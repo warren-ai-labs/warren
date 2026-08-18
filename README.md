@@ -116,6 +116,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [GLOSSARY.md](GLOSSARY.md) — shared terminology
 - [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md) — terminal black screen and missing text troubleshooting
 - [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
+- [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
 - [docs/runtime.md](docs/runtime.md) — ghostline and tmux runtime comparison
 - [Headless/README.md](Headless/README.md) — headless daemon and CLI
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
