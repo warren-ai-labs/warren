@@ -61,8 +61,18 @@ func parseGitWorktreesPorcelain(output []byte) ([]gitWorktree, error) {
 		}
 		switch key {
 		case "branch":
-			current.Branch = strings.TrimPrefix(value, "refs/heads/")
+			branch := strings.TrimPrefix(value, "refs/heads/")
+			if !hasValue || branch == "" {
+				return nil, errors.New("git worktree branch is empty")
+			}
+			if current.Detached {
+				return nil, errors.New("git worktree cannot be both branched and detached")
+			}
+			current.Branch = branch
 		case "detached":
+			if current.Branch != "" {
+				return nil, errors.New("git worktree cannot be both branched and detached")
+			}
 			current.Detached = true
 		case "locked":
 			current.Locked = true

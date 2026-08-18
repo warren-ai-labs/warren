@@ -46,6 +46,20 @@ func TestParseGitWorktreesPorcelainRejectsEmptyPath(t *testing.T) {
 	}
 }
 
+func TestParseGitWorktreesPorcelainRejectsInvalidCheckoutState(t *testing.T) {
+	tests := map[string][]byte{
+		"empty branch":        []byte("worktree /repo\x00branch\x00"),
+		"branch and detached": []byte("worktree /repo\x00branch refs/heads/main\x00detached\x00"),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseGitWorktreesPorcelain(input); err == nil {
+				t.Fatal("expected invalid checkout state error")
+			}
+		})
+	}
+}
+
 func TestWorkspacesForGitWorktreesProjectsValidDirectories(t *testing.T) {
 	root := t.TempDir()
 	mainPath := filepath.Join(root, "repository")
