@@ -19,6 +19,14 @@ import {
   resolveWorkspaceSession,
 } from "./navigation.js";
 import { runtime, serviceWorkerURL, webSocketURL } from "./runtime.js";
+import {
+  automaticSessionKind,
+  defaultPresetCommands,
+  releaseWorkspaceSession,
+  reserveWorkspaceSession,
+  sessionPresets,
+  shouldAttachCreatedSession,
+} from "./session.js";
 import { defaultTitleTemplate, renderTerminalTitle, sessionDisplayTitle, titlePlaceholders } from "./title.js";
 import {
   attachTerminalMessage,
@@ -106,17 +114,6 @@ const previewWorkspace = {
   branch: "main",
   path: "/Users/me/Workspace/warren",
 };
-const defaultPresetCommands = {
-  shell: "",
-  claude: "claude",
-  codex: "codex --dangerously-bypass-hook-trust",
-};
-const sessionPresets = [
-  { kind: "shell", label: "Shell", title: "Shell" },
-  { kind: "claude", label: "Claude", title: "Claude Code" },
-  { kind: "codex", label: "Codex", title: "Codex" },
-];
-
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
   const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem(storageKeys.activeWorkspace));
@@ -165,9 +162,10 @@ export default function App() {
   const connectionStateHandlerRef = useRef(() => {});
   const maintenanceTimeoutRef = useRef(null);
   const appStateRef = useRef({});
-   const pendingRequestsRef = useRef(new Map());
-   const inputQueueRef = useRef(null);
-   const navigationBeforeSettingsRef = useRef(null);
+  const pendingRequestsRef = useRef(new Map());
+  const creatingSessionWorkspaceIDsRef = useRef(new Set());
+  const inputQueueRef = useRef(null);
+  const navigationBeforeSettingsRef = useRef(null);
   const autoFocusOnAttachRef = useRef(true);
   const projectDragRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
@@ -551,6 +549,51 @@ export default function App() {
     });
   }, [clearTerminalSearch, markAttachReady, recordNavigation, refreshTerminal, request, requestSessionFocus]);
 
+  const createSession = useCallback((kind, targetWorkspaceID = null) => {
+    const workspaceID = targetWorkspaceID
+      || appStateRef.current.activeWorkspace
+      || selectedWorkspaceID;
+    if (!reserveWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID)) {
+      return false;
+    }
+    const finish = () => {
+      releaseWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID);
+    };
+    const preset = sessionPresets.find(value => value.kind === kind) || sessionPresets[0];
+    const sent = request("session.create", {
+      workspace: workspaceID,
+      kind: preset.kind,
+      command: presetCommands[preset.kind] || "",
+      title: preset.title,
+    }, result => {
+      finish();
+      const sessionID = result?.id;
+      if (sessionID && shouldAttachCreatedSession(
+        appStateRef.current.activeWorkspace,
+        workspaceID,
+      )) {
+        attachSession(sessionID);
+      }
+    }, detail => {
+      finish();
+      setConnectionStatus({ message: detail, online: false });
+      if (appStateRef.current.activeWorkspace === workspaceID) {
+        setEmptyOverride({ loading: false, message: detail });
+      }
+    });
+    if (appStateRef.current.activeWorkspace === workspaceID) {
+      setEmptyOverride({
+        loading: true,
+        message: sent ? `Starting ${preset.title}…` : "Waiting for connection…",
+      });
+    }
+    if (!sent) {
+      finish();
+      connectionRef.current?.reconnectNow();
+    }
+    return sent;
+  }, [attachSession, presetCommands, request, selectedWorkspaceID]);
+
   const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null) => {
     const state = appStateRef.current;
     const wasAttached = Boolean(state.activeSession || state.attachedSession);
@@ -577,28 +620,16 @@ export default function App() {
     setDrawerOpen(false);
 
     if (sessionID) attachSession(sessionID, true);
-    else if (wasAttached) request("session.detach");
-  }, [attachSession, clearTerminalSearch, recordNavigation, request]);
-
-  const createSession = useCallback(kind => {
-    const workspaceID = appStateRef.current.activeWorkspace || selectedWorkspaceID;
-    if (!workspaceID) return;
-    const preset = sessionPresets.find(value => value.kind === kind) || sessionPresets[0];
-    const sent = request("session.create", {
-      workspace: workspaceID,
-      kind: preset.kind,
-      command: presetCommands[preset.kind] || "",
-      title: preset.title,
-    }, result => {
-      const sessionID = result?.id;
-      if (sessionID) attachSession(sessionID);
-    });
-    setEmptyOverride({
-      loading: true,
-      message: sent ? `Starting ${preset.title}…` : "Waiting for connection…",
-    });
-    if (!sent) connectionRef.current?.reconnectNow();
-  }, [attachSession, presetCommands, request, selectedWorkspaceID]);
+    else if (nextTabs.length) attachSession(nextTabs[0].id, true);
+    else {
+      if (wasAttached) request("session.detach");
+      const automaticKind = automaticSessionKind({
+        tabs: nextTabs,
+        pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
+      });
+      if (automaticKind) createSession(automaticKind, workspaceID);
+    }
+  }, [attachSession, clearTerminalSearch, createSession, recordNavigation, request]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -928,6 +959,7 @@ export default function App() {
       setConnectionStatus({ message: "Authenticating…", online: false });
       return;
     }
+    creatingSessionWorkspaceIDsRef.current.clear();
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
     setAttachedSession(null);
