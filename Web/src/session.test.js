@@ -10,12 +10,16 @@ import {
 
 test("empty explicit workspace entry selects Claude", () => {
   assert.equal(firstAIPreset().kind, "claude");
-  assert.equal(automaticSessionKind({ tabs: [], pending: false }), "claude");
+  assert.equal(automaticSessionKind({ tabs: [], pending: false, explicit: true }), "claude");
 });
 
 test("existing or pending workspace does not start a session", () => {
-  assert.equal(automaticSessionKind({ tabs: [{}], pending: false }), null);
-  assert.equal(automaticSessionKind({ tabs: [], pending: true }), null);
+  assert.equal(automaticSessionKind({ tabs: [{}], pending: false, explicit: true }), null);
+  assert.equal(automaticSessionKind({ tabs: [], pending: true, explicit: true }), null);
+});
+
+test("passive workspace restoration does not start a session", () => {
+  assert.equal(automaticSessionKind({ tabs: [], pending: false, explicit: false }), null);
 });
 
 test("workspace reservation prevents duplicate requests and can be released", () => {

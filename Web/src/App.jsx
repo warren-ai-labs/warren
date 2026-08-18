@@ -594,7 +594,7 @@ export default function App() {
     return sent;
   }, [attachSession, presetCommands, request, selectedWorkspaceID]);
 
-  const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null) => {
+  const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null, explicit = true) => {
     const state = appStateRef.current;
     const wasAttached = Boolean(state.activeSession || state.attachedSession);
     const sessionID = resolveWorkspaceSession(
@@ -626,6 +626,7 @@ export default function App() {
       const automaticKind = automaticSessionKind({
         tabs: nextTabs,
         pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
+        explicit,
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
@@ -1503,7 +1504,7 @@ export default function App() {
       || state.attachedSession !== restoredPosition.sessionID
       || sessionWasInvalidated
     )) {
-      chooseWorkspace(restoredPosition.workspaceID, restoredPosition.sessionID);
+      chooseWorkspace(restoredPosition.workspaceID, restoredPosition.sessionID, false);
     }
     setSettingsOpen(false);
     returnFocusToTerminal();
