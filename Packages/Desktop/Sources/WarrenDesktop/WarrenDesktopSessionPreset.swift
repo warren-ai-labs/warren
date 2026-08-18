@@ -73,6 +73,12 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
 
     public static let pinned = builtIns.filter(\.isPinned)
 
+    public static var firstAI: Self? {
+        pinned.first { preset in
+            preset.request.kind == .claude || preset.request.kind == .codex
+        }
+    }
+
     /// Compact labels mirror Superset's 24pt preset bar without weakening the
     /// descriptive names used by the full session launcher.
     public var presetBarTitle: String {
@@ -96,7 +102,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// Returns the launch request with the user's Settings overrides applied.
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
-    func resolvedRequest(
+    public func resolvedRequest(
         shellCommand: String,
         claudeCommand: String,
         codexCommand: String

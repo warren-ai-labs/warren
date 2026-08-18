@@ -20,6 +20,10 @@ struct WarrenCompositionRoot: View {
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
     private var terminalFontSize = TerminalFontPreference.defaultSize
+    @AppStorage(WarrenPreferenceKey.presetCommandClaude)
+    private var claudeCommand = "claude"
+    @AppStorage(WarrenPreferenceKey.presetCommandCodex)
+    private var codexCommand = "codex --dangerously-bypass-hook-trust"
     @AppStorage("executionEndpoint")
     private var selectedEndpointID = "local"
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
@@ -185,7 +189,23 @@ struct WarrenCompositionRoot: View {
         } else if case .requestNewTerminalGroupSession(let groupID) = action {
             remoteModel.createSession(terminalGroupID: groupID, request: .shell)
         } else {
+            let automaticWorkspaceID = WarrenDesktopAutomaticSessionPolicy.workspaceID(
+                for: action,
+                in: remoteModel.projection,
+                creatingWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs
+            )
             remoteModel.perform(action)
+            if let automaticWorkspaceID,
+               let preset = WarrenDesktopSessionPreset.firstAI {
+                remoteModel.createSession(
+                    workspaceID: automaticWorkspaceID,
+                    request: preset.resolvedRequest(
+                        shellCommand: "",
+                        claudeCommand: claudeCommand,
+                        codexCommand: codexCommand
+                    )
+                )
+            }
         }
     }
 
