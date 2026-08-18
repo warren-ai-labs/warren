@@ -696,35 +696,37 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) bool {
 }
 
 func (s *Service) AddProject(path, name string) (api.Project, error) {
-	resolved, err := filepath.Abs(expandHome(strings.TrimSpace(path)))
+	selected, err := filepath.Abs(expandHome(strings.TrimSpace(path)))
 	if err != nil {
 		return api.Project{}, err
 	}
-	info, err := os.Stat(resolved)
+	info, err := os.Stat(selected)
 	if err != nil || !info.IsDir() {
-		return api.Project{}, fmt.Errorf("project path is not a directory: %s", resolved)
+		return api.Project{}, fmt.Errorf("project path is not a directory: %s", selected)
 	}
-	if output, err := exec.Command("git", "-C", resolved, "rev-parse", "--show-toplevel").Output(); err == nil {
-		resolved = strings.TrimSpace(string(output))
-	} else {
-		return api.Project{}, fmt.Errorf("project is not a Git repository: %s", resolved)
+	worktrees, err := listGitWorktrees(selected)
+	if err != nil {
+		return api.Project{}, fmt.Errorf("project is not a Git repository: %s: %w", selected, err)
 	}
+	createdAt := time.Now().UTC()
+	project := api.Project{ID: store.NewID(), Path: filepath.Clean(worktrees[0].Path), CreatedAt: createdAt}
 	if name == "" {
-		name = filepath.Base(resolved)
+		name = filepath.Base(project.Path)
 	}
-	project := api.Project{ID: store.NewID(), Name: name, Path: resolved, CreatedAt: time.Now().UTC()}
-	branch := gitOutput(resolved, "branch", "--show-current")
-	workspace := api.Workspace{ID: store.NewID(), ProjectID: project.ID, Name: defaultValue(branch, "main"), Path: resolved, Branch: branch, Kind: "root", CreatedAt: project.CreatedAt}
+	project.Name = name
+	workspaces, err := workspacesForGitWorktrees(project.ID, createdAt, worktrees, os.Stat)
+	if err != nil {
+		return api.Project{}, err
+	}
 	err = s.Store.Update(func(state *api.State) error {
 		for _, value := range state.Projects {
-			if samePath(value.Path, resolved) {
-				return fmt.Errorf("project already exists: %s", resolved)
+			if samePath(value.Path, project.Path) {
+				return fmt.Errorf("project already exists: %s", project.Path)
 			}
 		}
 		project.Order = len(state.Projects)
 		state.Projects = append(state.Projects, project)
-		workspace.Order = nextWorkspaceOrder(state.Workspaces, project.ID)
-		state.Workspaces = append(state.Workspaces, workspace)
+		state.Workspaces = append(state.Workspaces, workspaces...)
 		return nil
 	})
 	if err == nil {
