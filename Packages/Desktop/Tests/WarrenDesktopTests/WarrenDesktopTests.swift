@@ -125,6 +125,43 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(launchedApplicationURL, applicationURL)
     }
 
+    func testExternalIDEMenuPresentationKeepsUnavailableApplicationsVisible() {
+        let options = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.microsoft.VSCode"
+                    ? URL(fileURLWithPath: "/Applications/Visual Studio Code.app")
+                    : nil
+            },
+            directoryExists: { _ in true },
+            launch: { _, _ in }
+        ).options(
+            for: Workspace(
+                projectID: ProjectID(),
+                name: "Feature",
+                path: "/Users/me/Workspace/warren-feature"
+            ),
+            isLocalEndpoint: true
+        )
+
+        let items = WarrenDesktopExternalIDEMenuPresentation.items(from: options)
+
+        XCTAssertEqual(items.map(\.title), ["Visual Studio Code", "GoLand", "Android Studio"])
+        XCTAssertEqual(items.map(\.isEnabled), [true, false, false])
+    }
+
+    func testExternalIDEFailureUsesIDENameAndLaunchErrorDescription() {
+        let error = NSError(
+            domain: "WarrenDesktopTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Launch denied"]
+        )
+
+        let failure = WarrenDesktopExternalIDEFailure(ideName: "GoLand", error: error)
+
+        XCTAssertEqual(failure.title, "Unable to Open GoLand")
+        XCTAssertEqual(failure.message, "Launch denied")
+    }
+
     func testRootLayoutMountsAtSupersetDesktopSizeWithoutPixelCapture() {
         let root = WarrenDesktopRoot(
             projection: WarrenDesktopFixture.preview.projection,
@@ -350,6 +387,7 @@ final class WarrenDesktopTests: XCTestCase {
             endpointOptions: [WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true)],
             selectedEndpointID: "local",
             webStatus: WarrenDesktopWebStatus(),
+            externalIDEOptions: nil,
             hasInspector: false,
             isInspectorVisible: false,
             onToggleSidebar: {},
@@ -357,6 +395,7 @@ final class WarrenDesktopTests: XCTestCase {
             onCommandPalette: {},
             onSettings: {},
             onWeb: {},
+            onOpenInExternalIDE: { _ in },
             onSelectEndpoint: { _ in },
             onSelectTab: { _ in },
             onMoveTab: { _, _ in },

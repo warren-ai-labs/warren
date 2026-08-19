@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import SwiftUI
+import WarrenDesignSystem
 import WarrenDomain
 
 struct WarrenDesktopExternalIDE: Identifiable, Hashable, Sendable {
@@ -43,6 +45,65 @@ struct WarrenDesktopExternalIDEOption: Identifiable, Equatable {
 
     var id: WarrenDesktopExternalIDE.ID { ide.id }
     var isEnabled: Bool { workspaceURL != nil && applicationURL != nil }
+}
+
+struct WarrenDesktopExternalIDEMenuPresentation {
+    struct Item: Identifiable, Equatable {
+        let option: WarrenDesktopExternalIDEOption
+
+        var id: WarrenDesktopExternalIDE.ID { option.id }
+        var title: String { option.ide.name }
+        var systemImage: String { option.ide.systemImage }
+        var isEnabled: Bool { option.isEnabled }
+    }
+
+    static func items(
+        from options: [WarrenDesktopExternalIDEOption]
+    ) -> [Item] {
+        options.map(Item.init)
+    }
+}
+
+struct WarrenDesktopExternalIDEMenu: View {
+    let options: [WarrenDesktopExternalIDEOption]
+    let onOpen: (WarrenDesktopExternalIDEOption) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        Menu {
+            ForEach(WarrenDesktopExternalIDEMenuPresentation.items(from: options)) { item in
+                Button {
+                    onOpen(item.option)
+                } label: {
+                    Label(item.title, systemImage: item.systemImage)
+                }
+                .disabled(!item.isEnabled)
+            }
+        } label: {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 13, weight: .medium))
+                .accessibilityHidden(true)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .foregroundStyle(tokens.mutedForeground)
+        .accessibilityLabel("Open workspace in IDE")
+        .accessibilityHint("Open the current worktree in an external IDE")
+    }
+}
+
+struct WarrenDesktopExternalIDEFailure: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+
+    init(ideName: String, error: Error) {
+        title = "Unable to Open \(ideName)"
+        message = error.localizedDescription
+    }
 }
 
 @MainActor

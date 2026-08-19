@@ -18,6 +18,7 @@ struct WarrenDesktopTabBar: View {
     let endpointOptions: [WarrenDesktopEndpointOption]
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
+    let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let hasInspector: Bool
     let isInspectorVisible: Bool
     let onToggleSidebar: () -> Void
@@ -25,6 +26,7 @@ struct WarrenDesktopTabBar: View {
     let onCommandPalette: () -> Void
     let onSettings: () -> Void
     let onWeb: () -> Void
+    let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onSelectTab: (String) -> Void
     let onMoveTab: (String, String?) -> Void
@@ -140,11 +142,13 @@ struct WarrenDesktopTabBar: View {
                         endpointOptions: endpointOptions,
                         selectedEndpointID: selectedEndpointID,
                         webStatus: webStatus,
+                        externalIDEOptions: externalIDEOptions,
                         hasInspector: hasInspector,
                         isInspectorVisible: isInspectorVisible,
                         onCommandPalette: onCommandPalette,
                         onSettings: onSettings,
                         onWeb: onWeb,
+                        onOpenInExternalIDE: onOpenInExternalIDE,
                         onSelectEndpoint: onSelectEndpoint,
                         onToggleInspector: onToggleInspector
                     )
@@ -192,11 +196,13 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let endpointOptions: [WarrenDesktopEndpointOption]
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
+    let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let hasInspector: Bool
     let isInspectorVisible: Bool
     let onCommandPalette: () -> Void
     let onSettings: () -> Void
     let onWeb: () -> Void
+    let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onToggleInspector: () -> Void
 
@@ -205,6 +211,12 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         HStack(spacing: WarrenSpacing.xs) {
+            if let externalIDEOptions {
+                WarrenDesktopExternalIDEMenu(
+                    options: externalIDEOptions,
+                    onOpen: onOpenInExternalIDE
+                )
+            }
             WarrenDesktopChromeButton(
                 systemImage: "gearshape",
                 label: "Settings",
