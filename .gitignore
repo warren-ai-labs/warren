@@ -5,6 +5,7 @@
 DerivedData/
 xcuserdata/
 .vscode/
+.idea/
 Web/node_modules/
 Warren.app/
 Frameworks/
