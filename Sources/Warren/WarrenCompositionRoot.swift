@@ -60,7 +60,9 @@ struct WarrenCompositionRoot: View {
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,
-            onSetRuntime: { remoteModel.setDefaultRuntime($0) }
+            onSetRuntime: { remoteModel.setDefaultRuntime($0) },
+            importGitWorktrees: remoteModel.importGitWorktrees,
+            onSetImportGitWorktrees: { remoteModel.setImportGitWorktrees($0) }
         ) { context in
             WarrenTerminalSurfaceView(
                 context: context,

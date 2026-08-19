@@ -265,15 +265,17 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 	switch request.Method {
 	case http.MethodGet:
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime": s.Service.DefaultRuntime,
-			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
-			"gnarEdge":       s.Service.Settings.GnarEdge,
+			"defaultRuntime":     s.Service.DefaultRuntime,
+			"runtimeEnv":         s.Service.Settings.RuntimeEnv,
+			"gnarEdge":           s.Service.Settings.GnarEdge,
+			"importGitWorktrees": s.Service.Settings.ImportGitWorktrees,
 		})
 	case http.MethodPut:
 		var body struct {
-			DefaultRuntime string            `json:"defaultRuntime"`
-			RuntimeEnv     map[string]string `json:"runtimeEnv"`
-			GnarEdge       *string           `json:"gnarEdge"`
+			DefaultRuntime     string            `json:"defaultRuntime"`
+			RuntimeEnv         map[string]string `json:"runtimeEnv"`
+			GnarEdge           *string           `json:"gnarEdge"`
+			ImportGitWorktrees *bool             `json:"importGitWorktrees"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
 			http.Error(writer, "invalid settings", http.StatusBadRequest)
@@ -291,13 +293,20 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if body.ImportGitWorktrees != nil {
+			if err := s.Service.SetImportGitWorktrees(*body.ImportGitWorktrees); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if s.Tunnels != nil {
 			s.Tunnels.SetGnarEdge(s.Service.Settings.GnarEdge)
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime": s.Service.DefaultRuntime,
-			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
-			"gnarEdge":       s.Service.Settings.GnarEdge,
+			"defaultRuntime":     s.Service.DefaultRuntime,
+			"runtimeEnv":         s.Service.Settings.RuntimeEnv,
+			"gnarEdge":           s.Service.Settings.GnarEdge,
+			"importGitWorktrees": s.Service.Settings.ImportGitWorktrees,
 		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -735,9 +744,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPage(sessionID, before, limit))
 	case "settings.get":
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime": p.server.Service.DefaultRuntime,
-			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":       p.server.Service.Settings.GnarEdge,
+			"defaultRuntime":     p.server.Service.DefaultRuntime,
+			"runtimeEnv":         p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":           p.server.Service.Settings.GnarEdge,
+			"importGitWorktrees": p.server.Service.Settings.ImportGitWorktrees,
 		})
 	case "settings.put":
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
@@ -751,13 +761,19 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.server.Service.UpdateSettings(stringParam(params, "defaultRuntime"), runtimeEnv, gnarEdge); err != nil {
 			return err
 		}
+		if _, specified := params["importGitWorktrees"]; specified {
+			if err := p.server.Service.SetImportGitWorktrees(boolParam(params, "importGitWorktrees")); err != nil {
+				return err
+			}
+		}
 		if p.server.Tunnels != nil {
 			p.server.Tunnels.SetGnarEdge(p.server.Service.Settings.GnarEdge)
 		}
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime": p.server.Service.DefaultRuntime,
-			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":       p.server.Service.Settings.GnarEdge,
+			"defaultRuntime":     p.server.Service.DefaultRuntime,
+			"runtimeEnv":         p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":           p.server.Service.Settings.GnarEdge,
+			"importGitWorktrees": p.server.Service.Settings.ImportGitWorktrees,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProject(stringParam(params, "path"), stringParam(params, "name"))

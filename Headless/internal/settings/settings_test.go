@@ -21,10 +21,11 @@ func TestNormalizedDefaultsToGhostline(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	value := Settings{
-		DefaultRuntime: RuntimeTmux,
-		RuntimeEnv:     map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
-		GnarEdge:       "https://gnar.example.com",
-		TunnelEnabled:  map[string]bool{"gnar": true},
+		DefaultRuntime:     RuntimeTmux,
+		RuntimeEnv:         map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
+		GnarEdge:           "https://gnar.example.com",
+		TunnelEnabled:      map[string]bool{"gnar": true},
+		ImportGitWorktrees: true,
 	}
 	if err := Save(path, value); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -44,6 +45,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.TunnelEnabled["gnar"] {
 		t.Fatalf("loaded tunnelEnabled = %#v, want gnar restored", loaded.TunnelEnabled)
+	}
+	if !loaded.ImportGitWorktrees {
+		t.Fatal("loaded importGitWorktrees = false, want true")
 	}
 }
 

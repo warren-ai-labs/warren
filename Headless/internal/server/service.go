@@ -718,6 +718,11 @@ func (s *Service) AddProject(path, name string) (api.Project, error) {
 	if err != nil {
 		return api.Project{}, err
 	}
+	if !s.Settings.ImportGitWorktrees {
+		workspaces = filter(workspaces, func(workspace api.Workspace) bool {
+			return workspace.Kind == "root"
+		})
+	}
 	err = s.Store.Update(func(state *api.State) error {
 		for _, value := range state.Projects {
 			if samePath(value.Path, project.Path) {
@@ -1474,7 +1479,21 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 		return fmt.Errorf("runtime %q is not available on this host", kind)
 	}
 	s.DefaultRuntime = kind
-	s.Settings = settings.Settings{DefaultRuntime: kind, RuntimeEnv: runtimeEnv, GnarEdge: gnarEdge}
+	s.Settings.DefaultRuntime = kind
+	s.Settings.RuntimeEnv = runtimeEnv
+	s.Settings.GnarEdge = gnarEdge
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+// SetImportGitWorktrees records whether adding a project imports every Git
+// worktree as a workspace, persisting the intent when a settings file is
+// configured. The change applies to projects added afterwards; existing
+// workspaces are untouched.
+func (s *Service) SetImportGitWorktrees(enabled bool) error {
+	s.Settings.ImportGitWorktrees = enabled
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
 	}

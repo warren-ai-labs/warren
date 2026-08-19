@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
@@ -139,6 +140,43 @@ func TestWorkspacesForGitWorktreesRejectsInvalidRoot(t *testing.T) {
 	}
 }
 
+func TestAddProjectImportsOnlyMainCheckoutByDefault(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	featurePath := filepath.Join(root, "feature")
+	if err := os.Mkdir(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitForWorktreeTest(t, repository, "init", "--quiet", "--initial-branch=main")
+	runGitForWorktreeTest(t, repository, "-c", "user.name=Warren Tests", "-c", "user.email=warren@example.com", "commit", "--quiet", "--allow-empty", "-m", "initial")
+	runGitForWorktreeTest(t, repository, "worktree", "add", "--quiet", "-b", "feature/demo", featurePath)
+
+	state, err := store.Open(filepath.Join(root, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state}
+	project, err := service.AddProject(featurePath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.Snapshot()
+	if len(snapshot.Projects) != 1 || len(snapshot.Workspaces) != 1 {
+		t.Fatalf("imported state: projects=%d workspaces=%d, want 1 workspace", len(snapshot.Projects), len(snapshot.Workspaces))
+	}
+	workspace := snapshot.Workspaces[0]
+	if workspace.Kind != "root" {
+		t.Fatalf("workspace kind: got %q want root", workspace.Kind)
+	}
+	if !samePath(workspace.Path, canonicalWorktreeTestPath(t, repository)) {
+		t.Fatalf("workspace path: got %q want %q", workspace.Path, canonicalWorktreeTestPath(t, repository))
+	}
+	if project.ID != workspace.ProjectID {
+		t.Fatalf("workspace project: got %q want %q", workspace.ProjectID, project.ID)
+	}
+}
+
 func TestAddProjectImportsAllGitWorktrees(t *testing.T) {
 	root := t.TempDir()
 	repository := filepath.Join(root, "repository")
@@ -157,7 +195,7 @@ func TestAddProjectImportsAllGitWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &Service{Store: state}
+	service := &Service{Store: state, Settings: settings.Settings{ImportGitWorktrees: true}}
 	project, err := service.AddProject(detachedPath, "")
 	if err != nil {
 		t.Fatal(err)

@@ -33,6 +33,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
     private let onSetRuntime: (String) -> Void
+    private let importGitWorktrees: Bool
+    private let onSetImportGitWorktrees: (Bool) -> Void
     private let persistenceEnabled: Bool
     private let externalIDEService = WarrenDesktopExternalIDEService.live
     @State private var sidebarState: WarrenDesktopSidebarState
@@ -89,6 +91,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
         onSetRuntime: @escaping (String) -> Void = { _ in },
+        importGitWorktrees: Bool = false,
+        onSetImportGitWorktrees: @escaping (Bool) -> Void = { _ in },
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -109,6 +113,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
         self.onSetRuntime = onSetRuntime
+        self.importGitWorktrees = importGitWorktrees
+        self.onSetImportGitWorktrees = onSetImportGitWorktrees
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -285,7 +291,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 WarrenDesktopSettingsView(
                     onBack: closeSettings,
                     defaultRuntime: defaultRuntime,
-                    onSetRuntime: onSetRuntime
+                    onSetRuntime: onSetRuntime,
+                    importGitWorktrees: importGitWorktrees,
+                    onSetImportGitWorktrees: onSetImportGitWorktrees
                 )
                     .transition(.opacity)
             }

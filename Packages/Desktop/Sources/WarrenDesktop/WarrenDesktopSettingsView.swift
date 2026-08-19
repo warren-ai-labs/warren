@@ -9,6 +9,8 @@ struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
+    let importGitWorktrees: Bool
+    let onSetImportGitWorktrees: (Bool) -> Void
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -33,6 +35,7 @@ struct WarrenDesktopSettingsView: View {
         case terminalTitle = "Title"
         case terminalRuntime = "Terminal runtime"
         case presets = "Presets"
+        case workspaces = "Workspaces"
         case webSharing = "Web sharing"
 
         var id: String { rawValue }
@@ -43,6 +46,7 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: "textformat"
             case .terminalRuntime: "cpu"
             case .presets: "hammer"
+            case .workspaces: "arrow.triangle.branch"
             case .webSharing: "globe"
             }
         }
@@ -53,6 +57,7 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: "Build a title from live Session metadata."
             case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
             case .presets: "Commands launched by the Shell, Claude and Codex buttons."
+            case .workspaces: "How projects and Git worktrees appear in the sidebar."
             case .webSharing: "Publish the Web UI to the public internet."
             }
         }
@@ -63,6 +68,7 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
             case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
             case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "agent"]
+            case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout"]
             case .webSharing: [rawValue, detail, "gnar", "share", "public", "tunnel", "internet"]
             }
         }
@@ -70,7 +76,7 @@ struct WarrenDesktopSettingsView: View {
         var isTerminalSection: Bool {
             switch self {
             case .terminalFont, .terminalTitle, .terminalRuntime, .presets: true
-            case .webSharing: false
+            case .workspaces, .webSharing: false
             }
         }
     }
@@ -271,6 +277,8 @@ struct WarrenDesktopSettingsView: View {
                     terminalRuntimeSection(tokens: tokens)
                 case .presets:
                     presetsSection(tokens: tokens)
+                case .workspaces:
+                    workspacesSection(tokens: tokens)
                 case .webSharing:
                     webSharingSection(tokens: tokens)
                 }
@@ -469,6 +477,25 @@ struct WarrenDesktopSettingsView: View {
             )
         case .custom:
             EmptyView()
+        }
+    }
+
+    private func workspacesSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Workspaces", section: .workspaces, tokens: tokens) {
+            Toggle("Import all Git worktrees", isOn: Binding(
+                get: { importGitWorktrees },
+                set: { onSetImportGitWorktrees($0) }
+            ))
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("settings.workspaces.import-git-worktrees")
+            Text(
+                "When adding a project, import every Git worktree as a "
+                    + "workspace. Turn this off to add only the main checkout; "
+                    + "existing workspaces are never removed."
+            )
+            .font(WarrenTypography.supporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
