@@ -46,7 +46,7 @@ final class WarrenDesktopTests: XCTestCase {
                 bundleIdentifier == "com.microsoft.VSCode" ? codeURL : nil
             },
             directoryExists: { $0.path == workspace.path },
-            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
         )
 
         let options = service.options(for: workspace, isLocalEndpoint: true)
@@ -66,7 +66,7 @@ final class WarrenDesktopTests: XCTestCase {
         let service = WarrenDesktopExternalIDEService(
             resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
             directoryExists: { _ in true },
-            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
         )
 
         let options = service.options(for: workspace, isLocalEndpoint: false)
@@ -84,7 +84,7 @@ final class WarrenDesktopTests: XCTestCase {
         let service = WarrenDesktopExternalIDEService(
             resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
             directoryExists: { _ in false },
-            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
         )
 
         XCTAssertTrue(
@@ -95,6 +95,34 @@ final class WarrenDesktopTests: XCTestCase {
             service.options(for: nil, isLocalEndpoint: true)
                 .allSatisfy { !$0.isEnabled }
         )
+    }
+
+    func testExternalIDEServiceLaunchesWorkspaceWithResolvedApplication() async throws {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var launchedWorkspaceURL: URL?
+        var launchedApplicationURL: URL?
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in applicationURL },
+            directoryExists: { _ in true },
+            launch: { workspaceURL, resolvedApplicationURL in
+                launchedWorkspaceURL = workspaceURL
+                launchedApplicationURL = resolvedApplicationURL
+            }
+        )
+        let option = try XCTUnwrap(
+            service.options(for: workspace, isLocalEndpoint: true)
+                .first { $0.ide.id == .goLand }
+        )
+
+        try await service.open(option)
+
+        XCTAssertEqual(launchedWorkspaceURL?.path, workspace.path)
+        XCTAssertEqual(launchedApplicationURL, applicationURL)
     }
 
     func testRootLayoutMountsAtSupersetDesktopSizeWithoutPixelCapture() {

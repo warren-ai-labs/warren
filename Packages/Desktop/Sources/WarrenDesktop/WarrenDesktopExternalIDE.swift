@@ -47,7 +47,7 @@ struct WarrenDesktopExternalIDEOption: Identifiable, Equatable {
 
 @MainActor
 struct WarrenDesktopExternalIDEService {
-    typealias Launch = (URL, URL, @escaping (Error?) -> Void) -> Void
+    typealias Launch = (URL, URL) async throws -> Void
 
     let resolveApplicationURL: (String) -> URL?
     let directoryExists: (URL) -> Bool
@@ -72,4 +72,50 @@ struct WarrenDesktopExternalIDEService {
             )
         }
     }
+}
+
+enum WarrenDesktopExternalIDEError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "The IDE or workspace is no longer available."
+    }
+}
+
+extension WarrenDesktopExternalIDEService {
+    func open(_ option: WarrenDesktopExternalIDEOption) async throws {
+        guard let workspaceURL = option.workspaceURL,
+              let applicationURL = option.applicationURL else {
+            throw WarrenDesktopExternalIDEError.unavailable
+        }
+        try await launch(workspaceURL, applicationURL)
+    }
+
+    static let live = Self(
+        resolveApplicationURL: { bundleIdentifier in
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+        },
+        directoryExists: { url in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(
+                atPath: url.path,
+                isDirectory: &isDirectory
+            ) && isDirectory.boolValue
+        },
+        launch: { workspaceURL, applicationURL in
+            try await withCheckedThrowingContinuation { continuation in
+                NSWorkspace.shared.open(
+                    [workspaceURL],
+                    withApplicationAt: applicationURL,
+                    configuration: NSWorkspace.OpenConfiguration()
+                ) { _, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        }
+    )
 }
