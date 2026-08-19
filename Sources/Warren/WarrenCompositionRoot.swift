@@ -294,12 +294,15 @@ struct WarrenCompositionRoot: View {
             remoteModel.connect(endpoint)
             return
         }
-        let localEndpoint = WarrenRemoteEndpointConfiguration.localDaemon()
-        guard !remoteModel.isConnected(to: localEndpoint) else { return }
+        // Rebuild the endpoint on every pass instead of capturing it once
+        // before the loop: on a clean first launch the daemon writes
+        // ~/.warren/token only after this app starts, so a token captured
+        // once is empty and the connection can never succeed (code 7).
+        guard !remoteModel.isConnected(to: WarrenRemoteEndpointConfiguration.localDaemon()) else { return }
         remoteModel.disconnect()
         Task { @MainActor in
             for _ in 0..<30 {
-                let endpoint = localEndpoint
+                let endpoint = WarrenRemoteEndpointConfiguration.localDaemon()
                 if !endpoint.token.isEmpty, await isLocalDaemonReady(endpoint) {
                     remoteModel.connect(endpoint)
                     return
