@@ -25,11 +25,59 @@ final class WarrenDesktopTests: XCTestCase {
     func testExternalIDECatalogHasStableOrderAndBundleIdentifiers() {
         XCTAssertEqual(
             WarrenDesktopExternalIDE.supported.map(\.id),
-            [.visualStudioCode, .goLand, .androidStudio]
+            [
+                .xcode,
+                .visualStudioCode,
+                .cursor,
+                .windsurf,
+                .zed,
+                .intellijIDEA,
+                .intellijIDEACommunity,
+                .goLand,
+                .pyCharm,
+                .pyCharmCommunity,
+                .webStorm,
+                .phpStorm,
+                .rubyMine,
+                .clion,
+                .rider,
+                .dataGrip,
+                .rustRover,
+                .androidStudio,
+                .sublimeText,
+                .bbEdit,
+                .textMate,
+                .macVim,
+                .nova,
+            ]
         )
         XCTAssertEqual(
             WarrenDesktopExternalIDE.supported.map(\.bundleIdentifier),
-            ["com.microsoft.VSCode", "com.jetbrains.goland", "com.google.android.studio"]
+            [
+                "com.apple.dt.Xcode",
+                "com.microsoft.VSCode",
+                "com.todesktop.230313mzl4w4u92",
+                "com.exafunction.windsurf",
+                "dev.zed.Zed",
+                "com.jetbrains.intellij",
+                "com.jetbrains.intellij.ce",
+                "com.jetbrains.goland",
+                "com.jetbrains.pycharm",
+                "com.jetbrains.pycharm.ce",
+                "com.jetbrains.webstorm",
+                "com.jetbrains.phpstorm",
+                "com.jetbrains.rubymine",
+                "com.jetbrains.clion",
+                "com.jetbrains.rider",
+                "com.jetbrains.datagrip",
+                "com.jetbrains.rustrover",
+                "com.google.android.studio",
+                "com.sublimetext.4",
+                "com.barebones.bbedit",
+                "com.macromates.TextMate",
+                "org.vim.MacVim",
+                "com.panic.Nova",
+            ]
         )
     }
 
@@ -71,7 +119,7 @@ final class WarrenDesktopTests: XCTestCase {
 
         let options = service.options(for: workspace, isLocalEndpoint: false)
 
-        XCTAssertEqual(options.count, 3)
+        XCTAssertEqual(options.count, WarrenDesktopExternalIDE.supported.count)
         XCTAssertTrue(options.allSatisfy { !$0.isEnabled })
     }
 

@@ -6,9 +6,29 @@ import WarrenDomain
 
 struct WarrenDesktopExternalIDE: Identifiable, Hashable, Sendable {
     enum ID: String, Hashable, Sendable {
+        case xcode
         case visualStudioCode
+        case cursor
+        case windsurf
+        case zed
+        case intellijIDEA
+        case intellijIDEACommunity
         case goLand
+        case pyCharm
+        case pyCharmCommunity
+        case webStorm
+        case phpStorm
+        case rubyMine
+        case clion
+        case rider
+        case dataGrip
+        case rustRover
         case androidStudio
+        case sublimeText
+        case bbEdit
+        case textMate
+        case macVim
+        case nova
     }
 
     let id: ID
@@ -16,21 +36,29 @@ struct WarrenDesktopExternalIDE: Identifiable, Hashable, Sendable {
     let bundleIdentifier: String
 
     static let supported = [
-        Self(
-            id: .visualStudioCode,
-            name: "Visual Studio Code",
-            bundleIdentifier: "com.microsoft.VSCode"
-        ),
-        Self(
-            id: .goLand,
-            name: "GoLand",
-            bundleIdentifier: "com.jetbrains.goland"
-        ),
-        Self(
-            id: .androidStudio,
-            name: "Android Studio",
-            bundleIdentifier: "com.google.android.studio"
-        ),
+        Self(id: .xcode, name: "Xcode", bundleIdentifier: "com.apple.dt.Xcode"),
+        Self(id: .visualStudioCode, name: "Visual Studio Code", bundleIdentifier: "com.microsoft.VSCode"),
+        Self(id: .cursor, name: "Cursor", bundleIdentifier: "com.todesktop.230313mzl4w4u92"),
+        Self(id: .windsurf, name: "Windsurf", bundleIdentifier: "com.exafunction.windsurf"),
+        Self(id: .zed, name: "Zed", bundleIdentifier: "dev.zed.Zed"),
+        Self(id: .intellijIDEA, name: "IntelliJ IDEA", bundleIdentifier: "com.jetbrains.intellij"),
+        Self(id: .intellijIDEACommunity, name: "IntelliJ IDEA CE", bundleIdentifier: "com.jetbrains.intellij.ce"),
+        Self(id: .goLand, name: "GoLand", bundleIdentifier: "com.jetbrains.goland"),
+        Self(id: .pyCharm, name: "PyCharm", bundleIdentifier: "com.jetbrains.pycharm"),
+        Self(id: .pyCharmCommunity, name: "PyCharm CE", bundleIdentifier: "com.jetbrains.pycharm.ce"),
+        Self(id: .webStorm, name: "WebStorm", bundleIdentifier: "com.jetbrains.webstorm"),
+        Self(id: .phpStorm, name: "PhpStorm", bundleIdentifier: "com.jetbrains.phpstorm"),
+        Self(id: .rubyMine, name: "RubyMine", bundleIdentifier: "com.jetbrains.rubymine"),
+        Self(id: .clion, name: "CLion", bundleIdentifier: "com.jetbrains.clion"),
+        Self(id: .rider, name: "Rider", bundleIdentifier: "com.jetbrains.rider"),
+        Self(id: .dataGrip, name: "DataGrip", bundleIdentifier: "com.jetbrains.datagrip"),
+        Self(id: .rustRover, name: "RustRover", bundleIdentifier: "com.jetbrains.rustrover"),
+        Self(id: .androidStudio, name: "Android Studio", bundleIdentifier: "com.google.android.studio"),
+        Self(id: .sublimeText, name: "Sublime Text", bundleIdentifier: "com.sublimetext.4"),
+        Self(id: .bbEdit, name: "BBEdit", bundleIdentifier: "com.barebones.bbedit"),
+        Self(id: .textMate, name: "TextMate", bundleIdentifier: "com.macromates.TextMate"),
+        Self(id: .macVim, name: "MacVim", bundleIdentifier: "org.vim.MacVim"),
+        Self(id: .nova, name: "Nova", bundleIdentifier: "com.panic.Nova"),
     ]
 }
 
