@@ -14,46 +14,74 @@ struct WarrenDesktopExternalIDE: Identifiable, Hashable, Sendable {
     let id: ID
     let name: String
     let bundleIdentifier: String
-    let systemImage: String
 
     static let supported = [
         Self(
             id: .visualStudioCode,
             name: "Visual Studio Code",
-            bundleIdentifier: "com.microsoft.VSCode",
-            systemImage: "chevron.left.forwardslash.chevron.right"
+            bundleIdentifier: "com.microsoft.VSCode"
         ),
         Self(
             id: .goLand,
             name: "GoLand",
-            bundleIdentifier: "com.jetbrains.goland",
-            systemImage: "g.square"
+            bundleIdentifier: "com.jetbrains.goland"
         ),
         Self(
             id: .androidStudio,
             name: "Android Studio",
-            bundleIdentifier: "com.google.android.studio",
-            systemImage: "a.square"
+            bundleIdentifier: "com.google.android.studio"
         ),
     ]
 }
 
-struct WarrenDesktopExternalIDEOption: Identifiable, Equatable {
-    let ide: WarrenDesktopExternalIDE
-    let workspaceURL: URL?
-    let applicationURL: URL?
+/// A user-configured IDE entry: either an app bundle or an executable that
+/// opens a workspace directory (for example /usr/local/bin/code).
+struct WarrenDesktopCustomIDE: Identifiable, Codable, Hashable, Sendable {
+    var id: UUID
+    var name: String
+    var path: String
 
-    var id: WarrenDesktopExternalIDE.ID { ide.id }
+    init(name: String, path: String) {
+        self.id = UUID()
+        self.name = name
+        self.path = path
+    }
+}
+
+enum WarrenDesktopCustomIDEStore {
+    private static let storageKey = "warren.customExternalIDEs"
+
+    static func load() -> [WarrenDesktopCustomIDE] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let value = try? JSONDecoder().decode([WarrenDesktopCustomIDE].self, from: data) else {
+            return []
+        }
+        return value
+    }
+
+    static func save(_ value: [WarrenDesktopCustomIDE]) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        UserDefaults.standard.set(data, forKey: storageKey)
+    }
+}
+
+struct WarrenDesktopExternalIDEOption: Identifiable {
+    let id: String
+    let name: String
+    let applicationURL: URL?
+    let workspaceURL: URL?
+    let icon: NSImage?
+
     var isEnabled: Bool { workspaceURL != nil && applicationURL != nil }
 }
 
 struct WarrenDesktopExternalIDEMenuPresentation {
-    struct Item: Identifiable, Equatable {
+    struct Item: Identifiable {
         let option: WarrenDesktopExternalIDEOption
 
-        var id: WarrenDesktopExternalIDE.ID { option.id }
-        var title: String { option.ide.name }
-        var systemImage: String { option.ide.systemImage }
+        var id: String { option.id }
+        var title: String { option.name }
+        var icon: NSImage? { option.icon }
         var isEnabled: Bool { option.isEnabled }
     }
 
@@ -77,7 +105,11 @@ struct WarrenDesktopExternalIDEMenu: View {
                 Button {
                     onOpen(item.option)
                 } label: {
-                    Label(item.title, systemImage: item.systemImage)
+                    Label {
+                        Text(item.title)
+                    } icon: {
+                        iconView(item.icon)
+                    }
                 }
                 .disabled(!item.isEnabled)
             }
@@ -92,6 +124,18 @@ struct WarrenDesktopExternalIDEMenu: View {
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Open workspace in IDE")
         .accessibilityHint("Open the current worktree in an external IDE")
+    }
+
+    @ViewBuilder
+    private func iconView(_ icon: NSImage?) -> some View {
+        if let icon {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 14, height: 14)
+        } else {
+            Image(systemName: "app")
+                .frame(width: 14, height: 14)
+        }
     }
 }
 
@@ -112,8 +156,27 @@ struct WarrenDesktopExternalIDEService {
 
     let resolveApplicationURL: (String) -> URL?
     let directoryExists: (URL) -> Bool
+    let applicationIcon: (URL) -> NSImage?
+    let loadCustomIDEs: () -> [WarrenDesktopCustomIDE]
     let launch: Launch
 
+    init(
+        resolveApplicationURL: @escaping (String) -> URL?,
+        directoryExists: @escaping (URL) -> Bool,
+        applicationIcon: @escaping (URL) -> NSImage? = { _ in nil },
+        loadCustomIDEs: @escaping () -> [WarrenDesktopCustomIDE] = { [] },
+        launch: @escaping Launch
+    ) {
+        self.resolveApplicationURL = resolveApplicationURL
+        self.directoryExists = directoryExists
+        self.applicationIcon = applicationIcon
+        self.loadCustomIDEs = loadCustomIDEs
+        self.launch = launch
+    }
+
+    /// Resolves every installed built-in IDE plus the user's custom entries.
+    /// Only IDEs whose application is present on this Mac are listed, so the
+    /// workspace menu shows options the desktop can actually open.
     func options(
         for workspace: Workspace?,
         isLocalEndpoint: Bool
@@ -125,13 +188,30 @@ struct WarrenDesktopExternalIDEService {
             isLocalEndpoint && directoryExists(url) ? url : nil
         }
 
-        return WarrenDesktopExternalIDE.supported.map { ide in
-            WarrenDesktopExternalIDEOption(
-                ide: ide,
+        var options: [WarrenDesktopExternalIDEOption] = []
+        for ide in WarrenDesktopExternalIDE.supported {
+            guard let applicationURL = resolveApplicationURL(ide.bundleIdentifier) else {
+                continue
+            }
+            options.append(WarrenDesktopExternalIDEOption(
+                id: ide.id.rawValue,
+                name: ide.name,
+                applicationURL: applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                applicationURL: resolveApplicationURL(ide.bundleIdentifier)
-            )
+                icon: applicationIcon(applicationURL)
+            ))
         }
+        for custom in loadCustomIDEs() {
+            let applicationURL = URL(fileURLWithPath: custom.path).standardizedFileURL
+            options.append(WarrenDesktopExternalIDEOption(
+                id: "custom:\(custom.id.uuidString)",
+                name: custom.name,
+                applicationURL: applicationURL,
+                workspaceURL: availableWorkspaceURL,
+                icon: applicationIcon(applicationURL)
+            ))
+        }
+        return options
     }
 }
 
@@ -152,6 +232,13 @@ extension WarrenDesktopExternalIDEService {
         try await launch(workspaceURL, applicationURL)
     }
 
+    static func isApplicationBundle(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == "app"
+            || FileManager.default.fileExists(
+                atPath: url.appendingPathComponent("Contents/Info.plist").path
+            )
+    }
+
     static let live = Self(
         resolveApplicationURL: { bundleIdentifier in
             NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
@@ -163,19 +250,30 @@ extension WarrenDesktopExternalIDEService {
                 isDirectory: &isDirectory
             ) && isDirectory.boolValue
         },
+        applicationIcon: { url in
+            NSWorkspace.shared.icon(forFile: url.path)
+        },
+        loadCustomIDEs: WarrenDesktopCustomIDEStore.load,
         launch: { workspaceURL, applicationURL in
-            try await withCheckedThrowingContinuation { continuation in
-                NSWorkspace.shared.open(
-                    [workspaceURL],
-                    withApplicationAt: applicationURL,
-                    configuration: NSWorkspace.OpenConfiguration()
-                ) { _, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
+            if WarrenDesktopExternalIDEService.isApplicationBundle(applicationURL) {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    NSWorkspace.shared.open(
+                        [workspaceURL],
+                        withApplicationAt: applicationURL,
+                        configuration: NSWorkspace.OpenConfiguration()
+                    ) { _, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
                     }
                 }
+            } else {
+                let process = Process()
+                process.executableURL = applicationURL
+                process.arguments = [workspaceURL.path]
+                try process.run()
             }
         }
     )

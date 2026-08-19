@@ -582,7 +582,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 try await externalIDEService.open(option)
             } catch {
                 externalIDEFailure = WarrenDesktopExternalIDEFailure(
-                    ideName: option.ide.name,
+                    ideName: option.name,
                     error: error
                 )
             }

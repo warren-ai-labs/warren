@@ -211,7 +211,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         HStack(spacing: WarrenSpacing.xs) {
-            if let externalIDEOptions {
+            if let externalIDEOptions, !externalIDEOptions.isEmpty {
                 WarrenDesktopExternalIDEMenu(
                     options: externalIDEOptions,
                     onOpen: onOpenInExternalIDE

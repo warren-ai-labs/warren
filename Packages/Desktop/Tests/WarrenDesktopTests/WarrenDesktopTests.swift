@@ -51,8 +51,8 @@ final class WarrenDesktopTests: XCTestCase {
 
         let options = service.options(for: workspace, isLocalEndpoint: true)
 
-        XCTAssertEqual(options.map(\.ide.id), [.visualStudioCode, .goLand, .androidStudio])
-        XCTAssertEqual(options.map(\.isEnabled), [true, false, false])
+        XCTAssertEqual(options.map(\.id), ["visualStudioCode"])
+        XCTAssertEqual(options.map(\.isEnabled), [true])
         XCTAssertEqual(options.first?.workspaceURL?.path, workspace.path)
         XCTAssertEqual(options.first?.applicationURL, codeURL)
     }
@@ -116,7 +116,7 @@ final class WarrenDesktopTests: XCTestCase {
         )
         let option = try XCTUnwrap(
             service.options(for: workspace, isLocalEndpoint: true)
-                .first { $0.ide.id == .goLand }
+                .first { $0.id == "goLand" }
         )
 
         try await service.open(option)
@@ -125,7 +125,82 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(launchedApplicationURL, applicationURL)
     }
 
-    func testExternalIDEMenuPresentationKeepsUnavailableApplicationsVisible() {
+    func testExternalIDECustomIDEsAppearInOptions() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let custom = WarrenDesktopCustomIDE(name: "Cursor", path: "/Applications/Cursor.app")
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in nil },
+            directoryExists: { _ in true },
+            loadCustomIDEs: { [custom] },
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(options.map(\.id), ["custom:\(custom.id.uuidString)"])
+        XCTAssertEqual(options.first?.name, "Cursor")
+        XCTAssertEqual(options.first?.applicationURL?.path, "/Applications/Cursor.app")
+        XCTAssertEqual(options.first?.isEnabled, true)
+    }
+
+    func testExternalIDEOptionsRequestApplicationIcon() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var requestedPaths: [String] = []
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.jetbrains.goland" ? applicationURL : nil
+            },
+            directoryExists: { _ in true },
+            applicationIcon: { url in
+                requestedPaths.append(url.path)
+                return nil
+            },
+            launch: { _, _ in }
+        )
+
+        _ = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(requestedPaths, ["/Applications/GoLand.app"])
+    }
+
+    func testExternalIDECustomStoreRoundTrips() {
+        let defaults = UserDefaults.standard
+        let key = "warren.customExternalIDEs"
+        defaults.removeObject(forKey: key)
+        defer { defaults.removeObject(forKey: key) }
+
+        let custom = WarrenDesktopCustomIDE(name: "Cursor", path: "/Applications/Cursor.app")
+        WarrenDesktopCustomIDEStore.save([custom])
+        let loaded = WarrenDesktopCustomIDEStore.load()
+
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.name, "Cursor")
+        XCTAssertEqual(loaded.first?.path, "/Applications/Cursor.app")
+    }
+
+    func testExternalIDEIsApplicationBundleDetection() {
+        XCTAssertTrue(
+            WarrenDesktopExternalIDEService.isApplicationBundle(
+                URL(fileURLWithPath: "/Applications/Xcode.app")
+            )
+        )
+        XCTAssertFalse(
+            WarrenDesktopExternalIDEService.isApplicationBundle(
+                URL(fileURLWithPath: "/usr/local/bin/code")
+            )
+        )
+    }
+
+    func testExternalIDEMenuPresentationShowsOnlyInstalledApplications() {
         let options = WarrenDesktopExternalIDEService(
             resolveApplicationURL: { bundleIdentifier in
                 bundleIdentifier == "com.microsoft.VSCode"
@@ -145,8 +220,8 @@ final class WarrenDesktopTests: XCTestCase {
 
         let items = WarrenDesktopExternalIDEMenuPresentation.items(from: options)
 
-        XCTAssertEqual(items.map(\.title), ["Visual Studio Code", "GoLand", "Android Studio"])
-        XCTAssertEqual(items.map(\.isEnabled), [true, false, false])
+        XCTAssertEqual(items.map(\.title), ["Visual Studio Code"])
+        XCTAssertEqual(items.map(\.isEnabled), [true])
     }
 
     func testExternalIDEFailureUsesIDENameAndLaunchErrorDescription() {
