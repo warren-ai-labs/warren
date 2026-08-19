@@ -20,6 +20,12 @@ struct WarrenCompositionRoot: View {
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
     private var terminalFontSize = TerminalFontPreference.defaultSize
+    @AppStorage(WarrenPreferenceKey.presetCommandClaude)
+    private var claudeCommand = "claude"
+    @AppStorage(WarrenPreferenceKey.presetCommandCodex)
+    private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
+    private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage("executionEndpoint")
     private var selectedEndpointID = "local"
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
@@ -54,7 +60,9 @@ struct WarrenCompositionRoot: View {
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,
-            onSetRuntime: { remoteModel.setDefaultRuntime($0) }
+            onSetRuntime: { remoteModel.setDefaultRuntime($0) },
+            importGitWorktrees: remoteModel.importGitWorktrees,
+            onSetImportGitWorktrees: { remoteModel.setImportGitWorktrees($0) }
         ) { context in
             WarrenTerminalSurfaceView(
                 context: context,
@@ -147,6 +155,7 @@ struct WarrenCompositionRoot: View {
             remoteModel.copySecureWebURL()
         }
         .task {
+            presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
             updateTerminalFont()
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
@@ -185,7 +194,23 @@ struct WarrenCompositionRoot: View {
         } else if case .requestNewTerminalGroupSession(let groupID) = action {
             remoteModel.createSession(terminalGroupID: groupID, request: .shell)
         } else {
+            let automaticWorkspaceID = WarrenDesktopAutomaticSessionPolicy.workspaceID(
+                for: action,
+                in: remoteModel.projection,
+                creatingWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs
+            )
             remoteModel.perform(action)
+            if let automaticWorkspaceID,
+               let preset = WarrenDesktopSessionPreset.firstAI(orderedBy: presetOrder) {
+                remoteModel.createSession(
+                    workspaceID: automaticWorkspaceID,
+                    request: preset.resolvedRequest(
+                        shellCommand: "",
+                        claudeCommand: claudeCommand,
+                        codexCommand: codexCommand
+                    )
+                )
+            }
         }
     }
 

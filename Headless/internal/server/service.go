@@ -696,35 +696,42 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) bool {
 }
 
 func (s *Service) AddProject(path, name string) (api.Project, error) {
-	resolved, err := filepath.Abs(expandHome(strings.TrimSpace(path)))
+	selected, err := filepath.Abs(expandHome(strings.TrimSpace(path)))
 	if err != nil {
 		return api.Project{}, err
 	}
-	info, err := os.Stat(resolved)
+	info, err := os.Stat(selected)
 	if err != nil || !info.IsDir() {
-		return api.Project{}, fmt.Errorf("project path is not a directory: %s", resolved)
+		return api.Project{}, fmt.Errorf("project path is not a directory: %s", selected)
 	}
-	if output, err := exec.Command("git", "-C", resolved, "rev-parse", "--show-toplevel").Output(); err == nil {
-		resolved = strings.TrimSpace(string(output))
-	} else {
-		return api.Project{}, fmt.Errorf("project is not a Git repository: %s", resolved)
+	worktrees, err := listGitWorktrees(selected)
+	if err != nil {
+		return api.Project{}, fmt.Errorf("project is not a Git repository: %s: %w", selected, err)
 	}
+	createdAt := time.Now().UTC()
+	project := api.Project{ID: store.NewID(), Path: filepath.Clean(worktrees[0].Path), CreatedAt: createdAt}
 	if name == "" {
-		name = filepath.Base(resolved)
+		name = filepath.Base(project.Path)
 	}
-	project := api.Project{ID: store.NewID(), Name: name, Path: resolved, CreatedAt: time.Now().UTC()}
-	branch := gitOutput(resolved, "branch", "--show-current")
-	workspace := api.Workspace{ID: store.NewID(), ProjectID: project.ID, Name: defaultValue(branch, "main"), Path: resolved, Branch: branch, Kind: "root", CreatedAt: project.CreatedAt}
+	project.Name = name
+	workspaces, err := workspacesForGitWorktrees(project.ID, createdAt, worktrees, os.Stat)
+	if err != nil {
+		return api.Project{}, err
+	}
+	if !s.Settings.ImportGitWorktrees {
+		workspaces = filter(workspaces, func(workspace api.Workspace) bool {
+			return workspace.Kind == "root"
+		})
+	}
 	err = s.Store.Update(func(state *api.State) error {
 		for _, value := range state.Projects {
-			if samePath(value.Path, resolved) {
-				return fmt.Errorf("project already exists: %s", resolved)
+			if samePath(value.Path, project.Path) {
+				return fmt.Errorf("project already exists: %s", project.Path)
 			}
 		}
 		project.Order = len(state.Projects)
 		state.Projects = append(state.Projects, project)
-		workspace.Order = nextWorkspaceOrder(state.Workspaces, project.ID)
-		state.Workspaces = append(state.Workspaces, workspace)
+		state.Workspaces = append(state.Workspaces, workspaces...)
 		return nil
 	})
 	if err == nil {
@@ -1463,6 +1470,12 @@ func (s *Service) SetDefaultRuntime(kind string) error {
 // runtime environment overrides and the gnar edge, persisting them when a
 // settings file is configured. Existing sessions keep their own runtimeKind.
 func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnarEdge string) error {
+	if kind == "" {
+		kind = s.DefaultRuntime
+	}
+	if kind == "" {
+		kind = s.Settings.Normalized()
+	}
 	switch kind {
 	case settings.RuntimeGhostline, settings.RuntimeTmux:
 	default:
@@ -1472,7 +1485,21 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 		return fmt.Errorf("runtime %q is not available on this host", kind)
 	}
 	s.DefaultRuntime = kind
-	s.Settings = settings.Settings{DefaultRuntime: kind, RuntimeEnv: runtimeEnv, GnarEdge: gnarEdge}
+	s.Settings.DefaultRuntime = kind
+	s.Settings.RuntimeEnv = runtimeEnv
+	s.Settings.GnarEdge = gnarEdge
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+// SetImportGitWorktrees records whether adding a project imports every Git
+// worktree as a workspace, persisting the intent when a settings file is
+// configured. The change applies to projects added afterwards; existing
+// workspaces are untouched.
+func (s *Service) SetImportGitWorktrees(enabled bool) error {
+	s.Settings.ImportGitWorktrees = enabled
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
 	}

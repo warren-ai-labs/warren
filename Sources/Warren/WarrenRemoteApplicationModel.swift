@@ -634,6 +634,8 @@ final class WarrenRemoteApplicationModel {
     private(set) var webStatus = WarrenDesktopWebStatus()
     /// Default engine for new sessions, owned by the headless daemon.
     private(set) var defaultRuntime: String?
+    /// Whether adding a project imports every Git worktree as a workspace.
+    private(set) var importGitWorktrees = false
     @ObservationIgnored private var runtimeSettingsLoaded = false
     /// Set while the daemon has announced an operator-initiated maintenance
     /// window (for example an app install that restarts the daemon). Clients
@@ -704,6 +706,7 @@ final class WarrenRemoteApplicationModel {
         endpointConfiguration = configuration
         runtimeSettingsLoaded = false
         defaultRuntime = nil
+        importGitWorktrees = false
         if configuration.url.hasPrefix("http://127.0.0.1:8789"),
            !configuration.token.isEmpty,
            let url = URL(string: "http://127.0.0.1:8789/#t=\(configuration.token)") {
@@ -853,8 +856,9 @@ final class WarrenRemoteApplicationModel {
         ])
     }
 
-    /// Loads the headless daemon's default runtime. Runtime selection is a
-    /// headless-side decision; the Desktop only reflects and changes it.
+    /// Loads the headless daemon's settings (default runtime and Git worktree
+    /// import policy). Runtime selection is a headless-side decision; the
+    /// Desktop only reflects and changes it.
     func loadRuntimeSettings() {
         guard !runtimeSettingsLoaded, let wire else { return }
         runtimeSettingsLoaded = true
@@ -863,9 +867,13 @@ final class WarrenRemoteApplicationModel {
                 let data = try await wire.request("settings.get")
                 guard let self,
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let result = object["result"] as? [String: Any],
-                      let kind = result["defaultRuntime"] as? String else { return }
-                self.defaultRuntime = kind
+                      let result = object["result"] as? [String: Any] else { return }
+                if let kind = result["defaultRuntime"] as? String {
+                    self.defaultRuntime = kind
+                }
+                if let enabled = result["importGitWorktrees"] as? Bool {
+                    self.importGitWorktrees = enabled
+                }
             } catch {
                 // Settings are not critical; the picker keeps its default.
             }
@@ -878,6 +886,18 @@ final class WarrenRemoteApplicationModel {
             do {
                 _ = try await wire.request("settings.put", params: ["defaultRuntime": kind])
                 self?.defaultRuntime = kind
+            } catch {
+                self?.present(error)
+            }
+        }
+    }
+
+    func setImportGitWorktrees(_ enabled: Bool) {
+        guard let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await wire.request("settings.put", params: ["importGitWorktrees": enabled ? "true" : "false"])
+                self?.importGitWorktrees = enabled
             } catch {
                 self?.present(error)
             }

@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WarrenDesignSystem
 import WarrenDomain
 
@@ -9,6 +11,8 @@ struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
+    let importGitWorktrees: Bool
+    let onSetImportGitWorktrees: (Bool) -> Void
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -22,6 +26,8 @@ struct WarrenDesktopSettingsView: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
+    private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.gnarSharingEnabled)
     private var gnarSharingEnabled = true
     @Environment(\.colorScheme) private var colorScheme
@@ -31,6 +37,8 @@ struct WarrenDesktopSettingsView: View {
         case terminalTitle = "Title"
         case terminalRuntime = "Terminal runtime"
         case presets = "Presets"
+        case workspaces = "Workspaces"
+        case externalIDEs = "External IDEs"
         case webSharing = "Web sharing"
 
         var id: String { rawValue }
@@ -41,6 +49,8 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: "textformat"
             case .terminalRuntime: "cpu"
             case .presets: "hammer"
+            case .workspaces: "arrow.triangle.branch"
+            case .externalIDEs: "chevron.left.forwardslash.chevron.right"
             case .webSharing: "globe"
             }
         }
@@ -51,6 +61,8 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: "Build a title from live Session metadata."
             case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
             case .presets: "Commands launched by the Shell, Claude and Codex buttons."
+            case .workspaces: "How projects and Git worktrees appear in the sidebar."
+            case .externalIDEs: "IDEs the workspace menu can open worktrees in."
             case .webSharing: "Publish the Web UI to the public internet."
             }
         }
@@ -61,13 +73,15 @@ struct WarrenDesktopSettingsView: View {
             case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
             case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
             case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "agent"]
+            case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout"]
+            case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
             case .webSharing: [rawValue, detail, "gnar", "share", "public", "tunnel", "internet"]
             }
         }
 
         var isTerminalSection: Bool {
             switch self {
-            case .terminalFont, .terminalTitle, .terminalRuntime, .presets: true
+            case .terminalFont, .terminalTitle, .terminalRuntime, .presets, .workspaces, .externalIDEs: true
             case .webSharing: false
             }
         }
@@ -76,6 +90,8 @@ struct WarrenDesktopSettingsView: View {
     @State private var selectedSection: SettingsSection = .terminalFont
     @State private var searchQuery = ""
     @FocusState private var searchFocused: Bool
+    @State private var installedIDEs: [InstalledIDE] = []
+    @State private var customIDEs = WarrenDesktopCustomIDEStore.load()
 
     private var visibleSections: [SettingsSection] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -269,6 +285,10 @@ struct WarrenDesktopSettingsView: View {
                     terminalRuntimeSection(tokens: tokens)
                 case .presets:
                     presetsSection(tokens: tokens)
+                case .workspaces:
+                    workspacesSection(tokens: tokens)
+                case .externalIDEs:
+                    externalIDEsSection(tokens: tokens)
                 case .webSharing:
                     webSharingSection(tokens: tokens)
                 }
@@ -280,6 +300,7 @@ struct WarrenDesktopSettingsView: View {
                     shellCommand = ""
                     claudeCommand = "claude"
                     codexCommand = "codex --dangerously-bypass-hook-trust"
+                    presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tokens.mutedForeground)
@@ -369,22 +390,50 @@ struct WarrenDesktopSettingsView: View {
 
     private func presetsSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Launch commands", section: .presets, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Text("Session order")
+                    .font(WarrenTypography.bodyEmphasis)
+                Text("The first AI in this order starts automatically when you enter an empty workspace.")
+                    .font(WarrenTypography.supporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: WarrenSpacing.small) {
+                    ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
+                        HStack(spacing: WarrenSpacing.compact) {
+                            Image(systemName: preset.symbolName)
+                                .frame(width: 18)
+                                .foregroundStyle(tokens.mutedForeground)
+                            Text(preset.presetBarTitle)
+                                .font(WarrenTypography.body)
+                            Spacer()
+                            presetMoveButton(
+                                preset: preset,
+                                direction: -1,
+                                symbolName: "arrow.up",
+                                disabled: index == 0,
+                                tokens: tokens
+                            )
+                            presetMoveButton(
+                                preset: preset,
+                                direction: 1,
+                                symbolName: "arrow.down",
+                                disabled: index == orderedPresets.count - 1,
+                                tokens: tokens
+                            )
+                        }
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .frame(minHeight: 38)
+                        .background(tokens.fillHover)
+                        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
-                WarrenInputField(
-                    "Shell",
-                    text: $shellCommand,
-                    placeholder: "default shell (empty)"
-                )
-                WarrenInputField(
-                    "Claude",
-                    text: $claudeCommand,
-                    placeholder: "claude"
-                )
-                WarrenInputField(
-                    "Codex",
-                    text: $codexCommand,
-                    placeholder: "codex --dangerously-bypass-hook-trust"
-                )
+                ForEach(orderedPresets) { preset in
+                    presetCommandField(for: preset)
+                }
             }
             Text(
                 "Commands are typed into a plain shell after it opens, so "
@@ -395,6 +444,203 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.supporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var orderedPresets: [WarrenDesktopSessionPreset] {
+        WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)
+    }
+
+    private func presetMoveButton(
+        preset: WarrenDesktopSessionPreset,
+        direction: Int,
+        symbolName: String,
+        disabled: Bool,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        let directionLabel = direction < 0 ? "up" : "down"
+        return Button {
+            presetOrder = WarrenDesktopSessionPreset.moving(preset.id, by: direction, in: presetOrder)
+        } label: {
+            Image(systemName: symbolName)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(tokens.mutedForeground)
+        .disabled(disabled)
+        .accessibilityLabel("Move \(preset.presetBarTitle) \(directionLabel)")
+        .accessibilityIdentifier("settings.preset-order.\(preset.id).\(directionLabel)")
+    }
+
+    @ViewBuilder
+    private func presetCommandField(for preset: WarrenDesktopSessionPreset) -> some View {
+        switch preset.request.kind {
+        case .shell:
+            WarrenInputField("Shell", text: $shellCommand, placeholder: "default shell (empty)")
+        case .claude:
+            WarrenInputField("Claude", text: $claudeCommand, placeholder: "claude")
+        case .codex:
+            WarrenInputField(
+                "Codex",
+                text: $codexCommand,
+                placeholder: "codex --dangerously-bypass-hook-trust"
+            )
+        case .custom:
+            EmptyView()
+        }
+    }
+
+    private func workspacesSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Workspaces", section: .workspaces, tokens: tokens) {
+            Toggle("Import all Git worktrees", isOn: Binding(
+                get: { importGitWorktrees },
+                set: { onSetImportGitWorktrees($0) }
+            ))
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("settings.workspaces.import-git-worktrees")
+            Text(
+                "When adding a project, import every Git worktree as a "
+                    + "workspace. Turn this off to add only the main checkout; "
+                    + "existing workspaces are never removed."
+            )
+            .font(WarrenTypography.supporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func externalIDEsSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("External IDEs", section: .externalIDEs, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Text("Installed").font(WarrenTypography.bodyEmphasis)
+                if installedIDEs.isEmpty {
+                    Text("No supported IDEs found on this Mac.")
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                ForEach(installedIDEs) { ide in
+                    ideRow(icon: ide.icon, name: ide.name, path: ide.path, tokens: tokens)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Text("Custom").font(WarrenTypography.bodyEmphasis)
+                if customIDEs.isEmpty {
+                    Text("No custom IDEs yet.")
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                ForEach(customIDEs) { ide in
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: ide.path))
+                            .resizable()
+                            .frame(width: 16, height: 16)
+                        Text(ide.name).font(WarrenTypography.body)
+                        Spacer()
+                        Text(ide.path)
+                            .font(WarrenTypography.compactCode)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button(role: .destructive) {
+                            removeCustomIDE(ide)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .accessibilityLabel("Remove \(ide.name)")
+                    }
+                    .padding(WarrenSpacing.compact)
+                    .background(tokens.fillHover)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                }
+                Button {
+                    addCustomIDE()
+                } label: {
+                    Label("Add IDE…", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(tokens.mutedForeground)
+                .accessibilityIdentifier("settings.external-ides.add")
+            }
+
+            Text(
+                "The workspace menu lists IDEs installed on this Mac plus "
+                    + "your custom entries. A custom entry can be an app "
+                    + "bundle or an executable that opens a directory, for "
+                    + "example /usr/local/bin/code."
+            )
+            .font(WarrenTypography.supporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear {
+            installedIDEs = Self.probeInstalledIDEs()
+        }
+    }
+
+    private func ideRow(
+        icon: NSImage,
+        name: String,
+        path: String,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        HStack(spacing: WarrenSpacing.compact) {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 16, height: 16)
+            Text(name).font(WarrenTypography.body)
+            Spacer()
+            Text(path)
+                .font(WarrenTypography.compactCode)
+                .foregroundStyle(tokens.mutedForeground)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(WarrenSpacing.compact)
+        .background(tokens.fillHover)
+        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+    }
+
+    private func addCustomIDE() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.applicationBundle, .executable]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Add"
+        panel.message = "Choose an IDE app bundle or executable"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let ide = WarrenDesktopCustomIDE(name: Self.displayName(for: url), path: url.path)
+        customIDEs.append(ide)
+        WarrenDesktopCustomIDEStore.save(customIDEs)
+    }
+
+    private func removeCustomIDE(_ ide: WarrenDesktopCustomIDE) {
+        customIDEs.removeAll { $0.id == ide.id }
+        WarrenDesktopCustomIDEStore.save(customIDEs)
+    }
+
+    private static func displayName(for url: URL) -> String {
+        if let bundle = Bundle(url: url),
+           let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
+           !name.isEmpty {
+            return name
+        }
+        return url.deletingPathExtension().lastPathComponent
+    }
+
+    private static func probeInstalledIDEs() -> [InstalledIDE] {
+        WarrenDesktopExternalIDE.supported.compactMap { ide in
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ide.bundleIdentifier) else {
+                return nil
+            }
+            return InstalledIDE(
+                id: ide.id.rawValue,
+                name: ide.name,
+                path: url.path,
+                icon: NSWorkspace.shared.icon(forFile: url.path)
+            )
         }
     }
 
@@ -489,4 +735,11 @@ struct WarrenDesktopSettingsView: View {
             workspace: "warren", branch: "main", host: "MacBook Pro", user: "me", os: "macOS"
         ))
     }
+}
+
+private struct InstalledIDE: Identifiable {
+    let id: String
+    let name: String
+    let path: String
+    let icon: NSImage
 }

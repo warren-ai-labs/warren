@@ -168,6 +168,19 @@ func TestSessionRoutesRuntimeOperations(t *testing.T) {
 	}
 }
 
+func TestUpdateSettingsKeepsRuntimeWhenUnspecified(t *testing.T) {
+	service, _, _ := newCoexistService(t)
+	if err := service.SetDefaultRuntime("tmux"); err != nil {
+		t.Fatalf("SetDefaultRuntime: %v", err)
+	}
+	if err := service.UpdateSettings("", nil, ""); err != nil {
+		t.Fatalf("UpdateSettings with empty kind: %v", err)
+	}
+	if service.DefaultRuntime != "tmux" {
+		t.Fatalf("default = %q, want tmux preserved", service.DefaultRuntime)
+	}
+}
+
 func TestSetDefaultRuntimePersistsAndValidates(t *testing.T) {
 	service, _, _ := newCoexistService(t)
 	settingsPath := t.TempDir() + "/settings.json"

@@ -33,7 +33,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
     private let onSetRuntime: (String) -> Void
+    private let importGitWorktrees: Bool
+    private let onSetImportGitWorktrees: (Bool) -> Void
     private let persistenceEnabled: Bool
+    private let externalIDEService = WarrenDesktopExternalIDEService.live
     @State private var sidebarState: WarrenDesktopSidebarState
     @State private var sidebarTree: WarrenDesktopSidebarTreeState
     @State private var inspectorVisible: Bool
@@ -47,6 +50,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var renameValue = ""
     @State private var pendingDeletion: WarrenDesktopDeletionRequest?
     @State private var deleteWorkspaceRemoveWorktree = false
+    @State private var externalIDEFailure: WarrenDesktopExternalIDEFailure?
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var terminalTitleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
@@ -87,6 +91,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
         onSetRuntime: @escaping (String) -> Void = { _ in },
+        importGitWorktrees: Bool = false,
+        onSetImportGitWorktrees: @escaping (Bool) -> Void = { _ in },
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -107,6 +113,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
         self.onSetRuntime = onSetRuntime
+        self.importGitWorktrees = importGitWorktrees
+        self.onSetImportGitWorktrees = onSetImportGitWorktrees
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -144,6 +152,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             projection.sessions.filter(\.pinned).map(\.id)
         )
         let isAddingSession = isAddingSession(in: presentation)
+        let selectedEndpointIsLocal = endpointOptions.first {
+            $0.id == selectedEndpointID
+        }?.isLocal == true
+        let externalIDEOptions = presentation.workspace.map { workspace in
+            externalIDEService.options(
+                for: workspace,
+                isLocalEndpoint: selectedEndpointIsLocal
+            )
+        }
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
         ZStack(alignment: .topLeading) {
@@ -184,6 +201,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         endpointOptions: endpointOptions,
                         selectedEndpointID: selectedEndpointID,
                         webStatus: webStatus,
+                        externalIDEOptions: externalIDEOptions,
                         hasInspector: projection.inspector != nil,
                         isInspectorVisible: inspectorVisible,
                         onToggleSidebar: toggleSidebar,
@@ -200,6 +218,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             setSettingsPresented(true)
                         },
                         onWeb: { setWebPresented(!webPresented) },
+                        onOpenInExternalIDE: openInExternalIDE,
                         onSelectEndpoint: onSelectEndpoint,
                         onSelectTab: { dispatch(.selectTab($0)) },
                         onMoveTab: { tabID, destinationTabID in
@@ -272,7 +291,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 WarrenDesktopSettingsView(
                     onBack: closeSettings,
                     defaultRuntime: defaultRuntime,
-                    onSetRuntime: onSetRuntime
+                    onSetRuntime: onSetRuntime,
+                    importGitWorktrees: importGitWorktrees,
+                    onSetImportGitWorktrees: onSetImportGitWorktrees
                 )
                     .transition(.opacity)
             }
@@ -429,6 +450,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             guard !webStatus.tunnelRunning else { return }
             setWebPresented(false)
         }
+        .alert(item: $externalIDEFailure) { failure in
+            Alert(
+                title: Text(failure.title),
+                message: Text(failure.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .warrenSemanticObservationRoot(recorder: semanticRecorder)
     }
 
@@ -545,6 +573,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             dispatch(.launchSession(workspace.id, request))
         } else if let terminalGroup = presentation.terminalGroup {
             dispatch(.launchTerminalGroupSession(terminalGroup.id, request))
+        }
+    }
+
+    private func openInExternalIDE(_ option: WarrenDesktopExternalIDEOption) {
+        Task {
+            do {
+                try await externalIDEService.open(option)
+            } catch {
+                externalIDEFailure = WarrenDesktopExternalIDEFailure(
+                    ideName: option.name,
+                    error: error
+                )
+            }
         }
     }
 

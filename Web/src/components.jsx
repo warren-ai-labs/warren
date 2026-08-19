@@ -160,15 +160,13 @@ export function Sidebar({
   const isBuild = useBuildVariant();
   const [dragState, setDragState] = useState(null);
   const [dragOverID, setDragOverID] = useState(null);
+  const [dragOverPosition, setDragOverPosition] = useState(null);
 
   const beginDrag = (kind, id, projectID, event) => {
-    if (!(event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      return;
-    }
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", id);
     setDragOverID(null);
+    setDragOverPosition(null);
     setDragState({ kind, id, projectID });
     if (kind === "project") onBeginProjectDrag(expandedProjects);
   };
@@ -177,13 +175,19 @@ export function Sidebar({
     if (dragState?.kind === "project") onEndProjectDrag();
     setDragState(null);
     setDragOverID(null);
+    setDragOverPosition(null);
   };
 
   const projectDragOver = (projectID, event) => {
     if (dragState?.kind !== "project") return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    if (dragOverID !== projectID) setDragOverID(projectID);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (dragOverID !== projectID || dragOverPosition !== position) {
+      setDragOverID(projectID);
+      setDragOverPosition(position);
+    }
   };
 
   const workspaceDragOver = (workspace, event) => {
@@ -193,11 +197,23 @@ export function Sidebar({
     if (dragOverID !== workspace.id) setDragOverID(workspace.id);
   };
 
-  const dropProject = (beforeProjectID, event) => {
+  const dropProject = (projectID, event) => {
     if (dragState?.kind !== "project") return;
     event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const beforeProjectID = event.clientY < rect.top + rect.height / 2
+      ? projectID
+      : projectAfter(projectID);
     onMoveProject(dragState.id, beforeProjectID);
     endDrag();
+  };
+
+  const projectIDs = catalog.projects.map(project => project.id);
+
+  const projectAfter = projectID => {
+    const index = projectIDs.indexOf(projectID);
+    if (index < 0 || index + 1 >= projectIDs.length) return null;
+    return projectIDs[index + 1];
   };
 
   const dropWorkspace = (workspace, event) => {
@@ -225,7 +241,7 @@ export function Sidebar({
           return (
             <section className={`project${open ? " open" : ""}`} key={project.id}>
               <div
-                className={`project-toggle${dragOverID === project.id ? " drag-over" : ""}`}
+                className={`project-toggle${dragOverID === project.id ? " drag-over" : ""}${dragOverID === project.id && dragOverPosition === "before" ? " drag-before" : ""}${dragOverID === project.id && dragOverPosition === "after" ? " drag-after" : ""}`}
                 onContextMenu={event => onProjectContextMenu(event, project)}
                 draggable
                 onDragStart={event => beginDrag("project", project.id, null, event)}
@@ -865,6 +881,7 @@ export function SettingsPage({
   fontSize,
   titleTemplate,
   presetCommands,
+  presets,
   titlePreview,
   placeholders,
   onClose,
@@ -872,6 +889,7 @@ export function SettingsPage({
   onFontSizeChange,
   onTitleTemplateChange,
   onPresetCommandChange,
+  onMovePreset,
   onAppendPlaceholder,
   onRestore,
 }) {
@@ -994,14 +1012,46 @@ export function SettingsPage({
                   <h2>Launch commands</h2>
                   <p>Edited in a terminal session after the shell starts, so quitting an agent keeps the tab alive.</p>
                 </header>
+                <div className="preset-order-section">
+                  <div className="settings-subheading">
+                    <h3>Session order</h3>
+                    <p>The first AI in this order starts automatically when you enter an empty workspace.</p>
+                  </div>
+                  <div className="preset-order-list">
+                    {presets.map((preset, index) => (
+                      <div className="preset-order-row" key={preset.kind}>
+                        <SessionPresetIcon kind={preset.kind} />
+                        <span>{preset.label}</span>
+                        <div className="preset-order-actions">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            aria-label={`Move ${preset.label} up`}
+                            onClick={() => onMovePreset(preset.kind, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === presets.length - 1}
+                            aria-label={`Move ${preset.label} down`}
+                            onClick={() => onMovePreset(preset.kind, 1)}
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <div className="preset-fields">
-                  {["shell", "claude", "codex"].map(kind => (
-                    <label key={kind}>
-                      {kind === "shell" ? "Shell" : kind === "claude" ? "Claude" : "Codex"}
+                  {presets.map(preset => (
+                    <label key={preset.kind}>
+                      {preset.label}
                       <input
-                        value={presetCommands[kind] || ""}
-                        onChange={event => onPresetCommandChange(kind, event.target.value)}
-                        placeholder={kind === "shell" ? "default shell (empty)" : `command for ${kind}`}
+                        value={presetCommands[preset.kind] || ""}
+                        onChange={event => onPresetCommandChange(preset.kind, event.target.value)}
+                        placeholder={preset.kind === "shell" ? "default shell (empty)" : `command for ${preset.kind}`}
                         autoComplete="off"
                         spellCheck="false"
                       />

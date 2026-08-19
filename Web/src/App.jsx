@@ -19,6 +19,17 @@ import {
   resolveWorkspaceSession,
 } from "./navigation.js";
 import { runtime, serviceWorkerURL, webSocketURL } from "./runtime.js";
+import {
+  automaticSessionKind,
+  defaultSessionPresetOrder,
+  defaultPresetCommands,
+  loadSessionPresetOrder,
+  moveSessionPreset,
+  orderedSessionPresets,
+  releaseWorkspaceSession,
+  reserveWorkspaceSession,
+  shouldAttachCreatedSession,
+} from "./session.js";
 import { defaultTitleTemplate, renderTerminalTitle, sessionDisplayTitle, titlePlaceholders } from "./title.js";
 import {
   attachTerminalMessage,
@@ -56,6 +67,7 @@ const storageKeys = {
   fontSize: "warren.terminalFontSize",
   titleTemplate: "warren.terminalTitleTemplate",
   presetCommands: "warren.presetCommands",
+  presetOrder: "warren.presetOrder",
 };
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
@@ -106,17 +118,6 @@ const previewWorkspace = {
   branch: "main",
   path: "/Users/me/Workspace/warren",
 };
-const defaultPresetCommands = {
-  shell: "",
-  claude: "claude",
-  codex: "codex --dangerously-bypass-hook-trust",
-};
-const sessionPresets = [
-  { kind: "shell", label: "Shell", title: "Shell" },
-  { kind: "claude", label: "Claude", title: "Claude Code" },
-  { kind: "codex", label: "Codex", title: "Codex" },
-];
-
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
   const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem(storageKeys.activeWorkspace));
@@ -128,6 +129,7 @@ export default function App() {
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
   const [presetCommands, setPresetCommands] = useState(() => loadPresetCommands());
+  const [presetOrder, setPresetOrder] = useState(() => loadPresetOrder());
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
   const [emptyOverride, setEmptyOverride] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -165,12 +167,14 @@ export default function App() {
   const connectionStateHandlerRef = useRef(() => {});
   const maintenanceTimeoutRef = useRef(null);
   const appStateRef = useRef({});
-   const pendingRequestsRef = useRef(new Map());
-   const inputQueueRef = useRef(null);
-   const navigationBeforeSettingsRef = useRef(null);
+  const pendingRequestsRef = useRef(new Map());
+  const creatingSessionWorkspaceIDsRef = useRef(new Set());
+  const inputQueueRef = useRef(null);
+  const navigationBeforeSettingsRef = useRef(null);
   const autoFocusOnAttachRef = useRef(true);
   const projectDragRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const orderedPresets = useMemo(() => orderedSessionPresets(presetOrder), [presetOrder]);
   useKeyboardInset(mainRef);
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
@@ -551,7 +555,52 @@ export default function App() {
     });
   }, [clearTerminalSearch, markAttachReady, recordNavigation, refreshTerminal, request, requestSessionFocus]);
 
-  const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null) => {
+  const createSession = useCallback((kind, targetWorkspaceID = null) => {
+    const workspaceID = targetWorkspaceID
+      || appStateRef.current.activeWorkspace
+      || selectedWorkspaceID;
+    if (!reserveWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID)) {
+      return false;
+    }
+    const finish = () => {
+      releaseWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID);
+    };
+    const preset = orderedPresets.find(value => value.kind === kind) || orderedPresets[0];
+    const sent = request("session.create", {
+      workspace: workspaceID,
+      kind: preset.kind,
+      command: presetCommands[preset.kind] || "",
+      title: preset.title,
+    }, result => {
+      finish();
+      const sessionID = result?.id;
+      if (sessionID && shouldAttachCreatedSession(
+        appStateRef.current.activeWorkspace,
+        workspaceID,
+      )) {
+        attachSession(sessionID);
+      }
+    }, detail => {
+      finish();
+      setConnectionStatus({ message: detail, online: false });
+      if (appStateRef.current.activeWorkspace === workspaceID) {
+        setEmptyOverride({ loading: false, message: detail });
+      }
+    });
+    if (appStateRef.current.activeWorkspace === workspaceID) {
+      setEmptyOverride({
+        loading: true,
+        message: sent ? `Starting ${preset.title}…` : "Waiting for connection…",
+      });
+    }
+    if (!sent) {
+      finish();
+      connectionRef.current?.reconnectNow();
+    }
+    return sent;
+  }, [attachSession, orderedPresets, presetCommands, request, selectedWorkspaceID]);
+
+  const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null, explicit = true) => {
     const state = appStateRef.current;
     const wasAttached = Boolean(state.activeSession || state.attachedSession);
     const sessionID = resolveWorkspaceSession(
@@ -577,28 +626,18 @@ export default function App() {
     setDrawerOpen(false);
 
     if (sessionID) attachSession(sessionID, true);
-    else if (wasAttached) request("session.detach");
-  }, [attachSession, clearTerminalSearch, recordNavigation, request]);
-
-  const createSession = useCallback(kind => {
-    const workspaceID = appStateRef.current.activeWorkspace || selectedWorkspaceID;
-    if (!workspaceID) return;
-    const preset = sessionPresets.find(value => value.kind === kind) || sessionPresets[0];
-    const sent = request("session.create", {
-      workspace: workspaceID,
-      kind: preset.kind,
-      command: presetCommands[preset.kind] || "",
-      title: preset.title,
-    }, result => {
-      const sessionID = result?.id;
-      if (sessionID) attachSession(sessionID);
-    });
-    setEmptyOverride({
-      loading: true,
-      message: sent ? `Starting ${preset.title}…` : "Waiting for connection…",
-    });
-    if (!sent) connectionRef.current?.reconnectNow();
-  }, [attachSession, presetCommands, request, selectedWorkspaceID]);
+    else if (nextTabs.length) attachSession(nextTabs[0].id, true);
+    else {
+      if (wasAttached) request("session.detach");
+      const automaticKind = automaticSessionKind({
+        tabs: nextTabs,
+        pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
+        explicit,
+        presets: orderedPresets,
+      });
+      if (automaticKind) createSession(automaticKind, workspaceID);
+    }
+  }, [attachSession, clearTerminalSearch, createSession, orderedPresets, recordNavigation, request]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -609,6 +648,14 @@ export default function App() {
     setPresetCommands(previous => {
       const next = { ...previous, [kind]: command };
       localStorage.setItem(storageKeys.presetCommands, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const movePreset = useCallback((kind, offset) => {
+    setPresetOrder(previous => {
+      const next = moveSessionPreset(previous, kind, offset);
+      localStorage.setItem(storageKeys.presetOrder, JSON.stringify(next));
       return next;
     });
   }, []);
@@ -928,6 +975,7 @@ export default function App() {
       setConnectionStatus({ message: "Authenticating…", online: false });
       return;
     }
+    creatingSessionWorkspaceIDsRef.current.clear();
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
     setAttachedSession(null);
@@ -1471,7 +1519,7 @@ export default function App() {
       || state.attachedSession !== restoredPosition.sessionID
       || sessionWasInvalidated
     )) {
-      chooseWorkspace(restoredPosition.workspaceID, restoredPosition.sessionID);
+      chooseWorkspace(restoredPosition.workspaceID, restoredPosition.sessionID, false);
     }
     setSettingsOpen(false);
     returnFocusToTerminal();
@@ -1552,7 +1600,9 @@ export default function App() {
     setFontFamily(defaultFontFamily);
     setFontSize(defaultFontSize);
     setPresetCommands({ ...defaultPresetCommands });
+    setPresetOrder([...defaultSessionPresetOrder]);
     localStorage.removeItem(storageKeys.presetCommands);
+    localStorage.removeItem(storageKeys.presetOrder);
   }, []);
 
   const selectedAgentEvents = selectedSession
@@ -1647,7 +1697,7 @@ export default function App() {
                 onOpenSearch={() => setSearchOpen(true)}
                 onTabContextMenu={sessionContextMenu}
               />
-              <PresetBar presets={sessionPresets} onCreateSession={createSession} />
+              <PresetBar presets={orderedPresets} onCreateSession={createSession} />
               <div className="pane-title">
                 <span>{paneTitle}</span>
                 {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
@@ -1728,6 +1778,7 @@ export default function App() {
         fontSize={fontSize}
         titleTemplate={titleTemplate}
         presetCommands={presetCommands}
+        presets={orderedPresets}
         titlePreview={titlePreview}
         placeholders={Object.entries(titlePlaceholders)}
         onClose={closeSettings}
@@ -1735,6 +1786,7 @@ export default function App() {
         onFontSizeChange={updateFontSize}
         onTitleTemplateChange={updateTitleTemplate}
         onPresetCommandChange={updatePresetCommand}
+        onMovePreset={movePreset}
         onAppendPlaceholder={appendPlaceholder}
         onRestore={restoreDefaults}
       />
@@ -1750,7 +1802,7 @@ export default function App() {
       {isMobile && (
         <SessionSheet
           open={sessionSheetOpen}
-          presets={sessionPresets}
+          presets={orderedPresets}
           onChoose={chooseSessionPreset}
           onClose={() => setSessionSheetOpen(false)}
         />
@@ -1807,6 +1859,14 @@ function loadPresetCommands() {
   } catch {
     return { ...defaultPresetCommands };
   }
+}
+
+function loadPresetOrder() {
+  return loadSessionPresetOrder(localStorage, storageKeys.presetOrder);
+}
+
+function shortSessionID(id) {
+  return id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
 
 function clamp(value, minimum, maximum) {

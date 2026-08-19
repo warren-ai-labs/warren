@@ -22,6 +22,269 @@ final class WarrenDesktopTests: XCTestCase {
 
     }
 
+    func testExternalIDECatalogHasStableOrderAndBundleIdentifiers() {
+        XCTAssertEqual(
+            WarrenDesktopExternalIDE.supported.map(\.id),
+            [
+                .xcode,
+                .visualStudioCode,
+                .cursor,
+                .windsurf,
+                .zed,
+                .intellijIDEA,
+                .intellijIDEACommunity,
+                .goLand,
+                .pyCharm,
+                .pyCharmCommunity,
+                .webStorm,
+                .phpStorm,
+                .rubyMine,
+                .clion,
+                .rider,
+                .dataGrip,
+                .rustRover,
+                .androidStudio,
+                .sublimeText,
+                .bbEdit,
+                .textMate,
+                .macVim,
+                .nova,
+            ]
+        )
+        XCTAssertEqual(
+            WarrenDesktopExternalIDE.supported.map(\.bundleIdentifier),
+            [
+                "com.apple.dt.Xcode",
+                "com.microsoft.VSCode",
+                "com.todesktop.230313mzl4w4u92",
+                "com.exafunction.windsurf",
+                "dev.zed.Zed",
+                "com.jetbrains.intellij",
+                "com.jetbrains.intellij.ce",
+                "com.jetbrains.goland",
+                "com.jetbrains.pycharm",
+                "com.jetbrains.pycharm.ce",
+                "com.jetbrains.webstorm",
+                "com.jetbrains.phpstorm",
+                "com.jetbrains.rubymine",
+                "com.jetbrains.clion",
+                "com.jetbrains.rider",
+                "com.jetbrains.datagrip",
+                "com.jetbrains.rustrover",
+                "com.google.android.studio",
+                "com.sublimetext.4",
+                "com.barebones.bbedit",
+                "com.macromates.TextMate",
+                "org.vim.MacVim",
+                "com.panic.Nova",
+            ]
+        )
+    }
+
+    func testExternalIDEOptionsEnableOnlyInstalledApplicationsForLocalWorkspace() {
+        let projectID = ProjectID()
+        let workspace = Workspace(
+            projectID: projectID,
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let codeURL = URL(fileURLWithPath: "/Applications/Visual Studio Code.app")
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.microsoft.VSCode" ? codeURL : nil
+            },
+            directoryExists: { $0.path == workspace.path },
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(options.map(\.id), ["visualStudioCode"])
+        XCTAssertEqual(options.map(\.isEnabled), [true])
+        XCTAssertEqual(options.first?.workspaceURL?.path, workspace.path)
+        XCTAssertEqual(options.first?.applicationURL, codeURL)
+    }
+
+    func testExternalIDEOptionsDisableEveryApplicationForRemoteWorkspace() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Remote",
+            path: "/srv/warren"
+        )
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
+            directoryExists: { _ in true },
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: false)
+
+        XCTAssertEqual(options.count, WarrenDesktopExternalIDE.supported.count)
+        XCTAssertTrue(options.allSatisfy { !$0.isEnabled })
+    }
+
+    func testExternalIDEOptionsDisableEveryApplicationWithoutExistingWorkspaceDirectory() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Missing",
+            path: "/missing/worktree"
+        )
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
+            directoryExists: { _ in false },
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        XCTAssertTrue(
+            service.options(for: workspace, isLocalEndpoint: true)
+                .allSatisfy { !$0.isEnabled }
+        )
+        XCTAssertTrue(
+            service.options(for: nil, isLocalEndpoint: true)
+                .allSatisfy { !$0.isEnabled }
+        )
+    }
+
+    func testExternalIDEServiceLaunchesWorkspaceWithResolvedApplication() async throws {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var launchedWorkspaceURL: URL?
+        var launchedApplicationURL: URL?
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in applicationURL },
+            directoryExists: { _ in true },
+            launch: { workspaceURL, resolvedApplicationURL in
+                launchedWorkspaceURL = workspaceURL
+                launchedApplicationURL = resolvedApplicationURL
+            }
+        )
+        let option = try XCTUnwrap(
+            service.options(for: workspace, isLocalEndpoint: true)
+                .first { $0.id == "goLand" }
+        )
+
+        try await service.open(option)
+
+        XCTAssertEqual(launchedWorkspaceURL?.path, workspace.path)
+        XCTAssertEqual(launchedApplicationURL, applicationURL)
+    }
+
+    func testExternalIDECustomIDEsAppearInOptions() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let custom = WarrenDesktopCustomIDE(name: "Cursor", path: "/Applications/Cursor.app")
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in nil },
+            directoryExists: { _ in true },
+            loadCustomIDEs: { [custom] },
+            launch: { _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(options.map(\.id), ["custom:\(custom.id.uuidString)"])
+        XCTAssertEqual(options.first?.name, "Cursor")
+        XCTAssertEqual(options.first?.applicationURL?.path, "/Applications/Cursor.app")
+        XCTAssertEqual(options.first?.isEnabled, true)
+    }
+
+    func testExternalIDEOptionsRequestApplicationIcon() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var requestedPaths: [String] = []
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.jetbrains.goland" ? applicationURL : nil
+            },
+            directoryExists: { _ in true },
+            applicationIcon: { url in
+                requestedPaths.append(url.path)
+                return nil
+            },
+            launch: { _, _ in }
+        )
+
+        _ = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(requestedPaths, ["/Applications/GoLand.app"])
+    }
+
+    func testExternalIDECustomStoreRoundTrips() {
+        let defaults = UserDefaults.standard
+        let key = "warren.customExternalIDEs"
+        defaults.removeObject(forKey: key)
+        defer { defaults.removeObject(forKey: key) }
+
+        let custom = WarrenDesktopCustomIDE(name: "Cursor", path: "/Applications/Cursor.app")
+        WarrenDesktopCustomIDEStore.save([custom])
+        let loaded = WarrenDesktopCustomIDEStore.load()
+
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.name, "Cursor")
+        XCTAssertEqual(loaded.first?.path, "/Applications/Cursor.app")
+    }
+
+    func testExternalIDEIsApplicationBundleDetection() {
+        XCTAssertTrue(
+            WarrenDesktopExternalIDEService.isApplicationBundle(
+                URL(fileURLWithPath: "/Applications/Xcode.app")
+            )
+        )
+        XCTAssertFalse(
+            WarrenDesktopExternalIDEService.isApplicationBundle(
+                URL(fileURLWithPath: "/usr/local/bin/code")
+            )
+        )
+    }
+
+    func testExternalIDEMenuPresentationShowsOnlyInstalledApplications() {
+        let options = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.microsoft.VSCode"
+                    ? URL(fileURLWithPath: "/Applications/Visual Studio Code.app")
+                    : nil
+            },
+            directoryExists: { _ in true },
+            launch: { _, _ in }
+        ).options(
+            for: Workspace(
+                projectID: ProjectID(),
+                name: "Feature",
+                path: "/Users/me/Workspace/warren-feature"
+            ),
+            isLocalEndpoint: true
+        )
+
+        let items = WarrenDesktopExternalIDEMenuPresentation.items(from: options)
+
+        XCTAssertEqual(items.map(\.title), ["Visual Studio Code"])
+        XCTAssertEqual(items.map(\.isEnabled), [true])
+    }
+
+    func testExternalIDEFailureUsesIDENameAndLaunchErrorDescription() {
+        let error = NSError(
+            domain: "WarrenDesktopTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Launch denied"]
+        )
+
+        let failure = WarrenDesktopExternalIDEFailure(ideName: "GoLand", error: error)
+
+        XCTAssertEqual(failure.title, "Unable to Open GoLand")
+        XCTAssertEqual(failure.message, "Launch denied")
+    }
+
     func testRootLayoutMountsAtSupersetDesktopSizeWithoutPixelCapture() {
         let root = WarrenDesktopRoot(
             projection: WarrenDesktopFixture.preview.projection,
@@ -247,6 +510,7 @@ final class WarrenDesktopTests: XCTestCase {
             endpointOptions: [WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true)],
             selectedEndpointID: "local",
             webStatus: WarrenDesktopWebStatus(),
+            externalIDEOptions: nil,
             hasInspector: false,
             isInspectorVisible: false,
             onToggleSidebar: {},
@@ -254,6 +518,7 @@ final class WarrenDesktopTests: XCTestCase {
             onCommandPalette: {},
             onSettings: {},
             onWeb: {},
+            onOpenInExternalIDE: { _ in },
             onSelectEndpoint: { _ in },
             onSelectTab: { _ in },
             onMoveTab: { _, _ in },
@@ -691,6 +956,137 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(
             TerminalSessionLaunchRequest.codex.command,
             "codex --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(WarrenDesktopSessionPreset.firstAI?.id, "claude")
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.firstAI?.resolvedRequest(
+                shellCommand: "",
+                claudeCommand: "claude --model sonnet",
+                codexCommand: "codex"
+            ).command,
+            "claude --model sonnet"
+        )
+    }
+
+    func testPresetOrderNormalizesPersistedIdentifiers() {
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrder("codex,shell,codex,future"),
+            ["codex", "shell", "claude"]
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrder(""),
+            ["shell", "claude", "codex"]
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrderRawValue("codex,shell,codex,future"),
+            "codex,shell,claude"
+        )
+    }
+
+    func testPresetOrderControlsPresentationAndAutomaticAISelection() {
+        let order = "shell,codex,claude"
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.orderedPinned(by: order).map(\.id),
+            ["shell", "codex", "claude"]
+        )
+        XCTAssertEqual(WarrenDesktopSessionPreset.firstAI(orderedBy: order)?.id, "codex")
+    }
+
+    func testPresetOrderMovesWithinBounds() {
+        let order = "shell,claude,codex"
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("codex", by: -1, in: order),
+            "shell,codex,claude"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("shell", by: -1, in: order),
+            order
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("codex", by: 1, in: order),
+            order
+        )
+    }
+
+    func testAutomaticSessionPolicyChoosesExplicitEmptyWorkspace() {
+        let fixture = WarrenDesktopFixture.preview
+        let emptyWorkspaceID = fixture.groups[0].workspaces[1].id
+
+        XCTAssertEqual(
+            WarrenDesktopAutomaticSessionPolicy.workspaceID(
+                for: .selectWorkspace(emptyWorkspaceID),
+                in: fixture.projection,
+                creatingWorkspaceIDs: []
+            ),
+            emptyWorkspaceID
+        )
+    }
+
+    func testAutomaticSessionPolicyRejectsNonEmptyPendingAndPassiveActions() {
+        let fixture = WarrenDesktopFixture.preview
+        let populatedWorkspaceID = fixture.groups[0].workspaces[0].id
+        let emptyWorkspaceID = fixture.groups[0].workspaces[1].id
+        let restored = WarrenDesktopNavigationState(
+            selection: .workspace(emptyWorkspaceID),
+            selectedTabID: nil
+        )
+
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .selectWorkspace(populatedWorkspaceID),
+            in: fixture.projection,
+            creatingWorkspaceIDs: []
+        ))
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .selectWorkspace(emptyWorkspaceID),
+            in: fixture.projection,
+            creatingWorkspaceIDs: [emptyWorkspaceID]
+        ))
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .restoreNavigation(restored),
+            in: fixture.projection,
+            creatingWorkspaceIDs: []
+        ))
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .closeTab("tab-main"),
+            in: fixture.projection,
+            creatingWorkspaceIDs: []
+        ))
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .selectTerminalGroup(TerminalGroupID()),
+            in: fixture.projection,
+            creatingWorkspaceIDs: []
+        ))
+        XCTAssertNil(WarrenDesktopAutomaticSessionPolicy.workspaceID(
+            for: .selectWorkspace(WorkspaceID()),
+            in: fixture.projection,
+            creatingWorkspaceIDs: []
+        ))
+    }
+
+    func testAutomaticSessionPolicyResolvesAnEmptyProjectsFirstWorkspace() {
+        let host = WarrenDomain.Host(name: "Host")
+        let project = Project(hostID: host.id, name: "Empty Project", rootPath: "/tmp/project")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "main",
+            path: "/tmp/project",
+            branch: "main"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace]
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopAutomaticSessionPolicy.workspaceID(
+                for: .selectProject(project.id),
+                in: projection,
+                creatingWorkspaceIDs: []
+            ),
+            workspace.id
         )
     }
 

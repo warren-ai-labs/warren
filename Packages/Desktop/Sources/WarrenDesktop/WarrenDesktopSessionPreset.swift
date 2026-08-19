@@ -73,6 +73,58 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
 
     public static let pinned = builtIns.filter(\.isPinned)
 
+    public static var defaultOrderRawValue: String {
+        pinned.map(\.id).joined(separator: ",")
+    }
+
+    public static func normalizedOrder(_ rawValue: String) -> [String] {
+        let knownIDs = Set(pinned.map(\.id))
+        var seen: Set<String> = []
+        var result = rawValue
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { knownIDs.contains($0) && seen.insert($0).inserted }
+
+        for id in pinned.map(\.id) where seen.insert(id).inserted {
+            result.append(id)
+        }
+        return result
+    }
+
+    public static func normalizedOrderRawValue(_ rawValue: String) -> String {
+        normalizedOrder(rawValue).joined(separator: ",")
+    }
+
+    public static func orderedPinned(by rawValue: String) -> [Self] {
+        let presetsByID = Dictionary(uniqueKeysWithValues: pinned.map { ($0.id, $0) })
+        return normalizedOrder(rawValue).compactMap { presetsByID[$0] }
+    }
+
+    public static func moving(_ id: String, by offset: Int, in rawValue: String) -> String {
+        var order = normalizedOrder(rawValue)
+        guard let index = order.firstIndex(of: id) else {
+            return normalizedOrderRawValue(rawValue)
+        }
+        let destination = index + offset
+        guard order.indices.contains(destination) else {
+            return normalizedOrderRawValue(rawValue)
+        }
+        order.swapAt(index, destination)
+        return order.joined(separator: ",")
+    }
+
+    public static var firstAI: Self? {
+        pinned.first { preset in
+            preset.request.kind == .claude || preset.request.kind == .codex
+        }
+    }
+
+    public static func firstAI(orderedBy rawValue: String) -> Self? {
+        orderedPinned(by: rawValue).first { preset in
+            preset.request.kind == .claude || preset.request.kind == .codex
+        }
+    }
+
     /// Compact labels mirror Superset's 24pt preset bar without weakening the
     /// descriptive names used by the full session launcher.
     public var presetBarTitle: String {
@@ -96,7 +148,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// Returns the launch request with the user's Settings overrides applied.
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
-    func resolvedRequest(
+    public func resolvedRequest(
         shellCommand: String,
         claudeCommand: String,
         codexCommand: String
