@@ -55,6 +55,22 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+/// Live merge status projected by the Host for a workspace worktree.
+///
+/// The value is intentionally optional on `Workspace`: older Host snapshots
+/// and root workspaces do not carry merge information.
+public enum WorkspaceMergeState: String, Codable, CaseIterable, Hashable, Sendable {
+    case merged
+    case unmerged
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .merged: "Merged to default branch"
+        case .unmerged: "Not merged to default branch"
+        }
+    }
+}
+
 public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     public let id: WorkspaceID
     public let projectID: ProjectID
@@ -62,6 +78,9 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     public var path: String
     public var branch: String?
     public var pinned: Bool
+    /// Live merge status overlaid by the Host roster; it is absent for legacy
+    /// snapshots and workspaces whose status is not currently known.
+    public var mergeState: WorkspaceMergeState?
     /// Host-owned sidebar order within its project. Zero is the legacy
     /// fallback (creation order).
     public var order: Int
@@ -73,6 +92,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         path: String,
         branch: String? = nil,
         pinned: Bool = false,
+        mergeState: WorkspaceMergeState? = nil,
         order: Int = 0
     ) {
         self.id = id
@@ -81,6 +101,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         self.path = path
         self.branch = branch
         self.pinned = pinned
+        self.mergeState = mergeState
         self.order = order
     }
 
@@ -91,6 +112,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         case path
         case branch
         case pinned
+        case mergeState
         case order
     }
 
@@ -102,6 +124,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         path = try container.decode(String.self, forKey: .path)
         branch = try container.decodeIfPresent(String.self, forKey: .branch)
         pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+        mergeState = try container.decodeIfPresent(WorkspaceMergeState.self, forKey: .mergeState)
         order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
     }
 }

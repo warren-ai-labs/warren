@@ -786,6 +786,29 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(projection.firstWorkspace(in: populatedProject.id), workspace)
     }
 
+    func testProjectionCarriesWorkspaceMergeStateThroughGrouping() {
+        let host = WarrenDomain.Host(name: "Merge Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "review",
+            path: "/tmp/warren-review",
+            branch: "review",
+            mergeState: .merged
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace]
+        )
+
+        XCTAssertEqual(projection.workspace(id: workspace.id)?.mergeState, .merged)
+        XCTAssertEqual(
+            projection.groups.first?.workspaces.first?.mergeState,
+            .merged
+        )
+    }
+
     func testTerminalGroupProjectionKeepsGroupTabsAndNavigationScoped() {
         let host = WarrenDomain.Host(name: "Terminal Host")
         let group = TerminalGroup(hostID: host.id, name: "Inbox", home: "/tmp")

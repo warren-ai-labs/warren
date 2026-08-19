@@ -32,6 +32,35 @@ final class WarrenDomainTests: XCTestCase {
         XCTAssertEqual(lease.attachmentID, attachment.id)
     }
 
+    func testWorkspaceMergeStateRoundTripsAndLegacyPayloadDefaults() throws {
+        let host = Host(name: "Mac")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "review",
+            path: "/tmp/warren-review",
+            branch: "review",
+            mergeState: .merged
+        )
+
+        let encoded = try JSONEncoder().encode(workspace)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["mergeState"] as? String, "merged")
+        XCTAssertEqual(
+            try JSONDecoder().decode(Workspace.self, from: encoded).mergeState,
+            .merged
+        )
+
+        var legacyObject = object
+        legacyObject.removeValue(forKey: "mergeState")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        XCTAssertNil(
+            try JSONDecoder().decode(Workspace.self, from: legacyData).mergeState
+        )
+    }
+
     func testTerminalGroupAndSessionScopeRoundTripThroughJSON() throws {
         let host = Host(name: "Mac")
         let group = TerminalGroup(hostID: host.id, name: "Inbox", home: "/Users/test")

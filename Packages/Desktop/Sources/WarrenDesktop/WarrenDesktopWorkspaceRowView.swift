@@ -47,13 +47,13 @@ struct WarrenDesktopWorkspaceRow: View {
         .foregroundStyle(tokens.mutedForeground)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .accessibilityLabel("Workspace \(workspace.name)")
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityValue(workspaceAccessibilityValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
             id: "workspace.\(semanticScope).\(workspace.id.description)",
             role: .button,
             label: "Workspace \(workspace.name)",
-            value: isSelected ? "Selected" : "Not selected",
+            value: workspaceAccessibilityValue,
             isSelected: isSelected,
             action: onSelect
         )
@@ -108,13 +108,13 @@ struct WarrenDesktopWorkspaceRow: View {
         .focused($isFocused)
         .simultaneousGesture(TapGesture(count: 2).onEnded(onDoubleClick))
         .accessibilityLabel("Workspace \(workspace.name)")
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityValue(workspaceAccessibilityValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
             id: "workspace.\(semanticScope).\(workspace.id.description)",
             role: .button,
             label: "Workspace \(workspace.name)",
-            value: isSelected ? "Selected" : "Not selected",
+            value: workspaceAccessibilityValue,
             isSelected: isSelected,
             action: onSelect
         )
@@ -133,14 +133,33 @@ struct WarrenDesktopWorkspaceRow: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var isMergedWorktree: Bool {
+        workspace.branch != nil && workspace.mergeState == .merged
+    }
+
+    private var workspaceAccessibilityValue: String {
+        var values: [String] = []
+        if workspace.branch != nil, let mergeState = workspace.mergeState {
+            values.append(mergeState.accessibilityLabel)
+        }
+        values.append(isSelected ? "Selected" : "Not selected")
+        return values.joined(separator: " · ")
+    }
+
     /// Superset renders local worktrees as a plain dot; the main workspace gets
-    /// a laptop glyph. Branch rows deliberately have no branch icon.
+    /// a laptop glyph. A merged worktree uses the native merge glyph while
+    /// other branch rows retain the plain dot.
     @ViewBuilder
     private func workspaceGlyph(tokens: WarrenColorTokens) -> some View {
         if workspace.branch == nil {
             Image(systemName: "laptopcomputer")
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(tokens.mutedForeground)
+                .accessibilityHidden(true)
+        } else if isMergedWorktree {
+            Image(systemName: "arrow.triangle.merge")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(tokens.success.opacity(0.8))
                 .accessibilityHidden(true)
         } else {
             Circle()

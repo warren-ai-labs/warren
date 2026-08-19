@@ -63,7 +63,7 @@ enum WarrenEndpointCatalog {
     }
 }
 
-private struct RemoteRoster: Decodable, Sendable {
+struct RemoteRoster: Decodable, Sendable {
     struct Host: Decodable, Sendable { let id: String; let name: String }
     struct Project: Decodable, Sendable {
         let id: String
@@ -78,6 +78,9 @@ private struct RemoteRoster: Decodable, Sendable {
         let path: String
         let branch: String?
         let pinned: Bool?
+        // Keep the wire value raw so a future Host state cannot invalidate
+        // the entire roster; the projection maps known values below.
+        let mergeState: String?
     }
     struct TerminalGroup: Decodable, Sendable {
         let id: String
@@ -1709,7 +1712,8 @@ final class WarrenRemoteApplicationModel {
                 name: value.name,
                 path: value.path,
                 branch: value.branch,
-                pinned: value.pinned ?? false
+                pinned: value.pinned ?? false,
+                mergeState: value.mergeState.flatMap(WorkspaceMergeState.init(rawValue:))
             )
         }
         let terminalGroups = roster.terminalGroups.enumerated().compactMap { index, value -> WarrenDomain.TerminalGroup? in
