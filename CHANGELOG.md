@@ -6,6 +6,14 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.3.1] - 2026-08-19
+
+### Fixed
+
+- Fix first launch reporting "The local daemon is not running" (code 7) on a clean
+  machine: the client now re-reads `~/.warren/token` on every connect attempt, so it
+  picks up the token the daemon writes during first-run startup.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
