@@ -22,6 +22,8 @@ struct WarrenDesktopSettingsView: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
+    private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.gnarSharingEnabled)
     private var gnarSharingEnabled = true
     @Environment(\.colorScheme) private var colorScheme
@@ -280,6 +282,7 @@ struct WarrenDesktopSettingsView: View {
                     shellCommand = ""
                     claudeCommand = "claude"
                     codexCommand = "codex --dangerously-bypass-hook-trust"
+                    presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tokens.mutedForeground)
@@ -369,22 +372,50 @@ struct WarrenDesktopSettingsView: View {
 
     private func presetsSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Launch commands", section: .presets, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Text("Session order")
+                    .font(WarrenTypography.bodyEmphasis)
+                Text("The first AI in this order starts automatically when you enter an empty workspace.")
+                    .font(WarrenTypography.supporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: WarrenSpacing.small) {
+                    ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
+                        HStack(spacing: WarrenSpacing.compact) {
+                            Image(systemName: preset.symbolName)
+                                .frame(width: 18)
+                                .foregroundStyle(tokens.mutedForeground)
+                            Text(preset.presetBarTitle)
+                                .font(WarrenTypography.body)
+                            Spacer()
+                            presetMoveButton(
+                                preset: preset,
+                                direction: -1,
+                                symbolName: "arrow.up",
+                                disabled: index == 0,
+                                tokens: tokens
+                            )
+                            presetMoveButton(
+                                preset: preset,
+                                direction: 1,
+                                symbolName: "arrow.down",
+                                disabled: index == orderedPresets.count - 1,
+                                tokens: tokens
+                            )
+                        }
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .frame(minHeight: 38)
+                        .background(tokens.fillHover)
+                        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
-                WarrenInputField(
-                    "Shell",
-                    text: $shellCommand,
-                    placeholder: "default shell (empty)"
-                )
-                WarrenInputField(
-                    "Claude",
-                    text: $claudeCommand,
-                    placeholder: "claude"
-                )
-                WarrenInputField(
-                    "Codex",
-                    text: $codexCommand,
-                    placeholder: "codex --dangerously-bypass-hook-trust"
-                )
+                ForEach(orderedPresets) { preset in
+                    presetCommandField(for: preset)
+                }
             }
             Text(
                 "Commands are typed into a plain shell after it opens, so "
@@ -395,6 +426,49 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.supporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var orderedPresets: [WarrenDesktopSessionPreset] {
+        WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)
+    }
+
+    private func presetMoveButton(
+        preset: WarrenDesktopSessionPreset,
+        direction: Int,
+        symbolName: String,
+        disabled: Bool,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        let directionLabel = direction < 0 ? "up" : "down"
+        return Button {
+            presetOrder = WarrenDesktopSessionPreset.moving(preset.id, by: direction, in: presetOrder)
+        } label: {
+            Image(systemName: symbolName)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(tokens.mutedForeground)
+        .disabled(disabled)
+        .accessibilityLabel("Move \(preset.presetBarTitle) \(directionLabel)")
+        .accessibilityIdentifier("settings.preset-order.\(preset.id).\(directionLabel)")
+    }
+
+    @ViewBuilder
+    private func presetCommandField(for preset: WarrenDesktopSessionPreset) -> some View {
+        switch preset.request.kind {
+        case .shell:
+            WarrenInputField("Shell", text: $shellCommand, placeholder: "default shell (empty)")
+        case .claude:
+            WarrenInputField("Claude", text: $claudeCommand, placeholder: "claude")
+        case .codex:
+            WarrenInputField(
+                "Codex",
+                text: $codexCommand,
+                placeholder: "codex --dangerously-bypass-hook-trust"
+            )
+        case .custom:
+            EmptyView()
         }
     }
 

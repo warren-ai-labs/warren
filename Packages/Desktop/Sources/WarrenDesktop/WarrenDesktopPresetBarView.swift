@@ -21,6 +21,8 @@ struct WarrenDesktopPresetBar: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
+    private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -30,7 +32,7 @@ struct WarrenDesktopPresetBar: View {
             surface: tokens.background
         ) {
             HStack(spacing: WarrenSpacing.small) {
-                ForEach(WarrenDesktopSessionPreset.pinned) { preset in
+                ForEach(WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)) { preset in
                     Button {
                         onLaunch(preset.resolvedRequest(
                             shellCommand: shellCommand,

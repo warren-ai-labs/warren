@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import {
   automaticSessionKind,
   firstAIPreset,
+  loadSessionPresetOrder,
+  moveSessionPreset,
+  normalizeSessionPresetOrder,
+  orderedSessionPresets,
   releaseWorkspaceSession,
   reserveWorkspaceSession,
   shouldAttachCreatedSession,
@@ -11,6 +15,49 @@ import {
 test("empty explicit workspace entry selects Claude", () => {
   assert.equal(firstAIPreset().kind, "claude");
   assert.equal(automaticSessionKind({ tabs: [], pending: false, explicit: true }), "claude");
+});
+
+test("persisted preset order is normalized", () => {
+  assert.deepEqual(
+    normalizeSessionPresetOrder(["codex", "shell", "codex", "future"]),
+    ["codex", "shell", "claude"],
+  );
+  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex"]);
+});
+
+test("loading preset order repairs persisted data", () => {
+  const storage = {
+    value: '["codex","shell","codex","future"]',
+    getItem() { return this.value; },
+    setItem(_key, value) { this.value = value; },
+  };
+
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude"]);
+  assert.equal(storage.value, '["codex","shell","claude"]');
+
+  storage.value = "invalid-json";
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex"]);
+  assert.equal(storage.value, '["shell","claude","codex"]');
+});
+
+test("preset order controls presentation and automatic AI selection", () => {
+  const presets = orderedSessionPresets(["shell", "codex", "claude"]);
+
+  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude"]);
+  assert.equal(automaticSessionKind({
+    tabs: [],
+    pending: false,
+    explicit: true,
+    presets,
+  }), "codex");
+});
+
+test("preset order moves within bounds", () => {
+  const order = ["shell", "claude", "codex"];
+
+  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude"]);
+  assert.deepEqual(moveSessionPreset(order, "shell", -1), order);
+  assert.deepEqual(moveSessionPreset(order, "codex", 1), order);
 });
 
 test("existing or pending workspace does not start a session", () => {

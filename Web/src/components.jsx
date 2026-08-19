@@ -865,6 +865,7 @@ export function SettingsPage({
   fontSize,
   titleTemplate,
   presetCommands,
+  presets,
   titlePreview,
   placeholders,
   onClose,
@@ -872,6 +873,7 @@ export function SettingsPage({
   onFontSizeChange,
   onTitleTemplateChange,
   onPresetCommandChange,
+  onMovePreset,
   onAppendPlaceholder,
   onRestore,
 }) {
@@ -994,14 +996,46 @@ export function SettingsPage({
                   <h2>Launch commands</h2>
                   <p>Edited in a terminal session after the shell starts, so quitting an agent keeps the tab alive.</p>
                 </header>
+                <div className="preset-order-section">
+                  <div className="settings-subheading">
+                    <h3>Session order</h3>
+                    <p>The first AI in this order starts automatically when you enter an empty workspace.</p>
+                  </div>
+                  <div className="preset-order-list">
+                    {presets.map((preset, index) => (
+                      <div className="preset-order-row" key={preset.kind}>
+                        <SessionPresetIcon kind={preset.kind} />
+                        <span>{preset.label}</span>
+                        <div className="preset-order-actions">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            aria-label={`Move ${preset.label} up`}
+                            onClick={() => onMovePreset(preset.kind, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === presets.length - 1}
+                            aria-label={`Move ${preset.label} down`}
+                            onClick={() => onMovePreset(preset.kind, 1)}
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <div className="preset-fields">
-                  {["shell", "claude", "codex"].map(kind => (
-                    <label key={kind}>
-                      {kind === "shell" ? "Shell" : kind === "claude" ? "Claude" : "Codex"}
+                  {presets.map(preset => (
+                    <label key={preset.kind}>
+                      {preset.label}
                       <input
-                        value={presetCommands[kind] || ""}
-                        onChange={event => onPresetCommandChange(kind, event.target.value)}
-                        placeholder={kind === "shell" ? "default shell (empty)" : `command for ${kind}`}
+                        value={presetCommands[preset.kind] || ""}
+                        onChange={event => onPresetCommandChange(preset.kind, event.target.value)}
+                        placeholder={preset.kind === "shell" ? "default shell (empty)" : `command for ${preset.kind}`}
                         autoComplete="off"
                         spellCheck="false"
                       />

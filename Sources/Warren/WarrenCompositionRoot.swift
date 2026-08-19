@@ -24,6 +24,8 @@ struct WarrenCompositionRoot: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
+    private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage("executionEndpoint")
     private var selectedEndpointID = "local"
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
@@ -151,6 +153,7 @@ struct WarrenCompositionRoot: View {
             remoteModel.copySecureWebURL()
         }
         .task {
+            presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
             updateTerminalFont()
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
@@ -196,7 +199,7 @@ struct WarrenCompositionRoot: View {
             )
             remoteModel.perform(action)
             if let automaticWorkspaceID,
-               let preset = WarrenDesktopSessionPreset.firstAI {
+               let preset = WarrenDesktopSessionPreset.firstAI(orderedBy: presetOrder) {
                 remoteModel.createSession(
                     workspaceID: automaticWorkspaceID,
                     request: preset.resolvedRequest(

@@ -21,10 +21,13 @@ import {
 import { runtime, serviceWorkerURL, webSocketURL } from "./runtime.js";
 import {
   automaticSessionKind,
+  defaultSessionPresetOrder,
   defaultPresetCommands,
+  loadSessionPresetOrder,
+  moveSessionPreset,
+  orderedSessionPresets,
   releaseWorkspaceSession,
   reserveWorkspaceSession,
-  sessionPresets,
   shouldAttachCreatedSession,
 } from "./session.js";
 import { defaultTitleTemplate, renderTerminalTitle, sessionDisplayTitle, titlePlaceholders } from "./title.js";
@@ -64,6 +67,7 @@ const storageKeys = {
   fontSize: "warren.terminalFontSize",
   titleTemplate: "warren.terminalTitleTemplate",
   presetCommands: "warren.presetCommands",
+  presetOrder: "warren.presetOrder",
 };
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
@@ -125,6 +129,7 @@ export default function App() {
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
   const [presetCommands, setPresetCommands] = useState(() => loadPresetCommands());
+  const [presetOrder, setPresetOrder] = useState(() => loadPresetOrder());
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
   const [emptyOverride, setEmptyOverride] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -169,6 +174,7 @@ export default function App() {
   const autoFocusOnAttachRef = useRef(true);
   const projectDragRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const orderedPresets = useMemo(() => orderedSessionPresets(presetOrder), [presetOrder]);
   useKeyboardInset(mainRef);
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
@@ -559,7 +565,7 @@ export default function App() {
     const finish = () => {
       releaseWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID);
     };
-    const preset = sessionPresets.find(value => value.kind === kind) || sessionPresets[0];
+    const preset = orderedPresets.find(value => value.kind === kind) || orderedPresets[0];
     const sent = request("session.create", {
       workspace: workspaceID,
       kind: preset.kind,
@@ -592,7 +598,7 @@ export default function App() {
       connectionRef.current?.reconnectNow();
     }
     return sent;
-  }, [attachSession, presetCommands, request, selectedWorkspaceID]);
+  }, [attachSession, orderedPresets, presetCommands, request, selectedWorkspaceID]);
 
   const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null, explicit = true) => {
     const state = appStateRef.current;
@@ -627,10 +633,11 @@ export default function App() {
         tabs: nextTabs,
         pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
         explicit,
+        presets: orderedPresets,
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, clearTerminalSearch, createSession, recordNavigation, request]);
+  }, [attachSession, clearTerminalSearch, createSession, orderedPresets, recordNavigation, request]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -641,6 +648,14 @@ export default function App() {
     setPresetCommands(previous => {
       const next = { ...previous, [kind]: command };
       localStorage.setItem(storageKeys.presetCommands, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const movePreset = useCallback((kind, offset) => {
+    setPresetOrder(previous => {
+      const next = moveSessionPreset(previous, kind, offset);
+      localStorage.setItem(storageKeys.presetOrder, JSON.stringify(next));
       return next;
     });
   }, []);
@@ -1585,7 +1600,9 @@ export default function App() {
     setFontFamily(defaultFontFamily);
     setFontSize(defaultFontSize);
     setPresetCommands({ ...defaultPresetCommands });
+    setPresetOrder([...defaultSessionPresetOrder]);
     localStorage.removeItem(storageKeys.presetCommands);
+    localStorage.removeItem(storageKeys.presetOrder);
   }, []);
 
   const selectedAgentEvents = selectedSession
@@ -1680,7 +1697,7 @@ export default function App() {
                 onOpenSearch={() => setSearchOpen(true)}
                 onTabContextMenu={sessionContextMenu}
               />
-              <PresetBar presets={sessionPresets} onCreateSession={createSession} />
+              <PresetBar presets={orderedPresets} onCreateSession={createSession} />
               <div className="pane-title">
                 <span>{paneTitle}</span>
                 {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
@@ -1761,6 +1778,7 @@ export default function App() {
         fontSize={fontSize}
         titleTemplate={titleTemplate}
         presetCommands={presetCommands}
+        presets={orderedPresets}
         titlePreview={titlePreview}
         placeholders={Object.entries(titlePlaceholders)}
         onClose={closeSettings}
@@ -1768,6 +1786,7 @@ export default function App() {
         onFontSizeChange={updateFontSize}
         onTitleTemplateChange={updateTitleTemplate}
         onPresetCommandChange={updatePresetCommand}
+        onMovePreset={movePreset}
         onAppendPlaceholder={appendPlaceholder}
         onRestore={restoreDefaults}
       />
@@ -1783,7 +1802,7 @@ export default function App() {
       {isMobile && (
         <SessionSheet
           open={sessionSheetOpen}
-          presets={sessionPresets}
+          presets={orderedPresets}
           onChoose={chooseSessionPreset}
           onClose={() => setSessionSheetOpen(false)}
         />
@@ -1840,6 +1859,14 @@ function loadPresetCommands() {
   } catch {
     return { ...defaultPresetCommands };
   }
+}
+
+function loadPresetOrder() {
+  return loadSessionPresetOrder(localStorage, storageKeys.presetOrder);
+}
+
+function shortSessionID(id) {
+  return id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
 
 function clamp(value, minimum, maximum) {

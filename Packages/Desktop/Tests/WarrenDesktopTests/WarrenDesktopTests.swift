@@ -703,6 +703,48 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testPresetOrderNormalizesPersistedIdentifiers() {
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrder("codex,shell,codex,future"),
+            ["codex", "shell", "claude"]
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrder(""),
+            ["shell", "claude", "codex"]
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.normalizedOrderRawValue("codex,shell,codex,future"),
+            "codex,shell,claude"
+        )
+    }
+
+    func testPresetOrderControlsPresentationAndAutomaticAISelection() {
+        let order = "shell,codex,claude"
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.orderedPinned(by: order).map(\.id),
+            ["shell", "codex", "claude"]
+        )
+        XCTAssertEqual(WarrenDesktopSessionPreset.firstAI(orderedBy: order)?.id, "codex")
+    }
+
+    func testPresetOrderMovesWithinBounds() {
+        let order = "shell,claude,codex"
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("codex", by: -1, in: order),
+            "shell,codex,claude"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("shell", by: -1, in: order),
+            order
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("codex", by: 1, in: order),
+            order
+        )
+    }
+
     func testAutomaticSessionPolicyChoosesExplicitEmptyWorkspace() {
         let fixture = WarrenDesktopFixture.preview
         let emptyWorkspaceID = fixture.groups[0].workspaces[1].id
