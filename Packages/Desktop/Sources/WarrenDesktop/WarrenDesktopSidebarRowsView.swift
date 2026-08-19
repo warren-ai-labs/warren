@@ -18,14 +18,13 @@ struct WarrenDesktopSidebarRows: View {
     let isCollapsed: Bool
     let selection: WarrenDesktopSidebarSelection?
     let onAddProject: () -> Void
+    let onRequestTerminalGroupCreate: () -> Void
+    let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
     let onAction: (WarrenDesktopAction) -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
 
     @State private var dragSession = WarrenDesktopSidebarDragSession()
-    @State private var terminalGroupEditor: TerminalGroupEditorMode?
-    @State private var terminalGroupName = ""
-    @State private var terminalGroupHome = ""
     /// Ephemeral presentation state; persisted expansion preferences remain untouched.
     @State private var dragAutoCollapse: WarrenSidebarDragAutoCollapse?
     @State private var dragSourceRowID: String?
@@ -112,34 +111,6 @@ struct WarrenDesktopSidebarRows: View {
                 tree.expandedProjectIDs.insert(workspace.projectID)
             }
         }
-        .overlay {
-            if let terminalGroupEditor {
-                WarrenDesktopTerminalGroupEditor(
-                    title: terminalGroupEditor.title,
-                    name: $terminalGroupName,
-                    home: $terminalGroupHome,
-                    onCancel: { self.terminalGroupEditor = nil },
-                    onConfirm: {
-                        let name = terminalGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { return }
-                        switch terminalGroupEditor {
-                        case .create:
-                            onAction(.createTerminalGroup(
-                                name,
-                                home: normalizedHome(terminalGroupHome)
-                            ))
-                        case .edit(let groupID):
-                            onAction(.renameTerminalGroup(groupID, name))
-                            onAction(.setTerminalGroupHome(
-                                groupID,
-                                normalizedHome(terminalGroupHome)
-                            ))
-                        }
-                        self.terminalGroupEditor = nil
-                    }
-                )
-            }
-        }
         .onChange(of: groups) { oldGroups, newGroups in
             guard let projectID = selectedProjectID else { return }
             let oldCount = workspaceCount(for: projectID, in: oldGroups)
@@ -161,7 +132,7 @@ struct WarrenDesktopSidebarRows: View {
                     title: "Terminals",
                     actionImage: "plus",
                     actionLabel: "New terminal group",
-                    onAction: beginCreateTerminalGroup
+                    onAction: onRequestTerminalGroupCreate
                 )
             }
             if terminalGroups.isEmpty {
@@ -181,8 +152,8 @@ struct WarrenDesktopSidebarRows: View {
                                 isCollapsed: isCollapsed,
                                 isSelected: selection == .terminalGroup(group.id),
                                 onSelect: { onAction(.selectTerminalGroup(group.id)) },
-                                onRename: { beginEditTerminalGroup(group.group) },
-                                onSetHome: { beginEditTerminalGroup(group.group) },
+                                onRename: { onRequestTerminalGroupEdit(group.group) },
+                                onSetHome: { onRequestTerminalGroupEdit(group.group) },
                                 onDelete: {
                                     onRequestDeletion(.terminalGroup(
                                         group.group,
@@ -202,23 +173,6 @@ struct WarrenDesktopSidebarRows: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func beginCreateTerminalGroup() {
-        terminalGroupName = ""
-        terminalGroupHome = ""
-        terminalGroupEditor = .create
-    }
-
-    private func beginEditTerminalGroup(_ group: TerminalGroup) {
-        terminalGroupName = group.name
-        terminalGroupHome = group.home ?? ""
-        terminalGroupEditor = .edit(group.id)
-    }
-
-    private func normalizedHome(_ home: String) -> String? {
-        let value = home.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
     }
 
     private var selectedProjectID: ProjectID? {
@@ -249,18 +203,6 @@ struct WarrenDesktopSidebarRows: View {
             onAction(.selectWorkspace(workspaceID))
         case .terminalGroup(let groupID):
             onAction(.selectTerminalGroup(groupID))
-        }
-    }
-
-    private enum TerminalGroupEditorMode: Equatable {
-        case create
-        case edit(TerminalGroupID)
-
-        var title: String {
-            switch self {
-            case .create: "New Terminal Group"
-            case .edit: "Edit Terminal Group"
-            }
         }
     }
 

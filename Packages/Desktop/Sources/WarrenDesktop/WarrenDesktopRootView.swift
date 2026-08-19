@@ -48,6 +48,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var webDismissalNonce = 0
     @State private var pendingRename: WarrenDesktopRenameRequest?
     @State private var renameValue = ""
+    @State private var pendingTerminalGroupEditor: WarrenDesktopTerminalGroupEditorMode?
+    @State private var terminalGroupName = ""
+    @State private var terminalGroupHome = ""
     @State private var pendingDeletion: WarrenDesktopDeletionRequest?
     @State private var deleteWorkspaceRemoveWorktree = false
     @State private var externalIDEFailure: WarrenDesktopExternalIDEFailure?
@@ -174,7 +177,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onAction: dispatch,
                     onCommandPalette: { commandPalettePresented = true },
                     onRequestRename: presentRename,
-                    onRequestDeletion: presentDeletion
+                    onRequestDeletion: presentDeletion,
+                    onRequestTerminalGroupCreate: presentTerminalGroupCreate,
+                    onRequestTerminalGroupEdit: presentTerminalGroupEdit
                 )
                 .frame(width: sidebarState.renderedWidth)
 
@@ -366,6 +371,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .overlay {
             renameDialog
+        }
+        .overlay {
+            terminalGroupEditorDialog
         }
         .overlay {
             deletionDialog
@@ -662,6 +670,64 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             dispatch(.renameSession(id, renameValue))
         }
         dismissRename()
+    }
+
+    private func presentTerminalGroupCreate() {
+        terminalGroupName = ""
+        terminalGroupHome = ""
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            pendingTerminalGroupEditor = .create
+        }
+    }
+
+    private func presentTerminalGroupEdit(_ group: TerminalGroup) {
+        terminalGroupName = group.name
+        terminalGroupHome = group.home ?? ""
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            pendingTerminalGroupEditor = .edit(group.id)
+        }
+    }
+
+    private func dismissTerminalGroupEditor() {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            pendingTerminalGroupEditor = nil
+        }
+    }
+
+    private func confirmTerminalGroupEditor() {
+        guard let pendingTerminalGroupEditor else { return }
+        let name = terminalGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let home = normalizedTerminalGroupHome(terminalGroupHome)
+        switch pendingTerminalGroupEditor {
+        case .create:
+            dispatch(.createTerminalGroup(name, home: home))
+        case .edit(let groupID):
+            dispatch(.renameTerminalGroup(groupID, name))
+            dispatch(.setTerminalGroupHome(groupID, home))
+        }
+        dismissTerminalGroupEditor()
+    }
+
+    private func normalizedTerminalGroupHome(_ home: String) -> String? {
+        let value = home.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    @ViewBuilder
+    private var terminalGroupEditorDialog: some View {
+        if let pendingTerminalGroupEditor {
+            WarrenModalBackdrop {
+                WarrenDesktopTerminalGroupEditor(
+                    title: pendingTerminalGroupEditor.title,
+                    name: $terminalGroupName,
+                    home: $terminalGroupHome,
+                    onCancel: dismissTerminalGroupEditor,
+                    onConfirm: confirmTerminalGroupEditor
+                )
+            }
+            .zIndex(32)
+        }
     }
 
     @ViewBuilder

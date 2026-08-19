@@ -1,5 +1,18 @@
 import SwiftUI
 import WarrenDesignSystem
+import WarrenDomain
+
+enum WarrenDesktopTerminalGroupEditorMode: Equatable {
+    case create
+    case edit(TerminalGroupID)
+
+    var title: String {
+        switch self {
+        case .create: "New Terminal Group"
+        case .edit: "Edit Terminal Group"
+        }
+    }
+}
 
 struct WarrenDesktopTerminalGroupRow: View {
     let group: WarrenDesktopTerminalGroup

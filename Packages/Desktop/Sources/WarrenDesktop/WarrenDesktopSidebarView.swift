@@ -12,6 +12,8 @@ struct WarrenDesktopSidebar: View {
     let onCommandPalette: () -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
+    let onRequestTerminalGroupCreate: () -> Void
+    let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,6 +46,8 @@ struct WarrenDesktopSidebar: View {
                         isCollapsed: sidebarState.isCollapsed,
                         selection: selection,
                         onAddProject: { onAction(.addProject) },
+                        onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
+                        onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                         onAction: onAction,
                         onRequestRename: onRequestRename,
                         onRequestDeletion: onRequestDeletion
