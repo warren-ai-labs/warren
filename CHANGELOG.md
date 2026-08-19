@@ -6,6 +6,23 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.3.0] - 2026-08-19
+
+### Added
+
+- Import project git worktrees into workspaces, gated behind a new worktree setting.
+- Start a default AI session for new workspaces on macOS and the web.
+- Configure the order of session presets.
+- Open worktrees in external IDEs from the workspace menu, with installed IDE detection and custom IDE entries.
+- Drag projects to reorder the sidebar directly on the web.
+- Add an onboarding changelog page.
+
+### Fixed
+
+- Make the worktree import setting toggleable in settings.
+- Avoid restoring sessions during web restoration.
+- Reject invalid git worktree records.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
