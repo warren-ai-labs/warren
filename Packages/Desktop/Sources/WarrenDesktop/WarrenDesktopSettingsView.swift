@@ -75,8 +75,8 @@ struct WarrenDesktopSettingsView: View {
 
         var isTerminalSection: Bool {
             switch self {
-            case .terminalFont, .terminalTitle, .terminalRuntime, .presets: true
-            case .workspaces, .webSharing: false
+            case .terminalFont, .terminalTitle, .terminalRuntime, .presets, .workspaces: true
+            case .webSharing: false
             }
         }
     }

@@ -1470,6 +1470,12 @@ func (s *Service) SetDefaultRuntime(kind string) error {
 // runtime environment overrides and the gnar edge, persisting them when a
 // settings file is configured. Existing sessions keep their own runtimeKind.
 func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnarEdge string) error {
+	if kind == "" {
+		kind = s.DefaultRuntime
+	}
+	if kind == "" {
+		kind = s.Settings.Normalized()
+	}
 	switch kind {
 	case settings.RuntimeGhostline, settings.RuntimeTmux:
 	default:
