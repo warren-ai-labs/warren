@@ -22,6 +22,81 @@ final class WarrenDesktopTests: XCTestCase {
 
     }
 
+    func testExternalIDECatalogHasStableOrderAndBundleIdentifiers() {
+        XCTAssertEqual(
+            WarrenDesktopExternalIDE.supported.map(\.id),
+            [.visualStudioCode, .goLand, .androidStudio]
+        )
+        XCTAssertEqual(
+            WarrenDesktopExternalIDE.supported.map(\.bundleIdentifier),
+            ["com.microsoft.VSCode", "com.jetbrains.goland", "com.google.android.studio"]
+        )
+    }
+
+    func testExternalIDEOptionsEnableOnlyInstalledApplicationsForLocalWorkspace() {
+        let projectID = ProjectID()
+        let workspace = Workspace(
+            projectID: projectID,
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let codeURL = URL(fileURLWithPath: "/Applications/Visual Studio Code.app")
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                bundleIdentifier == "com.microsoft.VSCode" ? codeURL : nil
+            },
+            directoryExists: { $0.path == workspace.path },
+            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(options.map(\.ide.id), [.visualStudioCode, .goLand, .androidStudio])
+        XCTAssertEqual(options.map(\.isEnabled), [true, false, false])
+        XCTAssertEqual(options.first?.workspaceURL?.path, workspace.path)
+        XCTAssertEqual(options.first?.applicationURL, codeURL)
+    }
+
+    func testExternalIDEOptionsDisableEveryApplicationForRemoteWorkspace() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Remote",
+            path: "/srv/warren"
+        )
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
+            directoryExists: { _ in true },
+            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        let options = service.options(for: workspace, isLocalEndpoint: false)
+
+        XCTAssertEqual(options.count, 3)
+        XCTAssertTrue(options.allSatisfy { !$0.isEnabled })
+    }
+
+    func testExternalIDEOptionsDisableEveryApplicationWithoutExistingWorkspaceDirectory() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Missing",
+            path: "/missing/worktree"
+        )
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in URL(fileURLWithPath: "/Applications/IDE.app") },
+            directoryExists: { _ in false },
+            launch: { _, _, _ in XCTFail("Availability must not launch an IDE") }
+        )
+
+        XCTAssertTrue(
+            service.options(for: workspace, isLocalEndpoint: true)
+                .allSatisfy { !$0.isEnabled }
+        )
+        XCTAssertTrue(
+            service.options(for: nil, isLocalEndpoint: true)
+                .allSatisfy { !$0.isEnabled }
+        )
+    }
+
     func testRootLayoutMountsAtSupersetDesktopSizeWithoutPixelCapture() {
         let root = WarrenDesktopRoot(
             projection: WarrenDesktopFixture.preview.projection,
