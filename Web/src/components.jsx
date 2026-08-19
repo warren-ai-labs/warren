@@ -160,15 +160,13 @@ export function Sidebar({
   const isBuild = useBuildVariant();
   const [dragState, setDragState] = useState(null);
   const [dragOverID, setDragOverID] = useState(null);
+  const [dragOverPosition, setDragOverPosition] = useState(null);
 
   const beginDrag = (kind, id, projectID, event) => {
-    if (!(event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      return;
-    }
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", id);
     setDragOverID(null);
+    setDragOverPosition(null);
     setDragState({ kind, id, projectID });
     if (kind === "project") onBeginProjectDrag(expandedProjects);
   };
@@ -177,13 +175,19 @@ export function Sidebar({
     if (dragState?.kind === "project") onEndProjectDrag();
     setDragState(null);
     setDragOverID(null);
+    setDragOverPosition(null);
   };
 
   const projectDragOver = (projectID, event) => {
     if (dragState?.kind !== "project") return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    if (dragOverID !== projectID) setDragOverID(projectID);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (dragOverID !== projectID || dragOverPosition !== position) {
+      setDragOverID(projectID);
+      setDragOverPosition(position);
+    }
   };
 
   const workspaceDragOver = (workspace, event) => {
@@ -193,11 +197,23 @@ export function Sidebar({
     if (dragOverID !== workspace.id) setDragOverID(workspace.id);
   };
 
-  const dropProject = (beforeProjectID, event) => {
+  const dropProject = (projectID, event) => {
     if (dragState?.kind !== "project") return;
     event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const beforeProjectID = event.clientY < rect.top + rect.height / 2
+      ? projectID
+      : projectAfter(projectID);
     onMoveProject(dragState.id, beforeProjectID);
     endDrag();
+  };
+
+  const projectIDs = catalog.projects.map(project => project.id);
+
+  const projectAfter = projectID => {
+    const index = projectIDs.indexOf(projectID);
+    if (index < 0 || index + 1 >= projectIDs.length) return null;
+    return projectIDs[index + 1];
   };
 
   const dropWorkspace = (workspace, event) => {
@@ -225,7 +241,7 @@ export function Sidebar({
           return (
             <section className={`project${open ? " open" : ""}`} key={project.id}>
               <div
-                className={`project-toggle${dragOverID === project.id ? " drag-over" : ""}`}
+                className={`project-toggle${dragOverID === project.id ? " drag-over" : ""}${dragOverID === project.id && dragOverPosition === "before" ? " drag-before" : ""}${dragOverID === project.id && dragOverPosition === "after" ? " drag-after" : ""}`}
                 onContextMenu={event => onProjectContextMenu(event, project)}
                 draggable
                 onDragStart={event => beginDrag("project", project.id, null, event)}
