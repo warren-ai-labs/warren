@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WarrenClientCore
 import WarrenDesignSystem
@@ -109,6 +110,12 @@ struct WarrenDesktopTabBar: View {
                             )
                         }
                     }
+                    .background {
+                        WarrenDesktopTabScrollFollower(
+                            selectedTabID: selectedTabID,
+                            tabIDs: tabs.map(\.id)
+                        )
+                    }
                     .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
                 }
                 .frame(
@@ -160,6 +167,86 @@ struct WarrenDesktopTabBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace tab bar")
+    }
+}
+
+/// Keeps the native horizontal track aligned with the active tab. SwiftUI's
+/// `ScrollViewProxy` cannot reliably cross WarrenOverflowFadeScrollView's
+/// nested reader on macOS, so this leaf scrolls its enclosing AppKit view.
+private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
+    let selectedTabID: String?
+    let tabIDs: [String]
+
+    func makeNSView(context: Context) -> WarrenDesktopTabScrollFollowerView {
+        let view = WarrenDesktopTabScrollFollowerView()
+        view.update(selectedTabID: selectedTabID, tabIDs: tabIDs)
+        return view
+    }
+
+    func updateNSView(_ nsView: WarrenDesktopTabScrollFollowerView, context: Context) {
+        nsView.update(selectedTabID: selectedTabID, tabIDs: tabIDs)
+    }
+}
+
+private final class WarrenDesktopTabScrollFollowerView: NSView {
+    private var selectedTabID: String?
+    private var tabIDs: [String] = []
+    private var lastViewportWidth: CGFloat?
+    private var scrollScheduled = false
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        scheduleScroll()
+    }
+
+    override func layout() {
+        super.layout()
+        guard let scrollView = enclosingScrollView else { return }
+        let viewportWidth = scrollView.contentView.bounds.width
+        guard viewportWidth != lastViewportWidth else { return }
+        lastViewportWidth = viewportWidth
+        scheduleScroll()
+    }
+
+    func update(selectedTabID: String?, tabIDs: [String]) {
+        guard self.selectedTabID != selectedTabID || self.tabIDs != tabIDs else { return }
+        self.selectedTabID = selectedTabID
+        self.tabIDs = tabIDs
+        scheduleScroll()
+    }
+
+    private func scheduleScroll() {
+        guard !scrollScheduled else { return }
+        scrollScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.scrollScheduled = false
+            self.scrollToSelectedTab()
+        }
+    }
+
+    private func scrollToSelectedTab() {
+        guard let selectedTabID,
+              let selectedIndex = tabIDs.firstIndex(of: selectedTabID),
+              let scrollView = enclosingScrollView else { return }
+
+        let viewport = scrollView.contentView.bounds
+        guard viewport.width > 0 else { return }
+
+        let tabWidth = WarrenLayoutMetrics.tabWidth
+        let trackWidth = max(CGFloat(tabIDs.count) * tabWidth, bounds.width)
+        let maximumOriginX = max(trackWidth - viewport.width, 0)
+        let selectedMidpoint = (CGFloat(selectedIndex) + 0.5) * tabWidth
+        let originX = min(
+            max(selectedMidpoint - viewport.width / 2, 0),
+            maximumOriginX
+        )
+        guard abs(viewport.minX - originX) > 0.5 else { return }
+
+        var origin = viewport.origin
+        origin.x = originX
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 }
 

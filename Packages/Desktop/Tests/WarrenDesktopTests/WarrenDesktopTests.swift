@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import Combine
 @testable import WarrenDesktop
 import WarrenDesignSystem
 import WarrenDomain
@@ -12,6 +13,69 @@ private struct TestTerminalSurface: View {
     var body: some View {
         Text("surface:\(context.tab.id):\(context.workspace?.id.rawValue.uuidString ?? context.terminalGroup?.id.rawValue.uuidString ?? "none")")
     }
+}
+
+@MainActor
+private final class TabBarTestState: ObservableObject {
+    @Published var tabs: [ClientTab]
+    @Published var selectedTabID: String?
+
+    init(tabs: [ClientTab], selectedTabID: String?) {
+        self.tabs = tabs
+        self.selectedTabID = selectedTabID
+    }
+}
+
+private struct TabBarTestHarness: View {
+    @ObservedObject var state: TabBarTestState
+
+    var body: some View {
+        makeTabBar(tabs: state.tabs, selectedTabID: state.selectedTabID)
+            .frame(width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
+    }
+}
+
+@MainActor
+private func makeTabBar(
+    tabs: [ClientTab],
+    selectedTabID: String?
+) -> WarrenDesktopTabBar {
+    WarrenDesktopTabBar(
+        tabs: tabs,
+        tabTitles: Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.title) }),
+        tabActivities: [:],
+        pinnedSessionIDs: [],
+        selectedTabID: selectedTabID,
+        chromeMode: .workspace,
+        isSidebarCollapsed: false,
+        connectionState: .attached,
+        endpointOptions: [WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true)],
+        selectedEndpointID: "local",
+        webStatus: WarrenDesktopWebStatus(),
+        externalIDEOptions: nil,
+        hasInspector: false,
+        isInspectorVisible: false,
+        onToggleSidebar: {},
+        onToggleInspector: {},
+        onSettings: {},
+        onWeb: {},
+        onOpenInExternalIDE: { _ in },
+        onSelectEndpoint: { _ in },
+        onSelectTab: { _ in },
+        onMoveTab: { _, _ in },
+        sessionMoveTargets: [],
+        sessionMoveDestinations: [:],
+        onMoveSession: { _, _ in },
+        canAddTab: true,
+        isAddingTab: false,
+        onAddTab: {},
+        onCloseTab: { _ in },
+        onCloseOtherTabs: { _ in },
+        onCloseAllTabs: {},
+        onRequestRename: { _ in },
+        onToggleSessionPin: { _, _ in },
+        onDismissActivity: { _, _ in }
+    )
 }
 
 @MainActor
@@ -377,6 +441,72 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(filler.frame.width, 100)
     }
 
+    func testTabBarFollowsNewAndSelectedTabsInOverflowMode() {
+        let initialTabs = (0..<6).map { index in
+            ClientTab(
+                id: "tab-\(index)",
+                title: "Session \(index)",
+                sessionID: TerminalSessionID(rawValue: UUID()),
+                kind: .shell
+            )
+        }
+        let state = TabBarTestState(
+            tabs: initialTabs,
+            selectedTabID: initialTabs[0].id
+        )
+        let hostingView = NSHostingView(rootView: TabBarTestHarness(state: state))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        hostingView.layoutSubtreeIfNeeded()
+        let initialScrollViews = descendantViews(of: hostingView, as: NSScrollView.self)
+
+        guard let scrollView = initialScrollViews.first else {
+            XCTFail("Tab bar scroll view is missing")
+            return
+        }
+        XCTAssertLessThanOrEqual(scrollView.contentView.bounds.minX, 1)
+
+        let newTab = ClientTab(
+            id: "tab-new",
+            title: "New session",
+            sessionID: TerminalSessionID(rawValue: UUID()),
+            kind: .shell
+        )
+        state.tabs.append(newTab)
+        state.selectedTabID = newTab.id
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        hostingView.layoutSubtreeIfNeeded()
+        let updatedScrollViews = descendantViews(of: hostingView, as: NSScrollView.self)
+
+        guard let updatedScrollView = updatedScrollViews.first else {
+            XCTFail("Updated tab bar scroll view is missing")
+            return
+        }
+        XCTAssertGreaterThan(
+            updatedScrollView.contentView.bounds.minX,
+            1,
+            "Selecting a new tab must reveal it in the overflow track"
+        )
+
+        state.selectedTabID = initialTabs[0].id
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        hostingView.layoutSubtreeIfNeeded()
+
+        guard let restoredScrollView = descendantViews(of: hostingView, as: NSScrollView.self).first else {
+            XCTFail("Restored tab bar scroll view is missing")
+            return
+        }
+
+        XCTAssertLessThanOrEqual(
+            restoredScrollView.contentView.bounds.minX,
+            1,
+            "Selecting the first tab must return the overflow track to the leading edge"
+        )
+    }
+
     func testTabBarEngagesOverflowModeWhenTrailingChromeLeavesNarrowTrack() {
         let tabs = (0..<6).map { index in
             ClientTab(
@@ -532,43 +662,8 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     private func tabBar(tabs: [ClientTab]) -> some View {
-        WarrenDesktopTabBar(
-            tabs: tabs,
-            tabTitles: Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.title) }),
-            tabActivities: [:],
-            pinnedSessionIDs: [],
-            selectedTabID: tabs.first?.id,
-            chromeMode: .workspace,
-            isSidebarCollapsed: false,
-            connectionState: .attached,
-            endpointOptions: [WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true)],
-            selectedEndpointID: "local",
-            webStatus: WarrenDesktopWebStatus(),
-            externalIDEOptions: nil,
-            hasInspector: false,
-            isInspectorVisible: false,
-            onToggleSidebar: {},
-            onToggleInspector: {},
-            onSettings: {},
-            onWeb: {},
-            onOpenInExternalIDE: { _ in },
-            onSelectEndpoint: { _ in },
-            onSelectTab: { _ in },
-            onMoveTab: { _, _ in },
-            sessionMoveTargets: [],
-            sessionMoveDestinations: [:],
-            onMoveSession: { _, _ in },
-            canAddTab: true,
-            isAddingTab: false,
-            onAddTab: {},
-            onCloseTab: { _ in },
-            onCloseOtherTabs: { _ in },
-            onCloseAllTabs: {},
-            onRequestRename: { _ in },
-            onToggleSessionPin: { _, _ in },
-            onDismissActivity: { _, _ in }
-        )
-        .frame(width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
+        makeTabBar(tabs: tabs, selectedTabID: tabs.first?.id)
+            .frame(width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
     }
 
     func testWindowDragRegionUsesDedicatedAppKitView() {
