@@ -348,7 +348,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func installStatusDot() {
         guard let button = statusItem.button else { return }
-        let size: CGFloat = 5.5
+        let size: CGFloat = 6.5
         let dot = NSView()
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.wantsLayer = true
