@@ -352,6 +352,9 @@ or generated `Web/dist` changes into these commits.
 ### Phase 2 — Popovers, menus, and selectors
 
 - [x] Apply the popover role surface to Endpoint selection.
+- [x] Unify the top-right Web, endpoint, and external IDE controls behind one
+      app-owned chrome popover with the same surface, close affordance,
+      outside-click/Escape behavior, and light typography.
 - [x] Align External IDE menu labels, order, disabled states, and keyboard
       behavior with Web.
 - [x] Consolidate the seven macOS context-menu sites behind one action model.
