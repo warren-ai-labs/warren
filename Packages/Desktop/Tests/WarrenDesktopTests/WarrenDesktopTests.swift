@@ -1093,16 +1093,16 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testBuiltInPresetsMapToExplicitLaunchRequests() {
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex"])
+        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex", "trae"])
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.map(\.presetBarTitle),
-            ["Shell", "Claude", "Codex"]
+            ["Shell", "Claude", "Codex", "Trae"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.compactMap(\.presetBarIconName),
-            ["preset-shell", "preset-claude", "preset-codex"]
+            ["preset-shell", "preset-claude", "preset-codex", "preset-trae"]
         )
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.request), [.shell, .claude, .codex])
+        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.request), [.shell, .claude, .codex, .trae])
         XCTAssertNil(TerminalSessionLaunchRequest.shell.command)
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.command, "claude")
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.title, "Claude Code")
@@ -1110,13 +1110,11 @@ final class WarrenDesktopTests: XCTestCase {
             TerminalSessionLaunchRequest.codex.command,
             "codex --dangerously-bypass-hook-trust"
         )
+        XCTAssertEqual(TerminalSessionLaunchRequest.trae.command, "trae-cli interactive")
         XCTAssertEqual(WarrenDesktopSessionPreset.firstAI?.id, "claude")
         XCTAssertEqual(
-            WarrenDesktopSessionPreset.firstAI?.resolvedRequest(
-                shellCommand: "",
-                claudeCommand: "claude --model sonnet",
-                codexCommand: "codex"
-            ).command,
+            WarrenDesktopSessionPreset.firstAI?
+                .resolvedRequest(commandOverride: "claude --model sonnet").command,
             "claude --model sonnet"
         )
     }
@@ -1124,26 +1122,64 @@ final class WarrenDesktopTests: XCTestCase {
     func testPresetOrderNormalizesPersistedIdentifiers() {
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder("codex,shell,codex,future"),
-            ["codex", "shell", "claude"]
+            ["codex", "shell", "claude", "trae"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder(""),
-            ["shell", "claude", "codex"]
+            ["shell", "claude", "codex", "trae"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrderRawValue("codex,shell,codex,future"),
-            "codex,shell,claude"
+            "codex,shell,claude,trae"
         )
     }
 
     func testPresetOrderControlsPresentation() {
-        let order = "shell,codex,claude"
+        let order = "shell,codex,claude,trae"
 
         XCTAssertEqual(
             WarrenDesktopSessionPreset.orderedPinned(by: order).map(\.id),
-            ["shell", "codex", "claude"]
+            ["shell", "codex", "claude", "trae"]
         )
         XCTAssertEqual(WarrenDesktopSessionPreset.firstAI(orderedBy: order)?.id, "codex")
+    }
+
+    func testPresetVisibilityHidesTraeByDefaultAndControlsAutomaticAI() {
+        XCTAssertEqual(WarrenDesktopSessionPreset.defaultHiddenRawValue, "trae")
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.orderedVisible(
+                by: WarrenDesktopSessionPreset.defaultOrderRawValue,
+                hidden: WarrenDesktopSessionPreset.defaultHiddenRawValue
+            ).map(\.id),
+            ["shell", "claude", "codex"]
+        )
+
+        let onlyTraeVisible = WarrenDesktopSessionPreset.pinned
+            .map(\.id)
+            .filter { $0 != "trae" }
+            .joined(separator: ",")
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.firstAI(
+                orderedBy: "trae,shell,claude,codex",
+                hidden: onlyTraeVisible
+            )?.id,
+            "trae"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.settingVisibility(of: "trae", visible: true, in: "trae"),
+            ""
+        )
+    }
+
+    func testEveryPresetAcceptsItsOwnCommandOverride() {
+        for preset in WarrenDesktopSessionPreset.pinned {
+            XCTAssertEqual(
+                preset.resolvedRequest(commandOverride: "personal-\(preset.id)").command,
+                "personal-\(preset.id)"
+            )
+        }
+        let trae = WarrenDesktopSessionPreset.pinned.first { $0.id == "trae" }
+        XCTAssertEqual(trae?.resolvedRequest(commandOverride: "").command, "trae-cli interactive")
     }
 
     func testAutomaticShellPolicyIsOptInForAnEmptyWorkspace() {
@@ -1242,18 +1278,18 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testPresetOrderMovesWithinBounds() {
-        let order = "shell,claude,codex"
+        let order = "shell,claude,codex,trae"
 
         XCTAssertEqual(
             WarrenDesktopSessionPreset.moving("codex", by: -1, in: order),
-            "shell,codex,claude"
+            "shell,codex,claude,trae"
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.moving("shell", by: -1, in: order),
             order
         )
         XCTAssertEqual(
-            WarrenDesktopSessionPreset.moving("codex", by: 1, in: order),
+            WarrenDesktopSessionPreset.moving("trae", by: 1, in: order),
             order
         )
     }
@@ -1515,6 +1551,17 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertNil(cache.image(named: "missing"))
         XCTAssertNil(cache.image(named: "missing"))
         XCTAssertEqual(loads, ["known", "missing"])
+    }
+
+    func testPackagedPresetIconsAreValidImages() throws {
+        let iconNames = try WarrenDesktopSessionPreset.pinned.map {
+            try XCTUnwrap($0.presetBarIconName)
+        } + ["preset-codex-white"]
+
+        for iconName in iconNames {
+            let image = try XCTUnwrap(WarrenPresetIconCache.shared.image(named: iconName))
+            XCTAssertTrue(image.isValid, "Expected \(iconName) to decode as a valid image")
+        }
     }
 
     func testSelectionReconcilesEmptyToLoadedProjection() {

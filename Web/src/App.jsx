@@ -21,14 +21,18 @@ import {
 import { runtime, serviceWorkerURL, webSocketURL } from "./runtime.js";
 import {
   automaticSessionKind,
+  defaultHiddenSessionPresetKinds,
   defaultSessionPresetOrder,
   defaultPresetCommands,
+  loadHiddenSessionPresetKinds,
   loadSessionPresetOrder,
   moveSessionPreset,
   orderedSessionPresets,
   releaseWorkspaceSession,
   reserveWorkspaceSession,
+  sessionPresets,
   shouldAttachCreatedSession,
+  visibleSessionPresets,
 } from "./session.js";
 import { defaultTitleTemplate, renderTerminalTitle, sessionDisplayTitle, titlePlaceholders } from "./title.js";
 import {
@@ -73,6 +77,7 @@ const storageKeys = {
   titleTemplate: "warren.terminalTitleTemplate",
   presetCommands: "warren.presetCommands",
   presetOrder: "warren.presetOrder",
+  hiddenPresets: "warren.hiddenPresets",
 };
 
 // How often the open git panel re-fetches remote refs while it stays visible.
@@ -138,6 +143,7 @@ export default function App() {
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
   const [presetCommands, setPresetCommands] = useState(() => loadPresetCommands());
   const [presetOrder, setPresetOrder] = useState(() => loadPresetOrder());
+  const [hiddenPresets, setHiddenPresets] = useState(() => loadHiddenPresets());
   const [autoOpenShell, setAutoOpenShell] = useState(false);
   const [autoStartAI, setAutoStartAI] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
@@ -197,6 +203,10 @@ export default function App() {
   const projectDragRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const orderedPresets = useMemo(() => orderedSessionPresets(presetOrder), [presetOrder]);
+  const visiblePresets = useMemo(
+    () => visibleSessionPresets(orderedPresets, hiddenPresets),
+    [hiddenPresets, orderedPresets],
+  );
   useKeyboardInset(mainRef);
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
@@ -874,11 +884,11 @@ export default function App() {
         pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
         explicit: automaticEntry,
         autoStartAI,
-        presets: orderedPresets,
+        presets: visiblePresets,
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, autoStartAI, clearTerminalSearch, createSession, orderedPresets, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [attachSession, autoStartAI, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -897,6 +907,17 @@ export default function App() {
     setPresetOrder(previous => {
       const next = moveSessionPreset(previous, kind, offset);
       localStorage.setItem(storageKeys.presetOrder, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const updatePresetVisibility = useCallback((kind, visible) => {
+    setHiddenPresets(previous => {
+      const hidden = new Set(previous);
+      if (visible) hidden.delete(kind);
+      else hidden.add(kind);
+      const next = sessionPresets.map(preset => preset.kind).filter(value => hidden.has(value));
+      localStorage.setItem(storageKeys.hiddenPresets, JSON.stringify(next));
       return next;
     });
   }, []);
@@ -2020,8 +2041,10 @@ export default function App() {
     setFontSize(defaultFontSize);
     setPresetCommands({ ...defaultPresetCommands });
     setPresetOrder([...defaultSessionPresetOrder]);
+    setHiddenPresets([...defaultHiddenSessionPresetKinds]);
     localStorage.removeItem(storageKeys.presetCommands);
     localStorage.removeItem(storageKeys.presetOrder);
+    localStorage.removeItem(storageKeys.hiddenPresets);
   }, []);
 
   const selectedAgentEvents = selectedSession
@@ -2119,7 +2142,7 @@ export default function App() {
                 gitActive={gitOpen}
                 onTabContextMenu={sessionContextMenu}
               />
-              <PresetBar presets={orderedPresets} onCreateSession={createSession} />
+              <PresetBar presets={visiblePresets} onCreateSession={createSession} />
               <div className="pane-title">
                 <span>{paneTitle}</span>
                 {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
@@ -2247,6 +2270,7 @@ export default function App() {
         titleTemplate={titleTemplate}
         presetCommands={presetCommands}
         presets={orderedPresets}
+        hiddenPresets={hiddenPresets}
         autoOpenShell={autoOpenShell}
         autoStartAI={autoStartAI}
         titlePreview={titlePreview}
@@ -2256,6 +2280,7 @@ export default function App() {
         onFontSizeChange={updateFontSize}
         onTitleTemplateChange={updateTitleTemplate}
         onPresetCommandChange={updatePresetCommand}
+        onPresetVisibilityChange={updatePresetVisibility}
         onAutoOpenShellChange={updateAutoOpenShell}
         onAutoStartAIChange={updateAutoStartAI}
         onMovePreset={movePreset}
@@ -2274,7 +2299,7 @@ export default function App() {
       {isMobile && (
         <SessionSheet
           open={sessionSheetOpen}
-          presets={orderedPresets}
+          presets={visiblePresets}
           onChoose={chooseSessionPreset}
           onClose={() => setSessionSheetOpen(false)}
         />
@@ -2341,6 +2366,10 @@ function loadPresetCommands() {
 
 function loadPresetOrder() {
   return loadSessionPresetOrder(localStorage, storageKeys.presetOrder);
+}
+
+function loadHiddenPresets() {
+  return loadHiddenSessionPresetKinds(localStorage, storageKeys.hiddenPresets);
 }
 
 function shortSessionID(id) {

@@ -28,8 +28,12 @@ struct WarrenDesktopSettingsView: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.presetCommandTrae)
+    private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
+    @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
+    private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @AppStorage(WarrenPreferenceKey.gnarSharingEnabled)
     private var gnarSharingEnabled = true
     @Environment(\.colorScheme) private var colorScheme
@@ -62,7 +66,7 @@ struct WarrenDesktopSettingsView: View {
             case .terminalFont: "Applied to every terminal surface."
             case .terminalTitle: "Build a title from live Session metadata."
             case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
-            case .presets: "Commands launched by the Shell, Claude and Codex buttons."
+            case .presets: "Choose visible presets and customize every launch command."
             case .workspaces: "How projects import worktrees and enter sessions."
             case .externalIDEs: "IDEs the workspace menu can open worktrees in."
             case .webSharing: "Publish the Web UI to the public internet."
@@ -74,7 +78,7 @@ struct WarrenDesktopSettingsView: View {
             case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
             case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
             case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
-            case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "agent"]
+            case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
             case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
             case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
             case .webSharing: [rawValue, detail, "gnar", "share", "public", "tunnel", "internet"]
@@ -302,7 +306,9 @@ struct WarrenDesktopSettingsView: View {
                     shellCommand = ""
                     claudeCommand = "claude"
                     codexCommand = "codex --dangerously-bypass-hook-trust"
+                    traeCommand = "trae-cli interactive"
                     presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
+                    hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tokens.mutedForeground)
@@ -403,12 +409,16 @@ struct WarrenDesktopSettingsView: View {
                 VStack(spacing: WarrenSpacing.small) {
                     ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
                         HStack(spacing: WarrenSpacing.compact) {
-                            Image(systemName: preset.symbolName)
-                                .frame(width: 18)
-                                .foregroundStyle(tokens.mutedForeground)
+                            WarrenDesktopPresetIcon(preset: preset)
+                                .frame(width: 16, height: 16)
                             Text(preset.presetBarTitle)
                                 .font(WarrenTypography.body)
                             Spacer()
+                            Toggle("Show \(preset.presetBarTitle)", isOn: presetVisibilityBinding(for: preset))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.mini)
+                                .accessibilityIdentifier("settings.preset-visibility.\(preset.id)")
                             presetMoveButton(
                                 preset: preset,
                                 direction: -1,
@@ -438,7 +448,8 @@ struct WarrenDesktopSettingsView: View {
                 }
             }
             Text(
-                "Commands are typed into a plain shell after it opens, so "
+                "Hidden presets stay configurable here but do not appear in the "
+                    + "preset bar. Commands are typed into a plain shell after it opens, so "
                     + "quitting an agent with Ctrl+C / Ctrl+D keeps the "
                     + "terminal tab alive. Leave Shell empty for a bare "
                     + "terminal."
@@ -451,6 +462,19 @@ struct WarrenDesktopSettingsView: View {
 
     private var orderedPresets: [WarrenDesktopSessionPreset] {
         WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)
+    }
+
+    private func presetVisibilityBinding(for preset: WarrenDesktopSessionPreset) -> Binding<Bool> {
+        Binding(
+            get: { !WarrenDesktopSessionPreset.normalizedHidden(hiddenPresets).contains(preset.id) },
+            set: { visible in
+                hiddenPresets = WarrenDesktopSessionPreset.settingVisibility(
+                    of: preset.id,
+                    visible: visible,
+                    in: hiddenPresets
+                )
+            }
+        )
     }
 
     private func presetMoveButton(
@@ -487,6 +511,8 @@ struct WarrenDesktopSettingsView: View {
                 text: $codexCommand,
                 placeholder: "codex --dangerously-bypass-hook-trust"
             )
+        case .trae:
+            WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:
             EmptyView()
         }

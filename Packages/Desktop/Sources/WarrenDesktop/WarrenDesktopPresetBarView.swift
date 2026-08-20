@@ -5,8 +5,8 @@ import WarrenDomain
 
 /// Pinned command launchers between the workspace tabs and pane toolbar.
 ///
-/// Superset calls this its PresetsBar. Warren currently has three executable
-/// built-ins; custom commands continue through the full session creator. Every
+/// Superset calls this its PresetsBar. Warren keeps its executable built-ins
+/// in one catalog; custom commands continue through the full session creator. Every
 /// button emits a typed intent and creates a real Host-owned session.
 struct WarrenDesktopPresetBar: View {
     let workspace: Workspace?
@@ -21,8 +21,12 @@ struct WarrenDesktopPresetBar: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.presetCommandTrae)
+    private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
+    @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
+    private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -32,17 +36,16 @@ struct WarrenDesktopPresetBar: View {
             surface: tokens.background
         ) {
             HStack(spacing: WarrenSpacing.small) {
-                ForEach(WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)) { preset in
+                ForEach(WarrenDesktopSessionPreset.orderedVisible(
+                    by: presetOrder,
+                    hidden: hiddenPresets
+                )) { preset in
                     Button {
-                        onLaunch(preset.resolvedRequest(
-                            shellCommand: shellCommand,
-                            claudeCommand: claudeCommand,
-                            codexCommand: codexCommand
-                        ))
+                        onLaunch(preset.resolvedRequest(commandOverride: command(for: preset.id)))
                     } label: {
                         HStack(spacing: 6) {
-                            WarrenPresetIcon(preset: preset)
-                                .frame(width: 14, height: 14)
+                            WarrenDesktopPresetIcon(preset: preset)
+                                .frame(width: 16, height: 16)
 
                             Text(preset.presetBarTitle)
                                 .font(.system(size: 13, weight: .light))
@@ -82,9 +85,19 @@ struct WarrenDesktopPresetBar: View {
         .accessibilityLabel("Command presets")
     }
 
+    private func command(for presetID: String) -> String {
+        switch presetID {
+        case "shell": shellCommand
+        case "claude": claudeCommand
+        case "codex": codexCommand
+        case "trae": traeCommand
+        default: ""
+        }
+    }
+
 }
 
-private struct WarrenPresetIcon: View {
+struct WarrenDesktopPresetIcon: View {
     let preset: WarrenDesktopSessionPreset
 
     @Environment(\.colorScheme) private var colorScheme
@@ -95,6 +108,7 @@ private struct WarrenPresetIcon: View {
                 .resizable()
                 .scaledToFit()
                 .opacity(0.9)
+                .scaleEffect(preset.id == "codex" ? 1.35 : 1)
                 .accessibilityHidden(true)
         }
     }

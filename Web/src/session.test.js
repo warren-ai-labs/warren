@@ -2,13 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   automaticSessionKind,
+  loadHiddenSessionPresetKinds,
   loadSessionPresetOrder,
   moveSessionPreset,
+  normalizeHiddenSessionPresetKinds,
   normalizeSessionPresetOrder,
   orderedSessionPresets,
   releaseWorkspaceSession,
   reserveWorkspaceSession,
   shouldAttachCreatedSession,
+  visibleSessionPresets,
 } from "./session.js";
 
 test("automatic AI entry is opt-in, empty-only and follows preset order", () => {
@@ -40,9 +43,9 @@ test("automatic AI entry is opt-in, empty-only and follows preset order", () => 
 test("persisted preset order is normalized", () => {
   assert.deepEqual(
     normalizeSessionPresetOrder(["codex", "shell", "codex", "future"]),
-    ["codex", "shell", "claude"],
+    ["codex", "shell", "claude", "trae"],
   );
-  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex"]);
+  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex", "trae"]);
 });
 
 test("loading preset order repairs persisted data", () => {
@@ -52,26 +55,54 @@ test("loading preset order repairs persisted data", () => {
     setItem(_key, value) { this.value = value; },
   };
 
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude"]);
-  assert.equal(storage.value, '["codex","shell","claude"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude", "trae"]);
+  assert.equal(storage.value, '["codex","shell","claude","trae"]');
 
   storage.value = "invalid-json";
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex"]);
-  assert.equal(storage.value, '["shell","claude","codex"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex", "trae"]);
+  assert.equal(storage.value, '["shell","claude","codex","trae"]');
 });
 
 test("preset order controls presentation", () => {
   const presets = orderedSessionPresets(["shell", "codex", "claude"]);
 
-  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude"]);
+  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude", "trae"]);
 });
 
 test("preset order moves within bounds", () => {
-  const order = ["shell", "claude", "codex"];
+  const order = ["shell", "claude", "codex", "trae"];
 
-  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude"]);
+  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude", "trae"]);
   assert.deepEqual(moveSessionPreset(order, "shell", -1), order);
-  assert.deepEqual(moveSessionPreset(order, "codex", 1), order);
+  assert.deepEqual(moveSessionPreset(order, "trae", 1), order);
+});
+
+test("Trae is hidden by default and visibility only accepts known presets", () => {
+  const storage = {
+    value: null,
+    getItem() { return this.value; },
+    setItem(_key, value) { this.value = value; },
+  };
+
+  assert.deepEqual(loadHiddenSessionPresetKinds(storage, "hidden-presets"), ["trae"]);
+  assert.deepEqual(normalizeHiddenSessionPresetKinds(["future", "codex", "codex"]), ["codex"]);
+  assert.deepEqual(
+    visibleSessionPresets(orderedSessionPresets(null), ["trae"]).map(preset => preset.kind),
+    ["shell", "claude", "codex"],
+  );
+});
+
+test("Trae participates in automatic AI order when it is visible", () => {
+  assert.equal(
+    automaticSessionKind({
+      tabs: [],
+      pending: false,
+      explicit: true,
+      autoStartAI: true,
+      presets: visibleSessionPresets(orderedSessionPresets(["trae", "shell"]), []),
+    }),
+    "trae",
+  );
 });
 
 test("workspace reservation prevents duplicate requests and can be released", () => {

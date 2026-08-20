@@ -2133,7 +2133,9 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		kind = "shell"
 	}
 	customTitle := strings.TrimSpace(title)
-	defaultTitle := map[string]string{"shell": "Shell", "codex": "Codex", "claude": "Claude Code"}[kind]
+	defaultTitle := map[string]string{
+		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "trae": "Trae Agent",
+	}[kind]
 	if defaultTitle == "" {
 		fields := strings.Fields(command)
 		if len(fields) > 0 {

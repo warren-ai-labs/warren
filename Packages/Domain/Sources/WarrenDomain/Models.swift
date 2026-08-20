@@ -327,6 +327,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case shell
     case claude
     case codex
+    case trae
     case custom
 
     public var displayName: String {
@@ -334,6 +335,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .shell: "Shell"
         case .claude: "Claude Code"
         case .codex: "Codex"
+        case .trae: "Trae Agent"
         case .custom: "Custom"
         }
     }
@@ -385,6 +387,11 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
         kind: .codex,
         command: "codex --dangerously-bypass-hook-trust",
         title: "Codex"
+    )
+    public static let trae = Self(
+        kind: .trae,
+        command: "trae-cli interactive",
+        title: "Trae Agent"
     )
 
     public func identified(by requestID: UUID = UUID()) -> Self {

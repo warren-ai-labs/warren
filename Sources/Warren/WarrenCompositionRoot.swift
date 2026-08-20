@@ -29,8 +29,12 @@ struct WarrenCompositionRoot: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.presetCommandTrae)
+    private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
+    @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
+    private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @AppStorage("executionEndpoint")
     private var selectedEndpointID = "local"
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
@@ -223,6 +227,7 @@ struct WarrenCompositionRoot: View {
         }
         .task {
             presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
+            hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
@@ -281,32 +286,42 @@ struct WarrenCompositionRoot: View {
                 // guard prevents the double-click path from creating a second
                 // process. If this is the first event, the AI preference wins
                 // over the Shell preference for the same empty workspace.
-                if remoteModel.autoStartAI,
-                   let preset = WarrenDesktopSessionPreset.firstAI(orderedBy: presetOrder) {
-                    remoteModel.createSession(
-                        workspaceID: workspaceID,
-                        request: preset.resolvedRequest(
-                            shellCommand: "",
-                            claudeCommand: claudeCommand,
-                            codexCommand: codexCommand
+                if remoteModel.autoStartAI {
+                    if let preset = WarrenDesktopSessionPreset.firstAI(
+                        orderedBy: presetOrder,
+                        hidden: hiddenPresets
+                    ) {
+                        remoteModel.createSession(
+                            workspaceID: workspaceID,
+                            request: preset.resolvedRequest(commandOverride: command(for: preset.id))
                         )
-                    )
+                    } else if remoteModel.autoOpenShell {
+                        remoteModel.createSession(workspaceID: workspaceID, request: .shell)
+                    }
                 } else {
                     remoteModel.createSession(workspaceID: workspaceID, request: .shell)
                 }
             case .selectWorkspace, .selectProject:
-                guard let preset = WarrenDesktopSessionPreset.firstAI(orderedBy: presetOrder) else { return }
+                guard let preset = WarrenDesktopSessionPreset.firstAI(
+                    orderedBy: presetOrder,
+                    hidden: hiddenPresets
+                ) else { return }
                 remoteModel.createSession(
                     workspaceID: workspaceID,
-                    request: preset.resolvedRequest(
-                        shellCommand: "",
-                        claudeCommand: claudeCommand,
-                        codexCommand: codexCommand
-                    )
+                    request: preset.resolvedRequest(commandOverride: command(for: preset.id))
                 )
             default:
                 break
             }
+        }
+    }
+
+    private func command(for presetID: String) -> String {
+        switch presetID {
+        case "claude": claudeCommand
+        case "codex": codexCommand
+        case "trae": traeCommand
+        default: ""
         }
     }
 

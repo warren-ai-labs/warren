@@ -138,15 +138,12 @@ export function MergedBadge({ tabs = [] }) {
 }
 
 function SessionPresetIcon({ kind }) {
-  if (kind === "codex") {
-    return (
-      <picture>
-        <source media="(prefers-color-scheme:dark)" srcSet={webAssetURL("preset-codex-white.svg")} />
-        <img src={webAssetURL("preset-codex.svg")} alt="" />
-      </picture>
-    );
-  }
-  return <img src={webAssetURL(`preset-${kind}.svg`)} alt="" />;
+  const asset = kind === "codex" ? "preset-codex-white.svg" : `preset-${kind}.svg`;
+  return (
+    <span className={`preset-brand-icon preset-brand-icon-${kind}`} aria-hidden="true">
+      <img src={webAssetURL(asset)} alt="" />
+    </span>
+  );
 }
 
 export function Sidebar({
@@ -999,6 +996,7 @@ export function SettingsPage({
   titleTemplate,
   presetCommands,
   presets,
+  hiddenPresets = [],
   autoOpenShell,
   autoStartAI,
   titlePreview,
@@ -1008,6 +1006,7 @@ export function SettingsPage({
   onFontSizeChange,
   onTitleTemplateChange,
   onPresetCommandChange,
+  onPresetVisibilityChange,
   onAutoOpenShellChange,
   onAutoStartAIChange,
   onMovePreset,
@@ -1033,8 +1032,8 @@ export function SettingsPage({
     {
       id: "presets",
       label: "Presets",
-      description: "Commands launched by the Shell, Claude and Codex buttons.",
-      keywords: ["preset", "command", "launch", "shell", "claude", "codex", "agent"],
+      description: "Choose visible presets and customize every launch command.",
+      keywords: ["preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"],
     },
     {
       id: "workspaces",
@@ -1155,6 +1154,14 @@ export function SettingsPage({
                       <div className="preset-order-row" key={preset.kind}>
                         <SessionPresetIcon kind={preset.kind} />
                         <span>{preset.label}</span>
+                        <label className="preset-visibility-toggle">
+                          <input
+                            type="checkbox"
+                            checked={!hiddenPresets.includes(preset.kind)}
+                            onChange={event => onPresetVisibilityChange(preset.kind, event.target.checked)}
+                          />
+                          <span>Show</span>
+                        </label>
                         <div className="preset-order-actions">
                           <button
                             type="button"
@@ -1192,8 +1199,9 @@ export function SettingsPage({
                   ))}
                 </div>
                 <p className="settings-note">
-                  Leave Shell empty to open a plain terminal. Claude and Codex run inside the shell, so you can exit
-                  them with Ctrl+C / Ctrl+D and keep the session.
+                  Hidden presets stay configurable here but do not appear in the preset bar. Leave Shell empty to
+                  open a plain terminal. Agents run inside the shell, so you can exit them with Ctrl+C / Ctrl+D and
+                  keep the session.
                 </p>
               </section>
             ) : activeSection === "workspaces" ? (

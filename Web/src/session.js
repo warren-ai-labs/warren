@@ -2,15 +2,18 @@ export const defaultPresetCommands = {
   shell: "",
   claude: "claude",
   codex: "codex --dangerously-bypass-hook-trust",
+  trae: "trae-cli interactive",
 };
 
 export const sessionPresets = [
-  { kind: "shell", label: "Shell", title: "Shell" },
-  { kind: "claude", label: "Claude", title: "Claude Code" },
-  { kind: "codex", label: "Codex", title: "Codex" },
+  { kind: "shell", label: "Shell", title: "Shell", isAgent: false },
+  { kind: "claude", label: "Claude", title: "Claude Code", isAgent: true },
+  { kind: "codex", label: "Codex", title: "Codex", isAgent: true },
+  { kind: "trae", label: "Trae", title: "Trae Agent", isAgent: true },
 ];
 
 export const defaultSessionPresetOrder = sessionPresets.map(preset => preset.kind);
+export const defaultHiddenSessionPresetKinds = ["trae"];
 
 export function normalizeSessionPresetOrder(order, presets = sessionPresets) {
   const knownKinds = new Set(presets.map(preset => preset.kind));
@@ -53,6 +56,29 @@ export function orderedSessionPresets(order, presets = sessionPresets) {
   return normalizeSessionPresetOrder(order, presets).map(kind => presetsByKind.get(kind));
 }
 
+export function normalizeHiddenSessionPresetKinds(hiddenKinds, presets = sessionPresets) {
+  const hidden = new Set(Array.isArray(hiddenKinds) ? hiddenKinds : []);
+  return presets.map(preset => preset.kind).filter(kind => hidden.has(kind));
+}
+
+export function loadHiddenSessionPresetKinds(storage, key, presets = sessionPresets) {
+  const fallback = normalizeHiddenSessionPresetKinds(defaultHiddenSessionPresetKinds, presets);
+  try {
+    const rawValue = storage.getItem(key);
+    if (rawValue === null) return fallback;
+    const normalized = normalizeHiddenSessionPresetKinds(JSON.parse(rawValue), presets);
+    storage.setItem(key, JSON.stringify(normalized));
+    return normalized;
+  } catch {
+    return fallback;
+  }
+}
+
+export function visibleSessionPresets(presets, hiddenKinds) {
+  const hidden = new Set(normalizeHiddenSessionPresetKinds(hiddenKinds, presets));
+  return presets.filter(preset => !hidden.has(preset.kind));
+}
+
 export function moveSessionPreset(order, kind, offset, presets = sessionPresets) {
   const normalized = normalizeSessionPresetOrder(order, presets);
   const index = normalized.indexOf(kind);
@@ -63,7 +89,7 @@ export function moveSessionPreset(order, kind, offset, presets = sessionPresets)
 }
 
 export function firstAIPreset(presets = sessionPresets) {
-  return presets.find(preset => preset.kind === "claude" || preset.kind === "codex") || null;
+  return presets.find(preset => preset.isAgent) || null;
 }
 
 export function automaticSessionKind({ tabs, pending, explicit, autoStartAI = false, presets = sessionPresets }) {
