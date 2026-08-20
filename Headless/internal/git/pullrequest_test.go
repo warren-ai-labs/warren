@@ -17,6 +17,7 @@ func TestRemoteHostParsing(t *testing.T) {
 		{"ssh://git@github.com/abcdlsj/warren.git", "github.com"},
 		{"git@gitlab.com:group/repo.git", "gitlab.com"},
 		{"https://gitlab.bilibili.co/group/repo.git", "gitlab.bilibili.co"},
+		{"git@git.bilibili.co:group/repo.git", "git.bilibili.co"},
 		{"https://example.com/group/repo.git", "example.com"},
 	}
 	for _, test := range tests {
@@ -38,6 +39,10 @@ func TestPRHostSelectsCLIByRemote(t *testing.T) {
 	gitForTest(t, dir, "remote", "set-url", "origin", "https://gitlab.bilibili.co/group/repo.git")
 	if host, err := prHost(context.Background(), dir); err != nil || host != "gitlab" {
 		t.Fatalf("prHost = %q, %v, want gitlab", host, err)
+	}
+	gitForTest(t, dir, "remote", "set-url", "origin", "git@git.bilibili.co:group/repo.git")
+	if host, err := prHost(context.Background(), dir); err != nil || host != "gitlab" {
+		t.Fatalf("prHost = %q, %v, want gitlab for git.bilibili.co", host, err)
 	}
 	gitForTest(t, dir, "remote", "set-url", "origin", "git@example.com:group/repo.git")
 	if _, err := prHost(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "unsupported git host") {

@@ -104,7 +104,7 @@ func prHost(ctx context.Context, dir string) (string, error) {
 	switch {
 	case strings.Contains(host, "github.com"):
 		return "github", nil
-	case strings.Contains(host, "gitlab"):
+	case strings.Contains(host, "gitlab"), host == "git.bilibili.co":
 		return "gitlab", nil
 	}
 	return "", fmt.Errorf("unsupported git host %q for pull requests (GitHub and GitLab are supported)", host)
