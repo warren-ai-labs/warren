@@ -5,6 +5,7 @@ export function normalizeGitPanel(payload) {
     upstream: payload?.upstream || "",
     ahead: payload?.ahead || 0,
     behind: payload?.behind || 0,
+    aheadOfMain: payload?.aheadOfMain || 0,
     remote: payload?.remote || "",
     mainBranch: payload?.mainBranch || "",
     merged: Boolean(payload?.merged),

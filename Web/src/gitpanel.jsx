@@ -285,16 +285,9 @@ export function GitPanel({
               </>
             )}
           </div>
-          {data?.mainBranch && !data.operation &&
-            (data.merged ? (
-              <div className="git-merged-badge">Merged into {data.mainBranch}</div>
-            ) : (
-              <div className="git-unmerged-count">
-                {data.unmergedCommits.length
-                  ? `${data.unmergedCommits.length} commit${data.unmergedCommits.length === 1 ? "" : "s"} not in ${data.mainBranch}`
-                  : `Up to date with ${data.mainBranch}`}
-              </div>
-            ))}
+          {data?.mainBranch && !data.operation && data.merged && (
+            <div className="git-merged-badge">Merged into {data.mainBranch}</div>
+          )}
           {data?.upstream && (
             <div className="git-ahead-behind">
               {data.ahead > 0 && <span className="git-ahead">↑ {data.ahead} ahead</span>}
