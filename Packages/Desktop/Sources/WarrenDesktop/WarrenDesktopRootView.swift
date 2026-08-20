@@ -50,6 +50,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var commandPalettePresented = false
     @State private var settingsPresented = false
     @State private var navigationBeforeSettings: WarrenDesktopNavigationState?
+    @State private var chromePopover: WarrenDesktopChromePopover?
+    @State private var webDismissalNonce = 0
     @State private var pendingRename: WarrenDesktopRenameRequest?
     @State private var renameValue = ""
     @State private var pendingTerminalGroupEditor: WarrenDesktopTerminalGroupEditorMode?
@@ -172,15 +174,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             projection.sessions.filter(\.pinned).map(\.id)
         )
         let isAddingSession = isAddingSession(in: presentation)
-        let selectedEndpointIsLocal = endpointOptions.first {
-            $0.id == selectedEndpointID
-        }?.isLocal == true
-        let externalIDEOptions = presentation.workspace.map { workspace in
-            externalIDEService.options(
-                for: workspace,
-                isLocalEndpoint: selectedEndpointIsLocal
-            )
-        }
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
         ZStack(alignment: .topLeading) {
@@ -240,13 +233,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             // ownership so keystrokes go to Settings instead
                             // of the hidden terminal.
                             NSApp.keyWindow?.makeFirstResponder(nil)
+                            setChromePopover(nil)
                             setSettingsPresented(true)
                         },
-                        canShare: gnarSharingEnabled,
-                        onWebStart: onWebStart,
-                        onWebStop: onWebStop,
-                        onWebOpenURL: onWebOpenURL,
-                        onWebCopyURL: onWebCopyURL,
+                        onChromePopover: { popover in
+                            setChromePopover(chromePopover == popover ? nil : popover)
+                        },
                         onOpenInExternalIDE: openInExternalIDE,
                         onSelectEndpoint: onSelectEndpoint,
                         onSelectTab: { dispatch(.selectTab($0)) },
@@ -442,7 +434,103 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 .zIndex(WarrenPresentationLayer.commandSurface)
             }
         }
+        .overlay {
+            chromePopoverLayer
+        }
+        .onChange(of: chromePopover) { _, popover in
+            if popover == .web {
+                refreshWebDismissal()
+            }
+        }
         .warrenSemanticObservationRoot(recorder: semanticRecorder)
+    }
+
+    private var selectedEndpointIsLocal: Bool {
+        endpointOptions.first { $0.id == selectedEndpointID }?.isLocal == true
+    }
+
+    private var isWebChromePopover: Bool {
+        chromePopover == .web
+    }
+
+    private var externalIDEOptions: [WarrenDesktopExternalIDEOption]? {
+        makePresentation().workspace.map { workspace in
+            externalIDEService.options(
+                for: workspace,
+                isLocalEndpoint: selectedEndpointIsLocal
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var chromePopoverLayer: some View {
+        if let chromePopover, !settingsPresented {
+            ZStack(alignment: .topTrailing) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { setChromePopover(nil) }
+                    .ignoresSafeArea()
+
+                switch chromePopover {
+                case .web:
+                    WarrenDesktopWebPanel(
+                        status: webStatus,
+                        canShare: gnarSharingEnabled,
+                        onStart: {
+                            onWebStart()
+                            refreshWebDismissal()
+                        },
+                        onStop: {
+                            onWebStop()
+                            refreshWebDismissal()
+                        },
+                        onOpenURL: { url in
+                            onWebOpenURL(url)
+                            refreshWebDismissal()
+                        },
+                        onCopyURL: { url in
+                            onWebCopyURL(url)
+                            refreshWebDismissal()
+                        },
+                        onDismiss: { setChromePopover(nil) }
+                    )
+                case .endpoint:
+                    WarrenDesktopEndpointPopover(
+                        connectionState: projection.connectionState,
+                        endpoints: endpointOptions,
+                        selectedID: selectedEndpointID,
+                        onSelect: onSelectEndpoint,
+                        onDismiss: { setChromePopover(nil) }
+                    )
+                case .externalIDE:
+                    if let options = externalIDEOptions {
+                        WarrenDesktopExternalIDEPopover(
+                            options: options,
+                            onOpen: openInExternalIDE,
+                            onDismiss: { setChromePopover(nil) }
+                        )
+                    }
+                }
+            }
+            .padding(.top, WarrenLayoutMetrics.tabBarHeight + WarrenSpacing.small)
+            .padding(.trailing, WarrenSpacing.medium)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .onChange(of: webStatus.tunnelRunning) { _, isRunning in
+                // Keep the panel open while sharing so the public address
+                // stays visible for copying; it falls back to auto-dismiss
+                // after stop.
+                if isRunning, isWebChromePopover {
+                    refreshWebDismissal()
+                }
+            }
+            .task(id: webDismissalNonce) {
+                guard isWebChromePopover else { return }
+                try? await Task.sleep(for: WarrenDesktopWebDismissal.interval)
+                guard !Task.isCancelled else { return }
+                guard !webStatus.tunnelRunning else { return }
+                setChromePopover(nil)
+            }
+        }
     }
 
     /// Resolve all selection-dependent UI values once per body evaluation.
@@ -617,6 +705,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             settingsPresented = presented
         }
+    }
+
+    private func setChromePopover(_ popover: WarrenDesktopChromePopover?) {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            chromePopover = popover
+        }
+    }
+
+    private func refreshWebDismissal() {
+        guard isWebChromePopover else { return }
+        webDismissalNonce += 1
     }
 
     private func presentRename(_ request: WarrenDesktopRenameRequest) {
@@ -895,6 +994,10 @@ enum WarrenDesktopTabSelector {
         guard number >= 1, tabs.indices.contains(number - 1) else { return nil }
         return tabs[number - 1].id
     }
+}
+
+private enum WarrenDesktopWebDismissal {
+    static let interval: Duration = .seconds(3)
 }
 
 private enum WarrenDesktopPerformance {

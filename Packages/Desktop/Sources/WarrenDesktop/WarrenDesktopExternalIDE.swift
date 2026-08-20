@@ -167,54 +167,22 @@ struct WarrenDesktopExternalIDEMenuPresentation {
 
 struct WarrenDesktopExternalIDEMenu: View {
     let options: [WarrenDesktopExternalIDEOption]
+    let onPresent: () -> Void
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        Menu {
-            ForEach(WarrenDesktopExternalIDEMenuPresentation.items(from: options)) { item in
-                Button {
-                    onOpen(item.option)
-                } label: {
-                    Label {
-                        Text(item.title)
-                            .font(WarrenTypography.externalIDEName)
-                    } icon: {
-                        iconView(item.icon, tokens: tokens)
-                    }
-                }
-                .disabled(!item.isEnabled)
-            }
-        } label: {
+        Button(action: onPresent) {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .frame(width: 28, height: 28)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Open workspace in IDE")
         .accessibilityHint("Open the current worktree in an external IDE")
-    }
-
-    @ViewBuilder
-    private func iconView(_ icon: NSImage?, tokens: WarrenColorTokens) -> some View {
-        if let icon {
-            Image(nsImage: icon)
-                .resizable()
-                .scaledToFit()
-                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
-                       height: WarrenLayoutMetrics.externalIDEIconSize)
-        } else {
-            Image(systemName: "app")
-                .font(.system(size: WarrenLayoutMetrics.externalIDEIconSize, weight: .regular))
-                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
-                       height: WarrenLayoutMetrics.externalIDEIconSize)
-                .foregroundStyle(tokens.mutedForeground)
-        }
     }
 }
 

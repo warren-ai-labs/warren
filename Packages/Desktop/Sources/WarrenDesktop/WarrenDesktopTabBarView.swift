@@ -25,11 +25,7 @@ struct WarrenDesktopTabBar: View {
     let onToggleSidebar: () -> Void
     let onToggleInspector: () -> Void
     let onSettings: () -> Void
-    let canShare: Bool
-    let onWebStart: () -> Void
-    let onWebStop: () -> Void
-    let onWebOpenURL: (URL) -> Void
-    let onWebCopyURL: (URL) -> Void
+    let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onSelectTab: (String) -> Void
@@ -156,11 +152,7 @@ struct WarrenDesktopTabBar: View {
                         hasInspector: hasInspector,
                         isInspectorVisible: isInspectorVisible,
                         onSettings: onSettings,
-                        canShare: canShare,
-                        onWebStart: onWebStart,
-                        onWebStop: onWebStop,
-                        onWebOpenURL: onWebOpenURL,
-                        onWebCopyURL: onWebCopyURL,
+                        onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
                         onSelectEndpoint: onSelectEndpoint,
                         onToggleInspector: onToggleInspector
@@ -319,11 +311,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let hasInspector: Bool
     let isInspectorVisible: Bool
     let onSettings: () -> Void
-    let canShare: Bool
-    let onWebStart: () -> Void
-    let onWebStop: () -> Void
-    let onWebOpenURL: (URL) -> Void
-    let onWebCopyURL: (URL) -> Void
+    let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onToggleInspector: () -> Void
@@ -353,6 +341,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
             if let externalIDEOptions, !externalIDEOptions.isEmpty {
                 WarrenDesktopExternalIDEMenu(
                     options: externalIDEOptions,
+                    onPresent: { onChromePopover(.externalIDE) },
                     onOpen: onOpenInExternalIDE
                 )
             }
@@ -361,16 +350,20 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 connectionState: connectionState,
                 endpoints: endpointOptions,
                 selectedID: selectedEndpointID,
+                onPresent: { onChromePopover(.endpoint) },
                 onSelect: onSelectEndpoint
             )
         case .web:
-            WarrenDesktopWebMenu(
-                status: webStatus,
-                canShare: canShare,
-                onStart: onWebStart,
-                onStop: onWebStop,
-                onOpenURL: onWebOpenURL,
-                onCopyURL: onWebCopyURL
+            WarrenDesktopChromeButton(
+                systemImage: "globe",
+                label: "Web",
+                hint: webStatus.tunnelRunning
+                    ? "Public sharing is on"
+                    : (webStatus.isRunning ? "Web is running" : "Web is stopped"),
+                action: { onChromePopover(.web) },
+                tint: webStatus.tunnelRunning
+                    ? tokens.info
+                    : (webStatus.isRunning ? tokens.success : nil)
             )
         case .inspector:
             if hasInspector {
@@ -394,9 +387,11 @@ private struct WarrenDesktopEndpointControl: View {
     let connectionState: WarrenDesktopConnectionState
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
+    let onPresent: () -> Void
     let onSelect: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
 
     private var selectedEndpoint: WarrenDesktopEndpointOption? {
         endpoints.first { $0.id == selectedID }
@@ -405,37 +400,7 @@ private struct WarrenDesktopEndpointControl: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
-        Menu {
-            Text(presentation.label)
-                .font(WarrenTypography.popoverMeta)
-                .foregroundStyle(tokens.mutedForeground)
-            Divider()
-            ForEach(endpoints) { endpoint in
-                Button {
-                    onSelect(endpoint.id)
-                } label: {
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(
-                                endpoint.id == selectedID
-                                    ? tokens.highlight
-                                    : tokens.mutedForeground
-                            )
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(endpoint.label)
-                                .font(WarrenTypography.popoverItem)
-                            if let detail = endpoint.detail {
-                                Text(detail)
-                                    .font(WarrenTypography.popoverMeta)
-                                    .foregroundStyle(tokens.mutedForeground)
-                            }
-                        }
-                    }
-                }
-                .accessibilityLabel(endpoint.label)
-                .accessibilityValue(endpoint.id == selectedID ? "Selected" : "")
-            }
-        } label: {
+        Button(action: onPresent) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "server.rack")
                     .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
@@ -451,10 +416,10 @@ private struct WarrenDesktopEndpointControl: View {
                     .accessibilityHidden(true)
             }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
         .frame(width: 28, height: 28)
         .contentShape(.rect)
+        .focused($isFocused)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Execution server: \(selectedEndpoint?.label ?? "Server")")
         .accessibilityHint("\(presentation.label). Click for details.")

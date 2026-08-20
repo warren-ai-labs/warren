@@ -1824,16 +1824,6 @@ button:disabled {
   gap: var(--space-lg);
 }
 
-.settings-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xl);
-  padding: var(--space-2xl);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--fill-hover);
-}
-
 .settings-toggle,
 .settings-info-card {
   display: flex;

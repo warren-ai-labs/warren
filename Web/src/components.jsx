@@ -1266,19 +1266,17 @@ export function SettingsPage({
                   <h2>Terminal font</h2>
                   <p>Applied to every web terminal.</p>
                 </header>
-                <div className="settings-card">
-                  <div className="settings-fields">
-                    <label>
-                      Font family
-                      <input value={fontFamily} onChange={event => onFontFamilyChange(event.target.value)} autoComplete="off" spellCheck="false" />
-                    </label>
-                    <label>
-                      Size
-                      <input type="number" min="8" max="32" step="1" value={fontSize} onChange={event => onFontSizeChange(event.target.value)} />
-                    </label>
-                  </div>
-                  <div className="font-preview" style={{ fontFamily, fontSize: `${fontSize}px` }}>Aa&nbsp;&nbsp;The quick brown fox&nbsp;&nbsp;0123456789</div>
+                <div className="settings-fields">
+                  <label>
+                    Font family
+                    <input value={fontFamily} onChange={event => onFontFamilyChange(event.target.value)} autoComplete="off" spellCheck="false" />
+                  </label>
+                  <label>
+                    Size
+                    <input type="number" min="8" max="32" step="1" value={fontSize} onChange={event => onFontSizeChange(event.target.value)} />
+                  </label>
                 </div>
+                <div className="font-preview" style={{ fontFamily, fontSize: `${fontSize}px` }}>Aa&nbsp;&nbsp;The quick brown fox&nbsp;&nbsp;0123456789</div>
               </section>
             ) : activeSection === "presets" ? (
               <section className="settings-section">
@@ -1286,69 +1284,65 @@ export function SettingsPage({
                   <h2>Launch commands</h2>
                   <p>Edited in a terminal session after the shell starts, so quitting an agent keeps the tab alive.</p>
                 </header>
-                <div className="settings-card">
-                  <div className="preset-order-section">
-                    <div className="settings-subheading">
-                      <h3>Session order</h3>
-                      <p>This order controls the preset buttons; opening a workspace never changes it.</p>
-                    </div>
-                    <div className="preset-order-list">
-                      {presets.map((preset, index) => (
-                        <div className="preset-order-row" key={preset.kind}>
-                          <SessionPresetIcon kind={preset.kind} />
-                          <span>{preset.label}</span>
-                          <label className="preset-visibility-toggle">
-                            <input
-                              type="checkbox"
-                              checked={!hiddenPresets.includes(preset.kind)}
-                              onChange={event => onPresetVisibilityChange(preset.kind, event.target.checked)}
-                            />
-                            <span>Show</span>
-                          </label>
-                          <div className="preset-order-actions">
-                            <button
-                              type="button"
-                              disabled={index === 0}
-                              aria-label={`Move ${preset.label} up`}
-                              onClick={() => onMovePreset(preset.kind, -1)}
-                            >
-                              ↑
-                            </button>
-                            <button
-                              type="button"
-                              disabled={index === presets.length - 1}
-                              aria-label={`Move ${preset.label} down`}
-                              onClick={() => onMovePreset(preset.kind, 1)}
-                            >
-                              ↓
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                <div className="preset-order-section">
+                  <div className="settings-subheading">
+                    <h3>Session order</h3>
+                    <p>This order controls the preset buttons; opening a workspace never changes it.</p>
                   </div>
-                </div>
-                <div className="settings-card">
-                  <div className="preset-fields">
-                    {presets.map(preset => (
-                      <label key={preset.kind}>
-                        {preset.label}
-                        <input
-                          value={presetCommands[preset.kind] || ""}
-                          onChange={event => onPresetCommandChange(preset.kind, event.target.value)}
-                          placeholder={preset.kind === "shell" ? "default shell (empty)" : `command for ${preset.kind}`}
-                          autoComplete="off"
-                          spellCheck="false"
-                        />
-                      </label>
+                  <div className="preset-order-list">
+                    {presets.map((preset, index) => (
+                      <div className="preset-order-row" key={preset.kind}>
+                        <SessionPresetIcon kind={preset.kind} />
+                        <span>{preset.label}</span>
+                        <label className="preset-visibility-toggle">
+                          <input
+                            type="checkbox"
+                            checked={!hiddenPresets.includes(preset.kind)}
+                            onChange={event => onPresetVisibilityChange(preset.kind, event.target.checked)}
+                          />
+                          <span>Show</span>
+                        </label>
+                        <div className="preset-order-actions">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            aria-label={`Move ${preset.label} up`}
+                            onClick={() => onMovePreset(preset.kind, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === presets.length - 1}
+                            aria-label={`Move ${preset.label} down`}
+                            onClick={() => onMovePreset(preset.kind, 1)}
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      </div>
                     ))}
                   </div>
-                  <p className="settings-note">
-                    Hidden presets stay configurable here but do not appear in the preset bar. Leave Shell empty to
-                    open a plain terminal. Agents run inside the shell, so you can exit them with Ctrl+C / Ctrl+D and
-                    keep the session.
-                  </p>
                 </div>
+                <div className="preset-fields">
+                  {presets.map(preset => (
+                    <label key={preset.kind}>
+                      {preset.label}
+                      <input
+                        value={presetCommands[preset.kind] || ""}
+                        onChange={event => onPresetCommandChange(preset.kind, event.target.value)}
+                        placeholder={preset.kind === "shell" ? "default shell (empty)" : `command for ${preset.kind}`}
+                        autoComplete="off"
+                        spellCheck="false"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className="settings-note">
+                  Hidden presets stay configurable here but do not appear in the preset bar. Leave Shell empty to
+                  open a plain terminal. Agents run inside the shell, so you can exit them with Ctrl+C / Ctrl+D and
+                  keep the session.
+                </p>
               </section>
             ) : activeSection === "workspaces" ? (
               <section className="settings-section">
@@ -1356,7 +1350,7 @@ export function SettingsPage({
                   <h2>Workspaces</h2>
                   <p>Configure project worktree import and empty-workspace entry behavior.</p>
                 </header>
-                <div className="settings-card settings-options">
+                <div className="settings-options">
                   <div className="settings-info-card">
                     <span>
                       <strong>Git worktree import is configured per project</strong>
@@ -1393,17 +1387,15 @@ export function SettingsPage({
                   <h2>Terminal title</h2>
                   <p>Build a title from live Session metadata.</p>
                 </header>
-                <div className="settings-card">
-                  <label>
-                    Title template
-                    <input value={titleTemplate} onChange={event => onTitleTemplateChange(event.target.value)} autoComplete="off" spellCheck="false" />
-                  </label>
-                  <div className="settings-preview">Preview: {titlePreview}</div>
-                  <div className="placeholder-list">
-                    {placeholders.map(([key, description]) => (
-                      <button type="button" className="placeholder" key={key} title={description} onClick={() => onAppendPlaceholder(`{${key}}`)}>{`{${key}}`}</button>
-                    ))}
-                  </div>
+                <label>
+                  Title template
+                  <input value={titleTemplate} onChange={event => onTitleTemplateChange(event.target.value)} autoComplete="off" spellCheck="false" />
+                </label>
+                <div className="settings-preview">Preview: {titlePreview}</div>
+                <div className="placeholder-list">
+                  {placeholders.map(([key, description]) => (
+                    <button type="button" className="placeholder" key={key} title={description} onClick={() => onAppendPlaceholder(`{${key}}`)}>{`{${key}}`}</button>
+                  ))}
                 </div>
               </section>
             )
