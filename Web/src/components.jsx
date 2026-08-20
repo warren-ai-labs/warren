@@ -615,11 +615,20 @@ export function MobileShell({
 
 export function ContextMenu({ menu, onClose }) {
   const menuRef = useRef(null);
+  const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const onChange = event => setMobile(event.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     if (!menu) return undefined;
     const items = () => Array.from(menuRef.current?.querySelectorAll('[role="menuitem"]') || []);
-    items()[0]?.focus();
+    const first = items()[0] || menuRef.current?.querySelector("button");
+    first?.focus();
     const handlePointerDown = event => {
       if (!menuRef.current?.contains(event.target)) onClose();
     };
@@ -653,13 +662,15 @@ export function ContextMenu({ menu, onClose }) {
     <div
       ref={menuRef}
       className="context-menu"
-      role="menu"
+      role={mobile ? "dialog" : "menu"}
+      aria-modal={mobile ? "true" : undefined}
+      aria-label={mobile ? "Actions" : undefined}
       style={{ left: menu.x, top: menu.y }}
     >
       {menu.items.map((item, index) => (
         <button
           type="button"
-          role="menuitem"
+          role={mobile ? undefined : "menuitem"}
           className={item.danger ? "danger" : undefined}
           key={index}
           onClick={() => {
@@ -983,6 +994,129 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
               Import selected
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function TextInputDialog({
+  title,
+  message,
+  fieldLabel,
+  initialValue,
+  confirmLabel = "Rename",
+  destructive = false,
+  onCancel,
+  onConfirm,
+}) {
+  const inputRef = useRef(null);
+  const [text, setText] = useState(initialValue || "");
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const handleKeyDown = event => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onCancel();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  const submit = () => {
+    const trimmed = text.trim();
+    if (trimmed) onConfirm(trimmed);
+  };
+
+  return (
+    <div className="warren-dialog-overlay">
+      <div
+        className="warren-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="warren-dialog-title"
+      >
+        <h2 id="warren-dialog-title" className="warren-dialog-title">{title}</h2>
+        {message && <p className="warren-dialog-message">{message}</p>}
+        <label className="warren-dialog-field">
+          <span>{fieldLabel}</span>
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={event => setText(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            autoComplete="off"
+            spellCheck="false"
+          />
+        </label>
+        <div className="warren-dialog-actions">
+          <button type="button" className="warren-dialog-button secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={`warren-dialog-button ${destructive ? "danger" : "primary"}`}
+            disabled={!text.trim()}
+            onClick={submit}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ConfirmationDialog({
+  title,
+  message,
+  confirmLabel = "Delete",
+  onCancel,
+  onConfirm,
+}) {
+  const cancelRef = useRef(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const handleKeyDown = event => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onCancel();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="warren-dialog-overlay">
+      <div
+        className="warren-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="warren-dialog-title"
+      >
+        <h2 id="warren-dialog-title" className="warren-dialog-title">{title}</h2>
+        {message && <p className="warren-dialog-message">{message}</p>}
+        <div className="warren-dialog-actions">
+          <button
+            ref={cancelRef}
+            type="button"
+            className="warren-dialog-button secondary"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button type="button" className="warren-dialog-button danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
         </div>
       </div>
     </div>

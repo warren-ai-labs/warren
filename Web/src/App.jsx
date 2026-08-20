@@ -49,6 +49,7 @@ import { OutputBatcher } from "./output.js";
 import { decodeOutputFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
 import {
+  ConfirmationDialog,
   EmptyTerminal,
   ContextMenu,
   MobileShell,
@@ -59,6 +60,7 @@ import {
   SettingsPage,
   Sidebar,
   TerminalSearch,
+  TextInputDialog,
   TopBar,
   WorktreeImportDialog,
 } from "./components.jsx";
@@ -171,6 +173,8 @@ export default function App() {
   const [agentViewOverride, setAgentViewOverride] = useState(null);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [worktreeImportDialog, setWorktreeImportDialog] = useState(null);
+  const [renameDialog, setRenameDialog] = useState(null);
+  const [deleteDialog, setDeleteDialog] = useState(null);
 
   const connectionRef = useRef(null);
   const mainRef = useRef(null);
@@ -1725,26 +1729,55 @@ export default function App() {
   }, []);
 
   const renameProject = useCallback(project => {
-    const value = window.prompt("Rename project", project.name || "");
-    if (value?.trim()) {
-      request("project.rename", { id: project.id, name: value.trim() });
-    }
-  }, [request]);
+    setRenameDialog({
+      kind: "project",
+      id: project.id,
+      title: "Rename project",
+      message: "Choose a new name for this project.",
+      fieldLabel: "Project name",
+      initialValue: project.name || "",
+      confirmLabel: "Rename",
+    });
+  }, []);
 
   const renameWorkspace = useCallback(workspace => {
-    const value = window.prompt("Rename workspace", workspace.name || "");
-    if (value?.trim()) {
-      request("workspace.rename", { id: workspace.id, name: value.trim() });
-    }
-  }, [request]);
+    setRenameDialog({
+      kind: "workspace",
+      id: workspace.id,
+      title: "Rename workspace",
+      message: "Choose a new name for this workspace.",
+      fieldLabel: "Workspace name",
+      initialValue: workspace.name || "",
+      confirmLabel: "Rename",
+    });
+  }, []);
 
   const renameSession = useCallback(session => {
-    const current = sessionDisplayTitle(session);
-    const value = window.prompt("Rename session", current);
-    if (value?.trim()) {
-      request("session.rename", { id: session.id, title: value.trim() });
+    setRenameDialog({
+      kind: "session",
+      id: session.id,
+      title: "Rename session",
+      message: "Choose a new title for this session.",
+      fieldLabel: "Session title",
+      initialValue: sessionDisplayTitle(session),
+      confirmLabel: "Rename",
+    });
+  }, []);
+
+  const confirmRename = useCallback(value => {
+    const dialog = renameDialog;
+    if (!dialog) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (dialog.kind === "project") {
+      request("project.rename", { id: dialog.id, name: trimmed });
+    } else if (dialog.kind === "workspace") {
+      request("workspace.rename", { id: dialog.id, name: trimmed });
+    } else if (dialog.kind === "session") {
+      request("session.rename", { id: dialog.id, title: trimmed });
     }
-  }, [request]);
+    setRenameDialog(null);
+  }, [renameDialog, request]);
 
   const toggleProjectPin = useCallback(project => {
     request("project.pin", { id: project.id, pinned: !project.pinned });
@@ -1852,20 +1885,31 @@ export default function App() {
 
   const deleteSession = useCallback(session => {
     const label = sessionDisplayTitle(session) || session.id;
-    if (!window.confirm(`Delete session "${label}"? This kills its terminal process.`)) return;
-    request("session.delete", { id: session.id }, () => {
+    setDeleteDialog({
+      id: session.id,
+      title: "Delete session?",
+      message: `“${label}” will be terminated and removed from Warren.`,
+      confirmLabel: "Delete",
+    });
+  }, []);
+
+  const confirmDeleteSession = useCallback(() => {
+    const dialog = deleteDialog;
+    if (!dialog) return;
+    setDeleteDialog(null);
+    request("session.delete", { id: dialog.id }, () => {
       // If the deleted session owns the visible terminal, clear it right away
       // instead of waiting for the next roster broadcast. The empty-state
       // overlay is opaque, but the xterm surface behind it must not keep the
       // last agent screen.
       const current = appStateRef.current;
-      if (current.activeSession === session.id || current.attachedSession === session.id) {
+      if (current.activeSession === dialog.id || current.attachedSession === dialog.id) {
         terminalRef.current?.clear();
         recoveryAnchorRef.current = null;
         reanchorRequiredRef.current = false;
       }
     });
-  }, [request]);
+  }, [deleteDialog, request]);
 
   const sessionContextMenu = useCallback((event, session) => {
     showContextMenu(event, [
@@ -1953,6 +1997,7 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = event => {
       const modifier = event.metaKey || event.ctrlKey;
+      if (renameDialog || deleteDialog) return;
       if (event.key === "Escape" && terminalSearchOpen) {
         closeTerminalSearch();
         return;
@@ -1983,7 +2028,7 @@ export default function App() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, openSettings, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
+  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, renameDialog, deleteDialog, openSettings, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
 
   const chooseSearchWorkspace = useCallback(workspaceID => {
     closeSearch();
@@ -2310,6 +2355,26 @@ export default function App() {
         onToggle={toggleWorktreeCandidate}
         onImport={importSelectedWorktrees}
       />
+      {renameDialog && (
+        <TextInputDialog
+          title={renameDialog.title}
+          message={renameDialog.message}
+          fieldLabel={renameDialog.fieldLabel}
+          initialValue={renameDialog.initialValue}
+          confirmLabel={renameDialog.confirmLabel}
+          onCancel={() => setRenameDialog(null)}
+          onConfirm={confirmRename}
+        />
+      )}
+      {deleteDialog && (
+        <ConfirmationDialog
+          title={deleteDialog.title}
+          message={deleteDialog.message}
+          confirmLabel={deleteDialog.confirmLabel}
+          onCancel={() => setDeleteDialog(null)}
+          onConfirm={confirmDeleteSession}
+        />
+      )}
       <ContextMenu menu={contextMenu} onClose={closeContextMenu} />
     </>
   );

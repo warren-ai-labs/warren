@@ -87,14 +87,19 @@
   --radius-circle: 50%;
 
   /* Type scale. Sizes are semantic: chrome text 12–13px, body 13–14px,
-     headings 17–20px; light weights are reserved for large display text. */
+     settings/dialog titles 18–22px; light weights are reserved for large
+     display text. */
   --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12px;
+  --text-2sm: 13px;
   --text-base: 13px;
   --text-md: 14px;
+  --text-2md: 15px;
   --text-lg: 17px;
+  --text-dialog: 18px;
   --text-xl: 20px;
+  --text-2xl: 22px;
   --text-display: 30px;
   --weight-light: 300;
   --weight-regular: 400;
@@ -113,6 +118,15 @@
   --shadow-terminal-search: 0 4px 18px rgba(0, 0, 0, 0.35);
   --shadow-mobile-keys: 0 -6px 18px rgba(0, 0, 0, 0.25);
   --outline-image: 1px solid rgba(255, 255, 255, 0.1);
+
+  /* Presentation layers: the only z-index values a component may reference. */
+  --layer-content: 0;
+  --layer-inline-overlay: 10;
+  --layer-drawer: 20;
+  --layer-popover: 30;
+  --layer-command: 40;
+  --layer-modal: 50;
+  --layer-menu: 60;
 
   /* Motion. */
   --duration-fast: 100ms;
@@ -212,7 +226,7 @@ button:disabled {
 
 .skip-link {
   position: fixed;
-  z-index: 100;
+  z-index: var(--layer-menu);
   top: var(--space-xl);
   inset-inline-start: var(--space-xl);
   padding: var(--space-md) var(--space-xl);
@@ -803,8 +817,8 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  font-weight: var(--weight-light);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -1467,7 +1481,7 @@ button:disabled {
   position: absolute;
   top: var(--space-md);
   inset-inline-end: var(--space-md);
-  z-index: 10;
+  z-index: var(--layer-inline-overlay);
   display: flex;
   align-items: center;
   gap: 5px;
@@ -1643,7 +1657,7 @@ button:disabled {
 
 .settings-title {
   margin: var(--space-lg) var(--space-md) var(--space-xs);
-  font-size: var(--text-xl);
+  font-size: var(--text-2xl);
   font-weight: var(--weight-light);
 }
 
@@ -1719,8 +1733,8 @@ button:disabled {
 .settings-nav-label {
   padding: var(--space-lg) 10px var(--space-sm);
   color: var(--color-text-secondary);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-light);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
   letter-spacing: 0.1em;
   opacity: 0.55;
   text-transform: uppercase;
@@ -1738,8 +1752,8 @@ button:disabled {
   background: transparent;
   color: var(--color-text-secondary);
   text-align: start;
-  font-size: var(--text-base);
-  font-weight: var(--weight-light);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
   cursor: pointer;
 }
 
@@ -1757,7 +1771,7 @@ button:disabled {
 .settings-nav-empty {
   padding: 18px 10px;
   color: var(--color-text-secondary);
-  font-size: var(--text-base);
+  font-size: var(--text-md);
   text-align: center;
 }
 
@@ -1781,13 +1795,13 @@ button:disabled {
 .settings-page-heading h2 {
   margin: 0;
   font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-regular);
 }
 
 .settings-page-heading p {
   margin: var(--space-sm) 0 0;
   color: var(--color-text-secondary);
-  font-size: var(--text-base);
+  font-size: var(--text-md);
 }
 
 .settings-section {
@@ -1843,21 +1857,21 @@ button:disabled {
 
 .settings-toggle strong,
 .settings-info-card strong {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
 }
 
 .settings-toggle small,
 .settings-info-card small {
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   line-height: 1.5;
 }
 
 .settings label {
   color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
 }
 
 .settings input {
@@ -1870,7 +1884,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font: var(--text-base) ui-monospace, monospace;
+  font: var(--text-md) ui-monospace, monospace;
 }
 
 .settings input:focus {
@@ -1894,12 +1908,13 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-secondary);
+  font-size: var(--text-2sm);
 }
 
 .settings-note {
   margin-top: 10px;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   line-height: 1.55;
 }
 
@@ -1912,14 +1927,14 @@ button:disabled {
 .settings-subheading h3 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
 }
 
 .settings-subheading p {
   margin: var(--space-sm) 0 0;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   line-height: 1.5;
 }
 
@@ -1937,7 +1952,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--fill-hover);
   color: var(--color-text-primary);
-  font-size: var(--text-base);
+  font-size: var(--text-md);
 }
 
 .preset-order-row > .preset-brand-icon {
@@ -1953,7 +1968,7 @@ button:disabled {
   gap: var(--space-sm);
   margin-left: auto;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   font-weight: var(--weight-regular);
 }
 
@@ -2015,7 +2030,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--fill-hover);
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-sm) ui-monospace, monospace;
   cursor: pointer;
   transition-property: color, background-color, transform;
   transition-duration: var(--duration-fast);
@@ -2026,6 +2041,7 @@ button:disabled {
   padding: 28px;
   color: var(--color-text-secondary);
   text-align: center;
+  font-size: var(--text-md);
 }
 
 .settings-footer {
@@ -2040,13 +2056,13 @@ button:disabled {
   padding: 0;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   cursor: pointer;
 }
 
 .search-overlay {
   position: fixed;
-  z-index: 40;
+  z-index: var(--layer-command);
   inset: 0;
   display: none;
   background: var(--color-bg-overlay);
@@ -2209,7 +2225,7 @@ button:disabled {
 
 .worktree-dialog-overlay {
   position: fixed;
-  z-index: 50;
+  z-index: var(--layer-modal);
   inset: 0;
   display: flex;
   align-items: center;
@@ -2246,20 +2262,20 @@ button:disabled {
 .worktree-dialog-header h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-dialog);
+  font-weight: var(--weight-light);
 }
 
 .worktree-dialog-header p {
   margin: var(--space-sm) 0 0;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   line-height: var(--leading-relaxed);
 }
 
 .worktree-dialog-header strong {
   color: var(--color-text-primary);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-regular);
 }
 
 .worktree-dialog-close {
@@ -2345,19 +2361,19 @@ button:disabled {
   flex-wrap: wrap;
   gap: var(--space-sm);
   min-width: 0;
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
 }
 
 .worktree-candidate-title code {
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-sm) ui-monospace, monospace;
 }
 
 .worktree-candidate-path {
   overflow: hidden;
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-sm) ui-monospace, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2367,8 +2383,8 @@ button:disabled {
   border-radius: var(--radius-full);
   background: var(--fill-tertiary);
   color: var(--color-text-secondary);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -2399,7 +2415,7 @@ button:disabled {
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2414,7 +2430,7 @@ button:disabled {
   height: 32px;
   padding-inline: var(--space-lg);
   border-radius: var(--radius-sm);
-  font-size: var(--text-base);
+  font-size: var(--text-md);
   cursor: pointer;
 }
 
@@ -2435,6 +2451,112 @@ button:disabled {
   cursor: default;
 }
 
+.warren-dialog-overlay {
+  position: fixed;
+  z-index: var(--layer-modal);
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+  background: var(--color-bg-overlay);
+}
+
+.warren-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  width: min(480px, 100%);
+  max-height: min(680px, 90vh);
+  overflow-y: auto;
+  padding: var(--space-2xl);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-raised);
+  box-shadow: var(--shadow-dialog);
+  animation: search-in 0.14s var(--ease-out);
+}
+
+.warren-dialog-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-dialog);
+  font-weight: var(--weight-light);
+}
+
+.warren-dialog-message {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+}
+
+.warren-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--text-2sm);
+  font-weight: var(--weight-regular);
+}
+
+.warren-dialog-field input {
+  width: 100%;
+  height: 36px;
+  padding-inline: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
+}
+
+.warren-dialog-field input:focus {
+  outline: 0;
+  border-color: var(--color-focus-ring);
+  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+
+.warren-dialog-actions {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+  margin-top: var(--space-sm);
+}
+
+.warren-dialog-actions button {
+  height: 34px;
+  padding-inline: var(--space-lg);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
+  cursor: pointer;
+}
+
+.warren-dialog-button.secondary {
+  border: 1px solid var(--color-border-default);
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+.warren-dialog-button.primary {
+  border: 1px solid transparent;
+  background: var(--color-accent-solid);
+  color: var(--color-text-on-accent);
+}
+
+.warren-dialog-button.danger {
+  border: 1px solid transparent;
+  background: var(--color-status-danger);
+  color: var(--ember-white);
+  font-weight: var(--weight-medium);
+}
+
+.warren-dialog-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 @keyframes search-in {
   from {
     opacity: 0;
@@ -2448,7 +2570,7 @@ button:disabled {
 
 .context-menu {
   position: fixed;
-  z-index: 60;
+  z-index: var(--layer-menu);
   min-width: 180px;
   padding: 5px;
   border: 0;
@@ -2542,7 +2664,7 @@ button:disabled {
 
   .sidebar {
     position: fixed;
-    z-index: 20;
+    z-index: var(--layer-drawer);
     inset-block: 0 auto 0 0;
     width: min(78vw, 360px);
     padding-top: env(safe-area-inset-top);
@@ -2559,7 +2681,7 @@ button:disabled {
 
   .backdrop {
     position: fixed;
-    z-index: 19;
+    z-index: calc(var(--layer-drawer) - 1);
     inset: 0;
     display: block;
     border: 0;
@@ -2956,12 +3078,28 @@ button:disabled {
 
   .context-menu button {
     height: 44px;
-    font-size: var(--text-md);
+    font-size: var(--text-2md);
+  }
+
+  .warren-dialog-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .warren-dialog {
+    width: 100%;
+    max-width: none;
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+    padding-bottom: calc(var(--space-2xl) + env(safe-area-inset-bottom));
+  }
+
+  .warren-dialog-actions button {
+    height: 44px;
   }
 
   .session-sheet-overlay {
     position: fixed;
-    z-index: 45;
+    z-index: var(--layer-modal);
     inset: 0;
     display: flex;
     align-items: flex-end;
@@ -2988,8 +3126,8 @@ button:disabled {
   .session-sheet-title {
     padding: var(--space-xxs) var(--space-md) 10px;
     color: var(--color-text-secondary);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
+    font-size: var(--text-2sm);
+    font-weight: var(--weight-regular);
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
@@ -3006,7 +3144,7 @@ button:disabled {
     background: transparent;
     color: var(--color-text-primary);
     text-align: start;
-    font-size: var(--text-md);
+    font-size: var(--text-2md);
     cursor: pointer;
   }
 
@@ -3027,7 +3165,7 @@ button:disabled {
     border-radius: var(--radius-lg);
     background: var(--fill-hover);
     color: var(--color-text-primary);
-    font-size: var(--text-md);
+    font-size: var(--text-2md);
     cursor: pointer;
   }
 
@@ -3157,6 +3295,15 @@ button:disabled {
   }
 
   .worktree-dialog-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  .warren-dialog-button.secondary:hover {
+    background: var(--fill-hover);
+  }
+
+  .warren-dialog-button.primary:hover:not(:disabled),
+  .warren-dialog-button.danger:hover:not(:disabled) {
     filter: brightness(1.08);
   }
 
