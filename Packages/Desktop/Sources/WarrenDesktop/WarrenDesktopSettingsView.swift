@@ -560,7 +560,9 @@ struct WarrenDesktopSettingsView: View {
                 }
                 ForEach(customIDEs) { ide in
                     HStack(spacing: WarrenSpacing.compact) {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: ide.path))
+                        Image(nsImage: WarrenDesktopExternalIDEIcon.normalized(
+                            NSWorkspace.shared.icon(forFile: ide.path)
+                        ))
                             .resizable()
                             .scaledToFit()
                             .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
@@ -675,7 +677,9 @@ struct WarrenDesktopSettingsView: View {
                 id: ide.id.rawValue,
                 name: ide.name,
                 path: url.path,
-                icon: NSWorkspace.shared.icon(forFile: url.path)
+                icon: WarrenDesktopExternalIDEIcon.normalized(
+                    NSWorkspace.shared.icon(forFile: url.path)
+                )
             )
         }
     }

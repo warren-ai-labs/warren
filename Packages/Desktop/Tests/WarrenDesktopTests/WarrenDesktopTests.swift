@@ -241,6 +241,15 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(requestedPaths, ["/Applications/GoLand.app"])
     }
 
+    func testExternalIDEIconNormalizesAppKitIntrinsicSize() {
+        let source = NSImage(size: NSSize(width: 32, height: 32))
+        let normalized = WarrenDesktopExternalIDEIcon.normalized(source)
+
+        XCTAssertEqual(normalized.size.width, WarrenLayoutMetrics.externalIDEIconSize)
+        XCTAssertEqual(normalized.size.height, WarrenLayoutMetrics.externalIDEIconSize)
+        XCTAssertFalse(normalized === source)
+    }
+
     func testExternalIDECustomStoreRoundTrips() {
         let defaults = UserDefaults.standard
         let key = "warren.customExternalIDEs"

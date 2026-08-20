@@ -103,6 +103,20 @@ struct WarrenDesktopExternalIDEOption: Identifiable {
     var isEnabled: Bool { workspaceURL != nil && applicationURL != nil }
 }
 
+enum WarrenDesktopExternalIDEIcon {
+    /// AppKit menus can fall back to an NSImage's intrinsic 32pt/retina size
+    /// instead of honoring the SwiftUI frame. Normalize the logical size at
+    /// the boundary while retaining the original image representations.
+    static func normalized(_ icon: NSImage) -> NSImage {
+        let normalized = (icon.copy() as? NSImage) ?? icon
+        normalized.size = NSSize(
+            width: WarrenLayoutMetrics.externalIDEIconSize,
+            height: WarrenLayoutMetrics.externalIDEIconSize
+        )
+        return normalized
+    }
+}
+
 struct WarrenDesktopExternalIDEMenuPresentation {
     struct Item: Identifiable {
         let option: WarrenDesktopExternalIDEOption
@@ -231,7 +245,7 @@ struct WarrenDesktopExternalIDEService {
                 name: ide.name,
                 applicationURL: applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL)
+                icon: applicationIcon(applicationURL).map(WarrenDesktopExternalIDEIcon.normalized)
             ))
         }
         for custom in loadCustomIDEs() {
@@ -241,7 +255,7 @@ struct WarrenDesktopExternalIDEService {
                 name: custom.name,
                 applicationURL: applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL)
+                icon: applicationIcon(applicationURL).map(WarrenDesktopExternalIDEIcon.normalized)
             ))
         }
         return options
