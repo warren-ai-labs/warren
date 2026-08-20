@@ -291,18 +291,15 @@ struct WarrenDesktopCommandPalette: View {
     let resultsMaxHeight: CGFloat
 
     @State private var query = ""
-    @State private var debouncedQuery = ""
     @State private var searchTask: Task<Void, Never>?
+    @State private var rows: [WarrenDesktopCommandPaletteSearch.Result] = []
+    @State private var isSearching = false
     @State private var selectedIndex = 0
     @FocusState private var searchFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     private var hasQuery: Bool {
-        !debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var rows: [WarrenDesktopCommandPaletteSearch.Result] {
-        WarrenDesktopCommandPaletteSearch.results(for: debouncedQuery, in: projection)
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -316,8 +313,8 @@ struct WarrenDesktopCommandPalette: View {
                     .frame(height: WarrenSpacing.hairline)
 
                 if rows.isEmpty {
-                    Text("No results found.")
-                        .font(WarrenTypography.body)
+                    Text(isSearching ? "Searching…" : "No results found.")
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(tokens.mutedForeground)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, WarrenSpacing.large)
@@ -358,10 +355,25 @@ struct WarrenDesktopCommandPalette: View {
         .onChange(of: query) { _, newValue in
             searchTask?.cancel()
             let value = newValue
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                rows = []
+                isSearching = false
+                selectedIndex = 0
+                return
+            }
+            rows = []
+            isSearching = true
+            selectedIndex = 0
             searchTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(80))
+                try? await Task.sleep(for: .milliseconds(120))
                 guard !Task.isCancelled else { return }
-                debouncedQuery = value
+                let computed = await Task.detached(priority: .userInitiated) {
+                    WarrenDesktopCommandPaletteSearch.results(for: value, in: projection)
+                }.value
+                guard !Task.isCancelled else { return }
+                rows = computed
+                isSearching = false
                 selectedIndex = 0
             }
         }

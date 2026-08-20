@@ -515,6 +515,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             .padding(.top, WarrenLayoutMetrics.tabBarHeight + WarrenSpacing.small)
             .padding(.trailing, WarrenSpacing.medium)
             .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(
+                WarrenMotion.animation(.overlay, reduceMotion: reduceMotion),
+                value: chromePopover
+            )
             .onChange(of: webStatus.tunnelRunning) { _, isRunning in
                 // Keep the panel open while sharing so the public address
                 // stays visible for copying; it falls back to auto-dismiss

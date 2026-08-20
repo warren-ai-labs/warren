@@ -1431,6 +1431,7 @@ export function SearchPanel({
   const inputRef = useRef(null);
   const itemRefs = useRef(new Map());
   const [activeIndex, setActiveIndex] = useState(0);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -1440,10 +1441,19 @@ export function SearchPanel({
   }, [open]);
 
   useEffect(() => {
-    setActiveIndex(0);
+    if (!query) {
+      setDebouncedQuery("");
+      return undefined;
+    }
+    const timer = setTimeout(() => setDebouncedQuery(query), 80);
+    return () => clearTimeout(timer);
   }, [query]);
 
-  const needle = query.trim().toLowerCase();
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [debouncedQuery]);
+
+  const needle = debouncedQuery.trim().toLowerCase();
   const groups = useMemo(() => {
     const matches = value => !needle || String(value || "").toLowerCase().includes(needle);
     const result = [];
@@ -1471,7 +1481,7 @@ export function SearchPanel({
   useEffect(() => {
     const node = itemRefs.current.get(activeIndex);
     node?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, query]);
+  }, [activeIndex, debouncedQuery]);
 
   const chooseRow = row => {
     if (!row) return;

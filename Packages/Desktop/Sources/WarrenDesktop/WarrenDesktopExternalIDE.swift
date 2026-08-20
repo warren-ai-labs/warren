@@ -179,7 +179,9 @@ struct WarrenDesktopExternalIDEMenu: View {
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
+        .buttonStyle(.plain)
         .frame(width: 28, height: 28)
+        .contentShape(.rect)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Open workspace in IDE")
         .accessibilityHint("Open the current worktree in an external IDE")
