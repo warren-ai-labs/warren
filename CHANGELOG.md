@@ -8,14 +8,18 @@ All notable changes to Warren are documented here.
 
 ## [0.7.0] - 2026-08-20
 
-> Important release: the Web workspace now includes a complete Git panel.
-> The Push flow stages and commits every workspace change before pushing;
-> review the change list and commit message before confirming it.
+> Important release: the Web workspace now includes a complete Git panel,
+> while deterministic agent turn waits and configurable multi-agent presets
+> make automation and launch workflows easier to control. The Push flow stages
+> and commits every workspace change before pushing; review the change list and
+> commit message before confirming it.
 
 ### Added
 
 - Add a Git panel with status, line counts, branch checkout, upstream sync, branch history, pull request details, and pull request creation.
 - Add virtualized, syntax-highlighted Diff and File views with unified and split layouts, per-workspace UI restoration, and shareable URL state.
+- Add blocking agent turn waits with `agent wait` and `session send --wait`, bounded timeouts, and structured turn results.
+- Add configurable multi-agent presets with Trae Agent support, visibility controls, ordering, and per-agent launch commands across macOS and Web.
 
 ### Changed
 

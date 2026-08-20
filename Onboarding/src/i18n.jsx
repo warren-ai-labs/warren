@@ -95,13 +95,15 @@ const messages = {
         date: "August 20, 2026",
         title: "Warren brings Git into the workspace.",
         summary:
-          "A major Web workflow release with status, history, diffs, branch operations, pull requests, and hardened recovery and safety boundaries.",
+          "A major workflow release with Git operations, deterministic agent waits, configurable multi-agent presets, and hardened recovery and safety boundaries.",
         sections: [
           {
             title: "Added",
             items: [
               "Add a complete Git panel with status, line counts, branch checkout, upstream sync, history, and pull request workflows.",
               "Add virtualized Diff and File views with syntax highlighting, unified and split layouts, saved UI state, and shareable URLs.",
+              "Add blocking agent turn waits with agent wait and session send --wait, bounded timeouts, and structured turn results.",
+              "Add configurable multi-agent presets with Trae Agent support, visibility controls, ordering, and per-agent launch commands across macOS and Web.",
             ],
           },
           {
@@ -549,13 +551,15 @@ const messages = {
         date: "2026 年 8 月 20 日",
         title: "Warren 把 Git 带进了 Workspace。",
         summary:
-          "Web 工作流重大更新：新增状态、历史、Diff、分支操作和 Pull Request，并强化恢复能力与安全边界。",
+          "工作流重大更新：新增 Git 操作、确定性的 Agent 等待、可配置的多 Agent 预设，并强化恢复能力与安全边界。",
         sections: [
           {
             title: "新增",
             items: [
               "新增完整 Git 面板，支持状态、行数统计、分支切换、上游同步、历史和 Pull Request 工作流。",
               "新增虚拟化 Diff 与文件视图，支持语法高亮、统一与分栏布局、状态保存和 URL 分享。",
+              "新增阻塞式 Agent turn 等待，支持 agent wait、session send --wait、有界超时和结构化 turn 结果。",
+              "新增可配置的多 Agent 预设，支持 Trae Agent、显示隐藏、排序和逐个 Agent 的启动命令，并同步覆盖 macOS 与 Web。",
             ],
           },
           {
