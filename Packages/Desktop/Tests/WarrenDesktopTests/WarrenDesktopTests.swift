@@ -309,6 +309,8 @@ final class WarrenDesktopTests: XCTestCase {
         let source = NSImage(size: NSSize(width: 32, height: 32))
         let normalized = WarrenDesktopExternalIDEIcon.normalized(source)
 
+        XCTAssertEqual(WarrenDesktopExternalIDEIcon.opticalScale(for: "cursor"), 1.2)
+        XCTAssertEqual(WarrenDesktopExternalIDEIcon.opticalScale(for: "xcode"), 1)
         XCTAssertEqual(
             WarrenLayoutMetrics.externalIDEIconSize,
             WarrenLayoutMetrics.chromeIconSize * WarrenLayoutMetrics.externalIDEIconScale

@@ -104,15 +104,46 @@ struct WarrenDesktopExternalIDEOption: Identifiable {
 }
 
 enum WarrenDesktopExternalIDEIcon {
+    private static let cursorOpticalScale: CGFloat = 1.2
+
+    static func opticalScale(for identifier: String) -> CGFloat {
+        identifier == WarrenDesktopExternalIDE.ID.cursor.rawValue
+            ? cursorOpticalScale
+            : 1
+    }
+
     /// AppKit menus can fall back to an NSImage's intrinsic 32pt/retina size
     /// instead of honoring the SwiftUI frame. Normalize the logical size at
     /// the boundary while retaining the original image representations.
-    static func normalized(_ icon: NSImage) -> NSImage {
-        let normalized = (icon.copy() as? NSImage) ?? icon
-        normalized.size = NSSize(
+    static func normalized(_ icon: NSImage, opticalScale: CGFloat = 1) -> NSImage {
+        let targetSize = NSSize(
             width: WarrenLayoutMetrics.externalIDEIconSize,
             height: WarrenLayoutMetrics.externalIDEIconSize
         )
+        if opticalScale > 1.001 {
+            let normalized = NSImage(size: targetSize)
+            normalized.lockFocus()
+            let scaledSize = NSSize(
+                width: targetSize.width * opticalScale,
+                height: targetSize.height * opticalScale
+            )
+            icon.draw(
+                in: NSRect(
+                    x: (targetSize.width - scaledSize.width) / 2,
+                    y: (targetSize.height - scaledSize.height) / 2,
+                    width: scaledSize.width,
+                    height: scaledSize.height
+                ),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+            normalized.unlockFocus()
+            return normalized
+        }
+
+        let normalized = (icon.copy() as? NSImage) ?? icon
+        normalized.size = targetSize
         return normalized
     }
 }
@@ -245,7 +276,12 @@ struct WarrenDesktopExternalIDEService {
                 name: ide.name,
                 applicationURL: applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL).map(WarrenDesktopExternalIDEIcon.normalized)
+                icon: applicationIcon(applicationURL).map {
+                    WarrenDesktopExternalIDEIcon.normalized(
+                        $0,
+                        opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
+                    )
+                }
             ))
         }
         for custom in loadCustomIDEs() {
@@ -255,7 +291,9 @@ struct WarrenDesktopExternalIDEService {
                 name: custom.name,
                 applicationURL: applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL).map(WarrenDesktopExternalIDEIcon.normalized)
+                icon: applicationIcon(applicationURL).map {
+                    WarrenDesktopExternalIDEIcon.normalized($0)
+                }
             ))
         }
         return options

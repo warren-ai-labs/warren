@@ -678,7 +678,8 @@ struct WarrenDesktopSettingsView: View {
                 name: ide.name,
                 path: url.path,
                 icon: WarrenDesktopExternalIDEIcon.normalized(
-                    NSWorkspace.shared.icon(forFile: url.path)
+                    NSWorkspace.shared.icon(forFile: url.path),
+                    opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
                 )
             )
         }

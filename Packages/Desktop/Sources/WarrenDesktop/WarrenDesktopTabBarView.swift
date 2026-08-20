@@ -170,6 +170,22 @@ struct WarrenDesktopTabBar: View {
     }
 }
 
+enum WarrenDesktopTabScrollPosition {
+    static func originX(
+        selectedIndex: Int,
+        tabWidth: CGFloat,
+        trackWidth: CGFloat,
+        viewportWidth: CGFloat
+    ) -> CGFloat {
+        let maximumOriginX = max(trackWidth - viewportWidth, 0)
+        let selectedMidpoint = (CGFloat(selectedIndex) + 0.5) * tabWidth
+        return min(
+            max(selectedMidpoint - viewportWidth / 2, 0),
+            maximumOriginX
+        )
+    }
+}
+
 /// Keeps the native horizontal track aligned with the active tab. SwiftUI's
 /// `ScrollViewProxy` cannot reliably cross WarrenOverflowFadeScrollView's
 /// nested reader on macOS, so this leaf scrolls its enclosing AppKit view.
@@ -235,11 +251,11 @@ private final class WarrenDesktopTabScrollFollowerView: NSView {
 
         let tabWidth = WarrenLayoutMetrics.tabWidth
         let trackWidth = max(CGFloat(tabIDs.count) * tabWidth, bounds.width)
-        let maximumOriginX = max(trackWidth - viewport.width, 0)
-        let selectedMidpoint = (CGFloat(selectedIndex) + 0.5) * tabWidth
-        let originX = min(
-            max(selectedMidpoint - viewport.width / 2, 0),
-            maximumOriginX
+        let originX = WarrenDesktopTabScrollPosition.originX(
+            selectedIndex: selectedIndex,
+            tabWidth: tabWidth,
+            trackWidth: trackWidth,
+            viewportWidth: viewport.width
         )
         guard abs(viewport.minX - originX) > 0.5 else { return }
 
