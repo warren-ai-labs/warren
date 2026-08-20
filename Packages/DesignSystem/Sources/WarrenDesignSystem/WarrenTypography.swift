@@ -66,6 +66,11 @@ public enum WarrenTypography {
     public static let dialogAction = Font.system(size: 14, weight: .regular)
     public static let dialogCriticalAction = Font.system(size: 14, weight: .medium)
     public static let dialogMeta = Font.system(size: 12, weight: .regular)
+    /// Top-right chrome popovers (Web, endpoint, external IDE) share one calm
+    /// light text family so the controls read as one surface.
+    public static let popoverTitle = Font.system(size: 13, weight: .light)
+    public static let popoverItem = Font.system(size: 13, weight: .light)
+    public static let popoverMeta = Font.system(size: 12, weight: .light)
     public static let body = Font.system(size: 13, weight: .regular)
     public static let bodyEmphasis = Font.system(size: 13, weight: .medium)
     /// Superset `text-xs` descriptions and hints.

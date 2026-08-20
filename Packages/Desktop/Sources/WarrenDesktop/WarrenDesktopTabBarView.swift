@@ -25,7 +25,7 @@ struct WarrenDesktopTabBar: View {
     let onToggleSidebar: () -> Void
     let onToggleInspector: () -> Void
     let onSettings: () -> Void
-    let onWeb: () -> Void
+    let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onSelectTab: (String) -> Void
@@ -152,7 +152,7 @@ struct WarrenDesktopTabBar: View {
                         hasInspector: hasInspector,
                         isInspectorVisible: isInspectorVisible,
                         onSettings: onSettings,
-                        onWeb: onWeb,
+                        onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
                         onSelectEndpoint: onSelectEndpoint,
                         onToggleInspector: onToggleInspector
@@ -311,7 +311,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let hasInspector: Bool
     let isInspectorVisible: Bool
     let onSettings: () -> Void
-    let onWeb: () -> Void
+    let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
     let onToggleInspector: () -> Void
@@ -341,6 +341,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
             if let externalIDEOptions, !externalIDEOptions.isEmpty {
                 WarrenDesktopExternalIDEMenu(
                     options: externalIDEOptions,
+                    onPresent: { onChromePopover(.externalIDE) },
                     onOpen: onOpenInExternalIDE
                 )
             }
@@ -349,6 +350,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 connectionState: connectionState,
                 endpoints: endpointOptions,
                 selectedID: selectedEndpointID,
+                onPresent: { onChromePopover(.endpoint) },
                 onSelect: onSelectEndpoint
             )
         case .web:
@@ -358,7 +360,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 hint: webStatus.tunnelRunning
                     ? "Public sharing is on"
                     : (webStatus.isRunning ? "Web is running" : "Web is stopped"),
-                action: onWeb,
+                action: { onChromePopover(.web) },
                 tint: webStatus.tunnelRunning
                     ? tokens.info
                     : (webStatus.isRunning ? tokens.success : nil)
@@ -385,13 +387,11 @@ private struct WarrenDesktopEndpointControl: View {
     let connectionState: WarrenDesktopConnectionState
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
+    let onPresent: () -> Void
     let onSelect: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
-    @State private var isPresented = false
-    @State private var dismissTask: Task<Void, Never>?
 
     private var selectedEndpoint: WarrenDesktopEndpointOption? {
         endpoints.first { $0.id == selectedID }
@@ -400,7 +400,7 @@ private struct WarrenDesktopEndpointControl: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
-        Button(action: toggle) {
+        Button(action: onPresent) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "server.rack")
                     .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
@@ -423,72 +423,6 @@ private struct WarrenDesktopEndpointControl: View {
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Execution server: \(selectedEndpoint?.label ?? "Server")")
         .accessibilityHint("\(presentation.label). Click for details.")
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            popoverContent(tokens: tokens)
-        }
-        .onDisappear {
-            dismissTask?.cancel()
-        }
-    }
-
-    @ViewBuilder
-    private func popoverContent(tokens: WarrenColorTokens) -> some View {
-        let presentation = WarrenDesktopConnectionPresentation(connectionState)
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: WarrenSpacing.compact) {
-                WarrenStatusIndicator(
-                    color: statusColor(presentation.tone, tokens: tokens),
-                    isActive: presentation.isActive,
-                    size: 8,
-                    accessibilityLabel: presentation.label
-                )
-                Text(presentation.label)
-                    .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                Spacer()
-            }
-            .padding(.bottom, WarrenSpacing.compact)
-
-            Rectangle()
-                .fill(tokens.border)
-                .frame(height: WarrenSpacing.hairline)
-                .padding(.bottom, WarrenSpacing.small)
-
-            ForEach(endpoints) { endpoint in
-            Button {
-                    onSelect(endpoint.id)
-                    dismissTask?.cancel()
-                    dismissTask = nil
-                    isPresented = false
-            } label: {
-                HStack(spacing: WarrenSpacing.compact) {
-                    Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(
-                            endpoint.id == selectedID
-                                ? tokens.highlight
-                                    : tokens.mutedForeground
-                            )
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(endpoint.label)
-                                .font(WarrenTypography.navigationMeta)
-                                .foregroundStyle(tokens.foreground)
-                            if let detail = endpoint.detail {
-                                Text(detail)
-                                    .font(WarrenTypography.supporting)
-                                    .foregroundStyle(tokens.mutedForeground)
-                            }
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, WarrenSpacing.xs)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(WarrenSpacing.medium)
-        .frame(width: 220)
-        .warrenPanelSurface(cornerRadius: WarrenRadius.base)
     }
 
     private func statusColor(
@@ -503,25 +437,4 @@ private struct WarrenDesktopEndpointControl: View {
         }
     }
 
-    private func toggle() {
-        if isPresented {
-            dismissTask?.cancel()
-            dismissTask = nil
-            isPresented = false
-        } else {
-            show()
-        }
-    }
-
-    private func show() {
-        dismissTask?.cancel()
-        isPresented = true
-        dismissTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled else { return }
-            withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
-                isPresented = false
-            }
-        }
-    }
 }

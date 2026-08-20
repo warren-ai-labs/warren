@@ -39,6 +39,7 @@ public struct WarrenDesktopWebPanel: View {
     public let onStop: () -> Void
     public let onOpenURL: (URL) -> Void
     public let onCopyURL: (URL) -> Void
+    public let onDismiss: () -> Void
 
     public init(
         status: WarrenDesktopWebStatus,
@@ -46,7 +47,8 @@ public struct WarrenDesktopWebPanel: View {
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void,
         onOpenURL: @escaping (URL) -> Void,
-        onCopyURL: @escaping (URL) -> Void
+        onCopyURL: @escaping (URL) -> Void,
+        onDismiss: @escaping () -> Void = {}
     ) {
         self.status = status
         self.canShare = canShare
@@ -54,6 +56,7 @@ public struct WarrenDesktopWebPanel: View {
         self.onStop = onStop
         self.onOpenURL = onOpenURL
         self.onCopyURL = onCopyURL
+        self.onDismiss = onDismiss
     }
 
     public var body: some View {
@@ -81,15 +84,23 @@ public struct WarrenDesktopWebPanel: View {
                 .foregroundStyle(tokens.foreground)
                 .accessibilityHidden(true)
             Text("Web")
-                .font(WarrenTypography.navigationItem)
+                .font(WarrenTypography.popoverTitle)
                 .foregroundStyle(tokens.foreground)
             Spacer()
             Circle()
                 .fill(status.isRunning ? tokens.success : tokens.mutedForeground)
                 .frame(width: 7, height: 7)
             Text(status.isRunning ? "Running" : "Stopped")
-                .font(WarrenTypography.navigationMeta)
+                .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(WarrenTypography.popoverMeta)
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(tokens.mutedForeground)
+            .accessibilityLabel("Close Web panel")
         }
         .padding(.horizontal, WarrenSpacing.standard)
         .padding(.vertical, WarrenSpacing.medium)
