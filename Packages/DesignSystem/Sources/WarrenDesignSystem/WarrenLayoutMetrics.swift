@@ -48,6 +48,8 @@ public enum WarrenLayoutMetrics {
     public static let sidebarSectionLabelHeight: CGFloat = 32
     public static let sidebarRowIconSlotSize: CGFloat = 18
     public static let sidebarActionButtonSize: CGFloat = 24
+    /// External IDE logos stay in the compact navigation icon tier.
+    public static let externalIDEIconSize: CGFloat = 12
     /// `OverflowFadeContainer` uses a 1.5rem edge fade in Superset.
     public static let sidebarScrollFadeLength: CGFloat = 24
     /// Tab overflow needs to read as a real affordance; use a longer gradient

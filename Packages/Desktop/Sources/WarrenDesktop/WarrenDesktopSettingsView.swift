@@ -562,8 +562,10 @@ struct WarrenDesktopSettingsView: View {
                     HStack(spacing: WarrenSpacing.compact) {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: ide.path))
                             .resizable()
-                            .frame(width: 16, height: 16)
-                        Text(ide.name).font(WarrenTypography.body)
+                            .scaledToFit()
+                            .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
+                                   height: WarrenLayoutMetrics.externalIDEIconSize)
+                        Text(ide.name).font(WarrenTypography.navigationMeta)
                         Spacer()
                         Text(ide.path)
                             .font(WarrenTypography.compactCode)
@@ -574,6 +576,9 @@ struct WarrenDesktopSettingsView: View {
                             removeCustomIDE(ide)
                         } label: {
                             Image(systemName: "trash")
+                                .font(WarrenTypography.navigationMeta)
+                                .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
+                                       height: WarrenLayoutMetrics.sidebarActionButtonSize)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(tokens.mutedForeground)
@@ -589,6 +594,7 @@ struct WarrenDesktopSettingsView: View {
                     Label("Add IDE…", systemImage: "plus")
                 }
                 .buttonStyle(.plain)
+                .font(WarrenTypography.navigationMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityIdentifier("settings.external-ides.add")
             }
@@ -617,8 +623,10 @@ struct WarrenDesktopSettingsView: View {
         HStack(spacing: WarrenSpacing.compact) {
             Image(nsImage: icon)
                 .resizable()
-                .frame(width: 16, height: 16)
-            Text(name).font(WarrenTypography.body)
+                .scaledToFit()
+                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
+                       height: WarrenLayoutMetrics.externalIDEIconSize)
+            Text(name).font(WarrenTypography.navigationMeta)
             Spacer()
             Text(path)
                 .font(WarrenTypography.compactCode)

@@ -135,6 +135,7 @@ struct WarrenDesktopExternalIDEMenu: View {
                 } label: {
                     Label {
                         Text(item.title)
+                            .font(WarrenTypography.navigationMeta)
                     } icon: {
                         iconView(item.icon)
                     }
@@ -143,7 +144,7 @@ struct WarrenDesktopExternalIDEMenu: View {
             }
         } label: {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .accessibilityHidden(true)
         }
         .menuStyle(.borderlessButton)
@@ -159,10 +160,14 @@ struct WarrenDesktopExternalIDEMenu: View {
         if let icon {
             Image(nsImage: icon)
                 .resizable()
-                .frame(width: 14, height: 14)
+                .scaledToFit()
+                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
+                       height: WarrenLayoutMetrics.externalIDEIconSize)
         } else {
             Image(systemName: "app")
-                .frame(width: 14, height: 14)
+                .font(WarrenTypography.navigationMeta)
+                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
+                       height: WarrenLayoutMetrics.externalIDEIconSize)
         }
     }
 }
