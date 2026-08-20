@@ -32,14 +32,15 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     }
 }
 
-public struct WarrenDesktopWebPanel: View {
+public struct WarrenDesktopWebMenu: View {
     public let status: WarrenDesktopWebStatus
     public let canShare: Bool
     public let onStart: () -> Void
     public let onStop: () -> Void
     public let onOpenURL: (URL) -> Void
     public let onCopyURL: (URL) -> Void
-    public let onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
 
     public init(
         status: WarrenDesktopWebStatus,
@@ -47,8 +48,7 @@ public struct WarrenDesktopWebPanel: View {
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void,
         onOpenURL: @escaping (URL) -> Void,
-        onCopyURL: @escaping (URL) -> Void,
-        onDismiss: @escaping () -> Void = {}
+        onCopyURL: @escaping (URL) -> Void
     ) {
         self.status = status
         self.canShare = canShare
@@ -56,177 +56,51 @@ public struct WarrenDesktopWebPanel: View {
         self.onStop = onStop
         self.onOpenURL = onOpenURL
         self.onCopyURL = onCopyURL
-        self.onDismiss = onDismiss
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: .dark)
-        VStack(alignment: .leading, spacing: 0) {
-            header(tokens: tokens)
-            WarrenDesktopChromeDivider()
-            if let url = status.localURL {
-                content(url: url, tokens: tokens)
-            } else {
-                Text("Local Web is unavailable")
-                    .font(WarrenTypography.body)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .padding(WarrenSpacing.standard)
-            }
-        }
-        .frame(width: 320, alignment: .leading)
-        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.base)
-    }
-
-    private func header(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.small) {
-            Image(systemName: "globe")
-                .font(WarrenTypography.navigationGroup)
-                .foregroundStyle(tokens.foreground)
-                .accessibilityHidden(true)
-            Text("Web")
-                .font(WarrenTypography.popoverTitle)
-                .foregroundStyle(tokens.foreground)
-            Spacer()
-            Circle()
-                .fill(status.isRunning ? tokens.success : tokens.mutedForeground)
-                .frame(width: 7, height: 7)
-            Text(status.isRunning ? "Running" : "Stopped")
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        Menu {
+            Text(status.isRunning ? "Web is running" : "Web is stopped")
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(WarrenTypography.popoverMeta)
-                    .frame(width: 22, height: 22)
+            Divider()
+            if let url = status.localURL {
+                Button("Open Web UI") { onOpenURL(url) }
+                Button("Copy Web Address") { onCopyURL(url) }
+            } else {
+                Button("Local Web is unavailable") {}
+                    .disabled(true)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(tokens.mutedForeground)
-            .accessibilityLabel("Close Web panel")
-        }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, WarrenSpacing.medium)
-    }
-
-    private func content(url: URL, tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-            webAddressField(url, tokens: tokens)
-
-            HStack(spacing: WarrenSpacing.xs) {
-                WarrenDesktopWebCommandButton(
-                    title: "Open",
-                    accessibilityLabel: "Open the web UI"
-                ) {
-                    onOpenURL(url)
-                }
-                WarrenDesktopWebCommandButton(
-                    title: "Copy",
-                    accessibilityLabel: "Copy the web address"
-                ) {
-                    onCopyURL(url)
-                }
-                WarrenDesktopWebCommandButton(
-                    title: "Copy LAN",
-                    isEnabled: status.lanURL != nil,
-                    accessibilityLabel: "Copy the LAN web address"
-                ) {
-                    if let lanURL = status.lanURL {
-                        onCopyURL(lanURL)
-                    }
-                }
-                WarrenDesktopWebCommandButton(
-                    title: status.secureURL == nil ? "Share" : "Stop",
-                    isEnabled: canShare && status.canControl,
-                    isEmphasized: status.secureURL != nil,
-                    accessibilityLabel: status.secureURL == nil
-                        ? "Share the Web UI publicly"
-                        : "Stop public sharing"
-                ) {
-                    if status.secureURL == nil {
-                        onStart()
-                    } else {
-                        onStop()
-                    }
-                }
+            if let lanURL = status.lanURL {
+                Button("Copy LAN Address") { onCopyURL(lanURL) }
             }
-
             if let secureURL = status.secureURL {
-                HStack(spacing: WarrenSpacing.xs) {
-                    Circle()
-                        .fill(tokens.info)
-                        .frame(width: 6, height: 6)
-                    Text(secureURL.absoluteString)
-                        .font(WarrenTypography.code)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Button {
-                        onCopyURL(secureURL)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(WarrenTypography.navigationMeta)
-                    }
-                    .buttonStyle(WarrenChromeButtonStyle())
-                    .frame(width: 22, height: 22)
-                    .accessibilityLabel("Copy public web address")
+                Button("Copy Public Address") { onCopyURL(secureURL) }
+                if canShare && status.canControl {
+                    Button("Stop Public Sharing") { onStop() }
                 }
+            } else if canShare && status.canControl {
+                Button("Start Public Sharing") { onStart() }
             }
-        }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, WarrenSpacing.standard)
-    }
-
-    private func webAddressField(_ url: URL, tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.compact) {
-            Image(systemName: "link")
-                .font(WarrenTypography.navigationMeta)
-                .foregroundStyle(tokens.mutedForeground)
+        } label: {
+            Image(systemName: "globe")
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
-            Text(url.absoluteString)
-                .font(WarrenTypography.code)
-                .foregroundStyle(tokens.foreground.opacity(0.9))
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
-        .padding(.horizontal, WarrenSpacing.compact)
-        .frame(minHeight: 32)
-        .background(tokens.inputSurface)
-        .clipShape(.rect(cornerRadius: WarrenRadius.small))
-        .overlay {
-            RoundedRectangle(cornerRadius: WarrenRadius.small)
-                .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Web address: \(url.absoluteString)")
-    }
-}
-
-/// Inline command button used by the Web panel. Four equal-width commands
-/// share one quiet row: plain text, a soft hover wash, and no border chrome.
-private struct WarrenDesktopWebCommandButton: View {
-    let title: String
-    var isEnabled = true
-    var isEmphasized = false
-    let accessibilityLabel: String
-    let action: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        Button(action: action) {
-            Text(title)
-                .font(WarrenTypography.chromeLabel)
-                .foregroundStyle(isEmphasized ? tokens.info : tokens.mutedForeground)
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: WarrenLayoutMetrics.compactControlHeight
-                )
-                .background(
-                    isEmphasized ? tokens.info.opacity(0.12) : Color.clear
-                )
-                .contentShape(.rect)
-        }
-        .buttonStyle(WarrenChromeButtonStyle())
-        .disabled(!isEnabled)
-        .accessibilityLabel(accessibilityLabel)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .foregroundStyle(
+            status.tunnelRunning
+                ? tokens.info
+                : (status.isRunning ? tokens.success : tokens.mutedForeground)
+        )
+        .accessibilityLabel("Web")
+        .accessibilityHint(
+            status.tunnelRunning
+                ? "Public sharing is on"
+                : (status.isRunning ? "Web is running" : "Web is stopped")
+        )
     }
 }
