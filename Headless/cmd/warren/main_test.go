@@ -326,6 +326,67 @@ func TestValidateAgentReadArgs(t *testing.T) {
 	}
 }
 
+func TestValidateAgentWaitArgs(t *testing.T) {
+	if help, err := validateAgentWaitArgs([]string{"--help"}); err != nil || !help {
+		t.Fatalf("validate help = %v, %v; want true, nil", help, err)
+	}
+	if _, err := validateAgentWaitArgs([]string{"session-1", "--timeout"}); err == nil || !strings.Contains(err.Error(), "requires a value") {
+		t.Fatalf("missing timeout error = %v", err)
+	}
+	if _, err := validateAgentWaitArgs([]string{"session-1", "--callback", "echo nope"}); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("callback error = %v", err)
+	}
+}
+
+func TestAgentWaitTimeout(t *testing.T) {
+	if got, err := agentWaitTimeout(parseFlags(nil)); err != nil || got != defaultAgentWaitTimeout {
+		t.Fatalf("default timeout = %s, %v", got, err)
+	}
+	if got, err := agentWaitTimeout(parseFlags([]string{"--timeout", "45s"})); err != nil || got != 45*time.Second {
+		t.Fatalf("explicit timeout = %s, %v", got, err)
+	}
+	if _, err := agentWaitTimeout(parseFlags([]string{"--timeout", "never"})); err == nil {
+		t.Fatal("invalid timeout succeeded")
+	}
+	if _, err := agentWaitTimeout(parseFlags([]string{"--timeout"})); err == nil || !strings.Contains(err.Error(), "requires a value") {
+		t.Fatalf("missing timeout error = %v", err)
+	}
+}
+
+func TestValidateAgentSendWaitRejectsRunningTurn(t *testing.T) {
+	if err := validateAgentSendWait(api.AgentSnapshotResult{
+		Turn: api.AgentTurn{ID: 2, Status: api.AgentTurnStarted},
+	}); err == nil || !strings.Contains(err.Error(), "already has a running turn") {
+		t.Fatalf("running turn error = %v", err)
+	}
+	if err := validateAgentSendWait(api.AgentSnapshotResult{
+		Turn: api.AgentTurn{ID: 2, Status: api.AgentTurnCompleted},
+	}); err != nil {
+		t.Fatalf("completed baseline rejected: %v", err)
+	}
+}
+
+func TestAgentWaitCursorJoinsRunningOrJustCompletedTurn(t *testing.T) {
+	after, current := agentWaitCursor(api.AgentSnapshotResult{
+		Turn: api.AgentTurn{ID: 4, Status: api.AgentTurnStarted},
+	})
+	if after != 4 || current != 4 {
+		t.Fatalf("running cursor = after %d current %d, want 4 and 4", after, current)
+	}
+	after, current = agentWaitCursor(api.AgentSnapshotResult{
+		Turn: api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
+	})
+	if after != 3 || current != 0 {
+		t.Fatalf("completed cursor = after %d current %d, want 3 and 0", after, current)
+	}
+	after, current = agentWaitCursor(api.AgentSnapshotResult{
+		Turn: api.AgentTurn{Status: api.AgentTurnIdle},
+	})
+	if after != 0 || current != 0 {
+		t.Fatalf("idle cursor = after %d current %d, want zeroes", after, current)
+	}
+}
+
 func TestSessionRowsKeepsOrphanSessionUsable(t *testing.T) {
 	state := api.State{
 		Sessions: []api.Session{{

@@ -108,14 +108,21 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	if liveActivity != api.AgentActivityWorking {
 		t.Fatalf("live activity = %q, want working", liveActivity)
 	}
+	liveTurn := readAgentTurn(t, connection)
+	if liveTurn != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) {
+		t.Fatalf("live turn = %#v, want turn 1 started", liveTurn)
+	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
 		if candidate.ID == "session-agent" && candidate.AgentActivity != api.AgentActivityWorking {
 			t.Fatalf("roster activity = %q, want working", candidate.AgentActivity)
 		}
 	}
-	if history := service.agentHistory("session-agent"); len(history) != 2 {
-		t.Fatalf("history length = %d, want 2", len(history))
+	if history := service.agentHistory("session-agent"); len(history) != 2 || history[1].Turn != 1 {
+		t.Fatalf("history = %#v, want second event on turn 1", history)
+	}
+	if snapshot := service.agentSnapshot("session-agent"); snapshot.Turn != liveTurn || snapshot.Sequence != 2 {
+		t.Fatalf("snapshot = %#v, want live turn and sequence 2", snapshot)
 	}
 }
 
@@ -511,6 +518,29 @@ func readAgentActivity(t *testing.T, connection interface {
 	}
 }
 
+func readAgentTurn(t *testing.T, connection interface {
+	SetReadDeadline(time.Time) error
+	ReadMessage() (int, []byte, error)
+}) api.AgentTurn {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	if err := connection.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	defer connection.SetReadDeadline(time.Time{})
+	for {
+		_, data, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatalf("agent turn message never arrived: %v", err)
+		}
+		var message api.AgentTurnMessage
+		if json.Unmarshal(data, &message) != nil || message.Type != "agent.turn" {
+			continue
+		}
+		return api.AgentTurn{ID: message.Turn, Status: message.Status}
+	}
+}
+
 func TestAgentHistoryIncludesInitialAndLiveEvents(t *testing.T) {
 	directory := t.TempDir()
 	transcriptPath := filepath.Join(directory, "rollout-agent.jsonl")
@@ -748,6 +778,99 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	if previous["hasMore"] != false {
 		t.Fatalf("previous history hasMore = %v, want false", previous["hasMore"])
 	}
+}
+
+func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state}
+	service.lazyInit()
+	service.recordAgentTurns("session-turn", []api.AgentTurn{{ID: 3, Status: api.AgentTurnCompleted}}, false)
+	service.recordAgentEvents("session-turn", []api.AgentEvent{{
+		Sequence: 1, Turn: 3, Type: "assistant", Content: "done",
+	}}, api.AgentActivityReady)
+
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	snapshot := requestResult[map[string]any](t, connection, "agent.snapshot", map[string]any{
+		"session": "session-turn",
+	})
+	turn, ok := snapshot["turn"].(map[string]any)
+	if !ok || turn["id"] != float64(3) || turn["status"] != string(api.AgentTurnCompleted) {
+		t.Fatalf("snapshot turn = %#v, want turn 3 completed", snapshot["turn"])
+	}
+	events := requestResult[[]any](t, connection, "agent.turn.events", map[string]any{
+		"session": "session-turn",
+		"turn":    float64(3),
+	})
+	if len(events) != 1 {
+		t.Fatalf("turn events = %#v, want one event", events)
+	}
+	event, ok := events[0].(map[string]any)
+	if !ok || event["content"] != "done" {
+		t.Fatalf("turn event = %#v, want assistant result", events[0])
+	}
+}
+
+func TestAgentSubscribeDoesNotAttachTerminalOutput(t *testing.T) {
+	directory := t.TempDir()
+	transcriptPath := filepath.Join(directory, "rollout-subscribe.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"session_meta","payload":{}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session := api.Session{
+		ID: "session-subscribe", WorkspaceID: workspaceID, Kind: "codex",
+		Runtime: "runtime-subscribe", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newSpoolRuntime(t)
+	if err := runtime.Create(context.Background(), session.Runtime, directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime, AgentFinder: staticAgentFinder{path: transcriptPath}}
+	service.lazyInit()
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	subscription := requestResult[map[string]any](t, connection, "agent.subscribe", map[string]any{"session": session.ID})
+	snapshot, ok := subscription["snapshot"].(map[string]any)
+	if !ok || snapshot["epoch"] == nil || snapshot["turn"] == nil {
+		t.Fatalf("subscription snapshot = %#v", subscription["snapshot"])
+	}
+	service.outputMu.Lock()
+	terminalPeers := len(service.peers[session.ID])
+	agentPeers := len(service.agentPeers[session.ID])
+	service.outputMu.Unlock()
+	if terminalPeers != 0 || agentPeers != 1 {
+		t.Fatalf("peer registration = terminal %d agent %d, want 0 and 1", terminalPeers, agentPeers)
+	}
+
+	service.recordAgentTurns(session.ID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, true)
+	if turn := readAgentTurn(t, connection); turn != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) {
+		t.Fatalf("subscribed turn = %#v", turn)
+	}
+	service.stopOutput(session.ID, true)
+	readBrowserMessage(t, connection, "exited")
 }
 
 func waitForAgentHistory(t *testing.T, service *Service, sessionID, content string) {

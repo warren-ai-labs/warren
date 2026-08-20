@@ -565,6 +565,7 @@ type wsPeer struct {
 	closeFlag      bool
 	attached       *api.Session
 	controlSession string
+	agentSession   string
 	rosterCancel   context.CancelFunc
 }
 
@@ -587,10 +588,13 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 
 func (p *wsPeer) close() {
 	p.enqueueMu.Lock()
-	sessionID := p.closeLocked()
+	sessionID, agentSessionID := p.closeLocked()
 	p.enqueueMu.Unlock()
 	if sessionID != "" {
 		p.server.Service.detachPeer(p, sessionID)
+	}
+	if agentSessionID != "" {
+		p.server.Service.detachAgentPeer(p, agentSessionID)
 	}
 }
 
@@ -624,10 +628,13 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		// Queue overflow is a per-client failure: close only this peer. The
 		// client reconnects with its Recovery Anchor and Host re-serves the
 		// retained tail from the ring.
-		sessionID := p.closeLocked()
+		sessionID, agentSessionID := p.closeLocked()
 		p.enqueueMu.Unlock()
 		if sessionID != "" {
 			p.server.Service.detachPeer(p, sessionID)
+		}
+		if agentSessionID != "" {
+			p.server.Service.detachAgentPeer(p, agentSessionID)
 		}
 		return false
 	}
@@ -636,15 +643,16 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 // closeLocked must be called with enqueueMu held. It is idempotent so both
 // the writer's error path and queue overflow can tear down the same peer
 // exactly once.
-// closeLocked must be called with enqueueMu held. It returns the attached
-// session ID so the caller can unregister after releasing the lock, keeping
-// lock ordering between the outbound queue and the service registry acyclic.
-func (p *wsPeer) closeLocked() string {
+// closeLocked must be called with enqueueMu held. It returns terminal and
+// agent-only subscription IDs so the caller can unregister after releasing
+// the lock, keeping registry lock ordering acyclic.
+func (p *wsPeer) closeLocked() (string, string) {
 	if p.closeFlag {
+		agentSessionID := p.agentSession
 		if p.attached != nil {
-			return p.attached.ID
+			return p.attached.ID, agentSessionID
 		}
-		return ""
+		return "", agentSessionID
 	}
 	p.closeFlag = true
 	if p.rosterCancel != nil {
@@ -657,7 +665,7 @@ func (p *wsPeer) closeLocked() string {
 	}
 	close(p.closed)
 	close(p.outbound)
-	return sessionID
+	return sessionID, p.agentSession
 }
 
 func (p *wsPeer) writeJSON(value any) error {
@@ -715,6 +723,16 @@ func (p *wsPeer) enqueueAgentActivity(sessionID string, activity api.AgentActivi
 		Session:  sessionID,
 		Epoch:    p.server.Service.currentAgentEpoch(),
 		Activity: activity,
+	})
+}
+
+func (p *wsPeer) enqueueAgentTurn(sessionID string, turn api.AgentTurn) error {
+	return p.writeJSON(api.AgentTurnMessage{
+		Type:    "agent.turn",
+		Session: sessionID,
+		Epoch:   p.server.Service.currentAgentEpoch(),
+		Turn:    turn.ID,
+		Status:  turn.Status,
 	})
 }
 
@@ -779,6 +797,52 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPage(sessionID, before, limit))
+	case "agent.snapshot":
+		sessionID := stringParam(params, "session")
+		if sessionID == "" {
+			return fmt.Errorf("session parameter required")
+		}
+		return p.writeResult(command.ID, p.server.Service.agentSnapshot(sessionID))
+	case "agent.turn.events":
+		sessionID := stringParam(params, "session")
+		if sessionID == "" {
+			return fmt.Errorf("session parameter required")
+		}
+		turn, _ := uint64Param(params, "turn")
+		if turn == 0 {
+			return fmt.Errorf("turn parameter required")
+		}
+		return p.writeResult(command.ID, p.server.Service.agentTurnEvents(sessionID, turn))
+	case "agent.subscribe":
+		sessionID := stringParam(params, "session")
+		session, ok := p.server.Service.Session(sessionID)
+		if !ok {
+			return fmt.Errorf("session not found: %s", sessionID)
+		}
+		if session.Lifecycle != "running" {
+			return fmt.Errorf("session is not running: %s", sessionID)
+		}
+		entry, err := p.server.Service.ensureAgent(ctx, session)
+		if err != nil {
+			return err
+		}
+		if entry == nil {
+			return fmt.Errorf("session is not bound to an agent: %s", sessionID)
+		}
+		if err := p.server.Service.waitAgentReady(ctx, sessionID); err != nil {
+			return err
+		}
+		lock := p.server.Service.broadcastLock(sessionID)
+		if err := lock.LockContext(ctx); err != nil {
+			return err
+		}
+		snapshot := p.server.Service.agentSnapshot(sessionID)
+		err = p.subscribeAgent(sessionID)
+		lock.Unlock()
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: session, Snapshot: snapshot})
 	case "settings.get":
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime": p.server.Service.DefaultRuntime,
@@ -1283,6 +1347,32 @@ func (p *wsPeer) attach(session api.Session) {
 	p.detach()
 	p.attached = &session
 	p.controlSession = session.ID
+}
+
+func (p *wsPeer) subscribeAgent(sessionID string) error {
+	p.enqueueMu.Lock()
+	if p.closeFlag {
+		p.enqueueMu.Unlock()
+		return errors.New("connection is closed")
+	}
+	previous := p.agentSession
+	p.agentSession = sessionID
+	p.enqueueMu.Unlock()
+	if previous != "" && previous != sessionID {
+		p.server.Service.detachAgentPeer(p, previous)
+	}
+	p.server.Service.registerAgentPeer(sessionID, p)
+
+	// A writer failure can close the peer between the local assignment and
+	// registry insertion. Recheck and remove the late registration if needed.
+	p.enqueueMu.Lock()
+	closed := p.closeFlag || p.agentSession != sessionID
+	p.enqueueMu.Unlock()
+	if closed {
+		p.server.Service.detachAgentPeer(p, sessionID)
+		return errors.New("connection closed while subscribing to agent")
+	}
+	return nil
 }
 
 func (p *wsPeer) detach() {

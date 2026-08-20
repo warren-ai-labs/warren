@@ -89,7 +89,12 @@ func ReadTranscript(ctx context.Context, provider, path string, options ReadOpti
 		if len(line) > 0 {
 			line = bytes.TrimSpace(line)
 			if len(line) > 0 {
-				for _, event := range parser.parse(line) {
+				events := parser.parse(line)
+				// One-shot reads expose normalized conversation events, not live
+				// turn notifications. Drain transitions per line so --all does not
+				// retain lifecycle metadata for the entire transcript.
+				parser.DrainTurns()
+				for _, event := range events {
 					if !includeReadEvent(event, include, exclude) {
 						continue
 					}

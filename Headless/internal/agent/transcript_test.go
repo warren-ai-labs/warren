@@ -218,7 +218,7 @@ func TestWatcherTailsNewLines(t *testing.T) {
 		mu.Lock()
 		seen = append(seen, events...)
 		mu.Unlock()
-	}, nil)
+	}, nil, nil)
 	defer watcher.Close()
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -260,6 +260,56 @@ func TestWatcherTailsNewLines(t *testing.T) {
 			t.Fatalf("live event never arrived: %#v", contents)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWatcherPreservesFastTurnBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-fast-turn.jsonl")
+	writeLines(t, path, `{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ready"}]}}`)
+
+	type observedTurns struct {
+		turns  []api.AgentTurn
+		replay bool
+	}
+	turns := make(chan observedTurns, 2)
+	initial := make(chan struct{}, 1)
+	watcher := Start("session-1", "codex", path, func([]api.AgentEvent, api.AgentActivity) {
+		initial <- struct{}{}
+	}, nil, func(value []api.AgentTurn, replay bool) {
+		turns <- observedTurns{turns: value, replay: replay}
+	})
+	defer watcher.Close()
+	select {
+	case <-initial:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial transcript read")
+	}
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString(strings.Join([]string{
+		`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"task_started"}}`,
+		`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"task_complete"}}`,
+	}, "\n") + "\n")
+	closeErr := file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	select {
+	case observed := <-turns:
+		got := observed.turns
+		if observed.replay || len(got) != 2 || got[0] != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) ||
+			got[1] != (api.AgentTurn{ID: 1, Status: api.AgentTurnCompleted}) {
+			t.Fatalf("turns = %#v, want fast turn boundaries", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for turn boundaries")
 	}
 }
 

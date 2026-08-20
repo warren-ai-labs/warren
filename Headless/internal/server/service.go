@@ -141,6 +141,7 @@ type Service struct {
 	projectLifecycleLocks map[string]*sync.RWMutex
 	outputs               map[string]*outputSession
 	peers                 map[string]map[*wsPeer]struct{}
+	agentPeers            map[string]map[*wsPeer]struct{}
 	focusedPeers          map[string]*wsPeer
 	runtimeSizes          map[string]ghostline.Size
 	broadcastLocks        map[string]*sessionLock
@@ -170,6 +171,7 @@ type agentSession struct {
 	watcher  *agent.Watcher
 	events   []api.AgentEvent
 	activity api.AgentActivity
+	turn     api.AgentTurn
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -259,6 +261,9 @@ func (s *Service) lazyInitLocked() {
 	}
 	if s.peers == nil {
 		s.peers = map[string]map[*wsPeer]struct{}{}
+	}
+	if s.agentPeers == nil {
+		s.agentPeers = map[string]map[*wsPeer]struct{}{}
 	}
 	if s.focusedPeers == nil {
 		s.focusedPeers = map[string]*wsPeer{}
@@ -2786,6 +2791,7 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.mu.Lock()
 		existing.events = nil
 		existing.activity = ""
+		existing.turn = api.AgentTurn{}
 		existing.mu.Unlock()
 	} else if existing != nil {
 		existing.mu.Lock()
@@ -2825,6 +2831,9 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		},
 		func(activity api.AgentActivity) {
 			s.recordAgentActivity(sessionID, activity)
+		},
+		func(turns []api.AgentTurn, replay bool) {
+			s.recordAgentTurns(sessionID, turns, !replay || s.hasAgentPeers(sessionID))
 		},
 	)
 	s.agentsMu.Lock()
@@ -2962,6 +2971,31 @@ func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, a
 // transcript events, such as a tool call that has been waiting too long.
 func (s *Service) recordAgentActivity(sessionID string, activity api.AgentActivity) {
 	s.setAgentActivity(sessionID, activity, false)
+}
+
+// recordAgentTurns stores the latest turn cursor and optionally broadcasts
+// live boundaries. Historical replay updates the snapshot without waking a
+// waiter for work that completed before it subscribed.
+func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broadcast bool) {
+	if len(turns) == 0 {
+		return
+	}
+	s.lazyInit()
+	for _, turn := range turns {
+		s.agentsMu.Lock()
+		entry := s.agents[sessionID]
+		if entry == nil {
+			entry = &agentSession{}
+			s.agents[sessionID] = entry
+		}
+		entry.mu.Lock()
+		entry.turn = turn
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		if broadcast {
+			s.broadcastAgentTurn(sessionID, turn)
+		}
+	}
 }
 
 // forceAgentActivity records a state transition that must override an exited
@@ -3131,6 +3165,60 @@ func (s *Service) agentActivity(sessionID string) api.AgentActivity {
 	return entry.activity
 }
 
+func (s *Service) agentTurn(sessionID string) api.AgentTurn {
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry == nil {
+		return api.AgentTurn{Status: api.AgentTurnIdle}
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	turn := entry.turn
+	if turn.Status == "" {
+		turn.Status = api.AgentTurnIdle
+	}
+	return turn
+}
+
+func (s *Service) agentSnapshot(sessionID string) api.AgentSnapshotResult {
+	result := api.AgentSnapshotResult{
+		Epoch: s.currentAgentEpoch(),
+		Turn:  s.agentTurn(sessionID),
+	}
+	if history := s.agentHistory(sessionID); len(history) > 0 {
+		result.Sequence = history[len(history)-1].Sequence
+	}
+	return result
+}
+
+func (s *Service) agentTurnEvents(sessionID string, turn uint64) []api.AgentEvent {
+	history := s.agentHistory(sessionID)
+	events := make([]api.AgentEvent, 0)
+	for _, event := range history {
+		if event.Turn == turn {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	var watcher *agent.Watcher
+	if entry != nil {
+		watcher = entry.watcher
+	}
+	s.agentsMu.Unlock()
+	if watcher == nil {
+		return nil
+	}
+	return watcher.WaitReady(ctx)
+}
+
 // applyAgentState reflects the managed hook's SessionEnd state on the status
 // light: the agent CLI is gone, but the Warren session is still a shell.
 func (s *Service) applyAgentState(session api.Session) {
@@ -3209,21 +3297,38 @@ func (s *Service) broadcastAgentActivity(sessionID string, activity api.AgentAct
 	}, sessionID)
 }
 
-// broadcastAgent delivers one outbound message to every peer attached to a
-// session under the session broadcast lock.
+func (s *Service) broadcastAgentTurn(sessionID string, turn api.AgentTurn) {
+	if turn.Status == "" {
+		return
+	}
+	s.broadcastAgent(func(peer *wsPeer) error {
+		return peer.enqueueAgentTurn(sessionID, turn)
+	}, sessionID)
+}
+
+// broadcastAgent delivers one outbound message to terminal peers and
+// agent-only subscribers under the session broadcast lock.
 func (s *Service) broadcastAgent(send func(*wsPeer) error, sessionID string) {
 	lock := s.broadcastLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
 	s.outputMu.Lock()
-	peers := make([]*wsPeer, 0, len(s.peers[sessionID]))
+	unique := make(map[*wsPeer]struct{}, len(s.peers[sessionID])+len(s.agentPeers[sessionID]))
 	for peer := range s.peers[sessionID] {
+		unique[peer] = struct{}{}
+	}
+	for peer := range s.agentPeers[sessionID] {
+		unique[peer] = struct{}{}
+	}
+	peers := make([]*wsPeer, 0, len(unique))
+	for peer := range unique {
 		peers = append(peers, peer)
 	}
 	s.outputMu.Unlock()
 	for _, peer := range peers {
 		if err := send(peer); err != nil {
 			s.detachPeer(peer, sessionID)
+			s.detachAgentPeer(peer, sessionID)
 		}
 	}
 }
@@ -3660,6 +3765,35 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	s.outputMu.Unlock()
 }
 
+func (s *Service) registerAgentPeer(sessionID string, peer *wsPeer) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	if s.agentPeers[sessionID] == nil {
+		s.agentPeers[sessionID] = map[*wsPeer]struct{}{}
+	}
+	s.agentPeers[sessionID][peer] = struct{}{}
+}
+
+func (s *Service) detachAgentPeer(peer *wsPeer, sessionID string) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	if peers := s.agentPeers[sessionID]; peers != nil {
+		delete(peers, peer)
+		if len(peers) == 0 {
+			delete(s.agentPeers, sessionID)
+		}
+	}
+}
+
+func (s *Service) hasAgentPeers(sessionID string) bool {
+	s.lazyInit()
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	return len(s.agentPeers[sessionID]) > 0
+}
+
 // registerPeer records a live output subscription. It is intentionally kept
 // separate from attachOutputLocked so an attach can claim focus and resize
 // the runtime before the first snapshot is captured.
@@ -3821,11 +3955,19 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	s.outputMu.Lock()
 	outputSession := s.outputs[sessionID]
 	delete(s.outputs, sessionID)
-	peers := make([]*wsPeer, 0, len(s.peers[sessionID]))
+	uniquePeers := make(map[*wsPeer]struct{}, len(s.peers[sessionID])+len(s.agentPeers[sessionID]))
 	for peer := range s.peers[sessionID] {
+		uniquePeers[peer] = struct{}{}
+	}
+	for peer := range s.agentPeers[sessionID] {
+		uniquePeers[peer] = struct{}{}
+	}
+	peers := make([]*wsPeer, 0, len(uniquePeers))
+	for peer := range uniquePeers {
 		peers = append(peers, peer)
 	}
 	delete(s.peers, sessionID)
+	delete(s.agentPeers, sessionID)
 	delete(s.focusedPeers, sessionID)
 	delete(s.runtimeSizes, sessionID)
 	s.outputMu.Unlock()

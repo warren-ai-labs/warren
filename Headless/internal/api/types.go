@@ -162,6 +162,7 @@ const (
 // the terminal byte stream remains the source of truth for rendering.
 type AgentEvent struct {
 	Sequence   uint64      `json:"seq"`
+	Turn       uint64      `json:"turn,omitempty"`
 	ID         string      `json:"id,omitempty"`
 	Provider   string      `json:"provider"`
 	Type       string      `json:"type"`
@@ -180,6 +181,25 @@ type AgentEvent struct {
 	DurationMs int64       `json:"durationMs,omitempty"`
 	Sidechain  bool        `json:"sidechain,omitempty"`
 	Timestamp  time.Time   `json:"timestamp,omitempty"`
+}
+
+// AgentTurnStatus describes one explicit turn boundary in an agent transcript.
+// Idle is only used by snapshots before the first observed turn.
+type AgentTurnStatus string
+
+const (
+	AgentTurnIdle      AgentTurnStatus = "idle"
+	AgentTurnStarted   AgentTurnStatus = "started"
+	AgentTurnCompleted AgentTurnStatus = "completed"
+	AgentTurnFailed    AgentTurnStatus = "failed"
+	AgentTurnAborted   AgentTurnStatus = "aborted"
+)
+
+// AgentTurn is a monotonically numbered lifecycle transition within one
+// agent epoch. The number resets when the transcript projection is replaced.
+type AgentTurn struct {
+	ID     uint64          `json:"id"`
+	Status AgentTurnStatus `json:"status"`
 }
 
 // AgentUsage mirrors the token accounting both CLIs attach to their own
@@ -214,6 +234,42 @@ type AgentActivityMessage struct {
 	Session  string        `json:"session"`
 	Epoch    uint64        `json:"epoch,omitempty"`
 	Activity AgentActivity `json:"activity"`
+}
+
+// AgentTurnMessage carries explicit turn boundaries for blocking clients.
+// Activity remains presentation state; callers must use this message instead
+// of treating the ambiguous ready state as proof that a new turn completed.
+type AgentTurnMessage struct {
+	Type    string          `json:"t"`
+	Session string          `json:"session"`
+	Epoch   uint64          `json:"epoch,omitempty"`
+	Turn    uint64          `json:"turn"`
+	Status  AgentTurnStatus `json:"status"`
+}
+
+// AgentSnapshotResult is the subscription baseline used before a caller sends
+// input or starts waiting. Event sequence is included for diagnostics.
+type AgentSnapshotResult struct {
+	Epoch    uint64    `json:"epoch"`
+	Turn     AgentTurn `json:"turn"`
+	Sequence uint64    `json:"sequence"`
+}
+
+// AgentSubscriptionResult binds a read-only subscriber to a session and
+// returns the turn baseline established before live boundaries can interleave.
+type AgentSubscriptionResult struct {
+	Session  Session             `json:"session"`
+	Snapshot AgentSnapshotResult `json:"snapshot"`
+}
+
+// AgentWaitResult is printed by the blocking CLI once a turn reaches a
+// terminal state.
+type AgentWaitResult struct {
+	Session string          `json:"session"`
+	Epoch   uint64          `json:"epoch"`
+	Turn    uint64          `json:"turn"`
+	Status  AgentTurnStatus `json:"status"`
+	Events  []AgentEvent    `json:"events"`
 }
 
 // AgentHistoryResult is one page of the agent event history. Cursor is the

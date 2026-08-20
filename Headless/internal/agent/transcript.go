@@ -281,6 +281,7 @@ type Watcher struct {
 	interval   time.Duration
 	onEvents   func([]api.AgentEvent, api.AgentActivity)
 	onActivity func(api.AgentActivity)
+	onTurns    func([]api.AgentTurn, bool)
 	parser     *parser
 
 	mu           sync.Mutex
@@ -288,6 +289,7 @@ type Watcher struct {
 	lastActivity api.AgentActivity
 	stop         chan struct{}
 	done         chan struct{}
+	ready        chan struct{}
 	once         sync.Once
 }
 
@@ -296,6 +298,7 @@ func Start(
 	sessionID, provider, path string,
 	onEvents func([]api.AgentEvent, api.AgentActivity),
 	onActivity func(api.AgentActivity),
+	onTurns func([]api.AgentTurn, bool),
 ) *Watcher {
 	watcher := &Watcher{
 		sessionID:  sessionID,
@@ -304,9 +307,11 @@ func Start(
 		interval:   watchInterval,
 		onEvents:   onEvents,
 		onActivity: onActivity,
+		onTurns:    onTurns,
 		parser:     newParser(provider),
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
+		ready:      make(chan struct{}),
 	}
 	go watcher.loop()
 	return watcher
@@ -325,6 +330,17 @@ func (w *Watcher) Path() string {
 	return w.path
 }
 
+// WaitReady waits until the initial transcript replay has established the
+// current activity and turn cursor.
+func (w *Watcher) WaitReady(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.ready:
+		return nil
+	}
+}
+
 // Snapshot returns the retained event history.
 func (w *Watcher) Snapshot() []api.AgentEvent {
 	w.mu.Lock()
@@ -339,16 +355,24 @@ func (w *Watcher) loop() {
 	events, next, err := readNew(w.path, offset, w.parser)
 	if err == nil {
 		offset = next
+		w.lastActivity = w.parser.Activity()
 		if len(events) > 0 {
 			for index := range events {
 				sequence++
 				events[index].Sequence = sequence
 			}
 			w.append(events)
-			w.lastActivity = w.parser.Activity()
-			w.onEvents(events, w.lastActivity)
+			if w.onEvents != nil {
+				w.onEvents(events, w.lastActivity)
+			}
+		}
+		// Historical replay establishes the current turn cursor without
+		// flooding clients with every old lifecycle transition.
+		if turns := w.parser.DrainTurns(); len(turns) > 0 && w.onTurns != nil {
+			w.onTurns(turns[len(turns)-1:], true)
 		}
 	}
+	close(w.ready)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -361,19 +385,29 @@ func (w *Watcher) loop() {
 				continue
 			}
 			offset = next
+			activity := w.parser.Activity()
 			if len(events) > 0 {
 				for index := range events {
 					sequence++
 					events[index].Sequence = sequence
 				}
 				w.append(events)
-				w.lastActivity = w.parser.Activity()
-				w.onEvents(events, w.lastActivity)
+				w.lastActivity = activity
+				if w.onEvents != nil {
+					w.onEvents(events, activity)
+				}
+			}
+			// Events are delivered first so a waiter can retrieve the complete
+			// turn as soon as its terminal transition arrives.
+			if turns := w.parser.DrainTurns(); len(turns) > 0 && w.onTurns != nil {
+				w.onTurns(turns, false)
 			}
 			w.parser.Tick(time.Now())
 			if activity := w.parser.Activity(); activity != w.lastActivity {
 				w.lastActivity = activity
-				w.onActivity(activity)
+				if w.onActivity != nil {
+					w.onActivity(activity)
+				}
 			}
 		}
 	}
@@ -492,6 +526,9 @@ func (p *parser) parse(line []byte) []api.AgentEvent {
 	events := p.parseLine(line)
 	for index := range events {
 		p.tracker.Observe(events[index])
+		if !events[index].Sidechain {
+			events[index].Turn = p.tracker.Turn()
+		}
 	}
 	return events
 }
@@ -499,6 +536,11 @@ func (p *parser) parse(line []byte) []api.AgentEvent {
 // Activity is the presentation state after every line parsed so far.
 func (p *parser) Activity() api.AgentActivity {
 	return p.tracker.Activity()
+}
+
+// DrainTurns returns explicit lifecycle transitions observed while parsing.
+func (p *parser) DrainTurns() []api.AgentTurn {
+	return p.tracker.DrainTurns()
 }
 
 // Tick lets the tracker notice work that stalled without new transcript
