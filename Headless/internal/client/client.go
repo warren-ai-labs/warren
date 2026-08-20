@@ -20,6 +20,13 @@ import (
 type Client struct {
 	connection *websocket.Conn
 	mu         sync.Mutex
+	pendingMu  sync.Mutex
+	pending    []inboundMessage
+}
+
+type inboundMessage struct {
+	typeID int
+	data   []byte
 }
 
 func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
@@ -78,6 +85,7 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 			return err
 		}
 		if messageType != websocket.TextMessage {
+			c.stash(messageType, data)
 			continue
 		}
 		var response api.Response
@@ -94,6 +102,7 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 			}
 			return nil
 		}
+		c.stash(messageType, data)
 	}
 }
 
@@ -130,7 +139,7 @@ func (c *Client) ReadOutput(ctx context.Context, onOutput func([]byte) bool) err
 	})
 	defer stopClose()
 	for {
-		typeID, data, err := c.connection.ReadMessage()
+		typeID, data, err := c.nextMessage()
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -146,5 +155,112 @@ func (c *Client) ReadOutput(ctx context.Context, onOutput func([]byte) bool) err
 				return nil
 			}
 		}
+	}
+}
+
+func (c *Client) AgentSnapshot(ctx context.Context, sessionID string) (api.AgentSnapshotResult, error) {
+	var value api.AgentSnapshotResult
+	err := c.Request(ctx, "agent.snapshot", map[string]any{"session": sessionID}, &value)
+	return value, err
+}
+
+func (c *Client) SubscribeAgent(ctx context.Context, sessionID string) (api.AgentSubscriptionResult, error) {
+	var value api.AgentSubscriptionResult
+	err := c.Request(ctx, "agent.subscribe", map[string]any{"session": sessionID}, &value)
+	return value, err
+}
+
+func (c *Client) AgentTurnEvents(ctx context.Context, sessionID string, turn uint64) ([]api.AgentEvent, error) {
+	var value []api.AgentEvent
+	err := c.Request(ctx, "agent.turn.events", map[string]any{"session": sessionID, "turn": turn}, &value)
+	return value, err
+}
+
+// WaitAgentTurn blocks on the attached session until a turn newer than after
+// reaches a terminal state. current may name an already-running turn that a
+// standalone wait should join; send-and-wait callers pass zero.
+func (c *Client) WaitAgentTurn(
+	ctx context.Context,
+	sessionID string,
+	epoch, after, current uint64,
+) (api.AgentTurn, error) {
+	stopClose := context.AfterFunc(ctx, func() {
+		_ = c.connection.Close()
+	})
+	defer stopClose()
+	target := current
+	for {
+		messageType, data, err := c.nextMessage()
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return api.AgentTurn{}, ctxErr
+			}
+			return api.AgentTurn{}, err
+		}
+		if messageType != websocket.TextMessage {
+			continue
+		}
+		var envelope struct {
+			Type     string              `json:"t"`
+			Session  string              `json:"session"`
+			Epoch    uint64              `json:"epoch"`
+			Turn     uint64              `json:"turn"`
+			Status   api.AgentTurnStatus `json:"status"`
+			Activity api.AgentActivity   `json:"activity"`
+		}
+		if json.Unmarshal(data, &envelope) != nil || envelope.Session != sessionID {
+			continue
+		}
+		if envelope.Type == "exited" {
+			return api.AgentTurn{}, errors.New("agent session exited before the turn completed")
+		}
+		if envelope.Type == "agent.activity" && envelope.Activity == api.AgentActivityExited {
+			return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
+		}
+		if envelope.Type != "agent.turn" {
+			continue
+		}
+		if epoch != 0 && envelope.Epoch != 0 && envelope.Epoch != epoch {
+			return api.AgentTurn{}, errors.New("agent transcript changed while waiting")
+		}
+		if target == 0 && envelope.Status == api.AgentTurnStarted && envelope.Turn > after {
+			target = envelope.Turn
+		}
+		if target == 0 && envelope.Turn > after && terminalAgentTurn(envelope.Status) {
+			// Accept a terminal boundary even if a transport reconnect or a
+			// coalesced producer omitted the corresponding started notification.
+			target = envelope.Turn
+		}
+		if envelope.Turn == target && terminalAgentTurn(envelope.Status) {
+			return api.AgentTurn{ID: envelope.Turn, Status: envelope.Status}, nil
+		}
+	}
+}
+
+func (c *Client) stash(typeID int, data []byte) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.pending = append(c.pending, inboundMessage{typeID: typeID, data: append([]byte(nil), data...)})
+}
+
+func (c *Client) nextMessage() (int, []byte, error) {
+	c.pendingMu.Lock()
+	if len(c.pending) > 0 {
+		message := c.pending[0]
+		c.pending[0] = inboundMessage{}
+		c.pending = c.pending[1:]
+		c.pendingMu.Unlock()
+		return message.typeID, message.data, nil
+	}
+	c.pendingMu.Unlock()
+	return c.connection.ReadMessage()
+}
+
+func terminalAgentTurn(status api.AgentTurnStatus) bool {
+	switch status {
+	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnAborted:
+		return true
+	default:
+		return false
 	}
 }

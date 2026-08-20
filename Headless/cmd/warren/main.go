@@ -384,6 +384,14 @@ func resourceCommand(args []string) error {
 	if resource == "session" && action == "list" && boolValue(params, "all") && boolValue(params, "ended") {
 		return newUsageError("--all and --ended are mutually exclusive", actionUsageText(commandName, action))
 	}
+	if resource == "session" && action == "send" && stringValue(params, "timeout") != "" && !boolValue(params, "wait") {
+		return newUsageError("--timeout requires --wait", actionUsageText(commandName, action))
+	}
+	if resource == "session" && action == "send" && boolValue(params, "wait") {
+		if _, err := agentWaitTimeout(params); err != nil {
+			return newUsageError(err.Error(), actionUsageText(commandName, action))
+		}
+	}
 	var resolvedCurrentID string
 	if resource == "session" && (sessionTargetAction(action) || action == "current") && boolValue(params, "current") {
 		var err error
@@ -512,14 +520,35 @@ func resourceCommand(args []string) error {
 			data, _ := io.ReadAll(os.Stdin)
 			text = string(data)
 		}
-		if _, err := c.Attach(ctx, id); err != nil {
+		session, err := c.Attach(ctx, id)
+		if err != nil {
 			return err
+		}
+		var snapshot api.AgentSnapshotResult
+		if boolValue(params, "wait") {
+			if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
+				return fmt.Errorf("session is not bound to an agent: %s", session.ID)
+			}
+			snapshot, err = c.AgentSnapshot(ctx, id)
+			if err != nil {
+				return err
+			}
+			if err := validateAgentSendWait(snapshot); err != nil {
+				return err
+			}
 		}
 		if !strings.HasSuffix(text, "\n") && !boolValue(params, "raw") {
 			text += "\r"
 		}
 		if err := c.Input(ctx, []byte(text)); err != nil {
 			return err
+		}
+		if boolValue(params, "wait") {
+			timeout, err := agentWaitTimeout(params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return waitAndPrintAgentTurn(c, id, snapshot, snapshot.Turn.ID, 0, timeout)
 		}
 		return printValue(map[string]any{"sent": true})
 	case "session.read", "session.attach":
@@ -608,6 +637,9 @@ func agentCommand(args []string) error {
 	if len(args) == 0 || isHelpArgument(args[0]) {
 		fmt.Print(agentUsageText())
 		return nil
+	}
+	if args[0] == "wait" {
+		return agentWaitCommand(args[1:])
 	}
 	if args[0] != "read" {
 		return newUsageError(fmt.Sprintf("unknown agent command: %s", args[0]), agentUsageText())
@@ -717,6 +749,167 @@ func agentCommand(args []string) error {
 		return fmt.Errorf("read %s transcript %s: %w", provider, path, err)
 	}
 	return printValue(events)
+}
+
+const defaultAgentWaitTimeout = 30 * time.Minute
+
+func agentWaitCommand(args []string) error {
+	help, err := validateAgentWaitArgs(args)
+	if err != nil {
+		return newUsageError(err.Error(), agentWaitUsageText())
+	}
+	if help {
+		fmt.Print(agentWaitUsageText())
+		return nil
+	}
+	params := parseFlags(args)
+	positions := positionals(params)
+	if boolValue(params, "current") {
+		if len(positions) > 0 {
+			return newUsageError("--current cannot be combined with SESSION_ID", agentWaitUsageText())
+		}
+		id, err := currentSessionID()
+		if err != nil {
+			return err
+		}
+		positions = []string{id}
+	}
+	if len(positions) == 0 {
+		return newUsageError("missing SESSION_ID", agentWaitUsageText())
+	}
+	if len(positions) > 1 {
+		return newUsageError("agent wait accepts exactly one session ID", agentWaitUsageText())
+	}
+	timeout, err := agentWaitTimeout(params)
+	if err != nil {
+		return newUsageError(err.Error(), agentWaitUsageText())
+	}
+
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	subscription, err := c.SubscribeAgent(ctx, positions[0])
+	if err != nil {
+		return err
+	}
+	session := subscription.Session
+	if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
+		return fmt.Errorf("session is not bound to an agent: %s", session.ID)
+	}
+	snapshot := subscription.Snapshot
+	after, current := agentWaitCursor(snapshot)
+	return waitAndPrintAgentTurn(c, session.ID, snapshot, after, current, timeout)
+}
+
+func agentWaitCursor(snapshot api.AgentSnapshotResult) (after, current uint64) {
+	after = snapshot.Turn.ID
+	if snapshot.Turn.Status == api.AgentTurnStarted {
+		return after, snapshot.Turn.ID
+	}
+	if after > 0 {
+		// A turn may complete after the read-only subscription is registered
+		// but before this snapshot arrives. Its live terminal message is queued;
+		// allow exactly that latest turn while historical replay stays silent.
+		after--
+	}
+	return after, 0
+}
+
+func validateAgentWaitArgs(args []string) (bool, error) {
+	help := false
+	for index := 0; index < len(args); index++ {
+		item := args[index]
+		if item == "-h" || item == "--help" {
+			help = true
+			continue
+		}
+		if !strings.HasPrefix(item, "-") {
+			continue
+		}
+		if item == "--current" {
+			continue
+		}
+		if item == "--timeout" {
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+				return false, errors.New("--timeout requires a value")
+			}
+			index++
+			continue
+		}
+		if strings.HasPrefix(item, "--timeout=") && strings.TrimPrefix(item, "--timeout=") != "" {
+			continue
+		}
+		return false, fmt.Errorf("unknown flag %q", item)
+	}
+	return help, nil
+}
+
+func agentWaitTimeout(params map[string]any) (time.Duration, error) {
+	value := stringValue(params, "timeout")
+	if value == "" {
+		if _, present := params["timeout"]; present {
+			return 0, errors.New("--timeout requires a value")
+		}
+		return defaultAgentWaitTimeout, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --timeout %q", value)
+	}
+	if timeout <= 0 {
+		return 0, errors.New("--timeout must be greater than zero")
+	}
+	return timeout, nil
+}
+
+func validateAgentSendWait(snapshot api.AgentSnapshotResult) error {
+	if snapshot.Turn.Status == api.AgentTurnStarted {
+		return errors.New("agent already has a running turn; wait for it before using session send --wait")
+	}
+	return nil
+}
+
+func waitAndPrintAgentTurn(
+	c *client.Client,
+	sessionID string,
+	snapshot api.AgentSnapshotResult,
+	after uint64,
+	current uint64,
+	timeout time.Duration,
+) error {
+	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	waitContext, cancel := context.WithTimeout(signalContext, timeout)
+	defer cancel()
+	turn, err := c.WaitAgentTurn(waitContext, sessionID, snapshot.Epoch, after, current)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("agent turn did not complete before timeout %s", timeout)
+		}
+		return err
+	}
+	fetchContext, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer fetchCancel()
+	events, err := c.AgentTurnEvents(fetchContext, sessionID, turn.ID)
+	if err != nil {
+		return fmt.Errorf("read completed agent turn %d: %w", turn.ID, err)
+	}
+	result := api.AgentWaitResult{
+		Session: sessionID,
+		Epoch:   snapshot.Epoch,
+		Turn:    turn.ID,
+		Status:  turn.Status,
+		Events:  events,
+	}
+	if err := printValue(result); err != nil {
+		return err
+	}
+	if turn.Status != api.AgentTurnCompleted {
+		return fmt.Errorf("agent turn %d ended with status %s", turn.ID, turn.Status)
+	}
+	return nil
 }
 
 var agentReadValueFlags = map[string]bool{
@@ -1010,6 +1203,7 @@ var bareBooleanFlags = map[string]bool{
 	"yes":                   true,
 	"no-truncate":           true,
 	"raw":                   true,
+	"wait":                  true,
 	"use":                   true,
 }
 
@@ -1606,6 +1800,7 @@ Usage:
 
 Commands:
   agent read codex|claude [SESSION_FILE]
+  agent wait SESSION_ID [--timeout DURATION]
   endpoint list|add|use|remove|current
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
@@ -1625,6 +1820,7 @@ Run 'warren <command> --help' for command-specific help.
 Examples:
   warren agent read codex --recent 10 --include user,assistant
   warren agent read claude ~/.claude/projects/-work-demo/session.jsonl --full
+  warren agent wait SESSION_ID --timeout 30m
   warren endpoint add vps --url http://127.0.0.1:8789 --token TOKEN --use
   warren project add /srv/my-repo
   warren project move PROJECT_ID --before OTHER_PROJECT_ID
@@ -1652,8 +1848,9 @@ Examples:
 func agentUsageText() string {
 	return `Usage:
   warren agent read codex|claude [SESSION_FILE] [FLAGS]
+  warren agent wait SESSION_ID [--timeout DURATION] [--current]
 
-Run 'warren agent read --help' for read options.
+Run 'warren agent read --help' or 'warren agent wait --help' for options.
 `
 }
 
@@ -1672,6 +1869,17 @@ are limited to 2000 characters. --full disables text truncation; --all returns
 all matching activities (up to 100000). Low-value usage, attachment, and
 system instruction events are omitted unless selected explicitly with
 --include.
+`
+}
+
+func agentWaitUsageText() string {
+	return `Usage:
+  warren agent wait SESSION_ID [--timeout DURATION]
+  warren agent wait --current [--timeout DURATION]
+
+Wait for the running turn, or the next turn when the agent is idle. The
+default timeout is 30 minutes. On completion, Warren prints the normalized
+events belonging to that turn.
 `
 }
 
@@ -1724,7 +1932,7 @@ func resourceUsageText(commandName string) string {
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
-  warren session send SESSION_ID [TEXT...] [--current]
+  warren session send SESSION_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
   warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
@@ -1782,7 +1990,7 @@ func actionUsageText(commandName, action string) string {
 	case "session.move":
 		return fmt.Sprintf("Usage:\n  warren %s move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]\n  warren %s move --current --workspace WORKSPACE_ID [--dry-run]\n  warren %s move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]\n", name, name, name)
 	case "session.send":
-		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--wait] [--timeout DURATION]\n", name)
 	case "session.read":
 		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]\n", name)
 	case "session.attach":

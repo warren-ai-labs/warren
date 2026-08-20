@@ -18,6 +18,9 @@ type ActivityTracker struct {
 	activity     api.AgentActivity
 	pendingTools int
 	pendingSince time.Time
+	turn         uint64
+	turnActive   bool
+	turns        []api.AgentTurn
 }
 
 // NewActivityTracker starts an agent in the ready state: open, idle, waiting
@@ -41,13 +44,13 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	}
 	switch event.Type {
 	case "user":
-		t.working()
+		t.TurnStarted()
 	case "tool_call":
 		t.toolStarted(event.Timestamp)
 	case "tool_output":
 		t.toolFinished(event.ToolStatus == "error")
 	case "error":
-		t.failed()
+		t.TurnFailed()
 	case "assistant":
 		if event.StopReason == "end_turn" {
 			t.TurnComplete()
@@ -57,6 +60,11 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 
 // TurnStarted marks the beginning of a new turn.
 func (t *ActivityTracker) TurnStarted() {
+	if !t.turnActive {
+		t.turn++
+		t.turnActive = true
+		t.turns = append(t.turns, api.AgentTurn{ID: t.turn, Status: api.AgentTurnStarted})
+	}
 	t.working()
 }
 
@@ -65,6 +73,7 @@ func (t *ActivityTracker) TurnStarted() {
 func (t *ActivityTracker) TurnComplete() {
 	t.pendingTools = 0
 	t.pendingSince = time.Time{}
+	t.finishTurn(api.AgentTurnCompleted)
 	t.set(api.AgentActivityReady)
 }
 
@@ -73,6 +82,7 @@ func (t *ActivityTracker) TurnComplete() {
 func (t *ActivityTracker) TurnFailed() {
 	t.pendingTools = 0
 	t.pendingSince = time.Time{}
+	t.finishTurn(api.AgentTurnFailed)
 	t.set(api.AgentActivityFailed)
 }
 
@@ -81,7 +91,29 @@ func (t *ActivityTracker) TurnFailed() {
 func (t *ActivityTracker) TurnAborted() {
 	t.pendingTools = 0
 	t.pendingSince = time.Time{}
+	t.finishTurn(api.AgentTurnAborted)
 	t.set(api.AgentActivityWaitingForInput)
+}
+
+// Turn returns the current turn number. It remains stable after completion so
+// events emitted at the boundary can still be associated with that turn.
+func (t *ActivityTracker) Turn() uint64 {
+	return t.turn
+}
+
+// DrainTurns returns lifecycle transitions observed since the previous call.
+func (t *ActivityTracker) DrainTurns() []api.AgentTurn {
+	turns := append([]api.AgentTurn(nil), t.turns...)
+	t.turns = t.turns[:0]
+	return turns
+}
+
+func (t *ActivityTracker) finishTurn(status api.AgentTurnStatus) {
+	if !t.turnActive {
+		return
+	}
+	t.turnActive = false
+	t.turns = append(t.turns, api.AgentTurn{ID: t.turn, Status: status})
 }
 
 // Exited marks the agent process as gone.

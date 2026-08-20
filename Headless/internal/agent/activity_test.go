@@ -40,6 +40,29 @@ func TestActivityTrackerLifecycle(t *testing.T) {
 	}
 }
 
+func TestActivityTrackerEmitsStableTurnBoundaries(t *testing.T) {
+	tracker := NewActivityTracker()
+
+	tracker.Observe(api.AgentEvent{Type: "user"})
+	tracker.TurnStarted()
+	if got := tracker.DrainTurns(); len(got) != 1 || got[0].ID != 1 || got[0].Status != api.AgentTurnStarted {
+		t.Fatalf("started turns = %#v, want one started turn", got)
+	}
+
+	tracker.TurnComplete()
+	if got := tracker.DrainTurns(); len(got) != 1 || got[0].ID != 1 || got[0].Status != api.AgentTurnCompleted {
+		t.Fatalf("completed turns = %#v, want turn 1 completed", got)
+	}
+
+	tracker.Observe(api.AgentEvent{Type: "user"})
+	tracker.TurnFailed()
+	if got := tracker.DrainTurns(); len(got) != 2 ||
+		got[0] != (api.AgentTurn{ID: 2, Status: api.AgentTurnStarted}) ||
+		got[1] != (api.AgentTurn{ID: 2, Status: api.AgentTurnFailed}) {
+		t.Fatalf("failed turns = %#v, want turn 2 started then failed", got)
+	}
+}
+
 func TestActivityTrackerNoticesStalledTool(t *testing.T) {
 	tracker := NewActivityTracker()
 	started := time.Now()
@@ -108,6 +131,25 @@ func TestParserDrivesCodexActivity(t *testing.T) {
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted"}}`))
 	if got := parser.Activity(); got != api.AgentActivityWaitingForInput {
 		t.Fatalf("after turn_aborted = %q, want waiting for input", got)
+	}
+}
+
+func TestParserAssociatesEventsWithTurn(t *testing.T) {
+	parser := newParser("codex")
+
+	user := parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}`))
+	assistant := parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"agent_message","message":"done"}}`))
+	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"task_complete"}}`))
+
+	if len(user) != 1 || user[0].Turn != 1 {
+		t.Fatalf("user events = %#v, want turn 1", user)
+	}
+	if len(assistant) != 1 || assistant[0].Turn != 1 {
+		t.Fatalf("assistant events = %#v, want turn 1", assistant)
+	}
+	turns := parser.DrainTurns()
+	if len(turns) != 2 || turns[0].Status != api.AgentTurnStarted || turns[1].Status != api.AgentTurnCompleted {
+		t.Fatalf("turns = %#v, want started then completed", turns)
 	}
 }
 

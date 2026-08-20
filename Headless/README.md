@@ -76,6 +76,8 @@ warren --endpoint my-vps session list
 warren --endpoint my-vps session attach --current
 warren agent read codex --recent 10 --include user,assistant
 warren agent read claude /path/to/session.jsonl --full
+warren agent wait SESSION_ID --timeout 30m
+warren session send SESSION_ID "Run the relevant tests" --wait --timeout 30m
 ```
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
@@ -111,6 +113,19 @@ TYPE,...` to select event types, `--filter TYPE,...` to omit types, and
 events stay hidden unless requested through `--include`. An unbounded `--all`
 read is defensively capped at 100,000 matching activities; use `--recent` for
 a smaller, predictable result.
+
+`warren agent wait SESSION_ID` blocks until the currently running turn ends,
+or until the next turn ends when the agent is idle. It returns the normalized
+events assigned to that turn and defaults to a 30-minute timeout. `warren
+session send SESSION_ID TEXT --wait` captures the turn baseline before sending
+input, then waits for the new turn. It rejects an already-running agent because
+terminal input may steer that turn or queue a new one depending on provider
+state; use `agent wait` first when deterministic completion ownership matters.
+Callers must also serialize concurrent `session send` operations targeting the
+same session; Warren does not claim exclusive ownership of an agent turn.
+Completed turns exit 0; failed or aborted turns print their structured result
+and exit 1. Use `--current` with either command when `WARREN_SESSION_ID`
+identifies the target Warren Session.
 
 For `workspace create`, `--branch` is required and `--path` is optional: omit
 `--path` and the daemon places the new worktree under
