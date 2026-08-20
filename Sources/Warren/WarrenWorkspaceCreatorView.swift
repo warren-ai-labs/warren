@@ -4,9 +4,9 @@ import WarrenDesignSystem
 
 struct WarrenWorkspaceCreatorView: View {
     let project: Project
+    let onCancel: () -> Void
     let onCreate: (WorkspaceCreationRequest) -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var requestID = UUID()
     @State private var displayName = ""
@@ -19,7 +19,7 @@ struct WarrenWorkspaceCreatorView: View {
                 .font(WarrenTypography.dialogTitle)
                 .foregroundStyle(tokens.foreground)
             Text("Create a Git worktree for \(project.name).")
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
 
             WarrenInputField(
@@ -27,14 +27,18 @@ struct WarrenWorkspaceCreatorView: View {
                 text: $displayName,
                 placeholder: "feature/my-change",
                 monospaced: false,
-                focusOnAppear: true
+                focusOnAppear: true,
+                labelFont: WarrenTypography.dialogFieldLabel,
+                inputFont: WarrenTypography.dialogInput
             )
 
             WarrenInputField(
                 "Branch",
                 text: $branch,
                 placeholder: "main",
-                monospaced: false
+                monospaced: false,
+                labelFont: WarrenTypography.dialogFieldLabel,
+                inputFont: WarrenTypography.dialogInput
             )
             .onChange(of: branch) { _, value in
                 if displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -43,13 +47,13 @@ struct WarrenWorkspaceCreatorView: View {
             }
 
             Text("Worktree files are stored under ~/.warren/worktrees.")
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Create") {
                     onCreate(WorkspaceCreationRequest(
@@ -58,9 +62,9 @@ struct WarrenWorkspaceCreatorView: View {
                         branch: branch,
                         path: ""
                     ))
-                    dismiss()
+                    onCancel()
                 }
-                .buttonStyle(WarrenPrimaryButtonStyle())
+                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -69,10 +73,8 @@ struct WarrenWorkspaceCreatorView: View {
             }
         }
         .padding(WarrenSpacing.large)
-        .frame(width: 480)
+        .frame(width: WarrenLayoutMetrics.standardDialogWidth)
         .background(tokens.popoverSurface)
-        .onExitCommand {
-            dismiss()
-        }
+        .onExitCommand(perform: onCancel)
     }
 }

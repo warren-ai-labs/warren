@@ -711,32 +711,32 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
                 .foregroundStyle(tokens.foreground)
 
             Text("“\(workspace.name)” and every session it owns will be removed from Warren.")
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
 
             if canRemoveWorktree {
                 Toggle("Also delete the local worktree directory", isOn: $removeWorktree)
                     .toggleStyle(.checkbox)
-                    .font(WarrenTypography.body)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.foreground)
                     .tint(tokens.highlight)
                     .help("Leave unchecked to keep the Git worktree and branch on disk.")
                     .disabled(!isConfirmEnabled)
             } else if isWorktree && workspace.worktreeLocked {
                 Text("This Git worktree is locked and will be kept on disk.")
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             } else if isWorktree && project != nil {
                 Text("This checkout is managed outside Warren and will be kept on disk.")
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.mutedForeground)
             }
 
             if let validationMessage {
                 Text(validationMessage)
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -744,10 +744,10 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle())
+                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
                     .disabled(!isConfirmEnabled)
                     .keyboardShortcut(.defaultAction)
             }
@@ -784,17 +784,17 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
                 .foregroundStyle(tokens.foreground)
 
             Text("“\(project.name)” and its \(workspaceCount) workspace(s) will be removed from Warren.")
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text("Local Git worktree directories are kept on disk.")
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
 
             if let validationMessage {
                 Text(validationMessage)
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -802,10 +802,10 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle())
+                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
                     .disabled(!isConfirmEnabled)
                     .keyboardShortcut(.defaultAction)
             }
@@ -834,17 +834,17 @@ struct WarrenDesktopDeleteTerminalGroupConfirmation: View {
                 .foregroundStyle(tokens.foreground)
 
             Text("\"\(group.name)\" and its \(sessionCount) session(s) will be removed from Warren.")
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text("Running sessions will be terminated.")
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.warning)
 
             if let validationMessage {
                 Text(validationMessage)
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -852,10 +852,10 @@ struct WarrenDesktopDeleteTerminalGroupConfirmation: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle())
+                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
                     .disabled(!isConfirmEnabled)
                     .keyboardShortcut(.defaultAction)
             }

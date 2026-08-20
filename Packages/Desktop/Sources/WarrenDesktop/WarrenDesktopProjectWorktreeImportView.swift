@@ -36,7 +36,7 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
                     .font(WarrenTypography.dialogTitle)
                     .foregroundStyle(tokens.foreground)
                 Text("Choose worktrees to register under \(projectName). This does not create or delete files.")
-                    .font(WarrenTypography.body)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -45,13 +45,13 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
                 HStack(spacing: WarrenSpacing.compact) {
                     WarrenBrailleSpinner(size: 18, accessibilityLabel: "Loading worktrees")
                     Text("Reading Git worktrees…")
-                        .font(WarrenTypography.body)
+                        .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)
                 }
                 .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
             } else if candidates.isEmpty {
                 Text("No external Git worktrees are available to import.")
-                    .font(WarrenTypography.body)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.mutedForeground)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
             } else {
@@ -72,10 +72,10 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Import Selected", action: { onImport(Array(selectedPaths)) })
-                    .buttonStyle(WarrenPrimaryButtonStyle())
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
                     .disabled(isLoading || selectedPaths.isEmpty)
                     .keyboardShortcut(.defaultAction)
             }
@@ -105,20 +105,20 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
                 VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
                     HStack(spacing: WarrenSpacing.xs) {
                         Text(candidate.name)
-                            .font(WarrenTypography.bodyEmphasis)
+                            .font(WarrenTypography.dialogBody)
                         if candidate.locked {
                             Label("Locked", systemImage: "lock.fill")
-                                .font(WarrenTypography.supporting)
+                                .font(WarrenTypography.dialogMeta)
                                 .foregroundStyle(tokens.mutedForeground)
                         }
                         if candidate.imported {
                             Text("Imported")
-                                .font(WarrenTypography.supporting)
+                                .font(WarrenTypography.dialogMeta)
                                 .foregroundStyle(tokens.mutedForeground)
                         }
                     }
                     Text(candidate.path)
-                        .font(WarrenTypography.supporting)
+                        .font(WarrenTypography.dialogMeta)
                         .foregroundStyle(tokens.mutedForeground)
                         .lineLimit(1)
                         .truncationMode(.middle)

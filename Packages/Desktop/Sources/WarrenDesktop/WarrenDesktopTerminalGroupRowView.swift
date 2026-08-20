@@ -167,6 +167,7 @@ struct WarrenDesktopTerminalGroupEditor: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var nameFocused: Bool
+    @FocusState private var homeFocused: Bool
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -177,28 +178,53 @@ struct WarrenDesktopTerminalGroupEditor: View {
 
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text("Name")
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogFieldLabel)
                     .foregroundStyle(tokens.mutedForeground)
                 TextField("Terminal group name", text: $name)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .font(WarrenTypography.dialogInput)
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .frame(minHeight: 30)
+                    .background(tokens.inputSurface)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: WarrenRadius.small)
+                            .stroke(
+                                nameFocused ? tokens.highlight : tokens.border,
+                                lineWidth: WarrenSpacing.hairline
+                            )
+                    }
                     .focused($nameFocused)
             }
 
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text("Default home")
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogFieldLabel)
                     .foregroundStyle(tokens.mutedForeground)
                 TextField("Use host HOME", text: $home)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .font(WarrenTypography.dialogInput)
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .frame(minHeight: 30)
+                    .background(tokens.inputSurface)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: WarrenRadius.small)
+                            .stroke(
+                                homeFocused ? tokens.highlight : tokens.border,
+                                lineWidth: WarrenSpacing.hairline
+                            )
+                    }
+                    .focused($homeFocused)
             }
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
                 Button("Save", action: onConfirm)
-                    .buttonStyle(WarrenPrimaryButtonStyle())
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

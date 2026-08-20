@@ -152,7 +152,7 @@ struct WarrenDesktopSettingsView: View {
             Button(action: onBack) {
                 HStack(spacing: WarrenSpacing.small) {
                     Image(systemName: "arrow.left")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .regular))
                     Text("Back")
                 }
                 .font(WarrenTypography.settingsNavigationItem)
@@ -188,7 +188,7 @@ struct WarrenDesktopSettingsView: View {
 
                     if visibleSections.isEmpty {
                         Text("No settings match your search")
-                            .font(WarrenTypography.body)
+                            .font(WarrenTypography.settingsBody)
                             .foregroundStyle(tokens.mutedForeground)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, WarrenSpacing.large)
@@ -215,14 +215,14 @@ struct WarrenDesktopSettingsView: View {
     private func searchField(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.small) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(tokens.mutedForeground)
                 .frame(width: 16)
                 .accessibilityHidden(true)
 
             TextField("Search settings…", text: $searchQuery)
                 .textFieldStyle(.plain)
-                .font(WarrenTypography.navigationItem)
+                .font(WarrenTypography.settingsControl)
                 .focused($searchFocused)
 
             if !searchQuery.isEmpty {
@@ -233,6 +233,7 @@ struct WarrenDesktopSettingsView: View {
                         .font(.system(size: 12, weight: .regular))
                 }
                 .buttonStyle(.plain)
+                .font(WarrenTypography.settingsAction)
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityLabel("Clear settings search")
             }
@@ -263,7 +264,9 @@ struct WarrenDesktopSettingsView: View {
                     .accessibilityHidden(true)
 
                 Text(section.rawValue)
-                    .font(WarrenTypography.settingsNavigationItem)
+                    .font(isSelected
+                        ? WarrenTypography.settingsNavigationItemActive
+                        : WarrenTypography.settingsNavigationItem)
                     .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
                     .lineLimit(1)
 
@@ -311,6 +314,7 @@ struct WarrenDesktopSettingsView: View {
                     hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
                 }
                 .buttonStyle(.plain)
+                .font(WarrenTypography.settingsAction)
                 .foregroundStyle(tokens.mutedForeground)
                 .padding(.top, WarrenSpacing.medium)
                 .accessibilityIdentifier("settings.restore-defaults")
@@ -326,16 +330,16 @@ struct WarrenDesktopSettingsView: View {
     private func terminalFontSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Terminal font", section: .terminalFont, tokens: tokens) {
             HStack(alignment: .bottom, spacing: WarrenSpacing.xlarge) {
-                WarrenInputField(
+                settingsInputField(
                     "Font family",
                     text: $fontFamily,
                     placeholder: TerminalFontPreference.defaultFamily
                 )
                 VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                    Text("Size").font(WarrenTypography.bodyEmphasis)
+                    Text("Size").font(WarrenTypography.settingsBody)
                     Stepper(value: $fontSize, in: 8...32, step: 1) {
                         Text("\(Self.fontSizeLabel(fontSize)) pt")
-                            .font(WarrenTypography.code)
+                            .font(WarrenTypography.settingsControl)
                             .frame(width: 44, alignment: .leading)
                     }
                 }
@@ -360,13 +364,13 @@ struct WarrenDesktopSettingsView: View {
 
     private func terminalTitleSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Terminal title", section: .terminalTitle, tokens: tokens) {
-            WarrenInputField(
+            settingsInputField(
                 "Title template",
                 text: $titleTemplate,
                 placeholder: "Title template"
             )
             Text(preview)
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
             LazyVGrid(
@@ -380,10 +384,10 @@ struct WarrenDesktopSettingsView: View {
                         titleTemplate += placeholder.token
                     } label: {
                         HStack {
-                            Text(placeholder.token).font(WarrenTypography.compactCode)
+                            Text(placeholder.token).font(WarrenTypography.settingsMeta)
                             Spacer()
                             Text(placeholder.description)
-                                .font(WarrenTypography.navigationMeta)
+                                .font(WarrenTypography.settingsSupporting)
                                 .foregroundStyle(tokens.mutedForeground)
                         }
                         .padding(WarrenSpacing.compact)
@@ -400,9 +404,9 @@ struct WarrenDesktopSettingsView: View {
         settingsSection("Launch commands", section: .presets, tokens: tokens) {
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
                 Text("Session order")
-                    .font(WarrenTypography.bodyEmphasis)
+                    .font(WarrenTypography.settingsBody)
                 Text("This order controls the preset buttons; opening a workspace never changes it.")
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -412,7 +416,7 @@ struct WarrenDesktopSettingsView: View {
                             WarrenDesktopPresetIcon(preset: preset)
                                 .frame(width: 16, height: 16)
                             Text(preset.presetBarTitle)
-                                .font(WarrenTypography.body)
+                                .font(WarrenTypography.settingsBody)
                             Spacer()
                             Toggle("Show \(preset.presetBarTitle)", isOn: presetVisibilityBinding(for: preset))
                                 .labelsHidden()
@@ -454,7 +458,7 @@ struct WarrenDesktopSettingsView: View {
                     + "terminal tab alive. Leave Shell empty for a bare "
                     + "terminal."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -474,6 +478,22 @@ struct WarrenDesktopSettingsView: View {
                     in: hiddenPresets
                 )
             }
+        )
+    }
+
+    private func settingsInputField(
+        _ label: String,
+        text: Binding<String>,
+        placeholder: String = "",
+        monospaced: Bool = true
+    ) -> some View {
+        WarrenInputField(
+            label,
+            text: text,
+            placeholder: placeholder,
+            monospaced: monospaced,
+            labelFont: WarrenTypography.settingsBody,
+            inputFont: WarrenTypography.settingsControl
         )
     }
 
@@ -502,11 +522,11 @@ struct WarrenDesktopSettingsView: View {
     private func presetCommandField(for preset: WarrenDesktopSessionPreset) -> some View {
         switch preset.request.kind {
         case .shell:
-            WarrenInputField("Shell", text: $shellCommand, placeholder: "default shell (empty)")
+            settingsInputField("Shell", text: $shellCommand, placeholder: "default shell (empty)")
         case .claude:
-            WarrenInputField("Claude", text: $claudeCommand, placeholder: "claude")
+            settingsInputField("Claude", text: $claudeCommand, placeholder: "claude")
         case .codex:
-            WarrenInputField(
+            settingsInputField(
                 "Codex",
                 text: $codexCommand,
                 placeholder: "codex --dangerously-bypass-hook-trust"
@@ -525,6 +545,7 @@ struct WarrenDesktopSettingsView: View {
                 set: { onSetAutoOpenShell($0) }
             ))
             .toggleStyle(.switch)
+            .font(WarrenTypography.settingsControl)
             .accessibilityIdentifier("settings.workspaces.auto-open-shell")
             Text(
                 "Double-clicking an empty workspace is the explicit open action. "
@@ -533,7 +554,7 @@ struct WarrenDesktopSettingsView: View {
                     + "Shell is created. Explicit New Session and preset buttons "
                     + "always create the requested session."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
             Toggle("Start the first AI when entering an empty workspace", isOn: Binding(
@@ -541,6 +562,7 @@ struct WarrenDesktopSettingsView: View {
                 set: { onSetAutoStartAI($0) }
             ))
             .toggleStyle(.switch)
+            .font(WarrenTypography.settingsControl)
             .accessibilityIdentifier("settings.workspaces.auto-start-ai")
             Text(
                 "Selecting a workspace, selecting a project, or using the Command "
@@ -549,7 +571,7 @@ struct WarrenDesktopSettingsView: View {
                     + "enabled, this AI startup takes precedence over the Shell "
                     + "option on a double-click, preventing duplicate sessions."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
             Text(
@@ -557,7 +579,7 @@ struct WarrenDesktopSettingsView: View {
                     + "context menu to enable automatic import (no confirmation) "
                     + "or choose Import Existing Worktrees… for a one-time selection."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -566,10 +588,10 @@ struct WarrenDesktopSettingsView: View {
     private func externalIDEsSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("External IDEs", section: .externalIDEs, tokens: tokens) {
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                Text("Installed").font(WarrenTypography.bodyEmphasis)
+                Text("Installed").font(WarrenTypography.settingsBody)
                 if installedIDEs.isEmpty {
                     Text("No supported IDEs found on this Mac.")
-                        .font(WarrenTypography.supporting)
+                        .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                 }
                 ForEach(installedIDEs) { ide in
@@ -578,10 +600,10 @@ struct WarrenDesktopSettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                Text("Custom").font(WarrenTypography.bodyEmphasis)
+                Text("Custom").font(WarrenTypography.settingsBody)
                 if customIDEs.isEmpty {
                     Text("No custom IDEs yet.")
-                        .font(WarrenTypography.supporting)
+                        .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                 }
                 ForEach(customIDEs) { ide in
@@ -593,10 +615,10 @@ struct WarrenDesktopSettingsView: View {
                             .scaledToFit()
                             .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
                                    height: WarrenLayoutMetrics.externalIDEIconSize)
-                        Text(ide.name).font(WarrenTypography.externalIDEName)
+                        Text(ide.name).font(WarrenTypography.settingsBody)
                         Spacer()
                         Text(ide.path)
-                            .font(WarrenTypography.externalIDEPath)
+                            .font(WarrenTypography.settingsMeta)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -604,7 +626,7 @@ struct WarrenDesktopSettingsView: View {
                             removeCustomIDE(ide)
                         } label: {
                             Image(systemName: "trash")
-                                .font(WarrenTypography.navigationMeta)
+                            .font(WarrenTypography.settingsMeta)
                                 .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
                                        height: WarrenLayoutMetrics.sidebarActionButtonSize)
                         }
@@ -622,7 +644,7 @@ struct WarrenDesktopSettingsView: View {
                     Label("Add IDE…", systemImage: "plus")
                 }
                 .buttonStyle(.plain)
-                .font(WarrenTypography.externalIDEName)
+                .font(WarrenTypography.settingsAction)
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityIdentifier("settings.external-ides.add")
             }
@@ -633,7 +655,7 @@ struct WarrenDesktopSettingsView: View {
                     + "bundle or an executable that opens a directory, for "
                     + "example /usr/local/bin/code."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -654,10 +676,10 @@ struct WarrenDesktopSettingsView: View {
                 .scaledToFit()
                 .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
                        height: WarrenLayoutMetrics.externalIDEIconSize)
-            Text(name).font(WarrenTypography.externalIDEName)
+            Text(name).font(WarrenTypography.settingsBody)
             Spacer()
             Text(path)
-                .font(WarrenTypography.externalIDEPath)
+                .font(WarrenTypography.settingsMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -715,12 +737,13 @@ struct WarrenDesktopSettingsView: View {
         settingsSection("Web sharing", section: .webSharing, tokens: tokens) {
             Toggle("Share with gnar", isOn: $gnarSharingEnabled)
                 .toggleStyle(.switch)
+                .font(WarrenTypography.settingsControl)
                 .accessibilityIdentifier("settings.web-sharing.gnar-enabled")
             Text(
                 "Publishes this Mac's Web UI through the gnar tunnel installed "
                     + "and signed in on this Mac. Run `gnar login --edge <url>` first."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -740,6 +763,7 @@ struct WarrenDesktopSettingsView: View {
                 Text("tmux").tag("tmux")
             }
             .pickerStyle(.segmented)
+            .font(WarrenTypography.settingsControl)
             .accessibilityIdentifier("settings.terminal-runtime.picker")
 
             Text(
@@ -748,27 +772,27 @@ struct WarrenDesktopSettingsView: View {
                     + "created with. Changing the default affects newly "
                     + "created sessions only."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
 
-            Text("ghostline (recommended)").font(WarrenTypography.body).foregroundStyle(tokens.foreground)
+            Text("ghostline (recommended)").font(WarrenTypography.settingsBody).foregroundStyle(tokens.foreground)
             Text(
                 "Server-side libghostty-vt snapshots match the client exactly; "
                     + "a detached server keeps sessions alive across daemon "
                     + "upgrades; input reaches the PTY verbatim."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
 
-            Text("tmux").font(WarrenTypography.body).foregroundStyle(tokens.foreground)
+            Text("tmux").font(WarrenTypography.settingsBody).foregroundStyle(tokens.foreground)
             Text(
                 "Mature and battle-tested, but adds a middle layer that "
                     + "re-parses and re-renders output, translates input keys, "
                     + "and can misalign colored history on replay."
             )
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -782,9 +806,9 @@ struct WarrenDesktopSettingsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
             VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                Text(title).font(WarrenTypography.pageTitle)
+                Text(title).font(WarrenTypography.settingsSectionTitle)
                 Text(section.detail)
-                    .font(WarrenTypography.body)
+                    .font(WarrenTypography.settingsBody)
                     .foregroundStyle(tokens.mutedForeground)
             }
             .padding(.bottom, WarrenSpacing.small)

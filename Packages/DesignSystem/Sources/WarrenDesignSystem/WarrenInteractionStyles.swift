@@ -129,18 +129,21 @@ public struct WarrenPresetButtonStyle: ButtonStyle {
 /// Warren's neutral primary action, replacing the system blue prominent style.
 public struct WarrenPrimaryButtonStyle: ButtonStyle {
     public var isFocused: Bool
+    public var font: Font
 
-    public init(isFocused: Bool = false) {
+    public init(isFocused: Bool = false, font: Font = WarrenTypography.body) {
         self.isFocused = isFocused
+        self.font = font
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        PrimaryBody(configuration: configuration, isFocused: isFocused)
+        PrimaryBody(configuration: configuration, isFocused: isFocused, font: font)
     }
 
     private struct PrimaryBody: View {
         let configuration: ButtonStyle.Configuration
         let isFocused: Bool
+        let font: Font
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @State private var hovered = false
@@ -155,6 +158,7 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
                 hovered: hovered
             )
             configuration.label
+                .font(font)
                 .foregroundStyle(tokens.background)
                 .padding(.horizontal, WarrenSpacing.medium)
                 .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)

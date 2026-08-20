@@ -17,6 +17,7 @@ struct WarrenCompositionRoot: View {
     @State private var worktreeImportProjectID: ProjectID?
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
+    @State private var appMessage: WarrenAppMessage?
     @State private var terminalSearchPresented = false
     @State private var updateStatus: WarrenDesktopUpdateStatus = .none
     @Environment(\.colorScheme) private var colorScheme
@@ -120,10 +121,13 @@ struct WarrenCompositionRoot: View {
                             .foregroundStyle(tokens.mutedForeground)
                     }
                     .padding(WarrenSpacing.large)
-                    .warrenPanelSurface(cornerRadius: WarrenRadius.large)
+                    .warrenPresentationSurface(role: .status, cornerRadius: WarrenRadius.large)
                 }
                 .transition(.opacity)
             }
+        }
+        .overlay {
+            appPresentationLayer
         }
         .fileImporter(
             isPresented: $isProjectImporterPresented,
@@ -133,45 +137,6 @@ struct WarrenCompositionRoot: View {
         )
         .fileDialogMessage("Choose a local folder as the project.")
         .fileDialogConfirmationLabel("Add Project")
-        .sheet(item: $supersetImportPreview) { preview in
-            WarrenSupersetImportView(preview: preview) { selectedPreview in
-                supersetImportPreview = nil
-                setSupersetImporting(true)
-                Task { @MainActor in
-                    await remoteModel.commitSupersetImport(selectedPreview)
-                    setSupersetImporting(false)
-                }
-            }
-        }
-        .sheet(isPresented: workspaceCreatorBinding) {
-            if let projectID = workspaceCreatorProjectID,
-               let project = activeProjection.projectGroup(id: projectID)?.project {
-                WarrenWorkspaceCreatorView(project: project) { request in
-                    remoteModel.createWorkspace(projectID: projectID, request: request)
-                }
-            }
-        }
-        .sheet(isPresented: worktreeImportBinding) {
-            if let projectID = worktreeImportProjectID,
-               let project = activeProjection.projectGroup(id: projectID)?.project {
-                WarrenDesktopProjectWorktreeImportView(
-                    projectName: project.name,
-                    candidates: worktreeImportCandidates,
-                    isLoading: worktreeImportLoading,
-                    onCancel: dismissWorktreeImport,
-                    onImport: { paths in
-                        Task { @MainActor in
-                            do {
-                                try await remoteModel.importProjectWorktrees(projectID, paths: paths)
-                                dismissWorktreeImport()
-                            } catch {
-                                remoteModel.report(error)
-                            }
-                        }
-                    }
-                )
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
             remoteModel.copyLocalWebURL()
         }
@@ -184,6 +149,10 @@ struct WarrenCompositionRoot: View {
             // field mounts so the field receives the next keystroke.
             NSApp.keyWindow?.makeFirstResponder(nil)
             terminalSearchPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenAppPresentation.message)) { note in
+            guard let message = note.object as? WarrenAppMessage else { return }
+            appMessage = message
         }
         .onChange(of: terminalFontFamily) { _, _ in updateTerminalFont() }
         .onChange(of: terminalFontSize) { _, _ in updateTerminalFont() }
@@ -233,6 +202,69 @@ struct WarrenCompositionRoot: View {
             await monitorEndpointConfiguration()
         }
         .onChange(of: selectedEndpointID) { _, _ in connectSelectedEndpoint() }
+    }
+
+    @ViewBuilder
+    private var appPresentationLayer: some View {
+        if let appMessage {
+            WarrenMessageDialog(
+                title: appMessage.title,
+                message: appMessage.message,
+                actionLabel: appMessage.actionLabel,
+                onDismiss: { self.appMessage = nil }
+            )
+            .zIndex(WarrenPresentationLayer.modal)
+        } else if let preview = supersetImportPreview {
+            WarrenSheetSurface {
+                WarrenSupersetImportView(
+                    preview: preview,
+                    onCancel: { supersetImportPreview = nil },
+                    onConfirm: { selectedPreview in
+                        supersetImportPreview = nil
+                        setSupersetImporting(true)
+                        Task { @MainActor in
+                            await remoteModel.commitSupersetImport(selectedPreview)
+                            setSupersetImporting(false)
+                        }
+                    }
+                )
+            }
+            .zIndex(WarrenPresentationLayer.modal)
+        } else if let projectID = workspaceCreatorProjectID,
+                  let project = activeProjection.projectGroup(id: projectID)?.project {
+            WarrenModalSurface {
+                WarrenWorkspaceCreatorView(
+                    project: project,
+                    onCancel: { workspaceCreatorProjectID = nil },
+                    onCreate: { request in
+                        remoteModel.createWorkspace(projectID: projectID, request: request)
+                        workspaceCreatorProjectID = nil
+                    }
+                )
+            }
+            .zIndex(WarrenPresentationLayer.modal)
+        } else if let projectID = worktreeImportProjectID,
+                  let project = activeProjection.projectGroup(id: projectID)?.project {
+            WarrenSheetSurface {
+                WarrenDesktopProjectWorktreeImportView(
+                    projectName: project.name,
+                    candidates: worktreeImportCandidates,
+                    isLoading: worktreeImportLoading,
+                    onCancel: dismissWorktreeImport,
+                    onImport: { paths in
+                        Task { @MainActor in
+                            do {
+                                try await remoteModel.importProjectWorktrees(projectID, paths: paths)
+                                dismissWorktreeImport()
+                            } catch {
+                                remoteModel.report(error)
+                            }
+                        }
+                    }
+                )
+            }
+            .zIndex(WarrenPresentationLayer.modal)
+        }
     }
 
     private func updateTerminalFont() {
@@ -470,24 +502,6 @@ struct WarrenCompositionRoot: View {
         worktreeImportLoading = false
     }
 
-    private var workspaceCreatorBinding: Binding<Bool> {
-        Binding(
-            get: { workspaceCreatorProjectID != nil },
-            set: { isPresented in
-                if !isPresented { workspaceCreatorProjectID = nil }
-            }
-        )
-    }
-
-    private var worktreeImportBinding: Binding<Bool> {
-        Binding(
-            get: { worktreeImportProjectID != nil },
-            set: { isPresented in
-                if !isPresented { dismissWorktreeImport() }
-            }
-        )
-    }
-
     private func importProject(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
@@ -507,14 +521,19 @@ struct WarrenCompositionRoot: View {
 
 private struct WarrenSupersetImportView: View {
     let preview: SupersetImportPreview
+    let onCancel: () -> Void
     let onConfirm: (SupersetImportPreview) -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedProjectIDs: Set<String>
 
-    init(preview: SupersetImportPreview, onConfirm: @escaping (SupersetImportPreview) -> Void) {
+    init(
+        preview: SupersetImportPreview,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping (SupersetImportPreview) -> Void
+    ) {
         self.preview = preview
+        self.onCancel = onCancel
         self.onConfirm = onConfirm
         _selectedProjectIDs = State(initialValue: preview.readyProjectIDs)
     }
@@ -553,11 +572,10 @@ private struct WarrenSupersetImportView: View {
         .frame(
             minWidth: 680,
             idealWidth: 720,
-            maxWidth: 720,
+            maxWidth: WarrenLayoutMetrics.wideSheetWidth,
             minHeight: 520,
             idealHeight: 580
         )
-        .background(tokens.popoverSurface)
     }
 
     private func divider(tokens: WarrenColorTokens) -> some View {
@@ -571,7 +589,7 @@ private struct WarrenSupersetImportView: View {
             Text("Import from Superset")
                 .font(WarrenTypography.dialogTitle)
             Text("One-time copy. Warren does not modify or synchronize Superset.")
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
         }
         .padding(.horizontal, WarrenSpacing.large)
@@ -601,17 +619,17 @@ private struct WarrenSupersetImportView: View {
     ) -> some View {
         HStack(spacing: WarrenSpacing.xs) {
             Text("\(value)")
-                .font(WarrenTypography.bodyEmphasis)
+                .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.foreground)
             Text(label)
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.dialogMeta)
                 .foregroundStyle(tokens.mutedForeground)
         }
     }
 
     private func separator(tokens: WarrenColorTokens) -> some View {
         Text("·")
-            .font(WarrenTypography.supporting)
+            .font(WarrenTypography.dialogMeta)
             .foregroundStyle(tokens.mutedForeground)
             .accessibilityHidden(true)
     }
@@ -620,7 +638,7 @@ private struct WarrenSupersetImportView: View {
         ScrollView {
             if preview.projects.isEmpty {
                 Text("No projects found in Superset.")
-                    .font(WarrenTypography.body)
+                    .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.mutedForeground)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, WarrenSpacing.large)
@@ -661,11 +679,11 @@ private struct WarrenSupersetImportView: View {
             VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
                 HStack(spacing: WarrenSpacing.compact) {
                     Text(project.name)
-                        .font(WarrenTypography.bodyEmphasis)
+                        .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.foreground)
                         .lineLimit(1)
                     Text(project.status.rawValue.capitalized)
-                        .font(WarrenTypography.badge)
+                        .font(WarrenTypography.dialogMeta)
                         .foregroundStyle(statusColor(project.status, tokens: tokens))
                 }
                 Text(project.repositoryPath)
@@ -679,11 +697,11 @@ private struct WarrenSupersetImportView: View {
 
             VStack(alignment: .trailing, spacing: WarrenSpacing.xxs) {
                 Text(workspaceSummary(project))
-                    .font(WarrenTypography.supporting)
+                    .font(WarrenTypography.dialogMeta)
                     .foregroundStyle(tokens.mutedForeground)
                 if let diagnostic = project.diagnostic {
                     Text(diagnostic)
-                        .font(WarrenTypography.supporting)
+                        .font(WarrenTypography.dialogBody)
                         .foregroundStyle(statusColor(project.status, tokens: tokens))
                         .lineLimit(1)
                 }
@@ -732,22 +750,22 @@ private struct WarrenSupersetImportView: View {
     private func footer(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.compact) {
             Text("\(selectedProjectIDs.count) of \(preview.readyProjectCount) projects selected")
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.dialogMeta)
                 .foregroundStyle(tokens.mutedForeground)
 
             Spacer(minLength: 0)
 
             Button("Cancel") {
-                dismiss()
+                onCancel()
             }
-            .buttonStyle(WarrenSecondaryButtonStyle())
+            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
             .keyboardShortcut(.cancelAction)
 
             Button("Import") {
-                dismiss()
+                onCancel()
                 onConfirm(selectedPreview)
             }
-            .buttonStyle(WarrenPrimaryButtonStyle())
+            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
             .keyboardShortcut(.defaultAction)
             .disabled(selectedProjectIDs.isEmpty)
         }

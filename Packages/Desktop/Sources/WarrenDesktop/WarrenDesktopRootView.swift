@@ -404,6 +404,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             deletionDialog
         }
         .overlay {
+            externalIDEFailureDialog
+        }
+        .overlay {
             if commandPalettePresented && !settingsPresented {
                 GeometryReader { proxy in
                     let panelWidth = min(
@@ -482,13 +485,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             guard !Task.isCancelled else { return }
             guard !webStatus.tunnelRunning else { return }
             setWebPresented(false)
-        }
-        .alert(item: $externalIDEFailure) { failure in
-            Alert(
-                title: Text(failure.title),
-                message: Text(failure.message),
-                dismissButton: .default(Text("OK"))
-            )
         }
         .warrenSemanticObservationRoot(recorder: semanticRecorder)
     }
@@ -775,6 +771,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onConfirm: confirmRename
             )
             .zIndex(31)
+        }
+    }
+
+    @ViewBuilder
+    private var externalIDEFailureDialog: some View {
+        if let failure = externalIDEFailure {
+            WarrenMessageDialog(
+                title: failure.title,
+                message: failure.message,
+                onDismiss: { externalIDEFailure = nil }
+            )
+            .zIndex(WarrenPresentationLayer.modal)
         }
     }
 

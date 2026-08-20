@@ -92,6 +92,14 @@ public enum WarrenLayoutMetrics {
     /// Superset's settings search field is `h-8`.
     public static let settingsSearchHeight: CGFloat = 32
 
+    // Presentation surface geometry. Business surfaces use a documented width
+    // instead of inheriting arbitrary frame values from individual screens.
+    public static let compactDialogWidth: CGFloat = 400
+    public static let standardDialogWidth: CGFloat = 480
+    public static let wideSheetWidth: CGFloat = 720
+    public static let desktopSheetMaximumHeight: CGFloat = 680
+    public static let mobileActionRowHeight: CGFloat = 44
+
     /// Returns the width Superset's resize policy would display for a drag.
     /// Values below the snap threshold collapse the rail; other values are
     /// clamped to the expanded range.
@@ -132,4 +140,6 @@ public enum WarrenRadius {
     public static let medium: CGFloat = 8
     public static let base: CGFloat = 10
     public static let large: CGFloat = 12
+    /// Mobile sheets round only their top edge at this larger radius.
+    public static let sheet: CGFloat = 16
 }

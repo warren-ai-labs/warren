@@ -12,6 +12,23 @@ enum WebCommand {
     static let copySecureURL = Notification.Name("Web.copySecureURL")
 }
 
+enum WarrenAppPresentation {
+    static let message = Notification.Name("WarrenAppPresentation.message")
+}
+
+struct WarrenAppMessage: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let actionLabel: String
+
+    init(title: String, message: String, actionLabel: String = "OK") {
+        self.title = title
+        self.message = message
+        self.actionLabel = actionLabel
+    }
+}
+
 private enum WarrenWindowGeometry {
     /// Subtle corner radius for the borderless shell. The window keeps its
     /// own chrome edge-to-edge while the content is clipped into a rounded
@@ -435,12 +452,11 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         message: String,
         style: NSAlert.Style
     ) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = style
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        _ = style
+        NotificationCenter.default.post(
+            name: WarrenAppPresentation.message,
+            object: WarrenAppMessage(title: title, message: message)
+        )
     }
 
     private func buildMainMenu(target: AnyObject) -> NSMenu {

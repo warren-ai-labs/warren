@@ -8,16 +8,23 @@ public enum WarrenTypography {
     public static let navigationItem = Font.system(size: 13, weight: .regular)
     /// Secondary row metadata is Superset's `text-xs` tier.
     public static let navigationMeta = Font.system(size: 12, weight: .regular)
-    /// External IDE names use a light 13pt tier so the larger artwork does not
-    /// make the menu or settings rows feel visually heavy.
-    public static let externalIDEName = Font.system(size: 13, weight: .light)
-    public static let externalIDEPath = Font.system(size: 11, weight: .light, design: .monospaced)
-    /// Light settings navigation tiers. Settings chrome uses the light text
-    /// family so the sidebar reads as calm metadata instead of competing with
-    /// terminal content.
-    public static let settingsNavigationItem = Font.system(size: 13, weight: .light)
-    public static let settingsGroupLabel = Font.system(size: 10, weight: .light)
-    public static let settingsScreenTitle = Font.system(size: 20, weight: .light)
+    /// External IDE labels remain readable in compact menus and settings rows.
+    public static let externalIDEName = Font.system(size: 13, weight: .regular)
+    public static let externalIDEPath = Font.system(size: 11, weight: .regular, design: .monospaced)
+    /// Settings is a functional surface rather than passive chrome. Keep its
+    /// navigation readable at a larger size and never use a light weight for
+    /// labels that users must scan or select.
+    public static let settingsNavigationItem = Font.system(size: 14, weight: .regular)
+    public static let settingsNavigationItemActive = Font.system(size: 14, weight: .regular)
+    public static let settingsGroupLabel = Font.system(size: 12, weight: .regular)
+    public static let settingsScreenTitle = Font.system(size: 22, weight: .light)
+    public static let settingsSectionTitle = Font.system(size: 20, weight: .regular)
+    public static let settingsBody = Font.system(size: 14, weight: .regular)
+    public static let settingsBodyEmphasis = Font.system(size: 14, weight: .regular)
+    public static let settingsSupporting = Font.system(size: 13, weight: .regular)
+    public static let settingsControl = Font.system(size: 14, weight: .regular)
+    public static let settingsAction = Font.system(size: 14, weight: .regular)
+    public static let settingsMeta = Font.system(size: 12, weight: .regular)
     /// Superset group headings are `text-xs font-medium`.
     public static let groupHeading = Font.system(size: 12, weight: .medium)
     /// Superset shortcuts are `text-xs tracking-widest`; Warren keeps the
@@ -51,7 +58,14 @@ public enum WarrenTypography {
     public static let screenTitle = Font.system(size: 18, weight: .semibold)
     /// Superset settings page headings are `text-xl`.
     public static let pageTitle = Font.system(size: 20, weight: .semibold)
-    public static let dialogTitle = Font.system(size: 17, weight: .semibold)
+    /// Business dialogs use a clearer hierarchy than dense navigation chrome.
+    public static let dialogTitle = Font.system(size: 18, weight: .light)
+    public static let dialogBody = Font.system(size: 14, weight: .regular)
+    public static let dialogFieldLabel = Font.system(size: 13, weight: .regular)
+    public static let dialogInput = Font.system(size: 14, weight: .regular)
+    public static let dialogAction = Font.system(size: 14, weight: .regular)
+    public static let dialogCriticalAction = Font.system(size: 14, weight: .medium)
+    public static let dialogMeta = Font.system(size: 12, weight: .regular)
     public static let body = Font.system(size: 13, weight: .regular)
     public static let bodyEmphasis = Font.system(size: 13, weight: .medium)
     /// Superset `text-xs` descriptions and hints.
