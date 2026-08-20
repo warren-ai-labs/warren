@@ -1037,7 +1037,7 @@ private struct WarrenTerminalSearchBar: View {
         .foregroundStyle(tokens.mutedForeground)
         .padding(.horizontal, WarrenSpacing.small)
         .frame(height: 30)
-        .warrenPanelSurface(cornerRadius: WarrenRadius.medium)
+        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.medium)
         .onAppear {
             surface?.search(for: query)
             focusSearchField()

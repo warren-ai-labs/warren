@@ -349,7 +349,7 @@ struct WarrenDesktopCommandPalette: View {
             }
         }
         .frame(width: width)
-        .warrenPanelSurface(cornerRadius: WarrenRadius.base)
+        .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.base)
         .onAppear { focusSearchField() }
         .task {
             try? await Task.sleep(for: .milliseconds(10))

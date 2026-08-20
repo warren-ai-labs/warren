@@ -437,7 +437,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .transition(.opacity)
-                .zIndex(20)
+                .zIndex(WarrenPresentationLayer.commandSurface)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -745,7 +745,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @ViewBuilder
     private var terminalGroupEditorDialog: some View {
         if let pendingTerminalGroupEditor {
-            WarrenModalBackdrop {
+            WarrenModalSurface {
                 WarrenDesktopTerminalGroupEditor(
                     title: pendingTerminalGroupEditor.title,
                     name: $terminalGroupName,
@@ -754,7 +754,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onConfirm: confirmTerminalGroupEditor
                 )
             }
-            .zIndex(32)
+            .zIndex(WarrenPresentationLayer.modal)
         }
     }
 
@@ -770,7 +770,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onCancel: dismissRename,
                 onConfirm: confirmRename
             )
-            .zIndex(31)
+            .zIndex(WarrenPresentationLayer.modal)
         }
     }
 
@@ -844,7 +844,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var deletionDialog: some View {
         if let pendingDeletion {
             let validation = deletionValidation(for: pendingDeletion)
-            WarrenModalBackdrop {
+            WarrenModalSurface {
                 switch pendingDeletion {
                 case .workspace(let workspace, let project):
                     WarrenDesktopDeleteWorkspaceConfirmation(
@@ -862,7 +862,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         isConfirmEnabled: validation.isEnabled,
                         validationMessage: validation.message
                     )
-                    .warrenPanelSurface(cornerRadius: WarrenRadius.large)
                 case .project(let project, let workspaceCount):
                     WarrenDesktopDeleteProjectConfirmation(
                         project: project,
@@ -875,7 +874,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         isConfirmEnabled: validation.isEnabled,
                         validationMessage: validation.message
                     )
-                    .warrenPanelSurface(cornerRadius: WarrenRadius.large)
                 case .terminalGroup(let group, let sessionCount):
                     WarrenDesktopDeleteTerminalGroupConfirmation(
                         group: group,
@@ -888,10 +886,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         isConfirmEnabled: validation.isEnabled,
                         validationMessage: validation.message
                     )
-                    .warrenPanelSurface(cornerRadius: WarrenRadius.large)
                 }
             }
-            .zIndex(30)
+            .zIndex(WarrenPresentationLayer.modal)
         }
     }
 

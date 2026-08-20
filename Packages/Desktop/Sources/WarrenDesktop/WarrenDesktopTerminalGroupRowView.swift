@@ -166,8 +166,6 @@ struct WarrenDesktopTerminalGroupEditor: View {
     let onConfirm: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
-    @FocusState private var nameFocused: Bool
-    @FocusState private var homeFocused: Bool
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -176,47 +174,24 @@ struct WarrenDesktopTerminalGroupEditor: View {
                 .font(WarrenTypography.dialogTitle)
                 .foregroundStyle(tokens.foreground)
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                Text("Name")
-                    .font(WarrenTypography.dialogFieldLabel)
-                    .foregroundStyle(tokens.mutedForeground)
-                TextField("Terminal group name", text: $name)
-                    .textFieldStyle(.plain)
-                    .font(WarrenTypography.dialogInput)
-                    .padding(.horizontal, WarrenSpacing.compact)
-                    .frame(minHeight: 30)
-                    .background(tokens.inputSurface)
-                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: WarrenRadius.small)
-                            .stroke(
-                                nameFocused ? tokens.highlight : tokens.border,
-                                lineWidth: WarrenSpacing.hairline
-                            )
-                    }
-                    .focused($nameFocused)
-            }
+            WarrenInputField(
+                "Name",
+                text: $name,
+                placeholder: "Terminal group name",
+                monospaced: false,
+                focusOnAppear: true,
+                labelFont: WarrenTypography.dialogFieldLabel,
+                inputFont: WarrenTypography.dialogInput
+            )
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                Text("Default home")
-                    .font(WarrenTypography.dialogFieldLabel)
-                    .foregroundStyle(tokens.mutedForeground)
-                TextField("Use host HOME", text: $home)
-                    .textFieldStyle(.plain)
-                    .font(WarrenTypography.dialogInput)
-                    .padding(.horizontal, WarrenSpacing.compact)
-                    .frame(minHeight: 30)
-                    .background(tokens.inputSurface)
-                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: WarrenRadius.small)
-                            .stroke(
-                                homeFocused ? tokens.highlight : tokens.border,
-                                lineWidth: WarrenSpacing.hairline
-                            )
-                    }
-                    .focused($homeFocused)
-            }
+            WarrenInputField(
+                "Default home",
+                text: $home,
+                placeholder: "Use host HOME",
+                monospaced: false,
+                labelFont: WarrenTypography.dialogFieldLabel,
+                inputFont: WarrenTypography.dialogInput
+            )
 
             HStack {
                 Spacer()
@@ -230,9 +205,7 @@ struct WarrenDesktopTerminalGroupEditor: View {
             }
         }
         .padding(WarrenSpacing.large)
-        .frame(width: 390)
-        .warrenPanelSurface(cornerRadius: WarrenRadius.large)
-        .onAppear { nameFocused = true }
+        .frame(width: WarrenLayoutMetrics.compactDialogWidth)
         .onExitCommand(perform: onCancel)
     }
 }

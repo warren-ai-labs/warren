@@ -71,7 +71,7 @@ public struct WarrenDesktopWebPanel: View {
             }
         }
         .frame(width: 320, alignment: .leading)
-        .warrenPanelSurface(cornerRadius: WarrenRadius.base)
+        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.base)
     }
 
     private func header(tokens: WarrenColorTokens) -> some View {

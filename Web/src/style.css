@@ -2685,7 +2685,7 @@ button:disabled {
     inset: 0;
     display: block;
     border: 0;
-    background: var(--color-bg-overlay);
+    background: var(--color-bg-scrim-soft);
     opacity: 0;
     pointer-events: none;
     transition-property: opacity;
