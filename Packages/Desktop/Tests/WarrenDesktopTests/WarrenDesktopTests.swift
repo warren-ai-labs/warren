@@ -80,6 +80,14 @@ private func makeTabBar(
 
 @MainActor
 final class WarrenDesktopTests: XCTestCase {
+    func testPublicAccessUsesOwnerReachabilityTerminology() {
+        XCTAssertEqual(WarrenPublicAccessCopy.title, "Public Access")
+        XCTAssertEqual(WarrenPublicAccessCopy.edgeURL, "Edge URL")
+        XCTAssertEqual(WarrenPublicAccessCopy.enrollmentKey, "Enrollment Key (one time)")
+        XCTAssertEqual(WarrenPublicAccessCopy.publicEndpoint, "Public Endpoint")
+        XCTAssertFalse(WarrenPublicAccessCopy.title.localizedCaseInsensitiveContains("sharing"))
+    }
+
     func testWorkspaceChromeIsDefaultAndDoesNotShowIndependentTopBar() {
         XCTAssertFalse(WarrenDesktopChromeMode.workspace.showsIndependentTopBar)
         XCTAssertTrue(WarrenDesktopChromeMode.dashboard.showsIndependentTopBar)

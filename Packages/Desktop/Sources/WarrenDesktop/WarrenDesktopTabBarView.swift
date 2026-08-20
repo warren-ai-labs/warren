@@ -358,7 +358,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 systemImage: "globe",
                 label: "Web",
                 hint: webStatus.tunnelRunning
-                    ? "Public sharing is on"
+                    ? "Public Access is on"
                     : (webStatus.isRunning ? "Web is running" : "Web is stopped"),
                 action: { onChromePopover(.web) },
                 tint: webStatus.tunnelRunning

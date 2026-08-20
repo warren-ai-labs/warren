@@ -24,6 +24,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		DefaultRuntime: RuntimeTmux,
 		RuntimeEnv:     map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
 		GnarEdge:       "https://gnar.example.com",
+		GnarAccount:    "personal",
 		TunnelEnabled:  map[string]bool{"gnar": true},
 		AutoOpenShell:  true,
 		AutoStartAI:    true,
@@ -44,6 +45,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if loaded.GnarEdge != "https://gnar.example.com" {
 		t.Fatalf("loaded gnarEdge = %q", loaded.GnarEdge)
 	}
+	if loaded.GnarAccount != "personal" {
+		t.Fatalf("loaded gnarAccount = %q", loaded.GnarAccount)
+	}
 	if !loaded.TunnelEnabled["gnar"] {
 		t.Fatalf("loaded tunnelEnabled = %#v, want gnar restored", loaded.TunnelEnabled)
 	}
@@ -52,6 +56,21 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.AutoStartAI {
 		t.Fatal("loaded autoStartAI = false, want true")
+	}
+}
+
+func TestNormalizedGnarAccountUsesSafeDefault(t *testing.T) {
+	if got := NormalizedGnarAccount(""); got != DefaultGnarAccount {
+		t.Fatalf("empty gnar account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := NormalizedGnarAccount("  "); got != DefaultGnarAccount {
+		t.Fatalf("blank gnar account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := NormalizedGnarAccount("personal"); got != "personal" {
+		t.Fatalf("account = %q", got)
+	}
+	if got := NormalizedGnarAccount("bad\naccount"); got != DefaultGnarAccount {
+		t.Fatalf("control character account = %q, want %q", got, DefaultGnarAccount)
 	}
 }
 

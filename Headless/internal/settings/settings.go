@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Runtime kinds supported by the headless daemon.
@@ -16,6 +17,10 @@ const (
 // DefaultRuntimeKind is used when neither the settings file nor --runtime
 // selects one.
 const DefaultRuntimeKind = RuntimeGhostline
+
+// DefaultGnarAccount is used when Public Access is enabled without an
+// explicit account name. It is a label only; gnar owns the account token.
+const DefaultGnarAccount = "warren"
 
 // Settings is the headless daemon configuration. Runtime selection is a
 // headless-side decision: it controls which engine owns newly created
@@ -29,12 +34,14 @@ type Settings struct {
 	// daemon's built-in environment sanitization, so explicit values win;
 	// an empty value unsets the variable instead of passing an empty string.
 	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
-	// GnarEdge is the gnar edge server used for public Web sharing. Empty
+	// GnarEdge is the gnar Edge URL used for Public Access. Empty
 	// lets gnar use its own default (GNAR_EDGE or the single signed-in edge).
 	GnarEdge string `json:"gnarEdge,omitempty"`
+	// GnarAccount is the non-secret account label passed to gnar login.
+	GnarAccount string `json:"gnarAccount,omitempty"`
 	// TunnelEnabled records which reachability adapters the user wants
-	// running. The daemon restores them after a restart so a public URL
-	// survives until the user explicitly stops sharing.
+	// running. The daemon restores them after a restart so Public Access
+	// recovers until the user explicitly disables it.
 	TunnelEnabled map[string]bool `json:"tunnelEnabled,omitempty"`
 	// AutoOpenShell controls whether opening an empty workspace creates a
 	// default Shell session. Explicit New Session/Shell actions are unaffected.
@@ -42,6 +49,22 @@ type Settings struct {
 	// AutoStartAI controls whether entering an empty workspace starts the first
 	// AI preset. Explicit session actions are unaffected.
 	AutoStartAI bool `json:"autoStartAI"`
+}
+
+// NormalizedGnarAccount returns a safe account label for the gnar CLI.
+// Account names are not credentials, but rejecting control characters keeps
+// logs and child-process diagnostics unambiguous.
+func NormalizedGnarAccount(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return DefaultGnarAccount
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return DefaultGnarAccount
+		}
+	}
+	return value
 }
 
 // Normalized returns the effective default runtime kind.

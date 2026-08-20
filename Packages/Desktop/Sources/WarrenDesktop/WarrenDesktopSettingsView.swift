@@ -34,8 +34,8 @@ struct WarrenDesktopSettingsView: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
-    @AppStorage(WarrenPreferenceKey.gnarSharingEnabled)
-    private var gnarSharingEnabled = true
+    @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
+    private var publicAccessEnabled = true
     @Environment(\.colorScheme) private var colorScheme
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -45,7 +45,7 @@ struct WarrenDesktopSettingsView: View {
         case presets = "Presets"
         case workspaces = "Workspaces"
         case externalIDEs = "External IDEs"
-        case webSharing = "Web sharing"
+        case publicAccess = "Public Access"
 
         var id: String { rawValue }
 
@@ -57,7 +57,7 @@ struct WarrenDesktopSettingsView: View {
             case .presets: "hammer"
             case .workspaces: "arrow.triangle.branch"
             case .externalIDEs: "chevron.left.forwardslash.chevron.right"
-            case .webSharing: "globe"
+            case .publicAccess: "globe"
             }
         }
 
@@ -69,7 +69,7 @@ struct WarrenDesktopSettingsView: View {
             case .presets: "Choose visible presets and customize every launch command."
             case .workspaces: "How projects import worktrees and enter sessions."
             case .externalIDEs: "IDEs the workspace menu can open worktrees in."
-            case .webSharing: "Publish the Web UI to the public internet."
+            case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
             }
         }
 
@@ -81,14 +81,14 @@ struct WarrenDesktopSettingsView: View {
             case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
             case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
             case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
-            case .webSharing: [rawValue, detail, "gnar", "share", "public", "tunnel", "internet"]
+            case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "enrollment key", "tunnel", "internet"]
             }
         }
 
         var isTerminalSection: Bool {
             switch self {
             case .terminalFont, .terminalTitle, .terminalRuntime, .presets, .workspaces, .externalIDEs: true
-            case .webSharing: false
+            case .publicAccess: false
             }
         }
     }
@@ -298,8 +298,8 @@ struct WarrenDesktopSettingsView: View {
                     workspacesSection(tokens: tokens)
                 case .externalIDEs:
                     externalIDEsSection(tokens: tokens)
-                case .webSharing:
-                    webSharingSection(tokens: tokens)
+                case .publicAccess:
+                    publicAccessSection(tokens: tokens)
                 }
 
                 Button("Restore terminal defaults") {
@@ -733,15 +733,17 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private func webSharingSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Web sharing", section: .webSharing, tokens: tokens) {
-            Toggle("Share with gnar", isOn: $gnarSharingEnabled)
+    private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
+            Toggle("Allow Public Access controls", isOn: $publicAccessEnabled)
                 .toggleStyle(.switch)
                 .font(WarrenTypography.settingsControl)
-                .accessibilityIdentifier("settings.web-sharing.gnar-enabled")
+                .accessibilityIdentifier("settings.public-access.enabled")
             Text(
-                "Publishes this Mac's Web UI through the gnar tunnel installed "
-                    + "and signed in on this Mac. Run `gnar login --edge <url>` first."
+                "Reach this Mac's Web UI through the self-hosted gnar Edge installed "
+                    + "and signed in on this Mac. Configure the Edge URL and use the "
+                    + "one-time Enrollment Key in the Web panel; Warren never saves the key. "
+                    + "Turning controls off only disables this Desktop control surface."
             )
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)

@@ -32,6 +32,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let actions: WarrenDesktopActions
     private let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     private let onWebStart: () -> Void
+    private let onWebEnable: ((String, String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
@@ -67,8 +68,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
     private var terminalFontSize = TerminalFontPreference.defaultSize
-    @AppStorage(WarrenPreferenceKey.gnarSharingEnabled)
-    private var gnarSharingEnabled = true
+    @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
+    private var publicAccessEnabled = true
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -100,6 +101,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onWebStart: @escaping () -> Void = {},
+        onWebEnable: ((String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
@@ -128,6 +130,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.actions = actions
         self.terminalSurface = terminalSurface
         self.onWebStart = onWebStart
+        self.onWebEnable = onWebEnable
         self.onWebStop = onWebStop
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
@@ -475,10 +478,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 case .web:
                     WarrenDesktopWebPanel(
                         status: webStatus,
-                        canShare: gnarSharingEnabled,
+                        canControl: publicAccessEnabled,
                         onStart: {
                             onWebStart()
                             refreshWebDismissal()
+                        },
+                        onEnable: onWebEnable.map { callback in
+                            { edgeURL, accountName, enrollmentKey in
+                                callback(edgeURL, accountName, enrollmentKey)
+                                refreshWebDismissal()
+                            }
                         },
                         onStop: {
                             onWebStop()
@@ -520,7 +529,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 value: chromePopover
             )
             .onChange(of: webStatus.tunnelRunning) { _, isRunning in
-                // Keep the panel open while sharing so the public address
+                // Keep the panel open while Public Access is enabled so the public endpoint
                 // stays visible for copying; it falls back to auto-dismiss
                 // after stop.
                 if isRunning, isWebChromePopover {

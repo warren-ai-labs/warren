@@ -1245,10 +1245,71 @@ final class WarrenRemoteApplicationModel {
         surfaceManager.apply(font: preference)
     }
     func startWebFromUI() {
-        controlTunnel(.start, kind: "gnar")
+        enablePublicAccess(edgeURL: "", accountName: "", enrollmentKey: "")
     }
     func stopWeb() {
-        controlTunnel(.stop, kind: "gnar")
+        controlPublicAccess(.disable)
+    }
+
+    func enablePublicAccess(edgeURL: String, accountName: String, enrollmentKey: String) {
+        webStatus.publicAccessBusy = true
+        webStatus.publicAccessError = nil
+        Task {
+            defer { webStatus.publicAccessBusy = false }
+            do {
+                try await publicAccessRequest(
+                    .enable,
+                    edgeURL: edgeURL,
+                    accountName: accountName,
+                    enrollmentKey: enrollmentKey
+                )
+            } catch {
+                webStatus.publicAccessError = error.localizedDescription
+                if enrollmentKey.isEmpty, isMissingPublicAccessEndpoint(error) {
+                    do {
+                        try await tunnelRequest(.start, kind: "gnar")
+                        webStatus.publicAccessError = nil
+                        return
+                    } catch {
+                        webStatus.publicAccessError = error.localizedDescription
+                        present(error)
+                        return
+                    }
+                }
+                present(error)
+            }
+        }
+    }
+
+    private enum PublicAccessAction: String {
+        case enable
+        case disable
+        case restart
+    }
+
+    private func controlPublicAccess(_ action: PublicAccessAction) {
+        webStatus.publicAccessBusy = true
+        webStatus.publicAccessError = nil
+        Task {
+            defer { webStatus.publicAccessBusy = false }
+            do {
+                try await publicAccessRequest(action)
+            } catch {
+                webStatus.publicAccessError = error.localizedDescription
+                if isMissingPublicAccessEndpoint(error) {
+                    do {
+                        try await tunnelRequest(action == .disable ? .stop : .start, kind: "gnar")
+                        webStatus.publicAccessError = nil
+                        return
+                    } catch {
+                        webStatus.publicAccessError = error.localizedDescription
+                        present(error)
+                        return
+                    }
+                }
+                present(error)
+            }
+        }
     }
     func openWebURL(_ url: URL) { NSWorkspace.shared.open(url) }
     func copyWebURL(_ url: URL) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
@@ -1272,12 +1333,17 @@ final class WarrenRemoteApplicationModel {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Web sharing is not ready. Share it from the Web panel or start gnar first.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and Enrollment Key in the Web panel, then enable Public Access.",
                 ]))
                 return
             }
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.fragment = nil
+            NSPasteboard.general.setString(
+                (components?.url ?? url).absoluteString,
+                forType: .string
+            )
         }
     }
 
@@ -1326,6 +1392,9 @@ final class WarrenRemoteApplicationModel {
 
     private func refreshTunnelStatus() async {
         guard let configuration = endpointConfiguration else { return }
+        if await refreshPublicAccessStatus(configuration: configuration) {
+            return
+        }
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
@@ -1340,6 +1409,125 @@ final class WarrenRemoteApplicationModel {
         } catch {
             return
         }
+    }
+
+    private func publicAccessRequest(
+        _ action: PublicAccessAction,
+        edgeURL: String = "",
+        accountName: String = "",
+        enrollmentKey: String = ""
+    ) async throws {
+        guard let configuration = endpointConfiguration else {
+            throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])
+        }
+        let base = configuration.url.hasSuffix("/")
+            ? String(configuration.url.dropLast())
+            : configuration.url
+        guard let url = URL(string: base + "/v1/public-access/" + action.rawValue) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if action == .enable {
+            request.httpBody = try JSONEncoder().encode(PublicAccessEnableRequest(
+                edgeURL: edgeURL,
+                accountName: accountName,
+                enrollmentKey: enrollmentKey
+            ))
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONDecoder().decode(PublicAccessStatus.self, from: data).error)
+                .flatMap { $0 }
+                ?? String(data: data, encoding: .utf8)
+                ?? "Public Access request failed."
+            throw NSError(domain: "WarrenRemote", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+        applyPublicAccessStatus(from: data)
+    }
+
+    private func isMissingPublicAccessEndpoint(_ error: Error) -> Bool {
+        (error as NSError).code == 404
+    }
+
+    private func refreshPublicAccessStatus(configuration: WarrenRemoteEndpointConfiguration) async -> Bool {
+        let base = configuration.url.hasSuffix("/")
+            ? String(configuration.url.dropLast())
+            : configuration.url
+        guard let url = URL(string: base + "/v1/public-access") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+            applyPublicAccessStatus(from: data)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private struct PublicAccessEnableRequest: Encodable {
+        let edgeURL: String
+        let accountName: String
+        let enrollmentKey: String
+
+        enum CodingKeys: String, CodingKey {
+            case edgeURL = "edgeUrl"
+            case accountName
+            case enrollmentKey
+        }
+    }
+
+    private struct PublicAccessStatus: Decodable {
+        let edgeURL: String?
+        let accountName: String?
+        let enabled: Bool
+        let running: Bool
+        let publicEndpoint: String?
+        let error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case edgeURL = "edgeUrl"
+            case accountName
+            case enabled
+            case running
+            case publicEndpoint
+            case error
+        }
+    }
+
+    private func applyPublicAccessStatus(from data: Data) {
+        guard let response = try? JSONDecoder().decode(PublicAccessStatus.self, from: data) else {
+            webStatus.secureURL = nil
+            webStatus.tunnelRunning = false
+            webStatus.configuredEdgeURL = nil
+            webStatus.configuredAccountName = nil
+            return
+        }
+        webStatus.configuredEdgeURL = response.edgeURL.flatMap(URL.init(string:))
+        webStatus.configuredAccountName = response.accountName
+        webStatus.publicAccessError = response.error
+        guard response.running,
+              let endpoint = response.publicEndpoint,
+              let url = URL(string: endpoint) else {
+            webStatus.secureURL = nil
+            webStatus.tunnelRunning = false
+            return
+        }
+        webStatus.secureURL = url
+        webStatus.tunnelRunning = true
     }
 
     private func applyTunnelStatus(from data: Data) {
@@ -1364,6 +1552,7 @@ final class WarrenRemoteApplicationModel {
         }
         webStatus.secureURL = url
         webStatus.tunnelRunning = true
+        webStatus.publicAccessError = nil
     }
 
     func previewSupersetImport() async throws -> SupersetImportPreview {
