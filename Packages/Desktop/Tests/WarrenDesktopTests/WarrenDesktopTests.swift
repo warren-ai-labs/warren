@@ -58,7 +58,7 @@ private func makeTabBar(
         onToggleSidebar: {},
         onToggleInspector: {},
         onSettings: {},
-        onWeb: {},
+        onChromePopover: { _ in },
         onOpenInExternalIDE: { _ in },
         onSelectEndpoint: { _ in },
         onSelectTab: { _ in },

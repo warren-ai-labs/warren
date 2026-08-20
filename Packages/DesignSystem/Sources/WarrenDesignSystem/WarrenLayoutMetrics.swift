@@ -31,8 +31,11 @@ public enum WarrenLayoutMetrics {
     /// The close control is a 20pt button inside a 28pt accessory column.
     public static let tabCloseButtonSize: CGFloat = 20
     public static let tabAccessoryColumnWidth: CGFloat = 28
-    /// Compact action controls (e.g. the Web panel's Stop/Open/Copy row).
+    /// Compact action controls used by popovers and dense chrome rows.
     public static let compactControlHeight: CGFloat = 28
+    /// The Web popover needs room for a tokenized URL and its adjacent
+    /// actions, without reading like a persistent side panel.
+    public static let webPopoverWidth: CGFloat = 288
     public static let paneHeaderHeight: CGFloat = 28
     public static let paneMinimumWidth: CGFloat = 260
     public static let paneMinimumHeight: CGFloat = 160
