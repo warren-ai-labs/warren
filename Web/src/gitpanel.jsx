@@ -278,7 +278,12 @@ export function GitPanel({
           )}
           <div className="git-branch-line">
             <span className="git-branch-name">{data?.branch || "—"}</span>
-            {data?.upstream && <span className="git-upstream">{data.upstream}</span>}
+            {data?.upstream && (
+              <>
+                <span className="git-branch-arrow" aria-hidden="true">→</span>
+                <span className="git-upstream">{data.upstream}</span>
+              </>
+            )}
           </div>
           {data?.mainBranch && !data.operation &&
             (data.merged ? (
@@ -338,6 +343,53 @@ export function GitPanel({
               </div>
             </div>
           )}
+        </section>
+
+        <section className="git-section git-fixed-section">
+          <h3 className="git-section-title">Checkout</h3>
+          <div className="git-checkout-row">
+            <select
+              className="git-select"
+              aria-label="Branch"
+              value={branch}
+              onChange={event => {
+                setBranch(event.target.value);
+                setBranchTouched(true);
+              }}
+              disabled={createMode || !data?.branches.local.length && !data?.branches.remote.length}
+            >
+              <option value="">Choose a branch…</option>
+              {data?.branches.local.map(name => <option key={`l-${name}`} value={name}>{name}</option>)}
+              {data?.branches.remote.map(name => <option key={`r-${name}`} value={name}>{name} (remote)</option>)}
+            </select>
+            {createMode ? (
+              <input
+                className="git-input"
+                value={newBranch}
+                onChange={event => setNewBranch(event.target.value)}
+                placeholder="New branch name"
+                onKeyDown={event => {
+                  if (event.key === "Enter") submitCheckout();
+                }}
+              />
+            ) : null}
+            <div className="git-checkout-actions">
+              <button type="button" className="chrome-button" onClick={submitCheckout} disabled={busy || (createMode ? !newBranch.trim() : !branch)}>
+                {action === "git.checkout" ? "Switching…" : createMode ? "Create" : "Checkout"}
+              </button>
+              <button
+                type="button"
+                className="chrome-button"
+                disabled={busy}
+                onClick={() => {
+                  setCreateMode(!createMode);
+                  setNewBranch("");
+                }}
+              >
+                {createMode ? "Existing" : "New"}
+              </button>
+            </div>
+          </div>
         </section>
 
         {data?.remote && (
@@ -441,53 +493,6 @@ export function GitPanel({
             ))}
           </ul>
         </GitPane>
-
-        <section className="git-section git-fixed-section">
-          <h3 className="git-section-title">Checkout</h3>
-          <div className="git-checkout-row">
-            <select
-              className="git-select"
-              aria-label="Branch"
-              value={branch}
-              onChange={event => {
-                setBranch(event.target.value);
-                setBranchTouched(true);
-              }}
-              disabled={createMode || !data?.branches.local.length && !data?.branches.remote.length}
-            >
-              <option value="">Choose a branch…</option>
-              {data?.branches.local.map(name => <option key={`l-${name}`} value={name}>{name}</option>)}
-              {data?.branches.remote.map(name => <option key={`r-${name}`} value={name}>{name} (remote)</option>)}
-            </select>
-            {createMode ? (
-              <input
-                className="git-input"
-                value={newBranch}
-                onChange={event => setNewBranch(event.target.value)}
-                placeholder="New branch name"
-                onKeyDown={event => {
-                  if (event.key === "Enter") submitCheckout();
-                }}
-              />
-            ) : null}
-            <div className="git-checkout-actions">
-              <button type="button" className="chrome-button" onClick={submitCheckout} disabled={busy || (createMode ? !newBranch.trim() : !branch)}>
-                {action === "git.checkout" ? "Switching…" : createMode ? "Create" : "Checkout"}
-              </button>
-              <button
-                type="button"
-                className="chrome-button"
-                disabled={busy}
-                onClick={() => {
-                  setCreateMode(!createMode);
-                  setNewBranch("");
-                }}
-              >
-                {createMode ? "Existing" : "New"}
-              </button>
-            </div>
-          </div>
-        </section>
 
         </div>
       </div>

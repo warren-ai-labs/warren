@@ -3306,7 +3306,7 @@ button:disabled {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3351,7 +3351,7 @@ button:disabled {
 
 .git-section-title {
   margin: 0 0 var(--space-sm);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3376,6 +3376,10 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 
+.git-branch-arrow {
+  color: var(--color-text-disabled);
+}
+
 .git-ahead-behind {
   display: flex;
   gap: var(--space-md);
@@ -3384,7 +3388,7 @@ button:disabled {
 }
 
 .git-ahead { color: var(--color-status-success); }
-.git-behind { color: var(--color-status-warning); }
+.git-behind { color: var(--color-status-danger); }
 
 .git-remote {
   margin-top: var(--space-xs);
