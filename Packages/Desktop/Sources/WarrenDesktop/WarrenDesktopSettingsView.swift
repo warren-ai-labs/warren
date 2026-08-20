@@ -813,6 +813,14 @@ struct WarrenDesktopSettingsView: View {
             }
             .padding(.bottom, WarrenSpacing.small)
             content()
+                .padding(WarrenSpacing.large)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(tokens.fillHover)
+                .clipShape(.rect(cornerRadius: WarrenRadius.large))
+                .overlay {
+                    RoundedRectangle(cornerRadius: WarrenRadius.large)
+                        .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+                }
         }
     }
 

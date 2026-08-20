@@ -1824,6 +1824,16 @@ button:disabled {
   gap: var(--space-lg);
 }
 
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xl);
+  padding: var(--space-2xl);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--fill-hover);
+}
+
 .settings-toggle,
 .settings-info-card {
   display: flex;
@@ -2071,7 +2081,7 @@ button:disabled {
 
 .search-overlay.open {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
 }
 
@@ -2082,9 +2092,8 @@ button:disabled {
 .search-panel {
   display: flex;
   flex-direction: column;
-  width: min(720px, calc(100vw - 32px));
-  max-height: 80vh;
-  margin-top: max(16px, calc(50vh - 278px));
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
   overflow: hidden;
   border: 0;
   border-radius: var(--radius-xl);
@@ -2095,10 +2104,10 @@ button:disabled {
 .search-input-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex: 0 0 48px;
-  height: 48px;
-  padding-inline: var(--space-lg);
+  gap: 12px;
+  flex: 0 0 56px;
+  height: 56px;
+  padding-inline: 20px;
   border-bottom: 1px solid var(--color-border-separator);
   color: var(--color-text-secondary);
 }
@@ -2117,7 +2126,7 @@ button:disabled {
   outline: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font: var(--text-base) -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font: var(--text-md)/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
 }
 
 .search-input::placeholder {
@@ -2144,26 +2153,28 @@ button:disabled {
 }
 
 .search-group-heading {
-  padding: var(--space-md) 10px var(--space-xs);
+  padding: 12px 14px 6px;
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-regular);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .search-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  min-height: 40px;
-  padding-inline: 10px;
+  min-height: 48px;
+  padding-inline: 14px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-primary);
   text-align: start;
   cursor: pointer;
-  font-size: var(--text-base);
+  font-size: var(--text-md);
 }
 
 .search-item svg {
@@ -2186,7 +2197,7 @@ button:disabled {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
 }
 
 .search-name,
@@ -2197,17 +2208,19 @@ button:disabled {
 }
 
 .search-name {
-  font-weight: var(--weight-medium);
+  font-size: var(--text-md);
+  font-weight: var(--weight-light);
+  line-height: 1.4;
 }
 
 .search-path,
 .search-kind {
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-2sm);
 }
 
 .search-workspace-item .search-name {
-  font-weight: var(--weight-regular);
+  font-weight: var(--weight-light);
   flex: 1;
   min-width: 0;
 }
@@ -2218,10 +2231,10 @@ button:disabled {
 }
 
 .search-empty {
-  padding: 28px;
+  padding: 32px;
   color: var(--color-text-secondary);
   text-align: center;
-  font-size: var(--text-base);
+  font-size: var(--text-md);
 }
 
 .worktree-dialog-overlay {

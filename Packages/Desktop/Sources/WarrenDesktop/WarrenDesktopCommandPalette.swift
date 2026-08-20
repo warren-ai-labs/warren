@@ -93,7 +93,7 @@ struct WarrenDesktopCommandPaletteSearch {
                 detail: tab.kind.displayName
             ))
         }
-        return results
+        return Array(results.prefix(60))
     }
 
     private static func appendProjectResults(
@@ -291,20 +291,18 @@ struct WarrenDesktopCommandPalette: View {
     let resultsMaxHeight: CGFloat
 
     @State private var query = ""
+    @State private var debouncedQuery = ""
+    @State private var searchTask: Task<Void, Never>?
     @State private var selectedIndex = 0
     @FocusState private var searchFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
-    private var normalizedQuery: String {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
     private var hasQuery: Bool {
-        !normalizedQuery.isEmpty
+        !debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var rows: [WarrenDesktopCommandPaletteSearch.Result] {
-        WarrenDesktopCommandPaletteSearch.results(for: query, in: projection)
+        WarrenDesktopCommandPaletteSearch.results(for: debouncedQuery, in: projection)
     }
 
     var body: some View {
@@ -337,7 +335,7 @@ struct WarrenDesktopCommandPalette: View {
                             }
                             .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
                         }
-                        .frame(maxHeight: resultsMaxHeight)
+                        .frame(maxHeight: min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight))
                         .onChange(of: selectedIndex) { _, newIndex in
                             guard rows.indices.contains(newIndex) else { return }
                             proxy.scrollTo(rows[newIndex].id, anchor: .center)
@@ -357,8 +355,15 @@ struct WarrenDesktopCommandPalette: View {
             searchFocused = true
         }
         .onExitCommand(perform: onDismiss)
-        .onChange(of: query) { _, _ in
-            selectedIndex = 0
+        .onChange(of: query) { _, newValue in
+            searchTask?.cancel()
+            let value = newValue
+            searchTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(80))
+                guard !Task.isCancelled else { return }
+                debouncedQuery = value
+                selectedIndex = 0
+            }
         }
         .onChange(of: rows.count) { _, count in
             if !rows.indices.contains(selectedIndex) {
@@ -377,7 +382,7 @@ struct WarrenDesktopCommandPalette: View {
 
             TextField("Search projects, workspaces, sessions…", text: $query)
                 .textFieldStyle(.plain)
-                .font(WarrenTypography.body)
+                .font(WarrenTypography.popoverItem)
                 .focused($searchFocused)
                 .onKeyPress(.upArrow) {
                     moveSelection(-1)
@@ -436,7 +441,7 @@ struct WarrenDesktopCommandPalette: View {
                 .accessibilityHidden(true)
 
             Text("Start typing to search projects, workspaces, sessions, and terminal groups")
-                .font(WarrenTypography.supporting)
+                .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
 
@@ -459,19 +464,19 @@ struct WarrenDesktopCommandPalette: View {
         } label: {
             HStack(spacing: WarrenSpacing.compact) {
                 Image(systemName: row.kind.systemImage)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 14, weight: .light))
                     .foregroundStyle(tokens.mutedForeground)
                     .frame(width: 18, height: 18)
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(row.title)
-                        .font(WarrenTypography.navigationItem)
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(tokens.foreground)
                         .lineLimit(1)
                     if !row.detail.isEmpty {
                         Text(row.detail)
-                            .font(WarrenTypography.supporting)
+                            .font(WarrenTypography.popoverMeta)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -479,11 +484,11 @@ struct WarrenDesktopCommandPalette: View {
                 }
                 Spacer(minLength: 0)
                 Text(row.kind.label)
-                    .font(WarrenTypography.navigationMeta)
+                    .font(WarrenTypography.popoverMeta)
                     .foregroundStyle(tokens.mutedForeground)
             }
             .padding(.horizontal, WarrenLayoutMetrics.commandPaletteItemHorizontalPadding)
-            .frame(minHeight: 40)
+            .frame(minHeight: 44)
             .contentShape(.rect)
         }
         .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected))
