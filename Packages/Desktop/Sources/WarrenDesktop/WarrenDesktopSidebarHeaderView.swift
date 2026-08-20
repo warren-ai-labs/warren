@@ -62,7 +62,7 @@ struct WarrenDesktopSidebarHeader: View {
 
             Button(action: onToggle) {
                 Image(systemName: "sidebar.left")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                     .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
@@ -127,7 +127,7 @@ struct WarrenDesktopSidebarHeader: View {
     private var compactSearchButton: some View {
         Button(action: onCommandPalette) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .frame(width: 28, height: 28)
                 .accessibilityHidden(true)
         }
@@ -142,7 +142,7 @@ struct WarrenDesktopSidebarHeader: View {
     private var collapsedDashboardHeader: some View {
         Button(action: onToggle) {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
         .buttonStyle(.plain)
@@ -158,7 +158,7 @@ struct WarrenDesktopSidebarHeader: View {
         HStack(spacing: WarrenSpacing.compact) {
             Button(action: onToggle) {
                 Image(systemName: "sidebar.left")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                     .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
