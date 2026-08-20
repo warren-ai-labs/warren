@@ -157,6 +157,40 @@ Mobile surfaces must respect safe-area insets and use at least 44px touch rows.
 - `prefers-reduced-motion` and `accessibilityReduceMotion` disable movement,
   retaining a state change through opacity or immediate placement.
 
+### 4.6 Settings and dialog typography
+
+This is a scoped typography correction. Existing sidebar, tab, terminal, and
+other chrome text keeps its current density baseline. Settings and app-owned
+business surfaces receive a larger, more legible hierarchy instead of inheriting
+small navigation/supporting tokens.
+
+| Role | macOS / Web size | Weight | Use |
+| --- | --- | --- | --- |
+| Settings screen title | 22px | Semibold | Settings title and top-level page identity |
+| Settings section title | 20px | Semibold | Detail-page section heading |
+| Settings navigation item | 14px | Medium | Sidebar section navigation |
+| Settings group label | 12px | Semibold | `Terminal` / `Web` group labels; uppercase is allowed |
+| Settings body/control | 14px | Regular | Labels, values, toggles, selectors, and inputs |
+| Settings supporting text | 13px | Regular | Explanations, notes, and previews |
+| Dialog title | 18px | Semibold | Modal/sheet heading |
+| Dialog body | 14px | Regular | Consequences, instructions, and errors |
+| Dialog field label | 13px | Medium | Visible input labels |
+| Dialog input/action | 14px | Regular/Medium | Input values and button labels |
+| Dialog metadata | 12px | Regular | Paths, branches, and non-primary metadata |
+
+Rules:
+
+- Functional Settings text MUST NOT use a light weight. Light remains reserved
+  for non-functional display treatments outside this scope.
+- Dialog copy uses at least 14px for readable prose; 12px metadata must never
+  carry the only meaning or an error message.
+- Supporting copy uses a line-height of at least 1.45; long explanations may
+  wrap and must not be truncated by default.
+- The Web variables and macOS `WarrenTypography` tokens use the same semantic
+  names. Screens must not introduce literal sizes when a scoped token exists.
+- Mobile sheet actions use 15px text when the row is a primary touch target;
+  desktop actions remain 14px.
+
 ## 5. Interaction and accessibility contract
 
 Every app-owned presentation primitive MUST provide:
@@ -273,6 +307,8 @@ or generated `Web/dist` changes into these commits.
 - [ ] Add this approved taxonomy and role metrics to the DesignSystem.
 - [ ] Add role-specific elevation, sheet radius, and z-order tokens.
 - [ ] Mirror the semantic tokens in `Web/src/style.css`.
+- [ ] Add scoped Settings and dialog typography tokens without changing the
+      existing navigation/terminal chrome baseline.
 - [ ] Add the macOS presentation coordinator and Web presentation stack.
 - [ ] Add semantic tests for focus, Escape, outside click, and topmost-layer
       dismissal.
@@ -287,6 +323,8 @@ or generated `Web/dist` changes into these commits.
       sheet primitive.
 - [ ] Replace the Terminal Group editor's `.roundedBorder` fields with
       `WarrenInputField`.
+- [ ] Apply the dialog typography hierarchy to every macOS modal/sheet and the
+      corresponding Web dialog/sheet selectors.
 - [ ] Replace macOS IDE failure `Alert` and CLI `NSAlert` result flows with the
       app-owned modal/status contract.
 - [ ] Replace Web rename `window.prompt` calls with the shared modal.
