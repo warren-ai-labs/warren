@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const unmergedLogLimit = 200
+
 // FileChange is one file touched by a commit, as reported by --name-status,
 // with added/deleted line counts merged from --numstat.
 type FileChange struct {
@@ -40,7 +42,7 @@ func Log(ctx context.Context, dir string, limit int) ([]Commit, error) {
 // LogRange returns every commit reachable from HEAD but not from ref, i.e.
 // the current branch's changes that are not yet merged into ref's line.
 func LogRange(ctx context.Context, dir, ref string) ([]Commit, error) {
-	args := []string{"-c", "core.quotepath=false", "log", "-M", ref + "..HEAD"}
+	args := []string{"-c", "core.quotepath=false", "log", "-M", "-n", strconv.Itoa(unmergedLogLimit), ref + "..HEAD"}
 	return logRange(ctx, dir, args)
 }
 

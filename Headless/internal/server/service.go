@@ -139,6 +139,8 @@ type Service struct {
 	// the same project do not serialize their runtime startup.
 	workspaceLifecycleMu  sync.Mutex
 	projectLifecycleLocks map[string]*sync.RWMutex
+	gitMutationMu         sync.Mutex
+	gitMutationLocks      map[string]*sync.Mutex
 	outputs               map[string]*outputSession
 	peers                 map[string]map[*wsPeer]struct{}
 	focusedPeers          map[string]*wsPeer
@@ -1359,6 +1361,21 @@ func (s *Service) lockWorkspaceLifecycle(workspaceID string) *sync.RWMutex {
 	return nil
 }
 
+func (s *Service) lockGitMutation(workspaceID string) func() {
+	s.gitMutationMu.Lock()
+	if s.gitMutationLocks == nil {
+		s.gitMutationLocks = make(map[string]*sync.Mutex)
+	}
+	lock := s.gitMutationLocks[workspaceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.gitMutationLocks[workspaceID] = lock
+	}
+	s.gitMutationMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (s *Service) RemoveProject(id string, force bool) error {
 	projectLock := s.projectLifecycleLock(id)
 	projectLock.Lock()
@@ -1804,13 +1821,13 @@ func (s *Service) revalidatePanel(workspaceID, path string) {
 }
 
 func (s *Service) invalidatePanelCache(workspaceID string) {
-	if s.panelCache != nil {
-		s.panelCache.Remove(workspaceID)
-	}
+	s.panelCacheFor().Remove(workspaceID)
 }
 
 func (s *Service) loadGitPanel(ctx context.Context, workspaceID, path string, fetch bool) (api.GitPanel, error) {
 	if fetch {
+		unlock := s.lockGitMutation(workspaceID)
+		defer unlock()
 		// Refresh the remote refs before comparing against origin/main. A
 		// failed fetch (offline, no remote) must not block the panel; the
 		// comparison then uses the last fetched refs.
@@ -1879,10 +1896,15 @@ func (s *Service) GitDiff(ctx context.Context, workspaceID, path string, staged 
 	if err != nil {
 		return api.GitDiff{}, err
 	}
-	return api.GitDiff{Diff: view.Diff, Content: view.Content}, nil
+	return api.GitDiff{
+		Diff: view.Diff, Content: view.Content,
+		DiffTruncated: view.DiffTruncated, ContentTruncated: view.ContentTruncated,
+	}, nil
 }
 
 func (s *Service) GitCheckout(ctx context.Context, workspaceID, branch string, create bool) (api.GitCommandResult, error) {
+	unlock := s.lockGitMutation(workspaceID)
+	defer unlock()
 	workspace, err := findWorkspace(s.Store.Snapshot(), workspaceID)
 	if err != nil {
 		return api.GitCommandResult{}, err
@@ -1910,6 +1932,8 @@ func (s *Service) GitCheckout(ctx context.Context, workspaceID, branch string, c
 }
 
 func (s *Service) GitPull(ctx context.Context, workspaceID string) (api.GitCommandResult, error) {
+	unlock := s.lockGitMutation(workspaceID)
+	defer unlock()
 	workspace, err := findWorkspace(s.Store.Snapshot(), workspaceID)
 	if err != nil {
 		return api.GitCommandResult{}, err
@@ -1923,6 +1947,8 @@ func (s *Service) GitPull(ctx context.Context, workspaceID string) (api.GitComma
 }
 
 func (s *Service) GitPush(ctx context.Context, workspaceID string) (api.GitCommandResult, error) {
+	unlock := s.lockGitMutation(workspaceID)
+	defer unlock()
 	workspace, err := findWorkspace(s.Store.Snapshot(), workspaceID)
 	if err != nil {
 		return api.GitCommandResult{}, err
@@ -1936,6 +1962,8 @@ func (s *Service) GitPush(ctx context.Context, workspaceID string) (api.GitComma
 }
 
 func (s *Service) GitCommit(ctx context.Context, workspaceID, message string) (api.GitCommandResult, error) {
+	unlock := s.lockGitMutation(workspaceID)
+	defer unlock()
 	workspace, err := findWorkspace(s.Store.Snapshot(), workspaceID)
 	if err != nil {
 		return api.GitCommandResult{}, err
@@ -1951,6 +1979,8 @@ func (s *Service) GitCommit(ctx context.Context, workspaceID, message string) (a
 // GitCreatePullRequest pushes the workspace branch if needed and opens a
 // pull request against the repository's main branch.
 func (s *Service) GitCreatePullRequest(ctx context.Context, workspaceID, title, body string) (api.GitPullRequest, error) {
+	unlock := s.lockGitMutation(workspaceID)
+	defer unlock()
 	workspace, err := findWorkspace(s.Store.Snapshot(), workspaceID)
 	if err != nil {
 		return api.GitPullRequest{}, err

@@ -76,3 +76,17 @@ func TestOperationStateDetectsInProgressOperations(t *testing.T) {
 	}
 }
 
+func TestLogRangeIsBounded(t *testing.T) {
+	dir := newRepository(t)
+	gitForTest(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
+	for range unmergedLogLimit + 5 {
+		gitForTest(t, dir, "commit", "--allow-empty", "-m", "unmerged")
+	}
+	commits, err := LogRange(context.Background(), dir, "refs/remotes/origin/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) != unmergedLogLimit {
+		t.Fatalf("LogRange returned %d commits, want cap %d", len(commits), unmergedLogLimit)
+	}
+}

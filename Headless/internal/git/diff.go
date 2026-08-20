@@ -3,16 +3,22 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
+
+const maxFileViewBytes = 16 * 1024 * 1024
 
 // FileView is one file's full content and its unified diff, both keyed to
 // the same version: the working tree, the index, or a specific commit.
 type FileView struct {
-	Content string
-	Diff    string
+	Content          string
+	Diff             string
+	ContentTruncated bool
+	DiffTruncated    bool
 }
 
 // Show returns the full content of path at the selected version together
@@ -22,47 +28,88 @@ type FileView struct {
 // new content. Deleted files report an empty content with their diff.
 func Show(ctx context.Context, dir, path string, staged bool, commit string) (FileView, error) {
 	if commit != "" {
-		diff, err := run(ctx, dir, "show", "--format=", "--no-ext-diff", commit, "--", path)
+		resolved, err := resolveCommit(ctx, dir, commit)
 		if err != nil {
 			return FileView{}, err
 		}
-		return FileView{Content: showContent(ctx, dir, commit+":"+path), Diff: diff}, nil
+		content, contentTruncated, err := showContent(ctx, dir, resolved+":"+path)
+		if err != nil {
+			return FileView{}, err
+		}
+		diff, diffTruncated, err := runTruncated(ctx, dir, maxFileViewBytes, "show", "--format=", "--no-ext-diff", "--end-of-options", resolved, "--", path)
+		if err != nil {
+			return FileView{}, err
+		}
+		return FileView{
+			Content: content, Diff: completeTextPrefix(diff, diffTruncated),
+			ContentTruncated: contentTruncated, DiffTruncated: diffTruncated,
+		}, nil
 	}
 	if staged {
-		diff, err := run(ctx, dir, "diff", "--cached", "--no-ext-diff", "--", path)
+		content, contentTruncated, err := showContent(ctx, dir, ":"+path)
 		if err != nil {
 			return FileView{}, err
 		}
-		return FileView{Content: showContent(ctx, dir, ":"+path), Diff: diff}, nil
+		diff, diffTruncated, err := runTruncated(ctx, dir, maxFileViewBytes, "diff", "--cached", "--no-ext-diff", "--", path)
+		if err != nil {
+			return FileView{}, err
+		}
+		return FileView{
+			Content: content, Diff: completeTextPrefix(diff, diffTruncated),
+			ContentTruncated: contentTruncated, DiffTruncated: diffTruncated,
+		}, nil
 	}
-	diff, err := unstagedDiff(ctx, dir, path)
+	content, contentTruncated, err := worktreeContent(dir, path)
 	if err != nil {
 		return FileView{}, err
 	}
-	return FileView{Content: worktreeContent(dir, path), Diff: diff}, nil
+	diff, diffTruncated, err := unstagedDiff(ctx, dir, path)
+	if err != nil {
+		return FileView{}, err
+	}
+	return FileView{
+		Content: content, Diff: completeTextPrefix(diff, diffTruncated),
+		ContentTruncated: contentTruncated, DiffTruncated: diffTruncated,
+	}, nil
 }
 
-// showContent returns the file content at rev (e.g. "HEAD:path" or ":path"),
-// or "" when the path does not exist there.
-func showContent(ctx context.Context, dir, rev string) string {
-	output, err := run(ctx, dir, "show", rev)
+func resolveCommit(ctx context.Context, dir, commit string) (string, error) {
+	output, err := runLimited(ctx, dir, 256, "rev-parse", "--verify", "--quiet", "--end-of-options", commit+"^{commit}")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("invalid commit %q: %w", commit, err)
 	}
-	return output
+	return strings.TrimSpace(output), nil
+}
+
+// showContent returns the bounded file content at rev (e.g. "HEAD:path" or
+// ":path"), or "" when the path does not exist there.
+func showContent(ctx context.Context, dir, rev string) (string, bool, error) {
+	sizeText, err := runLimited(ctx, dir, 64, "cat-file", "-s", "--end-of-options", rev)
+	if err != nil {
+		return "", false, nil
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(sizeText), 10, 64)
+	if err != nil {
+		return "", false, fmt.Errorf("read git object size: %w", err)
+	}
+	content, truncated, err := runTruncated(ctx, dir, maxFileViewBytes, "show", "--no-ext-diff", "--end-of-options", rev)
+	if err != nil {
+		return "", false, err
+	}
+	return strings.ToValidUTF8(content, ""), truncated || size > maxFileViewBytes, nil
 }
 
 // unstagedDiff returns the working-tree diff of path, or a new-file diff for
 // untracked files.
-func unstagedDiff(ctx context.Context, dir, path string) (string, error) {
-	output, err := run(ctx, dir, "diff", "--no-ext-diff", "--", path)
+func unstagedDiff(ctx context.Context, dir, path string) (string, bool, error) {
+	output, truncated, err := runTruncated(ctx, dir, maxFileViewBytes, "diff", "--no-ext-diff", "--", path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if strings.TrimSpace(output) != "" || tracked(ctx, dir, path) {
-		return output, nil
+	if truncated || strings.TrimSpace(output) != "" || tracked(ctx, dir, path) {
+		return output, truncated, nil
 	}
-	return runAllowExit(ctx, dir, "diff", "--no-index", "--no-ext-diff", "--", "/dev/null", path)
+	return runAllowExitTruncated(ctx, dir, maxFileViewBytes, "diff", "--no-index", "--no-ext-diff", "--", "/dev/null", path)
 }
 
 // tracked reports whether git tracks path in the index.
@@ -72,27 +119,50 @@ func tracked(ctx context.Context, dir, path string) bool {
 }
 
 // worktreeContent reads path from the working tree, or "" when it is gone.
-func worktreeContent(dir, path string) string {
-	full, err := safePath(dir, path)
+func worktreeContent(dir, path string) (string, bool, error) {
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return ""
+		return "", false, err
 	}
-	content, err := os.ReadFile(full)
+	defer root.Close()
+	name := filepath.FromSlash(path)
+	info, err := root.Lstat(name)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
 	}
-	return string(content)
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := root.Readlink(name)
+		if err != nil {
+			return "", false, err
+		}
+		return target, false, nil
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return "", false, err
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxFileViewBytes+1))
+	if err != nil {
+		return "", false, err
+	}
+	truncated := len(content) > maxFileViewBytes || info.Size() > maxFileViewBytes
+	if len(content) > maxFileViewBytes {
+		content = content[:maxFileViewBytes]
+	}
+	return strings.ToValidUTF8(string(content), ""), truncated, nil
 }
 
-// safePath joins path onto dir, rejecting paths that escape it.
-func safePath(dir, path string) (string, error) {
-	full := filepath.Join(dir, filepath.FromSlash(path))
-	rel, err := filepath.Rel(dir, full)
-	if err != nil {
-		return "", err
+func completeTextPrefix(value string, truncated bool) string {
+	value = strings.ToValidUTF8(value, "")
+	if !truncated {
+		return value
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes workspace: %s", path)
+	if index := strings.LastIndexByte(value, '\n'); index >= 0 {
+		return value[:index+1]
 	}
-	return full, nil
+	return ""
 }

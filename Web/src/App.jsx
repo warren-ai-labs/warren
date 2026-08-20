@@ -8,7 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
 import { buildCatalog, moveInCatalog, rosterFromMessage, workspaceTabs } from "./catalog.js";
-import { WarrenConnection } from "./connection.js";
+import { WarrenConnection, rejectPendingRequests } from "./connection.js";
 import {
   captureNavigationPosition,
   createNavigationMemory,
@@ -147,10 +147,12 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
   const gitOpenRef = useRef(false);
+  const previousGitOpenRef = useRef(false);
   const [gitPanel, setGitPanel] = useState(null);
   const [gitRefreshing, setGitRefreshing] = useState(false);
   const [gitError, setGitError] = useState("");
   const gitLoadingRef = useRef(null);
+  const gitNeedsReloadRef = useRef(false);
   const [gitAction, setGitAction] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [terminalSearchOpen, setTerminalSearchOpen] = useState(false);
@@ -186,6 +188,7 @@ export default function App() {
   const maintenanceTimeoutRef = useRef(null);
   const appStateRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
+  const fileDiffNeedsReloadRef = useRef(false);
   const creatingSessionWorkspaceIDsRef = useRef(new Set());
   const settingsLoadedRef = useRef(false);
   const inputQueueRef = useRef(null);
@@ -285,8 +288,8 @@ export default function App() {
     setGitOpen(value);
   }, []);
 
-  const loadGitPanel = useCallback((force = false) => {
-    const workspaceID = selectedWorkspaceID;
+  const loadGitPanel = useCallback((force = false, requestedWorkspaceID = selectedWorkspaceID) => {
+    const workspaceID = requestedWorkspaceID;
     if (!workspaceID || gitLoadingRef.current === workspaceID) return;
     gitLoadingRef.current = workspaceID;
     setGitRefreshing(true);
@@ -314,6 +317,7 @@ export default function App() {
       finish();
     });
     if (!sent) {
+      gitNeedsReloadRef.current = true;
       setGitError("Not connected");
       finish();
     }
@@ -369,6 +373,10 @@ export default function App() {
   const fileDiffViewRef = useRef({ viewTab: "diff", diffStyle: "unified" });
 
   const setCurrentFileView = useCallback(value => {
+    if (!value) {
+      fileViewKeyRef.current = null;
+      fileDiffNeedsReloadRef.current = false;
+    }
     fileViewRef.current = value;
     setFileView(value);
   }, []);
@@ -402,13 +410,32 @@ export default function App() {
     setFileDiff({ loading: true, diff: "", content: "", error: "" });
     const params = { path: change.path, staged: change.staged };
     if (commit) params.commit = commit;
-    request("git.diff", { workspace: workspaceID, ...params }, result => {
+    const sent = request("git.diff", { workspace: workspaceID, ...params }, result => {
       if (fileViewKeyRef.current !== key) return;
-      setFileDiff({ loading: false, diff: result?.diff || "", content: result?.content || "", error: "" });
+      fileDiffNeedsReloadRef.current = false;
+      const truncatedParts = [
+        result?.diffTruncated ? "diff" : "",
+        result?.contentTruncated ? "file content" : "",
+      ].filter(Boolean);
+      const notice = truncatedParts.length > 0
+        ? `Result truncated at the 16 MiB system limit: ${truncatedParts.join(" and ")}.`
+        : "";
+      setFileDiff({
+        loading: false,
+        diff: result?.diff || "",
+        content: result?.content || "",
+        error: "",
+        notice,
+      });
     }, diffError => {
       if (fileViewKeyRef.current !== key) return;
       setFileDiff({ loading: false, diff: "", content: "", error: diffError });
     });
+    if (!sent && fileViewKeyRef.current === key) {
+      gitNeedsReloadRef.current = true;
+      fileDiffNeedsReloadRef.current = true;
+      setFileDiff({ loading: false, diff: "", content: "", error: "Not connected; the diff will retry after reconnecting." });
+    }
   }, [request, selectedWorkspaceID, setCurrentFileView]);
 
   const persistCurrentGitUI = useCallback(workspaceID => {
@@ -429,6 +456,7 @@ export default function App() {
   const restoreGitUIForWorkspace = useCallback(workspaceID => {
     if (!workspaceID) return;
     const snapshot = loadGitPanelUI(localStorage, workspaceID);
+    gitPanelUIStateRef.current = snapshot;
     setGitPanelSavedUI(snapshot);
     setFileDiffView(snapshot);
     if (gitOpenRef.current && snapshot.fileView) {
@@ -931,6 +959,17 @@ export default function App() {
     }
 
     setConnectionStatus({ message: "Connected", online: true });
+    if (gitNeedsReloadRef.current || fileDiffNeedsReloadRef.current) {
+      gitNeedsReloadRef.current = false;
+      gitLoadingRef.current = null;
+      if (gitOpenRef.current && nextWorkspaceID) {
+        loadGitPanel(true, nextWorkspaceID);
+        if (fileDiffNeedsReloadRef.current && fileViewRef.current) {
+          const pendingView = fileViewRef.current;
+          openFileView(pendingView, pendingView.commit || "", nextWorkspaceID);
+        }
+      }
+    }
     if (nextSessionID) {
       const rememberedSessionID = state.navigationMemory?.sessionByWorkspaceID?.[nextWorkspaceID];
       const hasRememberedSession = rememberedSessionID
@@ -945,7 +984,7 @@ export default function App() {
       attachSession(sessionID, false, false, false);
     }
     else if (activeTabWasRemoved) request("session.detach");
-  }, [attachSession, clearMaintenanceTimeout, clearTerminalSearch, loadRemoteSettings, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [attachSession, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -1202,6 +1241,9 @@ export default function App() {
       setConnectionStatus({ message: "Authenticating…", online: false });
       return;
     }
+    rejectPendingRequests(pendingRequestsRef.current, "Connection lost; reconnect and retry.");
+    gitNeedsReloadRef.current = true;
+    if (fileViewRef.current) fileDiffNeedsReloadRef.current = true;
     creatingSessionWorkspaceIDsRef.current.clear();
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
@@ -1544,10 +1586,13 @@ export default function App() {
   }, [activeSession]);
 
   useEffect(() => {
-    const opened = gitOpen && !gitOpenRef.current;
+    const wasOpen = previousGitOpenRef.current;
+    previousGitOpenRef.current = gitOpen;
+    const opened = gitOpen && !wasOpen;
     if (opened && selectedWorkspaceID) {
-      persistCurrentGitUI(selectedWorkspaceID);
       restoreGitUIForWorkspace(selectedWorkspaceID);
+    } else if (!gitOpen && wasOpen && selectedWorkspaceID) {
+      persistCurrentGitUI(selectedWorkspaceID);
     }
   }, [gitOpen, persistCurrentGitUI, restoreGitUIForWorkspace, selectedWorkspaceID]);
 
@@ -1561,7 +1606,7 @@ export default function App() {
     const hash = uiStateToHash({
       workspaceID: selectedWorkspaceID,
       sessionID: activeSession,
-      fileView: fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
+      fileView: gitOpen && fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
       viewTab: fileDiffViewRef.current.viewTab,
       diffStyle: fileDiffViewRef.current.diffStyle,
     });
@@ -1569,26 +1614,31 @@ export default function App() {
     if (window.location.hash !== target) {
       window.history.pushState(null, "", target);
     }
-  }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, selectedWorkspaceID]);
+  }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, gitOpen, selectedWorkspaceID]);
 
   const applyHashStateRef = useRef(null);
   applyHashStateRef.current = () => {
     const hashState = uiStateFromHash(window.location.hash);
-    if (!hashState.workspaceID) return;
+    if (!hashState.workspaceID) {
+      setCurrentFileView(null);
+      setFileDiffView(hashState);
+      return;
+    }
     chooseWorkspace(hashState.workspaceID, hashState.sessionID || null, false);
     if (hashState.fileView) {
+      setGitOpenState(true);
       openFileView(hashState.fileView, hashState.fileView.commit || "", hashState.workspaceID);
+    } else {
+      setCurrentFileView(null);
     }
     setFileDiffView(hashState);
   };
 
   useEffect(() => {
     const listener = () => applyHashStateRef.current?.();
-    window.addEventListener("popstate", listener);
     window.addEventListener("hashchange", listener);
     listener();
     return () => {
-      window.removeEventListener("popstate", listener);
       window.removeEventListener("hashchange", listener);
     };
   }, []);
@@ -2118,6 +2168,7 @@ export default function App() {
                   diff={fileDiff.diff}
                   content={fileDiff.content}
                   error={fileDiff.error}
+                  notice={fileDiff.notice}
                   onClose={() => {
                     setCurrentFileView(null);
                     persistCurrentGitUI(selectedWorkspaceID);

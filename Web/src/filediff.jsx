@@ -48,6 +48,7 @@ export function FileDiffView({
   diff,
   content,
   error,
+  notice,
   onClose,
   viewTab = "diff",
   diffStyle = "unified",
@@ -75,57 +76,60 @@ export function FileDiffView({
       ) : error ? (
         <p className="git-error file-diff-empty">{error}</p>
       ) : (
-        <DiffSurface>
-          <div className="file-diff-tabs" role="tablist" aria-label="File diff view">
-            <button
-              type="button"
-              className={viewTab === "diff" ? "file-diff-tab active" : "file-diff-tab"}
-              aria-selected={viewTab === "diff"}
-              role="tab"
-              onClick={() => onViewTabChange?.("diff")}
-            >
-              Diff
-            </button>
-            <button
-              type="button"
-              className={viewTab === "file" ? "file-diff-tab active" : "file-diff-tab"}
-              aria-selected={viewTab === "file"}
-              role="tab"
-              onClick={() => onViewTabChange?.("file")}
-            >
-              File
-            </button>
-          </div>
-          <div className="file-diff-body">
-            {viewTab === "diff" ? (
-              <>
-                <div className="file-diff-style-toggle" role="group" aria-label="Diff layout">
-                  <button
-                    type="button"
-                    className={diffStyle === "split" ? "file-diff-style-button active" : "file-diff-style-button"}
-                    onClick={() => onDiffStyleChange?.("split")}
-                  >
-                    Highlight
-                  </button>
-                  <button
-                    type="button"
-                    className={diffStyle === "unified" ? "file-diff-style-button active" : "file-diff-style-button"}
-                    onClick={() => onDiffStyleChange?.("unified")}
-                  >
-                    Unified
-                  </button>
-                </div>
+        <>
+          {notice && <p className="git-notice file-diff-notice" role="status">{notice}</p>}
+          <DiffSurface>
+            <div className="file-diff-tabs" role="tablist" aria-label="File diff view">
+              <button
+                type="button"
+                className={viewTab === "diff" ? "file-diff-tab active" : "file-diff-tab"}
+                aria-selected={viewTab === "diff"}
+                role="tab"
+                onClick={() => onViewTabChange?.("diff")}
+              >
+                Diff
+              </button>
+              <button
+                type="button"
+                className={viewTab === "file" ? "file-diff-tab active" : "file-diff-tab"}
+                aria-selected={viewTab === "file"}
+                role="tab"
+                onClick={() => onViewTabChange?.("file")}
+              >
+                File
+              </button>
+            </div>
+            <div className="file-diff-body">
+              {viewTab === "diff" ? (
+                <>
+                  <div className="file-diff-style-toggle" role="group" aria-label="Diff layout">
+                    <button
+                      type="button"
+                      className={diffStyle === "split" ? "file-diff-style-button active" : "file-diff-style-button"}
+                      onClick={() => onDiffStyleChange?.("split")}
+                    >
+                      Highlight
+                    </button>
+                    <button
+                      type="button"
+                      className={diffStyle === "unified" ? "file-diff-style-button active" : "file-diff-style-button"}
+                      onClick={() => onDiffStyleChange?.("unified")}
+                    >
+                      Unified
+                    </button>
+                  </div>
+                  <Virtualizer className="file-diff-pane-scroll">
+                    <PatchDiff patch={diff} options={options} />
+                  </Virtualizer>
+                </>
+              ) : (
                 <Virtualizer className="file-diff-pane-scroll">
-                  <PatchDiff patch={diff} options={options} />
+                  <File file={{ name: path, contents: content }} options={fileOptions} />
                 </Virtualizer>
-              </>
-            ) : (
-              <Virtualizer className="file-diff-pane-scroll">
-                <File file={{ name: path, contents: content }} options={fileOptions} />
-              </Virtualizer>
-            )}
-          </div>
-        </DiffSurface>
+              )}
+            </div>
+          </DiffSurface>
+        </>
       )}
     </section>
   );

@@ -6,6 +6,28 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.7.0] - 2026-08-20
+
+> Important release: the Web workspace now includes a complete Git panel.
+> The Push flow stages and commits every workspace change before pushing;
+> review the change list and commit message before confirming it.
+
+### Added
+
+- Add a Git panel with status, line counts, branch checkout, upstream sync, branch history, pull request details, and pull request creation.
+- Add virtualized, syntax-highlighted Diff and File views with unified and split layouts, per-workspace UI restoration, and shareable URL state.
+
+### Changed
+
+- Cache and revalidate Git panel projections in the background while keeping manual refresh available.
+- Bound Git command output, file content, diffs, and unique-branch history; oversized file views return a visible 16 MiB prefix with an explicit truncation notice.
+
+### Fixed
+
+- Reject flag-like commit references, keep symlink reads inside the workspace boundary, serialize Git mutations per workspace, and restore the index when a commit hook fails.
+- Recover Git loading and action states after connection loss, restore the first saved Git view, and keep the panel usable at compact desktop widths.
+- Keep pull request actions from wrapping and reduce desktop external-IDE icon and label sizing.
+
 ## [0.6.3] - 2026-08-20
 
 > Patch release: make manual update checks bypass stale local release responses.

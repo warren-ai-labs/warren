@@ -365,6 +365,8 @@ type GitCommandResult struct {
 }
 
 type GitDiff struct {
-	Diff    string `json:"diff"`
-	Content string `json:"content"`
+	Diff             string `json:"diff"`
+	Content          string `json:"content"`
+	DiffTruncated    bool   `json:"diffTruncated,omitempty"`
+	ContentTruncated bool   `json:"contentTruncated,omitempty"`
 }

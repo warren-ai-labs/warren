@@ -343,3 +343,32 @@ func TestCommitFailsOnCleanTree(t *testing.T) {
 		t.Fatal("CommitAll on a clean tree should fail")
 	}
 }
+
+func TestCommitFailureRestoresIndex(t *testing.T) {
+	dir := newRepository(t)
+	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitForTest(t, dir, "add", "staged.txt")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("unstaged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := gitForTest(t, dir, "status", "--porcelain=v1")
+	hook := strings.TrimSpace(gitForTest(t, dir, "rev-parse", "--git-path", "hooks/pre-commit"))
+	if !filepath.IsAbs(hook) {
+		hook = filepath.Join(dir, hook)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CommitAll(context.Background(), dir, "must fail"); err == nil {
+		t.Fatal("CommitAll succeeded despite a rejecting hook")
+	}
+	after := gitForTest(t, dir, "status", "--porcelain=v1")
+	if after != before {
+		t.Fatalf("status after failed commit = %q, want original %q", after, before)
+	}
+}

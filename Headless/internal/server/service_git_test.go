@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -203,5 +204,53 @@ func TestGitDiffReturnsWorkingTreeDiff(t *testing.T) {
 	}
 	if !strings.Contains(diff.Diff, "-a\n") || !strings.Contains(diff.Diff, "+b\n") {
 		t.Fatalf("diff = %q, want a -> b change", diff.Diff)
+	}
+}
+
+func TestGitMutationLockSerializesWorkspace(t *testing.T) {
+	service := &Service{}
+	unlock := service.lockGitMutation("workspace")
+	var entered atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		secondUnlock := service.lockGitMutation("workspace")
+		entered.Store(true)
+		secondUnlock()
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if entered.Load() {
+		t.Fatal("second mutation entered before the first released the workspace")
+	}
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("second mutation did not resume after unlock")
+	}
+}
+
+func TestGitPanelFetchWaitsForWorkspaceMutation(t *testing.T) {
+	repository := newRepositoryForServiceTest(t)
+	service, workspaceID := gitPanelService(t, repository)
+	unlock := service.lockGitMutation(workspaceID)
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.GitPanel(context.Background(), workspaceID, true, true)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("git panel fetch completed during a workspace mutation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("git panel fetch did not resume after the mutation")
 	}
 }

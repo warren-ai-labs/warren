@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WarrenConnection, reconnectDelay } from "./connection.js";
+import { WarrenConnection, reconnectDelay, rejectPendingRequests } from "./connection.js";
 
 class FakeSocket {
   static instances = [];
@@ -125,4 +125,16 @@ test("send treats a throwing socket as a closed transport", () => {
     },
   };
   assert.equal(connection.send("payload"), false);
+});
+
+test("rejectPendingRequests clears and fails every in-flight request", () => {
+  const errors = [];
+  const pending = new Map([
+    ["a", { onError: detail => errors.push(`a:${detail}`) }],
+    ["b", { onError: detail => errors.push(`b:${detail}`) }],
+    ["c", {}],
+  ]);
+  rejectPendingRequests(pending, "offline");
+  assert.equal(pending.size, 0);
+  assert.deepEqual(errors, ["a:offline", "b:offline"]);
 });

@@ -3185,6 +3185,13 @@ button:disabled {
   grid-template-columns: 280px minmax(0, 1fr) 340px;
 }
 
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app.git-panel-open {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+
 .git-panel {
   display: flex;
   flex-direction: column;
@@ -3815,6 +3822,15 @@ button:disabled {
   gap: var(--space-md);
   padding: var(--space-sm) var(--space-lg);
   border-bottom: 1px solid var(--color-border-separator);
+}
+
+.file-diff-notice {
+  margin: 0;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border-separator);
+  color: var(--color-status-warning);
+  background: color-mix(in srgb, var(--color-status-warning) 10%, transparent);
+  font-size: var(--text-sm);
 }
 
 .file-diff-title {

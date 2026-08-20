@@ -90,6 +90,35 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.7.0",
+        dateISO: "2026-08-20",
+        date: "August 20, 2026",
+        title: "Warren brings Git into the workspace.",
+        summary:
+          "A major Web workflow release with status, history, diffs, branch operations, pull requests, and hardened recovery and safety boundaries.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add a complete Git panel with status, line counts, branch checkout, upstream sync, history, and pull request workflows.",
+              "Add virtualized Diff and File views with syntax highlighting, unified and split layouts, saved UI state, and shareable URLs.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Cache and revalidate Git data in the background, and show an explicit notice when an exceptional file view reaches the 16 MiB system limit.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Harden Git references, workspace paths, commit rollback, mutation ordering, reconnect recovery, saved views, and compact desktop layouts.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.6.3",
         dateISO: "2026-08-20",
         date: "August 20, 2026",
@@ -514,6 +543,35 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.7.0",
+        dateISO: "2026-08-20",
+        date: "2026 年 8 月 20 日",
+        title: "Warren 把 Git 带进了 Workspace。",
+        summary:
+          "Web 工作流重大更新：新增状态、历史、Diff、分支操作和 Pull Request，并强化恢复能力与安全边界。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增完整 Git 面板，支持状态、行数统计、分支切换、上游同步、历史和 Pull Request 工作流。",
+              "新增虚拟化 Diff 与文件视图，支持语法高亮、统一与分栏布局、状态保存和 URL 分享。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "在后台缓存并刷新 Git 数据；极端文件视图达到 16 MiB 系统上限时显示明确提示。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "强化 Git 引用、Workspace 路径、提交回滚、变更串行、断线恢复、视图恢复和紧凑桌面布局。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.6.3",
         dateISO: "2026-08-20",

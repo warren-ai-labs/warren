@@ -345,10 +345,7 @@ transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:
 cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || exit 0
-provider=${WARREN_AGENT_KIND}
-if [ -z "$provider" ]; then
-  provider=${2:-codex}
-fi
+provider=${2:-${WARREN_AGENT_KIND:-codex}}
 [ -n "$WARREN_BIND_FILE" ] || exit 0
 [ -n "$transcript_path" ] || exit 0
 dir=$(dirname "$WARREN_BIND_FILE")

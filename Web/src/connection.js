@@ -6,6 +6,12 @@ export function reconnectDelay(attempt, random = Math.random) {
   return Math.round(base * (0.8 + random() * 0.4));
 }
 
+export function rejectPendingRequests(pending, detail = "Connection lost") {
+  const handlers = [...pending.values()];
+  pending.clear();
+  for (const handler of handlers) handler?.onError?.(detail);
+}
+
 export class WarrenConnection {
   constructor({
     url,
