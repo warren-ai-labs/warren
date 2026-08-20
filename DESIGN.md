@@ -180,6 +180,26 @@ The remote control plane is an independently deployable process. Each Host is is
 
 Session sharing is added incrementally through Principals, Share Grants, Capabilities, and multiple Attachments, without changing the resource tree.
 
+### 6.2 Git Panel
+
+The daemon owns all Git execution. Workspace-scoped typed intents:
+
+- `git.panel` { workspace } -> GitPanel (branch, upstream, ahead/behind, remote, changes, commits, branches)
+- `git.diff` { workspace, path, staged, commit } -> GitDiff (full file content and unified diff at the selected version)
+- `git.checkout` { workspace, branch, create } -> GitCommandResult
+- `git.pull` { workspace } -> GitCommandResult
+- `git.push` { workspace } -> GitCommandResult
+- `git.pr.create` { workspace, title, body } -> GitPullRequest
+
+`git.panel` also reports the hosted pull request for the current branch
+(`pullRequest`, or `pullRequestError` when the GitHub/GitLab CLI cannot be
+used). Pull requests are created against the repository's main branch
+(origin/main, falling back to origin/master) using `gh` or `glab` depending
+on the origin host.
+
+Read commands run with a 60-second timeout and never interpolate shell
+input; only `git -C <path>` with fixed argument arrays is used.
+
 ## 7. Data Design
 
 Host resource state is owned by the `warren-headless` daemon and persisted

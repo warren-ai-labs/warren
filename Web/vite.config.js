@@ -6,6 +6,9 @@ export default defineConfig({
   // gnar tunnel (/t/<name>), or behind any reverse proxy sub-path.
   base: "./",
   plugins: [react()],
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

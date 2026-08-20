@@ -75,6 +75,16 @@ const ChevronRightIcon = (
   </svg>
 );
 
+const GitIcon = (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="4" cy="4" r="1.6" />
+    <circle cx="4" cy="12" r="1.6" />
+    <circle cx="12" cy="6" r="1.6" />
+    <path d="M4 5.6v4.8M4 5.6c2.5.4 4.5 1.8 5.2 4.1" />
+    <path d="M12 7.6v.2a2.2 2.2 0 0 1-2.2 2.2" />
+  </svg>
+);
+
 function useBuildVariant() {
   // The Vite dev server is always a preview build. In production the daemon
   // serves a build-variant.txt stamped by scripts/build-app.sh, so a Web UI
@@ -368,6 +378,8 @@ export function TopBar({
   onNewSession,
   onOpenMenu,
   onOpenSearch,
+  onToggleGit,
+  gitActive,
   onTabContextMenu,
 }) {
   const tabRefs = useRef(new Map());
@@ -489,6 +501,15 @@ export function TopBar({
         <PlusIcon />
       </button>
       <div className="chrome-spacer" />
+      <button
+        type="button"
+        className={`chrome-button${gitActive ? " active" : ""}`}
+        aria-label="Toggle Git panel"
+        aria-pressed={gitActive}
+        onClick={onToggleGit}
+      >
+        {GitIcon}
+      </button>
       <button type="button" className="chrome-button" aria-label="Search projects" onClick={onOpenSearch}>
         <SearchIcon />
       </button>

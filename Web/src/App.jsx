@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -39,6 +39,7 @@ import {
 } from "./terminal.js";
 import { mergeAgentEvents } from "./agent.js";
 import { AgentView } from "./agent.jsx";
+const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
 import { InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
 import { decodeOutputFrame, isBinaryEnvelope } from "./wire.js";
@@ -57,6 +58,9 @@ import {
   TopBar,
   WorktreeImportDialog,
 } from "./components.jsx";
+import { GitPanel } from "./gitpanel.jsx";
+import { loadGitPanelUI, saveGitPanelUI, gitPanelUIFileView } from "./gitui.js";
+import { uiStateToHash, uiStateFromHash } from "./urlstate.js";
 import { enableTerminalTouchScroll } from "./touch.js";
 
 const storageKeys = {
@@ -70,6 +74,9 @@ const storageKeys = {
   presetCommands: "warren.presetCommands",
   presetOrder: "warren.presetOrder",
 };
+
+// How often the open git panel re-fetches remote refs while it stays visible.
+const GIT_PANEL_POLL_MS = 5 * 60_000;
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 const defaultFontSize = matchMedia("(max-width: 767px)").matches ? 12 : 13;
@@ -138,6 +145,13 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false);
+  const gitOpenRef = useRef(false);
+  const [gitPanel, setGitPanel] = useState(null);
+  const [gitRefreshing, setGitRefreshing] = useState(false);
+  const [gitError, setGitError] = useState("");
+  const gitLoadingRef = useRef(null);
+  const [gitAction, setGitAction] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [terminalSearchOpen, setTerminalSearchOpen] = useState(false);
   const [terminalSearchQuery, setTerminalSearchQuery] = useState("");
@@ -265,6 +279,171 @@ export default function App() {
       settingsLoadedRef.current = false;
     }
   }, [applyRemoteSettings, request]);
+
+  const setGitOpenState = useCallback(value => {
+    gitOpenRef.current = typeof value === "function" ? value(gitOpenRef.current) : value;
+    setGitOpen(value);
+  }, []);
+
+  const loadGitPanel = useCallback((force = false) => {
+    const workspaceID = selectedWorkspaceID;
+    if (!workspaceID || gitLoadingRef.current === workspaceID) return;
+    gitLoadingRef.current = workspaceID;
+    setGitRefreshing(true);
+    setGitError("");
+    setGitAction("");
+    const finish = () => {
+      if (gitLoadingRef.current === workspaceID) {
+        gitLoadingRef.current = null;
+        setGitRefreshing(false);
+      }
+    };
+    const sent = request("git.panel", { workspace: workspaceID, fetch: true, force }, result => {
+      if (appStateRef.current.activeWorkspace !== workspaceID) {
+        finish();
+        return;
+      }
+      setGitPanel(result);
+      finish();
+    }, error => {
+      if (appStateRef.current.activeWorkspace !== workspaceID) {
+        finish();
+        return;
+      }
+      setGitError(error);
+      finish();
+    });
+    if (!sent) {
+      setGitError("Not connected");
+      finish();
+    }
+  }, [request, selectedWorkspaceID]);
+
+  useEffect(() => {
+    if (!gitOpen) return;
+    const timer = setInterval(() => loadGitPanel(), GIT_PANEL_POLL_MS);
+    return () => clearInterval(timer);
+  }, [gitOpen, loadGitPanel]);
+
+  const runGitAction = useCallback((method, params) => {
+    setGitAction(method);
+    setGitError("");
+    const sent = request(method, params, () => {
+      setGitAction("");
+      loadGitPanel();
+    }, error => {
+      setGitAction("");
+      setGitError(error);
+    });
+    if (!sent) {
+      setGitAction("");
+      setGitError("Not connected");
+    }
+  }, [request, loadGitPanel]);
+
+  const runGitCommit = useCallback(message => {
+    setGitAction("git.commit");
+    setGitError("");
+    const sent = request("git.commit", { workspace: selectedWorkspaceID, message }, () => {
+      setGitAction("");
+      loadGitPanel();
+      runGitAction("git.push", { workspace: selectedWorkspaceID });
+    }, error => {
+      setGitAction("");
+      setGitError(error);
+    });
+    if (!sent) {
+      setGitAction("");
+      setGitError("Not connected");
+    }
+  }, [request, loadGitPanel, runGitAction, selectedWorkspaceID]);
+
+  const [fileView, setFileView] = useState(null);
+  const [fileDiff, setFileDiff] = useState({ loading: false, diff: "", content: "", error: "" });
+  const fileViewKeyRef = useRef(null);
+  const fileViewRef = useRef(null);
+  const [gitPanelSavedUI, setGitPanelSavedUI] = useState({});
+  const gitPanelUIStateRef = useRef({});
+  const [fileDiffViewTab, setFileDiffViewTabState] = useState("diff");
+  const [fileDiffStyle, setFileDiffStyleState] = useState("unified");
+  const fileDiffViewRef = useRef({ viewTab: "diff", diffStyle: "unified" });
+
+  const setCurrentFileView = useCallback(value => {
+    fileViewRef.current = value;
+    setFileView(value);
+  }, []);
+
+  const setFileDiffViewTab = useCallback(value => {
+    const next = value === "file" ? "file" : "diff";
+    fileDiffViewRef.current = { ...fileDiffViewRef.current, viewTab: next };
+    setFileDiffViewTabState(next);
+  }, []);
+
+  const setFileDiffStyle = useCallback(value => {
+    const next = value === "split" ? "split" : "unified";
+    fileDiffViewRef.current = { ...fileDiffViewRef.current, diffStyle: next };
+    setFileDiffStyleState(next);
+  }, []);
+
+  const setFileDiffView = useCallback(({ viewTab, diffStyle } = {}) => {
+    const next = {
+      viewTab: viewTab === "file" ? "file" : "diff",
+      diffStyle: diffStyle === "split" ? "split" : "unified",
+    };
+    fileDiffViewRef.current = next;
+    setFileDiffViewTabState(next.viewTab);
+    setFileDiffStyleState(next.diffStyle);
+  }, []);
+
+  const openFileView = useCallback((change, commit = "", workspaceID = selectedWorkspaceID) => {
+    const key = commit ? `${workspaceID}:${commit}:${change.path}` : `${workspaceID}:${change.staged ? "s" : "u"}:${change.path}`;
+    fileViewKeyRef.current = key;
+    setCurrentFileView({ key, path: change.path, staged: change.staged, commit });
+    setFileDiff({ loading: true, diff: "", content: "", error: "" });
+    const params = { path: change.path, staged: change.staged };
+    if (commit) params.commit = commit;
+    request("git.diff", { workspace: workspaceID, ...params }, result => {
+      if (fileViewKeyRef.current !== key) return;
+      setFileDiff({ loading: false, diff: result?.diff || "", content: result?.content || "", error: "" });
+    }, diffError => {
+      if (fileViewKeyRef.current !== key) return;
+      setFileDiff({ loading: false, diff: "", content: "", error: diffError });
+    });
+  }, [request, selectedWorkspaceID, setCurrentFileView]);
+
+  const persistCurrentGitUI = useCallback(workspaceID => {
+    if (!workspaceID) return;
+    saveGitPanelUI(localStorage, workspaceID, {
+      ...gitPanelUIStateRef.current,
+      viewTab: fileDiffViewRef.current.viewTab,
+      diffStyle: fileDiffViewRef.current.diffStyle,
+      fileView: fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
+    });
+  }, []);
+
+  const handleGitUIChange = useCallback(ui => {
+    gitPanelUIStateRef.current = ui;
+    persistCurrentGitUI(selectedWorkspaceID);
+  }, [persistCurrentGitUI, selectedWorkspaceID]);
+
+  const restoreGitUIForWorkspace = useCallback(workspaceID => {
+    if (!workspaceID) return;
+    const snapshot = loadGitPanelUI(localStorage, workspaceID);
+    setGitPanelSavedUI(snapshot);
+    setFileDiffView(snapshot);
+    if (gitOpenRef.current && snapshot.fileView) {
+      openFileView(snapshot.fileView, snapshot.fileView.commit || "", workspaceID);
+    } else {
+      setCurrentFileView(null);
+    }
+  }, [openFileView, setCurrentFileView, setFileDiffView]);
+
+  useEffect(() => {
+    if (gitOpen) {
+      setGitPanel(null);
+      loadGitPanel();
+    }
+  }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
     const params = { session: sessionID, limit: "200" };
@@ -627,6 +806,10 @@ export default function App() {
 
   const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null, automaticEntry = true) => {
     const state = appStateRef.current;
+    const previousWorkspaceID = state.activeWorkspace;
+    if (previousWorkspaceID && previousWorkspaceID !== workspaceID) {
+      persistCurrentGitUI(previousWorkspaceID);
+    }
     const wasAttached = Boolean(state.activeSession || state.attachedSession);
     const sessionID = resolveWorkspaceSession(
       state.catalog,
@@ -641,6 +824,9 @@ export default function App() {
     state.attachedSession = null;
     focusedSessionRef.current = null;
     setActiveWorkspace(workspaceID);
+    if (previousWorkspaceID !== workspaceID) {
+      restoreGitUIForWorkspace(workspaceID);
+    }
     setActiveSession(null);
     setAttachedSession(null);
     setEmptyOverride(null);
@@ -664,7 +850,7 @@ export default function App() {
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, autoStartAI, clearTerminalSearch, createSession, orderedPresets, recordNavigation, request]);
+  }, [attachSession, autoStartAI, clearTerminalSearch, createSession, orderedPresets, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -705,6 +891,7 @@ export default function App() {
     loadRemoteSettings();
     const nextCatalog = buildCatalog(rosterFromMessage(message));
     const state = appStateRef.current;
+    const previousWorkspaceID = state.activeWorkspace;
     const nextWorkspaceID = resolveRestoredWorkspace(nextCatalog, state.activeWorkspace, state.activeSession);
     const nextSessionID = nextWorkspaceID
       ? resolveWorkspaceSession(nextCatalog, nextWorkspaceID, state.navigationMemory, state.activeSession)
@@ -716,6 +903,10 @@ export default function App() {
     state.activeWorkspace = nextWorkspaceID;
     setCatalog(nextCatalog);
     setActiveWorkspace(nextWorkspaceID);
+    if (previousWorkspaceID !== nextWorkspaceID) {
+      if (previousWorkspaceID) persistCurrentGitUI(previousWorkspaceID);
+      restoreGitUIForWorkspace(nextWorkspaceID);
+    }
     setEmptyOverride(null);
     if (nextWorkspaceID) {
       const workspace = nextCatalog.workspaces.find(value => value.id === nextWorkspaceID);
@@ -754,7 +945,7 @@ export default function App() {
       attachSession(sessionID, false, false, false);
     }
     else if (activeTabWasRemoved) request("session.detach");
-  }, [attachSession, clearMaintenanceTimeout, clearTerminalSearch, loadRemoteSettings, recordNavigation, request]);
+  }, [attachSession, clearMaintenanceTimeout, clearTerminalSearch, loadRemoteSettings, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -1353,6 +1544,56 @@ export default function App() {
   }, [activeSession]);
 
   useEffect(() => {
+    const opened = gitOpen && !gitOpenRef.current;
+    if (opened && selectedWorkspaceID) {
+      persistCurrentGitUI(selectedWorkspaceID);
+      restoreGitUIForWorkspace(selectedWorkspaceID);
+    }
+  }, [gitOpen, persistCurrentGitUI, restoreGitUIForWorkspace, selectedWorkspaceID]);
+
+  const hashInitializedRef = useRef(false);
+  useEffect(() => {
+    if (!hashInitializedRef.current) {
+      hashInitializedRef.current = true;
+      return;
+    }
+    if (!selectedWorkspaceID) return;
+    const hash = uiStateToHash({
+      workspaceID: selectedWorkspaceID,
+      sessionID: activeSession,
+      fileView: fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
+      viewTab: fileDiffViewRef.current.viewTab,
+      diffStyle: fileDiffViewRef.current.diffStyle,
+    });
+    const target = hash || "#";
+    if (window.location.hash !== target) {
+      window.history.pushState(null, "", target);
+    }
+  }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, selectedWorkspaceID]);
+
+  const applyHashStateRef = useRef(null);
+  applyHashStateRef.current = () => {
+    const hashState = uiStateFromHash(window.location.hash);
+    if (!hashState.workspaceID) return;
+    chooseWorkspace(hashState.workspaceID, hashState.sessionID || null, false);
+    if (hashState.fileView) {
+      openFileView(hashState.fileView, hashState.fileView.commit || "", hashState.workspaceID);
+    }
+    setFileDiffView(hashState);
+  };
+
+  useEffect(() => {
+    const listener = () => applyHashStateRef.current?.();
+    window.addEventListener("popstate", listener);
+    window.addEventListener("hashchange", listener);
+    listener();
+    return () => {
+      window.removeEventListener("popstate", listener);
+      window.removeEventListener("hashchange", listener);
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(storageKeys.navigationMemory, JSON.stringify(navigationMemory));
   }, [navigationMemory]);
 
@@ -1774,7 +2015,7 @@ export default function App() {
   return (
     <>
       <h1 className="visually-hidden">Warren</h1>
-      <div className={`app${drawerOpen ? " drawer-open" : ""}`} hidden={settingsOpen}>
+      <div className={`app${drawerOpen ? " drawer-open" : ""}${gitOpen && !isMobile ? " git-panel-open" : ""}`} hidden={settingsOpen}>
         <a className="skip-link" href="#main">Skip to content</a>
         <Sidebar
           catalog={catalog}
@@ -1824,6 +2065,8 @@ export default function App() {
                 onNewSession={() => createSession("shell")}
                 onOpenMenu={() => setDrawerOpen(true)}
                 onOpenSearch={() => setSearchOpen(true)}
+                onToggleGit={() => setGitOpenState(open => !open)}
+                gitActive={gitOpen}
                 onTabContextMenu={sessionContextMenu}
               />
               <PresetBar presets={orderedPresets} onCreateSession={createSession} />
@@ -1858,11 +2101,34 @@ export default function App() {
             className="terminal-shell"
             aria-label="Terminal"
             onPointerDown={event => {
-              if (event.pointerType === "mouse") focusTerminal();
+              if (event.pointerType === "mouse" && !(gitOpen && fileView)) focusTerminal();
             }}
-            onClick={focusTerminal}
+            onClick={event => {
+              if (!(gitOpen && fileView)) focusTerminal();
+            }}
           >
-            <div id="terminal" ref={terminalHostRef} hidden={agentViewActive} />
+            <div id="terminal" ref={terminalHostRef} hidden={agentViewActive || (gitOpen && Boolean(fileView))} />
+            {gitOpen && fileView && (
+              <Suspense fallback={<p className="git-empty file-diff-empty">Loading diff viewer…</p>}>
+                <FileDiffView
+                  path={fileView.path}
+                  staged={fileView.staged}
+                  commit={fileView.commit}
+                  loading={fileDiff.loading}
+                  diff={fileDiff.diff}
+                  content={fileDiff.content}
+                  error={fileDiff.error}
+                  onClose={() => {
+                    setCurrentFileView(null);
+                    persistCurrentGitUI(selectedWorkspaceID);
+                  }}
+                  viewTab={fileDiffViewTab}
+                  diffStyle={fileDiffStyle}
+                  onViewTabChange={setFileDiffViewTab}
+                  onDiffStyleChange={setFileDiffStyle}
+                />
+              </Suspense>
+            )}
             {agentViewActive && (
               <AgentView
                 session={selectedSession}
@@ -1888,6 +2154,7 @@ export default function App() {
               onPrevious={() => stepTerminalSearch("previous")}
               onClose={closeTerminalSearch}
             />
+            {!(gitOpen && fileView) && (
             <EmptyTerminal
               activeWorkspace={selectedWorkspaceID}
               activeSession={activeSession}
@@ -1897,9 +2164,30 @@ export default function App() {
               override={emptyOverride}
               onNewSession={() => createSession("shell")}
             />
+            )}
           </section>
           {!agentViewActive && <MobileKeys onInput={sendInput} />}
         </main>
+        {!isMobile && gitOpen && (
+          <GitPanel
+            key={selectedWorkspaceID}
+            workspaceName={selectedWorkspace?.name}
+            panel={gitPanel}
+            refreshing={gitRefreshing}
+            error={gitError}
+            action={gitAction}
+            onRefresh={() => loadGitPanel(true)}
+            onPull={() => runGitAction("git.pull", { workspace: selectedWorkspaceID })}
+            onPush={() => runGitAction("git.push", { workspace: selectedWorkspaceID })}
+            onCheckout={(branch, create) => runGitAction("git.checkout", { workspace: selectedWorkspaceID, branch, create })}
+            onOpenFile={openFileView}
+            onCommit={runGitCommit}
+            onCreatePR={(title, body) => runGitAction("git.pr.create", { workspace: selectedWorkspaceID, title, body })}
+            onClose={() => setGitOpenState(false)}
+            saved={gitPanelSavedUI}
+            onUIChange={handleGitUIChange}
+          />
+        )}
       </div>
       <SettingsPage
         open={settingsOpen}

@@ -300,3 +300,71 @@ type Response struct {
 	Result any    `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
+
+// GitPanel is the aggregated Git projection for one workspace.
+type GitPanel struct {
+	WorkspaceID      string          `json:"workspace"`
+	Branch           string          `json:"branch"`
+	Upstream         string          `json:"upstream,omitempty"`
+	Ahead            int             `json:"ahead,omitempty"`
+	Behind           int             `json:"behind,omitempty"`
+	AheadOfMain      int             `json:"aheadOfMain,omitempty"`
+	Remote           string          `json:"remote,omitempty"`
+	MainBranch       string          `json:"mainBranch,omitempty"`
+	Merged           bool            `json:"merged,omitempty"`
+	Operation        string          `json:"operation,omitempty"`
+	Changes          []GitChange     `json:"changes"`
+	Commits          []GitCommit     `json:"commits"`
+	UnmergedCommits  []GitCommit     `json:"unmergedCommits,omitempty"`
+	Branches         []GitBranch     `json:"branches"`
+	PullRequest      *GitPullRequest `json:"pullRequest,omitempty"`
+	PullRequestError string          `json:"pullRequestError,omitempty"`
+	Refreshing       bool            `json:"refreshing,omitempty"`
+}
+
+type GitChange struct {
+	Path       string `json:"path"`
+	Status     string `json:"status"`
+	Staged     bool   `json:"staged,omitempty"`
+	RenameFrom string `json:"renameFrom,omitempty"`
+	Added      int    `json:"added,omitempty"`
+	Deleted    int    `json:"deleted,omitempty"`
+}
+
+type GitCommit struct {
+	Hash    string      `json:"hash"`
+	Short   string      `json:"short"`
+	Subject string      `json:"subject"`
+	Author  string      `json:"author"`
+	Email   string      `json:"email,omitempty"`
+	Time    time.Time   `json:"time"`
+	Files   []GitChange `json:"files"`
+}
+
+type GitBranch struct {
+	Name   string `json:"name"`
+	Remote bool   `json:"remote"`
+}
+
+// GitPullRequest is a hosted pull request (GitHub PR or GitLab MR) for the
+// workspace's current branch.
+type GitPullRequest struct {
+	Number int    `json:"number,omitempty"`
+	Title  string `json:"title"`
+	Body   string `json:"body,omitempty"`
+	State  string `json:"state,omitempty"`
+	Draft  bool   `json:"draft,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Author string `json:"author,omitempty"`
+	Base   string `json:"base,omitempty"`
+	Head   string `json:"head,omitempty"`
+}
+
+type GitCommandResult struct {
+	Message string `json:"message"`
+}
+
+type GitDiff struct {
+	Diff    string `json:"diff"`
+	Content string `json:"content"`
+}

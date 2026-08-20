@@ -1189,6 +1189,56 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"resized": resized})
+	case "git.panel":
+		panel, err := p.server.Service.GitPanel(ctx, stringParam(params, "workspace"), boolParam(params, "fetch"), boolParam(params, "force"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, panel)
+	case "git.diff":
+		diff, err := p.server.Service.GitDiff(ctx, stringParam(params, "workspace"), stringParam(params, "path"), boolParam(params, "staged"), stringParam(params, "commit"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, diff)
+	case "git.checkout":
+		result, err := p.server.Service.GitCheckout(ctx, stringParam(params, "workspace"), stringParam(params, "branch"), boolParam(params, "create"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "git.pull":
+		result, err := p.server.Service.GitPull(ctx, stringParam(params, "workspace"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "git.push":
+		result, err := p.server.Service.GitPush(ctx, stringParam(params, "workspace"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "git.commit":
+		message := strings.TrimSpace(stringParam(params, "message"))
+		if message == "" {
+			return fmt.Errorf("commit message is required")
+		}
+		result, err := p.server.Service.GitCommit(ctx, stringParam(params, "workspace"), message)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "git.pr.create":
+		title := strings.TrimSpace(stringParam(params, "title"))
+		if title == "" {
+			return fmt.Errorf("pull request title is required")
+		}
+		result, err := p.server.Service.GitCreatePullRequest(ctx, stringParam(params, "workspace"), title, stringParam(params, "body"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
 	default:
 		return fmt.Errorf("unknown method: %s", command.Method)
 	}
