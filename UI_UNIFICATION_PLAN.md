@@ -36,7 +36,8 @@ the terminal renderer.
 
 - One semantic presentation taxonomy shared by macOS and Web.
 - One set of surface, spacing, radius, elevation, motion, and focus roles.
-- Equivalent resource actions and destructive safeguards on both clients.
+- Equivalent presentation for shared actions, while preserving explicitly
+  documented client boundaries.
 - Predictable keyboard, pointer, touch, accessibility, loading, error, empty,
   and retry behavior.
 - A single owner for modal state and z-order in each client.
@@ -291,9 +292,9 @@ or generated `Web/dist` changes into these commits.
 - [ ] Replace Web rename `window.prompt` calls with the shared modal.
 - [ ] Replace Web session deletion `window.confirm` with the shared destructive
       modal.
-- [ ] Audit and align Project/Workspace deletion actions on Web; either expose
-      equivalent actions or document an explicit product boundary before
-      implementation.
+- [ ] Preserve the current Web product boundary: do not add Project/Workspace
+      deletion in this UI migration. Only the existing Web Session deletion
+      flow is migrated to the shared destructive modal.
 
 ### Phase 2 — Popovers, menus, and selectors
 
@@ -362,21 +363,26 @@ defined in `DESIGN.md` rather than screenshots alone.
 | Large dirty working tree obscures review | Work only in the Warren-managed workspace and keep commits scoped to presentation files |
 | Generated Web assets create noisy diffs | Build/generated output is a separate explicit step and must not be mixed with source commits |
 
-## 12. Approval gates
+## 12. Decision record
 
-Implementation must not start until these proposed decisions are accepted or
-changed:
+The following decisions were confirmed for this plan:
 
-1. Business dialogs and import flows become app-owned in-window surfaces;
-   native `.sheet` remains only for OS-owned workflows.
-2. Mobile bottom sheets use the 16px top-corner role and 44px touch rows.
-3. Modal backdrop click does not dismiss editable or destructive dialogs.
-4. Web must reach documented action parity for resource deletion, or the
-   product boundary must be explicitly recorded.
-5. macOS global/context menus remain native where platform conventions require;
-   Web mirrors their semantics rather than forcing pixel identity.
-6. Onboarding remains out of this migration.
+1. Business dialogs and import flows become app-owned in-window surfaces.
+   Native `.sheet` remains only for OS-owned workflows such as folder or
+   application selection.
+2. Mobile bottom sheets use 16px top corners, safe-area insets, and 44px touch
+   rows.
+3. Modal backdrop clicks do not dismiss editable or destructive dialogs.
+4. Web Project/Workspace deletion is explicitly out of scope. This migration
+   must not add those actions; it only replaces the existing Web Session
+   confirmation UI.
+5. macOS global and context menus remain native where platform conventions
+   require. “Mirror semantics” means the clients share action IDs, labels,
+   ordering, enabled/destructive states, and keyboard intent; it does not mean
+   forcing native macOS menus and Web menus to look pixel-identical.
+6. Onboarding is explicitly out of scope.
 
-After approval, implementation proceeds in the phase order above inside the
-`refactor/ui-presentation-unification` workspace. Each phase gets a typed
-commit prefix (`refactor:`, `fix:`, `test:`, or `docs:`) and its own checks.
+Implementation proceeds in the phase order above inside the
+`refactor/ui-presentation-unification` workspace after final approval. Each
+phase gets a typed commit prefix (`refactor:`, `fix:`, `test:`, or `docs:`) and
+its own checks.
