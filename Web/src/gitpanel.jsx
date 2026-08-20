@@ -58,7 +58,7 @@ const prStateLabels = {
   closed: "Closed",
 };
 
-function PullRequestView({ pr }) {
+function PullRequestView({ pr, aheadOfMain, mainBranch }) {
   return (
     <div className="git-pr">
       <div className="git-pr-header">
@@ -70,6 +70,11 @@ function PullRequestView({ pr }) {
       <p className="git-pr-meta">
         {pr.author} · {pr.base} ← {pr.head}
       </p>
+      {aheadOfMain > 0 && (
+        <p className="git-pr-meta git-pr-ahead">
+          <span className="git-ahead">↑ {aheadOfMain} commit{aheadOfMain === 1 ? "" : "s"} ahead of {mainBranch || "main"}</span>
+        </p>
+      )}
       {pr.body && <p className="git-pr-body">{pr.body}</p>}
       <a className="chrome-button git-pr-link" href={pr.url} target="_blank" rel="noreferrer">
         Open pull request ↗
@@ -399,7 +404,7 @@ export function GitPanel({
         {data?.remote && (
           <GitPane title="Pull Request" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
             {data.pullRequest ? (
-              <PullRequestView pr={data.pullRequest} />
+              <PullRequestView pr={data.pullRequest} aheadOfMain={data.aheadOfMain} mainBranch={data.mainBranch} />
             ) : data.pullRequestError ? (
               <p className="git-pr-error">{data.pullRequestError}</p>
             ) : canCreatePR ? (

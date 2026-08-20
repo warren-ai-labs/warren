@@ -308,6 +308,7 @@ type GitPanel struct {
 	Upstream         string          `json:"upstream,omitempty"`
 	Ahead            int             `json:"ahead,omitempty"`
 	Behind           int             `json:"behind,omitempty"`
+	AheadOfMain      int             `json:"aheadOfMain,omitempty"`
 	Remote           string          `json:"remote,omitempty"`
 	MainBranch       string          `json:"mainBranch,omitempty"`
 	Merged           bool            `json:"merged,omitempty"`

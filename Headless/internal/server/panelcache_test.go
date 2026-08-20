@@ -219,7 +219,26 @@ func TestGitPanelAheadBehindAgainstMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if panel.Ahead != 0 || panel.Behind != 2 {
-		t.Fatalf("ahead/behind = %d/%d, want 0/2 against origin/main", panel.Ahead, panel.Behind)
+	if panel.AheadOfMain != 0 {
+		t.Fatalf("ahead of main = %d, want 0 when HEAD is behind origin/main", panel.AheadOfMain)
+	}
+	if panel.Ahead != 0 || panel.Behind != 0 {
+		t.Fatalf("upstream ahead/behind = %d/%d, want 0/0 without a tracking branch", panel.Ahead, panel.Behind)
+	}
+}
+
+func TestGitPanelAheadOfMain(t *testing.T) {
+	repository := newRepositoryForServiceTest(t)
+	gitForServiceTest(t, repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitForServiceTest(t, repository, "commit", "--allow-empty", "-m", "one")
+	gitForServiceTest(t, repository, "commit", "--allow-empty", "-m", "two")
+
+	service, workspaceID := gitPanelService(t, repository)
+	panel, err := service.GitPanel(context.Background(), workspaceID, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if panel.AheadOfMain != 2 {
+		t.Fatalf("ahead of main = %d, want 2", panel.AheadOfMain)
 	}
 }
