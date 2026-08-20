@@ -373,7 +373,7 @@ or generated `Web/dist` changes into these commits.
 
 - [ ] Update `DESIGN.md` to describe the implemented contract rather than the
       intended one.
-- [ ] Add a presentation inventory test/lint that rejects new browser prompts,
+- [x] Add a presentation inventory test/lint that rejects new browser prompts,
       unapproved native business alerts, raw Web elevation values, and local
       z-index literals.
 - [ ] Run macOS semantic UI tests and Web keyboard/accessibility tests for every

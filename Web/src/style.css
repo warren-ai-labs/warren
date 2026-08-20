@@ -121,6 +121,7 @@
 
   /* Presentation layers: the only z-index values a component may reference. */
   --layer-content: 0;
+  --layer-inline: 1;
   --layer-inline-overlay: 10;
   --layer-drawer: 20;
   --layer-popover: 30;
@@ -685,7 +686,7 @@ button:disabled {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 2;
+  z-index: var(--layer-inline);
   display: grid;
   place-items: center;
   width: 22px;
@@ -3423,7 +3424,7 @@ button:disabled {
 .git-loading {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: var(--layer-inline);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3539,7 +3540,7 @@ button:disabled {
 .git-pane .git-section-title {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--layer-inline);
   margin-inline: calc(-1 * var(--space-md));
   padding: var(--space-xs) var(--space-md);
   background: var(--color-bg-surface);
@@ -3978,7 +3979,7 @@ button:disabled {
 .file-diff-view {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: var(--layer-inline);
   display: flex;
   flex-direction: column;
   min-width: 0;
