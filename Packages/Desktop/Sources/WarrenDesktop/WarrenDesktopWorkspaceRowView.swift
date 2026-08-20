@@ -290,7 +290,7 @@ struct WarrenDesktopWorkspaceActivityIndicator: View {
     }
 
     private var visibleDotCount: Int {
-        min(activeTabCount, 3)
+        min(activeTabCount, 2)
     }
 
     private var usesCountLabel: Bool {
