@@ -3407,7 +3407,7 @@ button:disabled {
 
 .git-ahead { color: var(--color-status-success); }
 .git-behind { color: var(--color-status-danger); }
-.git-synced { color: var(--color-text-secondary); }
+.git-synced { color: var(--color-status-success); }
 
 .git-pr-ahead {
   display: flex;

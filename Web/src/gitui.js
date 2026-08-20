@@ -1,4 +1,4 @@
-const PANE_KEYS = ["pr", "changes", "history"];
+const PANE_KEYS = ["checkout", "pr", "changes", "history"];
 const VIEW_TABS = ["diff", "file"];
 const DIFF_STYLES = ["split", "unified"];
 
