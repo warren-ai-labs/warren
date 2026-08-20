@@ -8,6 +8,10 @@ public enum WarrenTypography {
     public static let navigationItem = Font.system(size: 13, weight: .regular)
     /// Secondary row metadata is Superset's `text-xs` tier.
     public static let navigationMeta = Font.system(size: 12, weight: .regular)
+    /// External IDE names use a light 13pt tier so the larger artwork does not
+    /// make the menu or settings rows feel visually heavy.
+    public static let externalIDEName = Font.system(size: 13, weight: .light)
+    public static let externalIDEPath = Font.system(size: 11, weight: .light, design: .monospaced)
     /// Light settings navigation tiers. Settings chrome uses the light text
     /// family so the sidebar reads as calm metadata instead of competing with
     /// terminal content.

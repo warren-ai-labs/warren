@@ -300,7 +300,7 @@ private struct WarrenDesktopEndpointControl: View {
         Button(action: toggle) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "server.rack")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                     .padding(.top, 2)
                     .padding(.trailing, 2)
                     .accessibilityHidden(true)

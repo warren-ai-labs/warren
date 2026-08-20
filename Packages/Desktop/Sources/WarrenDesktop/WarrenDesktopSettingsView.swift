@@ -567,10 +567,10 @@ struct WarrenDesktopSettingsView: View {
                             .scaledToFit()
                             .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
                                    height: WarrenLayoutMetrics.externalIDEIconSize)
-                        Text(ide.name).font(WarrenTypography.navigationMeta)
+                        Text(ide.name).font(WarrenTypography.externalIDEName)
                         Spacer()
                         Text(ide.path)
-                            .font(WarrenTypography.compactCode)
+                            .font(WarrenTypography.externalIDEPath)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -596,7 +596,7 @@ struct WarrenDesktopSettingsView: View {
                     Label("Add IDE…", systemImage: "plus")
                 }
                 .buttonStyle(.plain)
-                .font(WarrenTypography.navigationMeta)
+                .font(WarrenTypography.externalIDEName)
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityIdentifier("settings.external-ides.add")
             }
@@ -628,10 +628,10 @@ struct WarrenDesktopSettingsView: View {
                 .scaledToFit()
                 .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
                        height: WarrenLayoutMetrics.externalIDEIconSize)
-            Text(name).font(WarrenTypography.navigationMeta)
+            Text(name).font(WarrenTypography.externalIDEName)
             Spacer()
             Text(path)
-                .font(WarrenTypography.compactCode)
+                .font(WarrenTypography.externalIDEPath)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
                 .truncationMode(.middle)

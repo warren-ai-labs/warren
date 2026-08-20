@@ -149,7 +149,7 @@ struct WarrenDesktopExternalIDEMenu: View {
                 } label: {
                     Label {
                         Text(item.title)
-                            .font(WarrenTypography.navigationMeta)
+                            .font(WarrenTypography.externalIDEName)
                     } icon: {
                         iconView(item.icon)
                     }
@@ -158,7 +158,7 @@ struct WarrenDesktopExternalIDEMenu: View {
             }
         } label: {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
         .menuStyle(.borderlessButton)
@@ -179,7 +179,7 @@ struct WarrenDesktopExternalIDEMenu: View {
                        height: WarrenLayoutMetrics.externalIDEIconSize)
         } else {
             Image(systemName: "app")
-                .font(WarrenTypography.navigationMeta)
+                .font(.system(size: WarrenLayoutMetrics.externalIDEIconSize, weight: .regular))
                 .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
                        height: WarrenLayoutMetrics.externalIDEIconSize)
         }

@@ -14,7 +14,7 @@ struct WarrenDesktopChromeButton: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
@@ -37,7 +37,7 @@ struct WarrenDesktopInspectorButton: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: action) {
             Image(systemName: "sidebar.right")
-                .font(.system(size: 14, weight: .regular))
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
