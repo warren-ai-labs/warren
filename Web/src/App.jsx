@@ -48,6 +48,7 @@ import { InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
 import { decodeOutputFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
+import { projectMenuItems, sessionMenuItems, workspaceMenuItems } from "./contextmenu.js";
 import {
   ConfirmationDialog,
   EmptyTerminal,
@@ -133,44 +134,6 @@ const previewWorkspace = {
   branch: "main",
   path: "/Users/me/Workspace/warren",
 };
-
-function projectMenuItems(project, actions) {
-  return [
-    {
-      label: project.pinned ? "Unpin project" : "Pin project",
-      action: () => actions.togglePin(project),
-    },
-    { label: "Rename project", action: () => actions.rename(project) },
-    { label: "Import existing worktrees…", action: () => actions.openImport(project) },
-    {
-      label: project.autoImportGitWorktrees
-        ? "Disable automatic worktree import"
-        : "Enable automatic worktree import (no confirmation)",
-      action: () => actions.toggleAutoImport(project),
-    },
-  ];
-}
-
-function workspaceMenuItems(workspace, actions) {
-  return [
-    {
-      label: workspace.pinned ? "Unpin workspace" : "Pin workspace",
-      action: () => actions.togglePin(workspace),
-    },
-    { label: "Rename workspace", action: () => actions.rename(workspace) },
-  ];
-}
-
-function sessionMenuItems(session, actions) {
-  return [
-    {
-      label: session.pinned ? "Unpin session" : "Pin session",
-      action: () => actions.togglePin(session),
-    },
-    { label: "Rename session", action: () => actions.rename(session) },
-    { label: "Delete session", danger: true, action: () => actions.delete(session) },
-  ];
-}
 
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
