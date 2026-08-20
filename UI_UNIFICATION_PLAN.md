@@ -4,6 +4,12 @@ Status: Approved — implementation is in progress; Phases 0–1 and the
 role/z-order part of Phase 3 are implemented, and the remaining menu,
 context-action, and hardening items are tracked below.
 
+Verification note: `mise run verify` was attempted on this branch. All
+UI-related builds and tests passed, but the pre-existing
+`GhosttyAdapterTests.testHostManagedTerminalAnswersBackgroundColorQuery`
+asserts a terminal OSC 11 color that differs on this machine; it is outside
+the presentation scope and was not changed.
+
 Branch: `refactor/ui-presentation-unification`
 
 Scope: Warren macOS Desktop, Web/PWA, and the shared DesignSystem. Onboarding is
