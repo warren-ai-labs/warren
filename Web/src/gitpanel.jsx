@@ -402,7 +402,7 @@ export function GitPanel({
         </GitPane>
 
         {data?.remote && (
-          <GitPane title="Pull Request" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
+          <GitPane title="Pull Request" className="git-pane-pr" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
             {data.pullRequest ? (
               <PullRequestView pr={data.pullRequest} aheadOfMain={data.aheadOfMain} mainBranch={data.mainBranch} />
             ) : data.pullRequestError ? (
