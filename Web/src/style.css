@@ -3295,7 +3295,12 @@ button:disabled {
 }
 
 .git-pane-checkout:not(.collapsed) {
+  flex: 0 1 auto;
   max-height: 25%;
+}
+
+.git-pane-checkout .git-pane-content {
+  flex: 1 1 auto;
 }
 
 .git-pane-pr:not(.collapsed) {
@@ -3738,8 +3743,6 @@ button:disabled {
   color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 6em;
-  overflow: hidden;
 }
 
 .git-pr-link {
