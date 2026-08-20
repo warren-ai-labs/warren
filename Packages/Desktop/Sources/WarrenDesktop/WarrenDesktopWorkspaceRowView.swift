@@ -78,10 +78,12 @@ struct WarrenDesktopWorkspaceRow: View {
         })
         .contextMenu {
             if !isInteractionDisabled {
-                Button(isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin)
-                Button("Rename Workspace", action: onRename)
-                Divider()
-                Button("Delete Workspace…", role: .destructive, action: onDelete)
+                WarrenDesktopContextMenu([
+                    .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
+                    .button(title: "Rename Workspace", action: onRename),
+                    .divider,
+                    .button(title: "Delete Workspace…", destructive: true, action: onDelete),
+                ])
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -156,10 +158,12 @@ struct WarrenDesktopWorkspaceRow: View {
         .contentShape(.rect)
         .contextMenu {
             if !isInteractionDisabled {
-                Button(isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin)
-                Button("Rename Workspace", action: onRename)
-                Divider()
-                Button("Delete Workspace…", role: .destructive, action: onDelete)
+                WarrenDesktopContextMenu([
+                    .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
+                    .button(title: "Rename Workspace", action: onRename),
+                    .divider,
+                    .button(title: "Delete Workspace…", destructive: true, action: onDelete),
+                ])
             }
         }
         .padding(.horizontal, WarrenSpacing.compact)

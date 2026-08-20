@@ -47,6 +47,40 @@ struct WarrenDesktopTabItem: View {
         }
     }
 
+    private var contextMenuActions: [WarrenDesktopContextMenuAction] {
+        guard tab.sessionID != nil else { return [] }
+        var actions: [WarrenDesktopContextMenuAction] = []
+        if !sessionMoveTargets.isEmpty {
+            var moveActions: [WarrenDesktopContextMenuAction] = []
+            if !workspaceMoveTargets.isEmpty {
+                moveActions.append(.menu(title: "Workspace", actions: workspaceMoveTargets.map { target in
+                    .button(title: target.title, action: {
+                        guard let sessionID = tab.sessionID else { return }
+                        onMoveSession(sessionID, target.destination)
+                    })
+                }))
+            }
+            if !terminalGroupMoveTargets.isEmpty {
+                moveActions.append(.menu(title: "Terminal Group", actions: terminalGroupMoveTargets.map { target in
+                    .button(title: target.title, action: {
+                        guard let sessionID = tab.sessionID else { return }
+                        onMoveSession(sessionID, target.destination)
+                    })
+                }))
+            }
+            actions.append(.menu(title: "Move Session To", actions: moveActions))
+        }
+        actions.append(.button(title: isPinned ? "Unpin Session" : "Pin Session", action: onTogglePin))
+        if activity != nil {
+            actions.append(.button(title: "Dismiss Activity", action: onDismissActivity))
+        }
+        actions.append(.button(title: "Rename Session", action: onRename))
+        actions.append(.button(title: "Close Tab", action: onClose))
+        actions.append(.button(title: "Close Other Tabs", action: onCloseOthers))
+        actions.append(.button(title: "Close All Tabs", action: onCloseAll))
+        return actions
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         ZStack(alignment: .trailing) {
@@ -186,38 +220,7 @@ struct WarrenDesktopTabItem: View {
         .onHover { isHovered = $0 }
         .contextMenu {
             if tab.sessionID != nil {
-                if !sessionMoveTargets.isEmpty {
-                    Menu("Move Session To") {
-                        if !workspaceMoveTargets.isEmpty {
-                            Menu("Workspace") {
-                                ForEach(workspaceMoveTargets) { target in
-                                    Button(target.title) {
-                                        guard let sessionID = tab.sessionID else { return }
-                                        onMoveSession(sessionID, target.destination)
-                                    }
-                                }
-                            }
-                        }
-                        if !terminalGroupMoveTargets.isEmpty {
-                            Menu("Terminal Group") {
-                                ForEach(terminalGroupMoveTargets) { target in
-                                    Button(target.title) {
-                                        guard let sessionID = tab.sessionID else { return }
-                                        onMoveSession(sessionID, target.destination)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Button(isPinned ? "Unpin Session" : "Pin Session", action: onTogglePin)
-                if activity != nil {
-                    Button("Dismiss Activity", action: onDismissActivity)
-                }
-                Button("Rename Session", action: onRename)
-                Button("Close Tab", action: onClose)
-                Button("Close Other Tabs", action: onCloseOthers)
-                Button("Close All Tabs", action: onCloseAll)
+                WarrenDesktopContextMenu(contextMenuActions)
             }
         }
         .accessibilityElement(children: .contain)

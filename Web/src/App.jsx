@@ -133,6 +133,45 @@ const previewWorkspace = {
   branch: "main",
   path: "/Users/me/Workspace/warren",
 };
+
+function projectMenuItems(project, actions) {
+  return [
+    {
+      label: project.pinned ? "Unpin project" : "Pin project",
+      action: () => actions.togglePin(project),
+    },
+    { label: "Rename project", action: () => actions.rename(project) },
+    { label: "Import existing worktrees…", action: () => actions.openImport(project) },
+    {
+      label: project.autoImportGitWorktrees
+        ? "Disable automatic worktree import"
+        : "Enable automatic worktree import (no confirmation)",
+      action: () => actions.toggleAutoImport(project),
+    },
+  ];
+}
+
+function workspaceMenuItems(workspace, actions) {
+  return [
+    {
+      label: workspace.pinned ? "Unpin workspace" : "Pin workspace",
+      action: () => actions.togglePin(workspace),
+    },
+    { label: "Rename workspace", action: () => actions.rename(workspace) },
+  ];
+}
+
+function sessionMenuItems(session, actions) {
+  return [
+    {
+      label: session.pinned ? "Unpin session" : "Pin session",
+      action: () => actions.togglePin(session),
+    },
+    { label: "Rename session", action: () => actions.rename(session) },
+    { label: "Delete session", danger: true, action: () => actions.delete(session) },
+  ];
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
   const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem(storageKeys.activeWorkspace));
@@ -1857,30 +1896,19 @@ export default function App() {
   }, [request]);
 
   const projectContextMenu = useCallback((event, project) => {
-    showContextMenu(event, [
-      {
-        label: project.pinned ? "Unpin project" : "Pin project",
-        action: () => toggleProjectPin(project),
-      },
-      { label: "Rename project", action: () => renameProject(project) },
-      {
-        label: project.autoImportGitWorktrees
-          ? "Disable automatic worktree import"
-          : "Enable automatic worktree import (no confirmation)",
-        action: () => toggleProjectAutoImport(project),
-      },
-      { label: "Import existing worktrees…", action: () => openWorktreeImport(project) },
-    ]);
+    showContextMenu(event, projectMenuItems(project, {
+      togglePin: toggleProjectPin,
+      rename: renameProject,
+      openImport: openWorktreeImport,
+      toggleAutoImport: toggleProjectAutoImport,
+    }));
   }, [openWorktreeImport, renameProject, showContextMenu, toggleProjectAutoImport, toggleProjectPin]);
 
   const workspaceContextMenu = useCallback((event, workspace) => {
-    showContextMenu(event, [
-      {
-        label: workspace.pinned ? "Unpin workspace" : "Pin workspace",
-        action: () => toggleWorkspacePin(workspace),
-      },
-      { label: "Rename workspace", action: () => renameWorkspace(workspace) },
-    ]);
+    showContextMenu(event, workspaceMenuItems(workspace, {
+      togglePin: toggleWorkspacePin,
+      rename: renameWorkspace,
+    }));
   }, [renameWorkspace, showContextMenu, toggleWorkspacePin]);
 
   const deleteSession = useCallback(session => {
@@ -1912,14 +1940,11 @@ export default function App() {
   }, [deleteDialog, request]);
 
   const sessionContextMenu = useCallback((event, session) => {
-    showContextMenu(event, [
-      {
-        label: session.pinned ? "Unpin session" : "Pin session",
-        action: () => toggleSessionPin(session),
-      },
-      { label: "Rename session", action: () => renameSession(session) },
-      { label: "Delete session", danger: true, action: () => deleteSession(session) },
-    ]);
+    showContextMenu(event, sessionMenuItems(session, {
+      togglePin: toggleSessionPin,
+      rename: renameSession,
+      delete: deleteSession,
+    }));
   }, [deleteSession, renameSession, showContextMenu, toggleSessionPin]);
 
   const openSessionMenu = useCallback(() => {

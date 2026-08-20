@@ -87,17 +87,19 @@ struct WarrenDesktopProjectRow: View {
         .focused($isFocused)
         .contextMenu {
             if !isInteractionDisabled {
-                Button(isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin)
-                Button("Rename Project", action: onRename)
-                Button("Import Existing Worktrees…", action: onImportWorktrees)
-                Button(
-                    project.autoImportGitWorktrees
-                        ? "Disable Automatic Worktree Import"
-                        : "Enable Automatic Worktree Import (No Confirmation)",
-                    action: onToggleAutoImportWorktrees
-                )
-                Divider()
-                Button("Delete Project…", role: .destructive, action: onDelete)
+                WarrenDesktopContextMenu([
+                    .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
+                    .button(title: "Rename Project", action: onRename),
+                    .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
+                    .button(
+                        title: project.autoImportGitWorktrees
+                            ? "Disable Automatic Worktree Import"
+                            : "Enable Automatic Worktree Import (No Confirmation)",
+                        action: onToggleAutoImportWorktrees
+                    ),
+                    .divider,
+                    .button(title: "Delete Project…", destructive: true, action: onDelete),
+                ])
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -227,17 +229,19 @@ struct WarrenDesktopProjectRow: View {
         .onHover { isHovered = $0 }
         .contextMenu {
             if !isInteractionDisabled {
-                Button(isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin)
-                Button("Rename Project", action: onRename)
-                Button("Import Existing Worktrees…", action: onImportWorktrees)
-                Button(
-                    project.autoImportGitWorktrees
-                        ? "Disable Automatic Worktree Import"
-                        : "Enable Automatic Worktree Import (No Confirmation)",
-                    action: onToggleAutoImportWorktrees
-                )
-                Divider()
-                Button("Delete Project…", role: .destructive, action: onDelete)
+                WarrenDesktopContextMenu([
+                    .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
+                    .button(title: "Rename Project", action: onRename),
+                    .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
+                    .button(
+                        title: project.autoImportGitWorktrees
+                            ? "Disable Automatic Worktree Import"
+                            : "Enable Automatic Worktree Import (No Confirmation)",
+                        action: onToggleAutoImportWorktrees
+                    ),
+                    .divider,
+                    .button(title: "Delete Project…", destructive: true, action: onDelete),
+                ])
             }
         }
         .padding(.horizontal, WarrenSpacing.compact)

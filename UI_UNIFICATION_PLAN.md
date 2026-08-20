@@ -346,14 +346,14 @@ or generated `Web/dist` changes into these commits.
 ### Phase 2 — Popovers, menus, and selectors
 
 - [x] Apply the popover role surface to Endpoint selection.
-- [ ] Align External IDE menu labels, order, disabled states, and keyboard
+- [x] Align External IDE menu labels, order, disabled states, and keyboard
       behavior with Web.
-- [ ] Consolidate the seven macOS context-menu sites behind one action model.
-- [ ] Consolidate Web Project/Workspace/Tab/Session context actions behind the
+- [x] Consolidate the seven macOS context-menu sites behind one action model.
+- [x] Consolidate Web Project/Workspace/Tab/Session context actions behind the
       same action model.
 - [x] Give the Web mobile context menu dialog semantics when rendered as a
       bottom sheet, including scrim, focus, and safe-area handling.
-- [ ] Normalize the Git branch selector styling without removing native select
+- [x] Normalize the Git branch selector styling without removing native select
       keyboard/accessibility behavior unless a replacement is proven equivalent.
 
 ### Phase 3 — Command, transient, and persistent surfaces

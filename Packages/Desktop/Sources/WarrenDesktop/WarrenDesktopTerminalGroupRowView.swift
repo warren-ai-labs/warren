@@ -151,10 +151,12 @@ struct WarrenDesktopTerminalGroupRow: View {
 
     @ViewBuilder
     private var contextMenu: some View {
-        Button("Rename Terminal Group", action: onRename)
-        Button("Set Default Home…", action: onSetHome)
-        Divider()
-        Button("Delete Terminal Group…", role: .destructive, action: onDelete)
+        WarrenDesktopContextMenu([
+            .button(title: "Rename Terminal Group", action: onRename),
+            .button(title: "Set Default Home…", action: onSetHome),
+            .divider,
+            .button(title: "Delete Terminal Group…", destructive: true, action: onDelete),
+        ])
     }
 }
 
