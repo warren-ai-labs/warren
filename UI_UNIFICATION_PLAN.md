@@ -1,6 +1,8 @@
 # Warren UI Presentation Unification Plan
 
-Status: Approved — implementation is in progress.
+Status: Approved — implementation is in progress; Phases 0–1 and the
+role/z-order part of Phase 3 are implemented, and the remaining menu,
+context-action, and hardening items are tracked below.
 
 Branch: `refactor/ui-presentation-unification`
 
@@ -311,10 +313,10 @@ or generated `Web/dist` changes into these commits.
 
 ### Phase 0 — Contract and token foundation
 
-- [ ] Add this approved taxonomy and role metrics to the DesignSystem.
-- [ ] Add role-specific elevation, sheet radius, and z-order tokens.
-- [ ] Mirror the semantic tokens in `Web/src/style.css`.
-- [ ] Add scoped Settings and dialog typography tokens without changing the
+- [x] Add this approved taxonomy and role metrics to the DesignSystem.
+- [x] Add role-specific elevation, sheet radius, and z-order tokens.
+- [x] Mirror the semantic tokens in `Web/src/style.css`.
+- [x] Add scoped Settings and dialog typography tokens without changing the
       existing navigation/terminal chrome baseline.
 - [ ] Add the macOS presentation coordinator and Web presentation stack.
 - [ ] Add semantic tests for focus, Escape, outside click, and topmost-layer
@@ -322,49 +324,49 @@ or generated `Web/dist` changes into these commits.
 
 ### Phase 1 — Business modals and system feedback (P0)
 
-- [ ] Migrate macOS Superset import preview from native `.sheet` to
+- [x] Migrate macOS Superset import preview from native `.sheet` to
       `WarrenSheetSurface`.
-- [ ] Migrate macOS Workspace creation from native `.sheet` to the shared
+- [x] Migrate macOS Workspace creation from native `.sheet` to the shared
       modal/sheet primitive.
-- [ ] Migrate macOS existing-worktree import from native `.sheet` to the shared
+- [x] Migrate macOS existing-worktree import from native `.sheet` to the shared
       sheet primitive.
-- [ ] Replace the Terminal Group editor's `.roundedBorder` fields with
+- [x] Replace the Terminal Group editor's `.roundedBorder` fields with
       `WarrenInputField`.
-- [ ] Apply the dialog typography hierarchy to every macOS modal/sheet and the
+- [x] Apply the dialog typography hierarchy to every macOS modal/sheet and the
       corresponding Web dialog/sheet selectors.
-- [ ] Replace macOS IDE failure `Alert` and CLI `NSAlert` result flows with the
+- [x] Replace macOS IDE failure `Alert` and CLI `NSAlert` result flows with the
       app-owned modal/status contract.
-- [ ] Replace Web rename `window.prompt` calls with the shared modal.
-- [ ] Replace Web session deletion `window.confirm` with the shared destructive
+- [x] Replace Web rename `window.prompt` calls with the shared modal.
+- [x] Replace Web session deletion `window.confirm` with the shared destructive
       modal.
-- [ ] Preserve the current Web product boundary: do not add Project/Workspace
+- [x] Preserve the current Web product boundary: do not add Project/Workspace
       deletion in this UI migration. Only the existing Web Session deletion
       flow is migrated to the shared destructive modal.
 
 ### Phase 2 — Popovers, menus, and selectors
 
-- [ ] Apply the popover role surface to Endpoint selection.
+- [x] Apply the popover role surface to Endpoint selection.
 - [ ] Align External IDE menu labels, order, disabled states, and keyboard
       behavior with Web.
 - [ ] Consolidate the seven macOS context-menu sites behind one action model.
 - [ ] Consolidate Web Project/Workspace/Tab/Session context actions behind the
       same action model.
-- [ ] Give the Web mobile context menu dialog semantics when rendered as a
+- [x] Give the Web mobile context menu dialog semantics when rendered as a
       bottom sheet, including scrim, focus, and safe-area handling.
 - [ ] Normalize the Git branch selector styling without removing native select
       keyboard/accessibility behavior unless a replacement is proven equivalent.
 
 ### Phase 3 — Command, transient, and persistent surfaces
 
-- [ ] Move macOS Command Palette to the shared command-surface role and layer.
-- [ ] Move the macOS Web panel and terminal search to role-specific popover
+- [x] Move macOS Command Palette to the shared command-surface role and layer.
+- [x] Move the macOS Web panel and terminal search to role-specific popover
       surfaces.
 - [ ] Normalize Superset loading, terminal connection, maintenance, and copy
       feedback as `Status` surfaces.
 - [ ] Normalize the Web terminal search, Git loading, and file-diff overlays.
-- [ ] Normalize the mobile drawer/backdrop against the soft-scrim contract.
+- [x] Normalize the mobile drawer/backdrop against the soft-scrim contract.
 - [ ] Align Inspector and Git pane width, header, close action, and focus rules.
-- [ ] Keep Settings as an in-window page replacement on both clients, with the
+- [x] Keep Settings as an in-window page replacement on both clients, with the
       same back/Escape behavior.
 
 ### Phase 4 — Documentation, generated assets, and hardening

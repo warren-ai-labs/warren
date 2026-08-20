@@ -449,7 +449,10 @@ custom properties in `Web/src/style.css`:
 - Radius: `4/6/8/10/12px` tiers matching `WarrenRadius`, plus full-pill
   (`999px`) for chips, toggles, and sheets.
 - Typography: UI text is 13px by default, chrome metadata 10–12px, headings
-  17–20px; light weights are display-only.
+  17–20px; Settings and business dialogs use the scoped 18–22px title and
+  13–14px body tiers. Light weights are display-only titles; regular is the
+  default for functional labels, and medium is reserved for destructive
+  confirmation actions or explicit critical states.
 - Status: success `#7ec699`, warning `#e5c07b`, info `#61afef`, amber working
   `#f59e0b`, failed/destructive `#cc4444`, exited neutral `#a8a5a3`.
 
@@ -458,14 +461,21 @@ Focus rings use the accent token, hover treatments are gated behind
 `@media (hover: hover)`, and all motion honors `prefers-reduced-motion`.
 
 The macOS client shares one presentation vocabulary through
-`WarrenDesignSystem` primitives: `warrenPanelSurface` for floating panels
-(command palette, Web panel, endpoint popover, terminal search), and
-`WarrenModalBackdrop` / `WarrenTextInputDialog` / `WarrenInputField` /
-`WarrenSecondaryButtonStyle` / `WarrenDestructiveButtonStyle` for dialogs,
+`WarrenDesignSystem` primitives: `warrenPresentationSurface(role:)` with
+`WarrenPresentationRole` and `WarrenPresentationLayer` for every floating
+surface (command palette, Web panel, endpoint popover, terminal search), and
+`WarrenModalSurface` / `WarrenSheetSurface` / `WarrenMessageDialog` /
+`WarrenTextInputDialog` / `WarrenInputField` / button styles for dialogs,
 inputs, and confirmations. Settings, rename dialogs, delete confirmations,
 workspace creation, Superset import, and progress overlays all use these
 primitives instead of system alerts, sheets, rounded-border fields, or
-per-screen radius/shadow values.
+per-screen radius/shadow values. OS-owned folder and application selection
+still uses `fileImporter` / `NSOpenPanel`; global and context menus remain
+native, sharing action labels and ordering with the Web client.
+
+The Web client mirrors the same roles with `--layer-*` CSS variables, the
+`warren-dialog` primitives for rename/delete flows, `worktree-dialog` and
+`session-sheet` surfaces, and dialog semantics on the mobile context menu.
 
 ## 12. Non-Intrusive Observability and Acceptance Design
 
