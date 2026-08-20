@@ -239,10 +239,14 @@ struct WarrenDesktopActivityIndicator: View {
         WarrenStatusIndicator(
             color: color,
             isActive: activity == .working,
-            size: 7,
+            size: indicatorSize,
             accessibilityLabel: accessibilityLabel
         )
         .frame(width: 10, height: 10)
+    }
+
+    private var indicatorSize: CGFloat {
+        activity == .waitingForInput ? 6 : 7
     }
 
     private var color: Color {
