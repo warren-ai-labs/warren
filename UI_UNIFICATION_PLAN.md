@@ -1,6 +1,6 @@
 # Warren UI Presentation Unification Plan
 
-Status: Draft — implementation is blocked until this specification is approved.
+Status: Approved — implementation is in progress.
 
 Branch: `refactor/ui-presentation-unification`
 
@@ -166,22 +166,29 @@ small navigation/supporting tokens.
 
 | Role | macOS / Web size | Weight | Use |
 | --- | --- | --- | --- |
-| Settings screen title | 22px | Semibold | Settings title and top-level page identity |
-| Settings section title | 20px | Semibold | Detail-page section heading |
-| Settings navigation item | 14px | Medium | Sidebar section navigation |
-| Settings group label | 12px | Semibold | `Terminal` / `Web` group labels; uppercase is allowed |
+| Settings screen title | 22px | Light | Settings title and top-level page identity |
+| Settings section title | 20px | Regular | Detail-page section heading |
+| Settings navigation item | 14px | Regular | Sidebar section navigation; selection uses surface/color |
+| Settings group label | 12px | Regular | `Terminal` / `Web` group labels; uppercase is allowed |
 | Settings body/control | 14px | Regular | Labels, values, toggles, selectors, and inputs |
 | Settings supporting text | 13px | Regular | Explanations, notes, and previews |
-| Dialog title | 18px | Semibold | Modal/sheet heading |
+| Dialog title | 18px | Light | Modal/sheet heading |
 | Dialog body | 14px | Regular | Consequences, instructions, and errors |
-| Dialog field label | 13px | Medium | Visible input labels |
-| Dialog input/action | 14px | Regular/Medium | Input values and button labels |
+| Dialog field label | 13px | Regular | Visible input labels |
+| Dialog input/action | 14px | Regular | Input values and non-destructive button labels |
 | Dialog metadata | 12px | Regular | Paths, branches, and non-primary metadata |
 
 Rules:
 
-- Functional Settings text MUST NOT use a light weight. Light remains reserved
-  for non-functional display treatments outside this scope.
+- Functional Settings body/control text MUST NOT use a light weight. Light is
+  allowed for large page and dialog titles where size and spacing provide the
+  hierarchy.
+- Regular is the default weight for selected navigation, field labels, section
+  headings, and actions. Selection should primarily use surface/color, not
+  heavier text.
+- Medium is reserved for genuinely high-importance information, such as the
+  destructive confirmation action or an explicit critical status. Semibold is
+  not a Settings/dialog weight.
 - Dialog copy uses at least 14px for readable prose; 12px metadata must never
   carry the only meaning or an error message.
 - Supporting copy uses a line-height of at least 1.45; long explanations may
