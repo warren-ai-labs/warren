@@ -225,6 +225,123 @@ exit 1
 	}
 }
 
+func TestStartPublicAccessFeedsEnrollmentKeyOnlyToLoginStdin(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "enrollment-key")
+	argsFile := filepath.Join(t.TempDir(), "gnar-args")
+	t.Setenv("GNAR_KEY_FILE", keyFile)
+	t.Setenv("GNAR_ARGS_FILE", argsFile)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"login_ok","account":"warren"}'
+  exit 0
+fi
+printf '%s\n' "$@" > "$GNAR_ARGS_FILE"
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/warren/path","target":"http://127.0.0.1:8789"}'
+sleep 30
+`)
+	manager := NewManager(slog.New(slog.NewTextHandler(os.Stderr, nil)), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", []byte("memorable-key"))
+	if err != nil {
+		t.Fatalf("start public access: %v", err)
+	}
+	defer manager.Stop(KindGnar)
+	if status.URL != "https://edge.example.com/warren/path/" {
+		t.Fatalf("public endpoint = %q, want path-mode trailing slash", status.URL)
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatalf("read login key: %v", err)
+	}
+	if string(key) != "memorable-key" {
+		t.Fatalf("login stdin = %q, want enrollment key", key)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read tunnel args: %v", err)
+	}
+	if strings.Contains(string(args), "memorable-key") {
+		t.Fatalf("enrollment key leaked into tunnel args: %q", args)
+	}
+}
+
+func TestStartPublicAccessRedactsEnrollmentKeyOnLoginFailure(t *testing.T) {
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  cat >/dev/null
+  printf '%s\n' '{"type":"error","message":"invalid enrollment-key=memorable-key"}'
+  exit 1
+fi
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	_, err := manager.StartPublicAccess("https://edge.example.com", "warren", []byte("memorable-key"))
+	if err == nil {
+		t.Fatal("login failure must be returned")
+	}
+	if strings.Contains(err.Error(), "memorable-key") {
+		t.Fatalf("login error leaked enrollment key: %v", err)
+	}
+}
+
+func TestStartPublicAccessReportsTunnelFailureAndNoEndpoint(t *testing.T) {
+	binary := writeScript(t, `#!/bin/sh
+printf '%s\n' '{"type":"error","message":"no persisted gnar token; enrollment required"}'
+sleep 1
+exit 1
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", nil)
+	if err == nil {
+		t.Fatal("public access must fail when gnar cannot establish a tunnel")
+	}
+	if status.Running || status.URL != "" || !strings.Contains(status.Error, "enrollment required") {
+		t.Fatalf("failed public access status = %#v", status)
+	}
+	if current := manager.Status()[KindGnar]; current.Running || current.URL != "" {
+		t.Fatalf("failed public access left a live endpoint: %#v", current)
+	}
+}
+
+func TestStartPublicAccessRejectsGnarProcessThatExitsAfterReady(t *testing.T) {
+	binary := writeScript(t, `#!/bin/sh
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/warren"}'
+exit 0
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", nil)
+	if err == nil {
+		t.Fatal("a gnar process that exits immediately must fail Public Access")
+	}
+	if status.Running || status.URL != "" {
+		t.Fatalf("exited gnar status = %#v", status)
+	}
+}
+
+func TestValidateEdgeURLRejectsCredentialBearingURLs(t *testing.T) {
+	for _, value := range []string{
+		"",
+		"ftp://edge.example.com",
+		"https://user:pass@edge.example.com",
+		"https://edge.example.com?enrollment-key=secret",
+		"https://edge.example.com?",
+		"https://edge.example.com/#secret",
+		"https://edge.example.com/#",
+	} {
+		if err := ValidateEdgeURL(value); err == nil {
+			t.Fatalf("ValidateEdgeURL(%q) unexpectedly succeeded", value)
+		}
+	}
+	if err := ValidateEdgeURL("https://edge.example.com/path/"); err != nil {
+		t.Fatalf("valid Edge URL rejected: %v", err)
+	}
+}
+
+func TestRedactionKeepsActionableNonSecretWords(t *testing.T) {
+	if got := redactGnarText("gnar token required; run login"); got != "gnar token required; run login" {
+		t.Fatalf("redaction changed actionable error: %q", got)
+	}
+}
+
 func writeScript(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tunnel-adapter")

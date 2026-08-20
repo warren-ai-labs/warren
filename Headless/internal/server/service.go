@@ -2221,6 +2221,12 @@ func (s *Service) SetDefaultRuntime(kind string) error {
 // runtime environment overrides and the gnar edge, persisting them when a
 // settings file is configured. Existing sessions keep their own runtimeKind.
 func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnarEdge string) error {
+	gnarEdge = strings.TrimSpace(gnarEdge)
+	if gnarEdge != "" {
+		if err := tunnel.ValidateEdgeURL(gnarEdge); err != nil {
+			return err
+		}
+	}
 	if kind == "" {
 		kind = s.DefaultRuntime
 	}
@@ -2243,6 +2249,31 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 		return settings.Save(s.SettingsPath, s.Settings)
 	}
 	return nil
+}
+
+// UpdatePublicAccessConfig persists the non-secret gnar Edge configuration.
+// Enrollment keys are intentionally not accepted here; they belong only to
+// the in-memory enable request and are forwarded to gnar over stdin.
+func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
+	edge = strings.TrimSpace(edge)
+	if edge != "" {
+		if err := tunnel.ValidateEdgeURL(edge); err != nil {
+			return err
+		}
+	}
+	s.Settings.GnarEdge = edge
+	s.Settings.GnarAccount = settings.NormalizedGnarAccount(account)
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+// PublicAccessEnabled reports the persisted user intent independently of the
+// current gnar process. This distinction lets recovery retry after a daemon
+// restart without claiming that an endpoint is already live.
+func (s *Service) PublicAccessEnabled() bool {
+	return s.Settings.TunnelEnabled != nil && s.Settings.TunnelEnabled[tunnel.KindGnar]
 }
 
 // SetAutoOpenShell records whether opening an empty workspace creates a Shell

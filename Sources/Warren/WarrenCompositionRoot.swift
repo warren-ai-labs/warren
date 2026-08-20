@@ -76,6 +76,13 @@ struct WarrenCompositionRoot: View {
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: selectEndpoint,
             onWebStart: { remoteModel.startWebFromUI() },
+            onWebEnable: { edgeURL, accountName, enrollmentKey in
+                remoteModel.enablePublicAccess(
+                    edgeURL: edgeURL,
+                    accountName: accountName,
+                    enrollmentKey: enrollmentKey
+                )
+            },
             onWebStop: { remoteModel.stopWeb() },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },

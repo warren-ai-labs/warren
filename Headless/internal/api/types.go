@@ -426,3 +426,24 @@ type GitDiff struct {
 	DiffTruncated    bool   `json:"diffTruncated,omitempty"`
 	ContentTruncated bool   `json:"contentTruncated,omitempty"`
 }
+
+// PublicAccessStatus is the credential-free projection of the self-hosted
+// gnar Edge lifecycle. Enrollment keys, gnar account tokens, and the Warren
+// daemon token are deliberately absent from this type.
+type PublicAccessStatus struct {
+	EdgeURL        string `json:"edgeUrl"`
+	AccountName    string `json:"accountName"`
+	Enabled        bool   `json:"enabled"`
+	Running        bool   `json:"running"`
+	PublicEndpoint string `json:"publicEndpoint"`
+	Error          string `json:"error"`
+}
+
+// PublicAccessEnableRequest contains the one-time bootstrap input for a
+// self-hosted gnar Edge. EnrollmentKey is consumed in memory and is never
+// persisted or included in a URL or command-line argument.
+type PublicAccessEnableRequest struct {
+	EdgeURL       string `json:"edgeUrl,omitempty"`
+	AccountName   string `json:"accountName,omitempty"`
+	EnrollmentKey string `json:"enrollmentKey,omitempty"`
+}

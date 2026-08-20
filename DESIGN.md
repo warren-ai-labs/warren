@@ -172,7 +172,7 @@ SSH only bootstraps the remote daemon and forwards a loopback port. Once `warren
 
 Tailscale, LAN, Cloudflare Tunnel, and gnar only provide network reachability; they are not part of the business model. The central Relay Service only provides Host registration, discovery, pairing, revocation, signaling, and WebSocket relay; Sessions and processes remain owned by the Host.
 
-The daemon serves the Web UI over HTTP on `0.0.0.0:8789` (Desktop and CLI keep using the loopback address) and over HTTPS on `0.0.0.0:8788` for LAN devices; the HTTPS listener uses a locally generated CA so phones only need to trust it once. Public access still uses an explicitly started Cloudflare Tunnel, Tailscale Serve, or gnar HTTPS URL; the URL carries a random pairing token and the WebSocket handshake still requires authentication. Slow Web clients use a bounded non-blocking send queue and must never block the macOS main thread or Host output.
+The daemon serves the Web UI over HTTP on `0.0.0.0:8789` (Desktop and CLI keep using the loopback address) and over HTTPS on `0.0.0.0:8788` for LAN devices; the HTTPS listener uses a locally generated CA so phones only need to trust it once. Public Access uses an explicitly started self-hosted gnar Edge and reports a credential-free Public Endpoint. Warren Web authentication still requires the daemon token at the WebSocket boundary; only the legacy `/v1/tunnels` compatibility response may carry that token in a URL fragment, which remains a documented residual exposure risk. Slow Web clients use a bounded non-blocking send queue and must never block the macOS main thread or Host output.
 
 The Web/PWA client uses React + Vite, with source in `Web/`. React owns the component tree and client state; xterm owns terminal rendering. `Web/dist` contains build output only and is embedded by both the Go daemon and the Go Relay Service; do not maintain single-file inline copies of the script.
 
@@ -213,7 +213,7 @@ Default files under `~/.warren/`:
 ~/.warren/
 ├── state.json        # Projects, Workspaces, Sessions, sidebar order, runtime bindings, import receipts
 ├── config.json       # CLI/Desktop endpoint list and current endpoint
-├── settings.json     # daemon settings such as defaultRuntime and gnarEdge
+├── settings.json     # daemon settings such as defaultRuntime, gnarEdge, and gnarAccount
 ├── token             # authentication token
 ├── output/           # per-session raw PTY spools
 ├── worktrees/        # Git worktrees created by Warren

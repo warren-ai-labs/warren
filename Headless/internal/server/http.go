@@ -21,6 +21,7 @@ import (
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 	"github.com/gorilla/websocket"
 )
@@ -162,6 +163,10 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/tunnels", s.handleTunnels)
 	mux.HandleFunc("POST /v1/tunnels/start", s.handleTunnelStart)
 	mux.HandleFunc("POST /v1/tunnels/stop", s.handleTunnelStop)
+	mux.HandleFunc("GET /v1/public-access", s.handlePublicAccess)
+	mux.HandleFunc("POST /v1/public-access/enable", s.handlePublicAccessEnable)
+	mux.HandleFunc("POST /v1/public-access/disable", s.handlePublicAccessDisable)
+	mux.HandleFunc("POST /v1/public-access/restart", s.handlePublicAccessRestart)
 	mux.HandleFunc("GET /", s.handleWebAsset)
 	mux.HandleFunc("GET /service-worker.js", s.handleWebAsset)
 	mux.HandleFunc("GET /manifest.webmanifest", s.handleWebAsset)
@@ -269,6 +274,7 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			"defaultRuntime": s.Service.DefaultRuntime,
 			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
 			"gnarEdge":       s.Service.Settings.GnarEdge,
+			"gnarAccount":    settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
 			"autoOpenShell":  s.Service.Settings.AutoOpenShell,
 			"autoStartAI":    s.Service.Settings.AutoStartAI,
 		})
@@ -277,6 +283,7 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			DefaultRuntime string            `json:"defaultRuntime"`
 			RuntimeEnv     map[string]string `json:"runtimeEnv"`
 			GnarEdge       *string           `json:"gnarEdge"`
+			GnarAccount    *string           `json:"gnarAccount"`
 			AutoOpenShell  *bool             `json:"autoOpenShell"`
 			AutoStartAI    *bool             `json:"autoStartAI"`
 		}
@@ -295,6 +302,15 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 		if err := s.Service.UpdateSettings(body.DefaultRuntime, runtimeEnv, gnarEdge); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if body.GnarAccount != nil {
+			s.Service.Settings.GnarAccount = settings.NormalizedGnarAccount(*body.GnarAccount)
+			if s.Service.SettingsPath != "" {
+				if err := settings.Save(s.Service.SettingsPath, s.Service.Settings); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
 		}
 		if body.AutoOpenShell != nil {
 			if err := s.Service.SetAutoOpenShell(*body.AutoOpenShell); err != nil {
@@ -315,6 +331,7 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			"defaultRuntime": s.Service.DefaultRuntime,
 			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
 			"gnarEdge":       s.Service.Settings.GnarEdge,
+			"gnarAccount":    settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
 			"autoOpenShell":  s.Service.Settings.AutoOpenShell,
 			"autoStartAI":    s.Service.Settings.AutoStartAI,
 		})
@@ -376,6 +393,194 @@ func (s *HTTPServer) handleTunnelControl(writer http.ResponseWriter, request *ht
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status(), s.Token))
+}
+
+func (s *HTTPServer) handlePublicAccess(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
+func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var body api.PublicAccessEnableRequest
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
+		return
+	}
+	edge := strings.TrimSpace(body.EdgeURL)
+	if edge == "" {
+		edge = strings.TrimSpace(s.Service.Settings.GnarEdge)
+	}
+	if edge != "" {
+		if err := tunnel.ValidateEdgeURL(edge); err != nil {
+			s.writePublicAccessError(writer, http.StatusBadRequest, err)
+			return
+		}
+	} else if body.EnrollmentKey != "" && s.Tunnels.GnarEdge() == "" {
+		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when enrolling gnar"))
+		return
+	}
+	account := settings.NormalizedGnarAccount(body.AccountName)
+	if strings.TrimSpace(body.AccountName) == "" {
+		account = settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
+	}
+	previousEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	previousAccount := settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
+	if err := s.Service.UpdatePublicAccessConfig(edge, account); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, true); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	// An empty request Edge URL means "use the configured/default gnar Edge".
+	// Preserve an effective WARREN_GNAR_EDGE value instead of clearing it.
+	if edge != "" {
+		s.Tunnels.SetGnarEdge(edge)
+	}
+	// Re-enrollment or a changed non-secret configuration must not leave an
+	// older gnar process serving the previous account or Edge URL.
+	if len(body.EnrollmentKey) > 0 || previousEdge != edge || previousAccount != account {
+		if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok && current.Running {
+			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
+				s.writePublicAccessError(writer, http.StatusBadRequest, err)
+				return
+			}
+		}
+	}
+	key := []byte(body.EnrollmentKey)
+	// Do not retain the request string after converting it to the private
+	// stdin buffer. The manager clears this byte slice after login returns.
+	body.EnrollmentKey = ""
+	status, err := s.Tunnels.StartPublicAccess(edge, account, key)
+	if err != nil {
+		projected := s.publicAccessStatus()
+		projected.Error = err.Error()
+		if status.Error != "" {
+			projected.Error = status.Error
+		}
+		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+		return
+	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
+func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, false); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
+func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	if edge != "" {
+		if err := tunnel.ValidateEdgeURL(edge); err != nil {
+			s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("Public Access is not configured: "+err.Error()))
+			return
+		}
+	}
+	account := settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
+	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, true); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	status, err := s.Tunnels.StartPublicAccess(edge, account, nil)
+	if err != nil {
+		projected := s.publicAccessStatus()
+		projected.Error = err.Error()
+		if status.Error != "" {
+			projected.Error = status.Error
+		}
+		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+		return
+	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
+func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
+	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	if edge == "" && s.Tunnels != nil {
+		edge = s.Tunnels.GnarEdge()
+	}
+	status := api.PublicAccessStatus{
+		EdgeURL:     edge,
+		AccountName: settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
+		Enabled:     s.Service.PublicAccessEnabled(),
+	}
+	if status.EdgeURL != "" {
+		if err := tunnel.ValidateEdgeURL(status.EdgeURL); err != nil {
+			status.Error = err.Error()
+			// Do not echo an invalid Edge URL: it may contain userinfo or other
+			// material that must never cross the Public Access API boundary.
+			status.EdgeURL = ""
+		}
+	}
+	if s.Tunnels == nil {
+		return status
+	}
+	if value, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok {
+		status.Running = value.Running && value.URL != ""
+		if status.Running {
+			status.PublicEndpoint = value.URL
+		}
+		if value.Error != "" {
+			status.Error = value.Error
+		}
+	}
+	return status
+}
+
+func (s *HTTPServer) writePublicAccessStatus(writer http.ResponseWriter, code int, status api.PublicAccessStatus) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(code)
+	_ = json.NewEncoder(writer).Encode(status)
+}
+
+func (s *HTTPServer) writePublicAccessError(writer http.ResponseWriter, code int, err error) {
+	status := s.publicAccessStatus()
+	status.Error = err.Error()
+	s.writePublicAccessStatus(writer, code, status)
 }
 
 func tunnelResponse(status map[string]tunnel.Status, token string) map[string]any {
@@ -848,6 +1053,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"defaultRuntime": p.server.Service.DefaultRuntime,
 			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
 			"gnarEdge":       p.server.Service.Settings.GnarEdge,
+			"gnarAccount":    settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
 			"autoOpenShell":  p.server.Service.Settings.AutoOpenShell,
 			"autoStartAI":    p.server.Service.Settings.AutoStartAI,
 		})
@@ -876,10 +1082,19 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if p.server.Tunnels != nil {
 			p.server.Tunnels.SetGnarEdge(p.server.Service.Settings.GnarEdge)
 		}
+		if _, specified := params["gnarAccount"]; specified {
+			p.server.Service.Settings.GnarAccount = settings.NormalizedGnarAccount(stringParam(params, "gnarAccount"))
+			if p.server.Service.SettingsPath != "" {
+				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
+					return err
+				}
+			}
+		}
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime": p.server.Service.DefaultRuntime,
 			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
 			"gnarEdge":       p.server.Service.Settings.GnarEdge,
+			"gnarAccount":    settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
 			"autoOpenShell":  p.server.Service.Settings.AutoOpenShell,
 			"autoStartAI":    p.server.Service.Settings.AutoStartAI,
 		})

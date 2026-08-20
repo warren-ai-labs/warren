@@ -2,6 +2,8 @@ package tunnel
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +21,10 @@ import (
 )
 
 const (
-	KindCloudflared = "cloudflared"
-	KindTailscale   = "tailscale"
-	KindGnar        = "gnar"
+	KindCloudflared  = "cloudflared"
+	KindTailscale    = "tailscale"
+	KindGnar         = "gnar"
+	gnarLoginTimeout = 30 * time.Second
 )
 
 // Status is the runtime projection of one tunnel. URL is empty until the
@@ -47,6 +50,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	states map[string]*state
+	// lastErrors keeps an actionable failure visible even when a process could
+	// not be created (for example a missing gnar binary). It is memory-only.
+	lastErrors map[string]string
 }
 
 type state struct {
@@ -57,6 +63,7 @@ type state struct {
 	stopped   bool
 	scanDone  chan struct{}
 	ready     chan struct{}
+	done      chan struct{}
 	readyOnce sync.Once
 }
 
@@ -67,6 +74,9 @@ func NewManager(
 	tailscalePath string,
 	gnarPath string,
 ) *Manager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Manager{
 		logger:          logger,
 		target:          target,
@@ -76,6 +86,7 @@ func NewManager(
 		pollInterval:    250 * time.Millisecond,
 		pollAttempts:    40,
 		states:          make(map[string]*state),
+		lastErrors:      make(map[string]string),
 	}
 }
 
@@ -112,6 +123,8 @@ func (m *Manager) Status() map[string]Status {
 	for _, kind := range []string{KindCloudflared, KindTailscale, KindGnar} {
 		if st := m.states[kind]; st != nil {
 			result[kind] = Status{Running: !st.stopped, URL: st.url, Error: st.err}
+		} else if message := m.lastErrors[kind]; message != "" {
+			result[kind] = Status{Error: message}
 		}
 	}
 	return result
@@ -122,7 +135,88 @@ func (m *Manager) Status() map[string]Status {
 func (m *Manager) SetGnarEdge(edge string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.gnarEdge = edge
+	m.gnarEdge = strings.TrimSpace(edge)
+}
+
+// GnarEdge returns the effective Edge URL selected for future gnar starts.
+// It may come from WARREN_GNAR_EDGE or a command-line override and is not a
+// credential.
+func (m *Manager) GnarEdge() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gnarEdge
+}
+
+// StartPublicAccess enrolls gnar when a one-time enrollment key is supplied,
+// then starts the normal gnar tunnel. The key is accepted as bytes so callers
+// can clear their request buffer immediately after this method returns.
+// gnar remains responsible for its long-lived token and credential store.
+func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) (Status, error) {
+	if len(enrollmentKey) > 0 {
+		defer clearBytes(enrollmentKey)
+	}
+	edge = strings.TrimSpace(edge)
+	if edge != "" {
+		if err := ValidateEdgeURL(edge); err != nil {
+			return Status{Error: err.Error()}, err
+		}
+		m.SetGnarEdge(edge)
+	}
+	if len(enrollmentKey) > 0 {
+		path := m.gnarPath
+		if path == "" {
+			path = findExecutable(gnarCandidates())
+		}
+		if path == "" {
+			err := errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+		if edge == "" {
+			m.mu.Lock()
+			edge = m.gnarEdge
+			m.mu.Unlock()
+		}
+		if edge == "" {
+			err := errors.New("an Edge URL is required before enrolling gnar")
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+		if err := ValidateEdgeURL(edge); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+		account = strings.TrimSpace(account)
+		if account == "" {
+			account = "warren"
+		}
+		for _, character := range account {
+			if character < 0x20 || character == 0x7f {
+				err := errors.New("gnar account name contains a control character")
+				m.recordError(KindGnar, err.Error())
+				return Status{Error: err.Error()}, err
+			}
+		}
+		if err := loginGnar(path, edge, account, enrollmentKey); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+		// The key is bootstrap-only. Clear it before the long-lived tunnel
+		// process is started; the deferred clear covers every early return.
+		clearBytes(enrollmentKey)
+	}
+	status, err := m.Start(KindGnar)
+	if err != nil {
+		return status, err
+	}
+	if status.Running && status.URL != "" {
+		return status, nil
+	}
+	if status.Error == "" {
+		status.Error = "gnar did not report a public endpoint before the startup timeout"
+	}
+	m.recordError(KindGnar, status.Error)
+	return status, errors.New(status.Error)
 }
 
 // StopAll tears down every running reachability adapter. The daemon calls it
@@ -210,8 +304,19 @@ func (m *Manager) wait(st *state) {
 	if st.scanDone != nil {
 		<-st.scanDone
 	}
+	// Wake a synchronous gnar start when the child exits before emitting a
+	// readiness or error event. Without this signal a dead child would make
+	// the caller wait for the full startup timeout.
+	if st.ready != nil {
+		st.readyOnce.Do(func() { close(st.ready) })
+	}
 	m.mu.Lock()
 	if m.states[st.kind] == st {
+		if st.kind == KindGnar && !st.stopped && st.err == "" {
+			st.err = "gnar exited before the Public Endpoint remained available"
+			st.url = ""
+			st.stopped = true
+		}
 		if st.err == "" {
 			delete(m.states, st.kind)
 		} else {
@@ -221,6 +326,9 @@ func (m *Manager) wait(st *state) {
 		}
 	}
 	m.mu.Unlock()
+	if st.done != nil {
+		close(st.done)
+	}
 }
 
 func (m *Manager) waitForStop(kind string, timeout time.Duration) {
@@ -233,6 +341,18 @@ func (m *Manager) waitForStop(kind string, timeout time.Duration) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForStateDone(st *state, timeout time.Duration) {
+	if st == nil || st.done == nil {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-st.done:
+	case <-timer.C:
 	}
 }
 
@@ -326,9 +446,18 @@ func (m *Manager) startGnar() (Status, error) {
 	}
 	if path == "" {
 		m.mu.Unlock()
-		return Status{}, errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
+		err := errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
 	}
 	reapStaleGnar(m.target)
+	if m.gnarEdge != "" {
+		if err := ValidateEdgeURL(m.gnarEdge); err != nil {
+			m.mu.Unlock()
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+	}
 	args := []string{m.target, "--no-tui", "--json"}
 	if m.gnarEdge != "" {
 		args = append(args, "--edge", m.gnarEdge)
@@ -338,32 +467,80 @@ func (m *Manager) startGnar() (Status, error) {
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		m.mu.Unlock()
-		return Status{}, err
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
 	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
 		m.mu.Unlock()
-		return Status{}, err
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
 	}
 	if err := command.Start(); err != nil {
 		m.mu.Unlock()
-		return Status{}, err
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
 	}
-	st := &state{kind: KindGnar, cmd: command, scanDone: make(chan struct{}), ready: make(chan struct{})}
+	st := &state{
+		kind:     KindGnar,
+		cmd:      command,
+		scanDone: make(chan struct{}),
+		ready:    make(chan struct{}),
+		done:     make(chan struct{}),
+	}
 	m.states[KindGnar] = st
 	m.mu.Unlock()
 
 	go m.scanGnar(st, io.MultiReader(stdout, stderr))
 	go m.wait(st)
 	// Start is synchronous for the caller: wait for the first tunnel_ready or
-	// error event so the client can show the public URL immediately. An edge
-	// that never answers is surfaced as a running tunnel without a URL and the
-	// error scanner still reports why.
+	// error event so the client can show the public endpoint immediately. A
+	// process that never answers is terminated instead of being reported live.
 	select {
 	case <-st.ready:
 	case <-time.After(time.Duration(m.pollAttempts) * m.pollInterval):
 	}
-	return m.Status()[KindGnar], nil
+	// A child can emit tunnel_ready and exit in the same scheduling window.
+	// Give wait a short grace period to observe that exit before returning a
+	// live endpoint to Public Access callers.
+	if st.done != nil {
+		select {
+		case <-st.done:
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	status := m.Status()[KindGnar]
+	if status.URL != "" {
+		m.mu.Lock()
+		delete(m.lastErrors, KindGnar)
+		m.mu.Unlock()
+	}
+	if status.URL == "" {
+		if status.Error == "" {
+			status.Error = "gnar did not report a public endpoint before the startup timeout"
+			m.mu.Lock()
+			if m.states[KindGnar] == st {
+				st.err = status.Error
+				st.stopped = true
+				st.url = ""
+			}
+			m.mu.Unlock()
+		} else {
+			m.mu.Lock()
+			if m.states[KindGnar] == st {
+				st.stopped = true
+				st.url = ""
+			}
+			m.mu.Unlock()
+		}
+		if st.cmd != nil && st.cmd.Process != nil {
+			_ = st.cmd.Process.Kill()
+		}
+		waitForStateDone(st, 2*time.Second)
+		status.Running = false
+		status.URL = ""
+	}
+	return status, nil
 }
 
 func (m *Manager) scanGnar(st *state, reader io.Reader) {
@@ -379,25 +556,30 @@ func (m *Manager) scanGnar(st *state, reader io.Reader) {
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
 			continue
 		}
+		message := redactGnarText(event.Message)
 		m.mu.Lock()
 		if m.states[st.kind] == st {
 			switch event.Type {
 			case "tunnel_ready":
 				if event.PublicURL != "" {
-					st.url = event.PublicURL
+					if endpoint, err := NormalizePublicEndpoint(event.PublicURL); err == nil {
+						st.url = endpoint
+					} else {
+						st.err = "gnar returned an invalid public endpoint"
+					}
 				}
 			case "error":
-				st.err = event.Message
+				st.err = message
 			}
 		}
 		m.mu.Unlock()
 		switch event.Type {
 		case "tunnel_ready":
-			if event.PublicURL != "" {
-				m.logger.Info("tunnel ready", "kind", st.kind, "url", event.PublicURL)
+			if endpoint, err := NormalizePublicEndpoint(event.PublicURL); err == nil && endpoint != "" {
+				m.logger.Info("tunnel ready", "kind", st.kind, "url", endpoint)
 			}
 		case "error":
-			m.logger.Warn("gnar tunnel error", "kind", st.kind, "error", event.Message)
+			m.logger.Warn("gnar tunnel error", "kind", st.kind, "error", message)
 		}
 		if event.Type == "tunnel_ready" || event.Type == "error" {
 			st.readyOnce.Do(func() { close(st.ready) })
@@ -413,18 +595,29 @@ func (m *Manager) stopGnar() error {
 	}
 	m.mu.Unlock()
 	if st == nil {
+		m.mu.Lock()
+		delete(m.lastErrors, KindGnar)
+		m.mu.Unlock()
 		return nil
 	}
 	if st.cmd != nil && st.cmd.Process != nil {
 		_ = st.cmd.Process.Kill()
 	}
+	waitForStateDone(st, 2*time.Second)
 	m.mu.Lock()
 	if m.states[KindGnar] == st {
 		delete(m.states, KindGnar)
 	}
+	delete(m.lastErrors, KindGnar)
 	m.mu.Unlock()
 	m.waitForStop(KindGnar, 2*time.Second)
 	return nil
+}
+
+func (m *Manager) recordError(kind, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastErrors[kind] = redactGnarText(message)
 }
 
 var (
@@ -539,4 +732,130 @@ func parseTailscaleURL(data []byte) string {
 		return "https://" + strings.SplitN(host, ":", 2)[0] + "/"
 	}
 	return ""
+}
+
+// ValidateEdgeURL accepts only absolute HTTP(S) URLs. Credentials, queries,
+// and fragments are rejected so an Edge configuration can never smuggle a
+// secret into a child command or a public endpoint.
+func ValidateEdgeURL(raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return errors.New("Edge URL is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery ||
+		parsed.Fragment != "" || strings.Contains(value, "#") || strings.Contains(value, "?") || parsed.Opaque != "" {
+		return fmt.Errorf("Edge URL must be an absolute HTTP(S) URL without credentials, query, or fragment")
+	}
+	return nil
+}
+
+// NormalizePublicEndpoint validates a gnar endpoint and preserves a trailing
+// slash for path-mode endpoints. The root host form intentionally remains
+// without a slash to avoid changing gnar's reserved URL display.
+func NormalizePublicEndpoint(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if err := ValidateEdgeURL(value); err != nil {
+		return "", fmt.Errorf("invalid public endpoint: %w", err)
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Path != "" && parsed.Path != "/" && !strings.HasSuffix(parsed.Path, "/") {
+		parsed.Path += "/"
+	}
+	return parsed.String(), nil
+}
+
+func loginGnar(path, edge, account string, enrollmentKey []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), gnarLoginTimeout)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx,
+		path,
+		"login",
+		"--edge", edge,
+		"--account", account,
+		"--enrollment-key-stdin",
+		"--json",
+	)
+	command.Stdin = bytes.NewReader(enrollmentKey)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	combined := append(stdout.Bytes(), stderr.Bytes()...)
+	message := gnarLoginMessage(combined)
+	if ctx.Err() == context.DeadlineExceeded {
+		return errors.New("gnar login timed out; check the Edge URL and try again")
+	}
+	if err != nil {
+		if message == "" {
+			message = "gnar login failed"
+		}
+		return fmt.Errorf("%s: %w", redactGnarText(message, string(enrollmentKey)), err)
+	}
+	if message != "" && strings.HasPrefix(strings.ToLower(message), "error:") {
+		return errors.New(redactGnarText(message, string(enrollmentKey)))
+	}
+	return nil
+}
+
+func gnarLoginMessage(data []byte) string {
+	var fallback string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Error   string `json:"error"`
+			OK      *bool  `json:"ok"`
+			Success *bool  `json:"success"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			fallback = line
+			continue
+		}
+		message := strings.TrimSpace(event.Message)
+		if message == "" {
+			message = strings.TrimSpace(event.Error)
+		}
+		if event.Type == "error" || (event.OK != nil && !*event.OK) || (event.Success != nil && !*event.Success) {
+			if message == "" {
+				message = "gnar login failed"
+			}
+			return "error: " + message
+		}
+		if message != "" {
+			fallback = message
+		}
+	}
+	return fallback
+}
+
+func redactGnarText(value string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "<redacted>")
+		}
+	}
+	value = sensitiveGnarPattern.ReplaceAllString(value, `$1$2<redacted>`)
+	value = sensitiveValuePattern.ReplaceAllString(value, `$1<redacted>`)
+	return sensitiveBareValuePattern.ReplaceAllString(value, `$1<redacted>`)
+}
+
+var sensitiveGnarPattern = regexp.MustCompile(`(?i)(enrollment[-_ ]?key|access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token)(\s*[:=]\s*["']?)[^\s,"'}]+`)
+var sensitiveValuePattern = regexp.MustCompile(`(?i)((?:token|secret|credential|enrollment[-_ ]?key)(?:\s+is)?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}`)
+var sensitiveBareValuePattern = regexp.MustCompile(`(?i)((?:access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token|token|secret|credential|enrollment[-_ ]?key)\s+)[A-Za-z0-9._~+/=-]{12,}`)
+
+func clearBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }

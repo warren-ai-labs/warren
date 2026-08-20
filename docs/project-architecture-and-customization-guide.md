@@ -465,7 +465,10 @@ terminal data.
 
 The intended running state is persisted in `settings.json`, so tunnels left
 enabled can be restored after a daemon restart. On shutdown, the daemon stops
-the adapter processes so a public URL does not outlive its owner.
+the adapter processes so a Public Endpoint does not outlive its owner. The
+self-hosted gnar Public Access API keeps Enrollment Keys in memory only; the
+legacy tunnel response remains the only compatibility path that can carry a
+Web token fragment.
 
 ### 10.4 Relay control plane
 
@@ -646,7 +649,7 @@ Default Host files:
 | --- | --- |
 | `state.json` | Host resources, Runtime bindings, lifecycle, output positions |
 | `config.json` | Desktop/CLI endpoint catalog and selected endpoint |
-| `settings.json` | Default Runtime, Runtime environment, gnar edge, tunnel intent, and empty-workspace Shell/AI defaults; worktree import policy lives on each Project |
+| `settings.json` | Default Runtime, Runtime environment, gnar Edge/account label, tunnel intent, and empty-workspace Shell/AI defaults; Enrollment Keys are never persisted; worktree import policy lives on each Project |
 | `token` | Direct Host bearer token |
 | `output/` | Per-Session raw PTY spools and archives |
 | `agent-bind/` | Warren Session to external agent conversation binding |

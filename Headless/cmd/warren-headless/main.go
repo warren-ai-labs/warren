@@ -243,15 +243,20 @@ func main() {
 	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
 	tunnelManager.SetGnarEdge(gnarEdgeValue)
 	// Restore the tunnels the user left running before the previous daemon
-	// exited, so a public URL survives Warren restarts and upgrades. Start is
+	// exited, so the Public Endpoint survives Warren restarts and upgrades. Start is
 	// asynchronous: the daemon must not block readiness on a slow edge.
 	for _, kind := range []string{tunnel.KindGnar, tunnel.KindCloudflared, tunnel.KindTailscale} {
 		if !loadedSettings.TunnelEnabled[kind] {
 			continue
 		}
 		go func() {
-			if _, err := tunnelManager.Start(kind); err != nil {
+			status, err := tunnelManager.Start(kind)
+			if err != nil {
 				logger.Warn("restore tunnel failed", "kind", kind, "error", err)
+				return
+			}
+			if kind == tunnel.KindGnar && (!status.Running || status.URL == "") {
+				logger.Warn("restore tunnel did not produce a public endpoint", "kind", kind, "error", status.Error)
 				return
 			}
 			logger.Info("restored tunnel", "kind", kind)
@@ -293,7 +298,7 @@ func main() {
 		_ = lanHTTPServer.Close()
 	}
 	// A public tunnel must never outlive its daemon: stop every reachability
-	// adapter so the shared URL stops working as soon as the owner exits.
+	// adapter so the Public Endpoint stops working as soon as the owner exits.
 	tunnelManager.StopAll()
 	stopService()
 	service.Shutdown()
