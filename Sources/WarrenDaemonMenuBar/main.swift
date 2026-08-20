@@ -37,7 +37,8 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     private var state: DaemonState = .checking {
         didSet { updateStatusItem() }
     }
-    private let statusDotPulseDuration: CFTimeInterval = 1.4
+    private let statusDotPulseDuration: CFTimeInterval = 2.2
+    private let statusDotPulseKey = "statusDotPulse"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -371,19 +372,47 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     }
 
     private func setStatusDotBreathing(_ breathing: Bool) {
-        guard let layer = statusDot?.layer else { return }
-        if breathing {
-            let pulse = CABasicAnimation(keyPath: "opacity")
-            pulse.fromValue = 0.25
-            pulse.toValue = 1.0
-            pulse.duration = statusDotPulseDuration
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            layer.add(pulse, forKey: "statusDotPulse")
-        } else {
-            layer.removeAnimation(forKey: "statusDotPulse")
+        guard let dot = statusDot, let layer = dot.layer else { return }
+        guard breathing else {
+            layer.removeAnimation(forKey: statusDotPulseKey)
+            layer.opacity = 1
+            dot.isHidden = true
+            return
         }
-        statusDot?.isHidden = !breathing
+
+        dot.isHidden = false
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            layer.removeAnimation(forKey: statusDotPulseKey)
+            layer.opacity = 1
+            return
+        }
+
+        // Health polling can publish the same state repeatedly. Keep the
+        // existing animation alive so every poll does not restart its phase.
+        guard layer.animation(forKey: statusDotPulseKey) == nil else { return }
+
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 0.55
+        opacity.toValue = 1.0
+        opacity.duration = statusDotPulseDuration
+
+        let shadowOpacity = CABasicAnimation(keyPath: "shadowOpacity")
+        shadowOpacity.fromValue = 0.35
+        shadowOpacity.toValue = 0.9
+        shadowOpacity.duration = statusDotPulseDuration
+
+        let shadowRadius = CABasicAnimation(keyPath: "shadowRadius")
+        shadowRadius.fromValue = 1.2
+        shadowRadius.toValue = 2.4
+        shadowRadius.duration = statusDotPulseDuration
+
+        let pulse = CAAnimationGroup()
+        pulse.animations = [opacity, shadowOpacity, shadowRadius]
+        pulse.duration = statusDotPulseDuration
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(pulse, forKey: statusDotPulseKey)
     }
 
     private func updateStatusItem() {
