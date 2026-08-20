@@ -78,9 +78,9 @@ function PullRequestView({ pr }) {
   );
 }
 
-function GitPane({ title, open, onToggle, children }) {
+function GitPane({ title, open, onToggle, className = "", children }) {
   return (
-    <div className={`git-pane${open ? "" : " collapsed"}`}>
+    <div className={`git-pane${open ? "" : " collapsed"}${className ? ` ${className}` : ""}`}>
       <button
         type="button"
         className="git-pane-header"
@@ -144,7 +144,7 @@ export function GitPanel({
   const [createMode, setCreateMode] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set(saved?.expanded || []));
   const [openPanes, setOpenPanes] = useState(() => new Set(
-    saved?.openPanes ? saved.openPanes : ["pr", "changes", "history"],
+    saved?.openPanes ? saved.openPanes : ["checkout", "pr", "changes", "history"],
   ));
   const [selectedKey, setSelectedKey] = useState(saved?.selectedKey || null);
   const [commitOpen, setCommitOpen] = useState(false);
@@ -345,8 +345,12 @@ export function GitPanel({
           )}
         </section>
 
-        <section className="git-section git-fixed-section">
-          <h3 className="git-section-title">Checkout</h3>
+        <GitPane
+          title="Checkout"
+          className="git-pane-checkout"
+          open={openPanes.has("checkout")}
+          onToggle={() => togglePane("checkout")}
+        >
           <div className="git-checkout-row">
             <select
               className="git-select"
@@ -390,7 +394,7 @@ export function GitPanel({
               </button>
             </div>
           </div>
-        </section>
+        </GitPane>
 
         {data?.remote && (
           <GitPane title="Pull Request" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>

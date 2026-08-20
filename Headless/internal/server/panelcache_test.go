@@ -206,3 +206,20 @@ func TestGitPanelReportsBackgroundRefresh(t *testing.T) {
 		t.Fatal("expected no refresh flag while revalidation is already running")
 	}
 }
+
+func TestGitPanelAheadBehindAgainstMain(t *testing.T) {
+	repository := newRepositoryForServiceTest(t)
+	gitForServiceTest(t, repository, "commit", "--allow-empty", "-m", "one")
+	gitForServiceTest(t, repository, "commit", "--allow-empty", "-m", "two")
+	gitForServiceTest(t, repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitForServiceTest(t, repository, "reset", "--hard", "HEAD~2")
+
+	service, workspaceID := gitPanelService(t, repository)
+	panel, err := service.GitPanel(context.Background(), workspaceID, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if panel.Ahead != 0 || panel.Behind != 2 {
+		t.Fatalf("ahead/behind = %d/%d, want 0/2 against origin/main", panel.Ahead, panel.Behind)
+	}
+}

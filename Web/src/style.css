@@ -3294,6 +3294,10 @@ button:disabled {
   flex: 1 1 0;
 }
 
+.git-pane-checkout:not(.collapsed) {
+  max-height: 25%;
+}
+
 .git-pane-header {
   flex: 0 0 auto;
   display: flex;

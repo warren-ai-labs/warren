@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -53,6 +54,23 @@ func StatusFor(ctx context.Context, dir string) (Status, error) {
 		applyCounts(change, counts)
 	}
 	return status, nil
+}
+
+// AheadBehind counts commits in ref but not in HEAD (behind) and in HEAD but
+// not in ref (ahead), so callers can show how a branch relates to a remote
+// main line instead of its upstream.
+func AheadBehind(ctx context.Context, dir, ref string) (ahead, behind int, err error) {
+	output, err := run(ctx, dir, "rev-list", "--left-right", "--count", ref+"...HEAD")
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(output)
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("unexpected rev-list output %q", output)
+	}
+	behind, _ = strconv.Atoi(fields[0])
+	ahead, _ = strconv.Atoi(fields[1])
+	return ahead, behind, nil
 }
 
 // parseStatus reads porcelain v2 output. With -z the entire stream is

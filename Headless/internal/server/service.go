@@ -1860,6 +1860,10 @@ func (s *Service) loadGitPanel(ctx context.Context, workspaceID, path string, fe
 				panel.UnmergedCommits = apiGitCommits(unmerged)
 			}
 		}
+		if ahead, behind, err := git.AheadBehind(ctx, path, mainBranch); err == nil {
+			panel.Ahead = ahead
+			panel.Behind = behind
+		}
 	}
 	return panel, nil
 }
