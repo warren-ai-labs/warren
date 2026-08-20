@@ -289,6 +289,37 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertFalse(WarrenRemoteApplicationModel.shouldApplyRoster(roster, after: roster))
     }
 
+    func testRosterActivityOverridesStaleLiveActivity() {
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.resolvedAgentActivity(
+                rosterActivity: "ready",
+                liveActivity: .working
+            ),
+            .ready
+        )
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.resolvedAgentActivity(
+                rosterActivity: "working",
+                liveActivity: .ready
+            ),
+            .working
+        )
+    }
+
+    func testLiveActivityFillsMissingRosterActivity() {
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.resolvedAgentActivity(
+                rosterActivity: nil,
+                liveActivity: .working
+            ),
+            .working
+        )
+        XCTAssertNil(WarrenRemoteApplicationModel.resolvedAgentActivity(
+            rosterActivity: nil,
+            liveActivity: nil
+        ))
+    }
+
     func testLatestValueSignalCoalescesPendingValues() {
         var signal = WarrenLatestValueSignal<Int>()
 

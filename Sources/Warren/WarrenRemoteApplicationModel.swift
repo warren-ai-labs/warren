@@ -2063,15 +2063,20 @@ final class WarrenRemoteApplicationModel {
             ensureDeletionReconciliation(using: wire)
         case .agent(let sessionID, let activity):
             agentActivityBySessionID[sessionID] = activity
-            if WarrenActivityDismissal.presentedActivity(
+            let presentation = WarrenActivityDismissal.presentedActivity(
                 candidate: activity,
                 dismissed: dismissedActivityBySessionID[sessionID]
-            ).clearsDismissal {
+            )
+            if presentation.clearsDismissal {
                 dismissedActivityBySessionID.removeValue(forKey: sessionID)
             }
-            if let currentRoster {
-                apply(currentRoster, advancesGeneration: false)
-            }
+            // Activity events are live updates and should not wait for the
+            // next roster tick. The roster remains authoritative when it is
+            // applied, so a stale event cache cannot overwrite a newer
+            // server snapshot later.
+            publishProjectionIfChanged(
+                projection.withSessionActivity(presentation.activity, for: sessionID)
+            )
         case .maintenance(let message):
             maintenanceMessage = message?.isEmpty == false ? message : "Warren is updating"
             maintenanceResetTask?.cancel()
@@ -2226,8 +2231,10 @@ final class WarrenRemoteApplicationModel {
             return (value, id, workspaceID, terminalGroupID)
         }
         let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
-            let candidateActivity = agentActivityBySessionID[id]
-                ?? AgentActivityState(rawValue: value.activity ?? "")
+            let candidateActivity = Self.resolvedAgentActivity(
+                rosterActivity: value.activity,
+                liveActivity: agentActivityBySessionID[id]
+            )
             let presentation = WarrenActivityDismissal.presentedActivity(
                 candidate: candidateActivity,
                 dismissed: dismissedActivityBySessionID[id]
@@ -2698,6 +2705,15 @@ final class WarrenRemoteApplicationModel {
 
     nonisolated static func shouldApplyRoster(_ roster: RemoteRoster, after previous: RemoteRoster?) -> Bool {
         previous != roster
+    }
+
+    /// The daemon roster is the durable snapshot. A live event is only a
+    /// fallback for sessions whose snapshot has not exposed activity yet.
+    nonisolated static func resolvedAgentActivity(
+        rosterActivity: String?,
+        liveActivity: AgentActivityState?
+    ) -> AgentActivityState? {
+        AgentActivityState(rawValue: rosterActivity ?? "") ?? liveActivity
     }
 
     private func publishNavigationIfChanged(_ nextNavigation: WarrenDesktopNavigationState) {
