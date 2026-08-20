@@ -6,6 +6,7 @@ import SwiftUI
 public enum WarrenPresentationRole: Sendable {
     case inline
     case popover
+    case menu
     case modal
     case sheet
     case commandSurface
@@ -42,7 +43,7 @@ public enum WarrenPresentationMetrics {
         switch role {
         case .inline, .status:
             WarrenRadius.medium
-        case .popover, .commandSurface:
+        case .popover, .menu, .commandSurface:
             WarrenRadius.base
         case .modal, .sheet:
             WarrenRadius.large
@@ -53,7 +54,7 @@ public enum WarrenPresentationMetrics {
         switch role {
         case .inline, .status:
             .init(opacity: 0, radius: 0, y: 0)
-        case .popover:
+        case .popover, .menu:
             .init(opacity: 0.45, radius: 20, y: 12)
         case .modal, .commandSurface:
             .init(opacity: 0.5, radius: 35, y: 24)
@@ -196,6 +197,30 @@ public struct WarrenSheetSurface<Content: View>: View {
             content
                 .warrenPresentationSurface(role: .sheet, cornerRadius: cornerRadius)
         }
+    }
+}
+
+/// Non-blocking progress, success, warning or connection feedback. Status
+/// surfaces never trap focus and do not participate in modal dismissal.
+public struct WarrenStatusSurface<Content: View>: View {
+    private let content: Content
+    private let cornerRadius: CGFloat
+
+    public init(
+        cornerRadius: CGFloat = WarrenRadius.medium,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.content = content()
+    }
+
+    public var body: some View {
+        content
+            .warrenPresentationSurface(
+                role: .status,
+                cornerRadius: cornerRadius,
+                showsBorder: false
+            )
     }
 }
 

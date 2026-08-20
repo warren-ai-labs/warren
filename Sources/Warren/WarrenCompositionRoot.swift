@@ -20,6 +20,7 @@ struct WarrenCompositionRoot: View {
     @State private var appMessage: WarrenAppMessage?
     @State private var terminalSearchPresented = false
     @State private var updateStatus: WarrenDesktopUpdateStatus = .none
+    @StateObject private var presentation = WarrenPresentationCoordinator()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
@@ -214,6 +215,8 @@ struct WarrenCompositionRoot: View {
                 onDismiss: { self.appMessage = nil }
             )
             .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.modal) }
+            .onDisappear { presentation.dismissTop() }
         } else if let preview = supersetImportPreview {
             WarrenSheetSurface {
                 WarrenSupersetImportView(
@@ -230,6 +233,8 @@ struct WarrenCompositionRoot: View {
                 )
             }
             .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.sheet) }
+            .onDisappear { presentation.dismissTop() }
         } else if let projectID = workspaceCreatorProjectID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenModalSurface {
@@ -243,6 +248,8 @@ struct WarrenCompositionRoot: View {
                 )
             }
             .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.modal) }
+            .onDisappear { presentation.dismissTop() }
         } else if let projectID = worktreeImportProjectID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenSheetSurface {
@@ -264,6 +271,8 @@ struct WarrenCompositionRoot: View {
                 )
             }
             .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.sheet) }
+            .onDisappear { presentation.dismissTop() }
         }
     }
 
@@ -913,9 +922,11 @@ private struct WarrenTerminalLoadingOverlay: View {
                 }
                 .padding(.horizontal, WarrenSpacing.standard)
                 .padding(.vertical, WarrenSpacing.compact)
-                .background(Color.black.opacity(0.62), in: RoundedRectangle(
-                    cornerRadius: WarrenRadius.medium
-                ))
+                .warrenPresentationSurface(
+                    role: .status,
+                    cornerRadius: WarrenRadius.medium,
+                    showsBorder: false
+                )
                 .transition(.opacity)
             }
         }

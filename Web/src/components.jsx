@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
+import { shouldDismissOnBackdrop } from "./presentation.js";
 
 const activityLabels = {
   working: "Working",
@@ -924,7 +925,12 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
   const availableCount = candidates.filter(candidate => !candidate.imported).length;
 
   return (
-    <div className="worktree-dialog-overlay" onClick={onClose}>
+    <div
+      className="worktree-dialog-overlay"
+      onClick={() => {
+        if (shouldDismissOnBackdrop("sheet", dialog.loading || selected.size > 0)) onClose();
+      }}
+    >
       <div
         className="worktree-dialog"
         role="dialog"

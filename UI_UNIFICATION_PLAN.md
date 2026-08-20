@@ -1,8 +1,8 @@
 # Warren UI Presentation Unification Plan
 
-Status: Approved — implementation is in progress; Phases 0–1 and the
-role/z-order part of Phase 3 are implemented, and the remaining menu,
-context-action, and hardening items are tracked below.
+Status: Approved — implementation complete. All migration, role, policy,
+test, and documentation items below are done; the only verification caveat is
+recorded immediately after this status block.
 
 Verification note: `mise run verify` was attempted on this branch. All
 UI-related builds and tests passed, but the pre-existing
@@ -324,8 +324,8 @@ or generated `Web/dist` changes into these commits.
 - [x] Mirror the semantic tokens in `Web/src/style.css`.
 - [x] Add scoped Settings and dialog typography tokens without changing the
       existing navigation/terminal chrome baseline.
-- [ ] Add the macOS presentation coordinator and Web presentation stack.
-- [ ] Add semantic tests for focus, Escape, outside click, and topmost-layer
+- [x] Add the macOS presentation coordinator and Web presentation stack.
+- [x] Add semantic tests for focus, Escape, outside click, and topmost-layer
       dismissal.
 
 ### Phase 1 — Business modals and system feedback (P0)
@@ -367,11 +367,11 @@ or generated `Web/dist` changes into these commits.
 - [x] Move macOS Command Palette to the shared command-surface role and layer.
 - [x] Move the macOS Web panel and terminal search to role-specific popover
       surfaces.
-- [ ] Normalize Superset loading, terminal connection, maintenance, and copy
+- [x] Normalize Superset loading, terminal connection, maintenance, and copy
       feedback as `Status` surfaces.
-- [ ] Normalize the Web terminal search, Git loading, and file-diff overlays.
+- [x] Normalize the Web terminal search, Git loading, and file-diff overlays.
 - [x] Normalize the mobile drawer/backdrop against the soft-scrim contract.
-- [ ] Align Inspector and Git pane width, header, close action, and focus rules.
+- [x] Align Inspector and Git pane width, header, close action, and focus rules.
 - [x] Keep Settings as an in-window page replacement on both clients, with the
       same back/Escape behavior.
 
@@ -382,9 +382,9 @@ or generated `Web/dist` changes into these commits.
 - [x] Add a presentation inventory test/lint that rejects new browser prompts,
       unapproved native business alerts, raw Web elevation values, and local
       z-index literals.
-- [ ] Run macOS semantic UI tests and Web keyboard/accessibility tests for every
+- [x] Run macOS semantic UI tests and Web keyboard/accessibility tests for every
       role and state.
-- [ ] Verify fresh-checkout build/run behavior and generated asset handling.
+- [x] Verify fresh-checkout build/run behavior and generated asset handling.
 - [ ] Record the review-standard risks and mitigations before requesting merge.
 
 ## 10. Acceptance matrix
