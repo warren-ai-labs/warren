@@ -58,7 +58,7 @@ const prStateLabels = {
   closed: "Closed",
 };
 
-function PullRequestView({ pr, aheadOfMain, mainBranch }) {
+function PullRequestView({ pr }) {
   return (
     <div className="git-pr">
       <div className="git-pr-header">
@@ -70,11 +70,6 @@ function PullRequestView({ pr, aheadOfMain, mainBranch }) {
       <p className="git-pr-meta">
         {pr.author} · {pr.base} ← {pr.head}
       </p>
-      {aheadOfMain > 0 && (
-        <p className="git-pr-meta git-pr-ahead">
-          <span className="git-ahead">↑ {aheadOfMain} commit{aheadOfMain === 1 ? "" : "s"} ahead of {mainBranch || "main"}</span>
-        </p>
-      )}
       {pr.body && <p className="git-pr-body">{pr.body}</p>}
       <a className="chrome-button git-pr-link" href={pr.url} target="_blank" rel="noreferrer">
         Open pull request ↗
@@ -300,10 +295,13 @@ export function GitPanel({
                   : `Up to date with ${data.mainBranch}`}
               </div>
             ))}
-          {(data?.ahead > 0 || data?.behind > 0) && (
+          {data?.upstream && (
             <div className="git-ahead-behind">
               {data.ahead > 0 && <span className="git-ahead">↑ {data.ahead} ahead</span>}
               {data.behind > 0 && <span className="git-behind">↓ {data.behind} behind</span>}
+              {data.ahead <= 0 && data.behind <= 0 && (
+                <span className="git-synced">Synced with {data.upstream}</span>
+              )}
             </div>
           )}
           {data?.remote && <div className="git-remote">{data.remote}</div>}
@@ -403,8 +401,13 @@ export function GitPanel({
 
         {data?.remote && (
           <GitPane title="Pull Request" className="git-pane-pr" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
+            {data.aheadOfMain > 0 && data.mainBranch && (
+              <p className="git-pr-meta git-pr-ahead">
+                <span className="git-ahead">↑ {data.aheadOfMain} commit{data.aheadOfMain === 1 ? "" : "s"} ahead of {data.mainBranch}</span>
+              </p>
+            )}
             {data.pullRequest ? (
-              <PullRequestView pr={data.pullRequest} aheadOfMain={data.aheadOfMain} mainBranch={data.mainBranch} />
+              <PullRequestView pr={data.pullRequest} />
             ) : data.pullRequestError ? (
               <p className="git-pr-error">{data.pullRequestError}</p>
             ) : canCreatePR ? (
