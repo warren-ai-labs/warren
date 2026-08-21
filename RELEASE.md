@@ -24,6 +24,46 @@ sync before publishing anything.
    checkout, and coupling risks. Record any material risk and its mitigation
    in the release description before publishing.
 
+## Local signing
+
+Every local release build must use a stable macOS code-signing identity. An
+ad-hoc signature is tied to the current code hash, so macOS will treat each
+rebuilt Warren app and daemon as a new client and ask for TCC or incoming
+network permissions again.
+
+Install an Apple Development certificate for local testing or a Developer ID
+Application certificate for a distributable build. Check the available
+identities with:
+
+```sh
+security find-identity -v -p codesigning
+```
+
+`scripts/build-app.sh` invokes `scripts/sign-app.sh` automatically. The script
+prefers Developer ID Application, then Apple Development, and signs every
+Mach-O file inside the app before signing the outer bundle. Set
+`WARREN_CODESIGN_IDENTITY` to a certificate name or SHA-1 hash when the
+automatic choice is not appropriate:
+
+```sh
+WARREN_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  bash scripts/build-app.sh release
+```
+
+Verify the result before installing it:
+
+```sh
+codesign -dvvv Warren.app 2>&1 | egrep 'Identifier=|TeamIdentifier=|Signature='
+codesign --verify --deep --strict --verbose=2 Warren.app
+spctl --assess --type execute --verbose=4 Warren.app
+```
+
+`TeamIdentifier` must be present and `Signature` must not be `adhoc`. A
+local Apple Development build may still be rejected by `spctl` because it is
+not notarized; a distributable Developer ID build must pass Gatekeeper after
+notarization. After switching from an old ad-hoc build, approve the newly
+signed app once; do not use `WARREN_ALLOW_ADHOC_SIGNING=1` for a release.
+
 ## Checks and packaging
 
 Run the checks relevant to the changed surfaces before creating the release
