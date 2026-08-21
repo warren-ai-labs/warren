@@ -2,6 +2,20 @@ import SwiftUI
 import Foundation
 import WarrenDesignSystem
 
+/// Stable user-facing terminology for the owner-only reachability feature.
+/// Keeping copy in one place prevents the resource-granting concept
+/// from leaking into Public Access controls.
+public enum WarrenPublicAccessCopy {
+    public static let title = "Public Access"
+    public static let edgeURL = "Edge URL"
+    public static let inviteKey = "Invite Key (one time)"
+    public static let approvalKey = "Approval Key (one time)"
+    /// Compatibility label for callers that still refer to the old approval
+    /// key name. New UI uses `approvalKey` explicitly.
+    public static let enrollmentKey = "Enrollment Key (one time)"
+    public static let publicEndpoint = "Public Endpoint"
+}
+
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var isRunning: Bool
     public var localURL: URL?
@@ -9,11 +23,28 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     /// example `http://192.168.1.23:8789/#t=<token>`.
     public var lanURL: URL?
     public var secureURL: URL?
+    /// Configured self-hosted gnar Edge, without credentials.
+    public var configuredEdgeURL: URL?
+    /// Release/launcher fallback used when no custom Edge override is saved.
+    public var defaultEdgeURL: URL?
+    /// True when the effective Edge comes from the release/launcher fallback.
+    public var usingDefaultEdge: Bool
+    /// Configured non-secret gnar account label.
+    public var configuredAccountName: String?
+    /// Effective account label, including the system-name default.
+    public var effectiveAccountName: String?
+    /// True when the effective account comes from the Warren Host/system name.
+    public var usingDefaultAccount: Bool
+    /// The persisted user intent reported by the headless daemon. This is
+    /// distinct from `canControl`, which only gates the Desktop controls.
+    public var publicAccessEnabled: Bool
     public var canControl: Bool
     /// True while the daemon reports a live public tunnel
     /// (gnar/cloudflared/tailscale). Independent of `isRunning`, which only
     /// reflects local Web reachability.
     public var tunnelRunning: Bool
+    public var publicAccessBusy: Bool
+    public var publicAccessError: String?
 
     public init(
         isRunning: Bool = false,
@@ -21,14 +52,32 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         lanURL: URL? = nil,
         secureURL: URL? = nil,
         canControl: Bool = true,
-        tunnelRunning: Bool = false
+        tunnelRunning: Bool = false,
+        configuredEdgeURL: URL? = nil,
+        defaultEdgeURL: URL? = nil,
+        usingDefaultEdge: Bool = false,
+        configuredAccountName: String? = nil,
+        effectiveAccountName: String? = nil,
+        usingDefaultAccount: Bool = false,
+        publicAccessEnabled: Bool = false,
+        publicAccessBusy: Bool = false,
+        publicAccessError: String? = nil
     ) {
         self.isRunning = isRunning
         self.localURL = localURL
         self.lanURL = lanURL
         self.secureURL = secureURL
+        self.configuredEdgeURL = configuredEdgeURL
+        self.defaultEdgeURL = defaultEdgeURL
+        self.usingDefaultEdge = usingDefaultEdge
+        self.configuredAccountName = configuredAccountName
+        self.effectiveAccountName = effectiveAccountName
+        self.usingDefaultAccount = usingDefaultAccount
+        self.publicAccessEnabled = publicAccessEnabled
         self.canControl = canControl
         self.tunnelRunning = tunnelRunning
+        self.publicAccessBusy = publicAccessBusy
+        self.publicAccessError = publicAccessError
     }
 }
 
@@ -41,7 +90,7 @@ enum WarrenDesktopWebAddressKind: String, Hashable, Sendable {
         switch self {
         case .local: "Local"
         case .lan: "LAN"
-        case .publicAccess: "Public"
+        case .publicAccess: WarrenPublicAccessCopy.publicEndpoint
         }
     }
 
@@ -49,7 +98,7 @@ enum WarrenDesktopWebAddressKind: String, Hashable, Sendable {
         switch self {
         case .local: "Local Web"
         case .lan: "LAN Web"
-        case .publicAccess: "Public Web"
+        case .publicAccess: WarrenPublicAccessCopy.publicEndpoint
         }
     }
 
@@ -92,8 +141,15 @@ enum WarrenDesktopWebAddressPresentation {
 
 public struct WarrenDesktopWebPanel: View {
     public let status: WarrenDesktopWebStatus
-    public let canShare: Bool
+    public let canControl: Bool
+    @available(*, deprecated, message: "Use canControl for Public Access controls.")
+    public var canShare: Bool { canControl }
     public let onStart: () -> Void
+    /// Deprecated callback for callers that already have a signed-in gnar
+    /// installation. New callers should configure Public Access in Settings.
+    public let onEnable: ((String, String, String) -> Void)?
+    /// Opens the canonical Public Access setup page in Settings.
+    public let onOpenSettings: (() -> Void)?
     public let onStop: () -> Void
     public let onOpenURL: (URL) -> Void
     public let onCopyURL: (URL) -> Void
@@ -103,6 +159,29 @@ public struct WarrenDesktopWebPanel: View {
 
     public init(
         status: WarrenDesktopWebStatus,
+        canControl: Bool = true,
+        onStart: @escaping () -> Void,
+        onEnable: ((String, String, String) -> Void)? = nil,
+        onOpenSettings: (() -> Void)? = nil,
+        onStop: @escaping () -> Void,
+        onOpenURL: @escaping (URL) -> Void,
+        onCopyURL: @escaping (URL) -> Void,
+        onDismiss: @escaping () -> Void = {}
+    ) {
+        self.status = status
+        self.canControl = canControl
+        self.onStart = onStart
+        self.onEnable = onEnable
+        self.onOpenSettings = onOpenSettings
+        self.onStop = onStop
+        self.onOpenURL = onOpenURL
+        self.onCopyURL = onCopyURL
+        self.onDismiss = onDismiss
+    }
+
+    @available(*, deprecated, message: "Use the canControl initializer for Public Access.")
+    public init(
+        status: WarrenDesktopWebStatus,
         canShare: Bool = true,
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void,
@@ -110,13 +189,16 @@ public struct WarrenDesktopWebPanel: View {
         onCopyURL: @escaping (URL) -> Void,
         onDismiss: @escaping () -> Void = {}
     ) {
-        self.status = status
-        self.canShare = canShare
-        self.onStart = onStart
-        self.onStop = onStop
-        self.onOpenURL = onOpenURL
-        self.onCopyURL = onCopyURL
-        self.onDismiss = onDismiss
+        self.init(
+            status: status,
+            canControl: canShare,
+            onStart: onStart,
+            onOpenSettings: nil,
+            onStop: onStop,
+            onOpenURL: onOpenURL,
+            onCopyURL: onCopyURL,
+            onDismiss: onDismiss
+        )
     }
 
     public var body: some View {
@@ -175,21 +257,66 @@ public struct WarrenDesktopWebPanel: View {
                     onOpen: address.kind.canOpenInBrowser
                         ? { onOpenURL(address.url) }
                         : nil,
-                    onCopy: { onCopyURL(address.url) }
+                    onCopy: onCopyURL
                 )
             }
 
             WarrenDesktopChromeDivider()
                 .padding(.vertical, WarrenSpacing.xs)
 
-            WarrenDesktopWebSharingRow(
+            if status.secureURL == nil {
+                publicAccessSetupHint(tokens: tokens)
+            }
+
+            WarrenDesktopWebPublicAccessRow(
                 isActive: status.secureURL != nil,
-                isEnabled: canShare && status.canControl,
-                onStart: onStart,
+                isEnabled: canControl && status.canControl && !status.publicAccessBusy,
+                isBusy: status.publicAccessBusy,
+                hasError: status.publicAccessError != nil,
+                onStart: {
+                    if let onOpenSettings {
+                        onOpenSettings()
+                    } else if let onEnable {
+                        // Preserve the old signed-in gnar path for clients
+                        // that have not yet adopted the Settings callback.
+                        onEnable("", "", "")
+                    } else {
+                        onStart()
+                    }
+                },
                 onStop: onStop
             )
+
+            if let error = status.publicAccessError, !error.isEmpty {
+                Text(error)
+                    .font(WarrenTypography.popoverMeta)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Public Access error: \(error)")
+            }
         }
         .padding(WarrenSpacing.medium)
+    }
+
+    private func publicAccessSetupHint(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+            Text(WarrenPublicAccessCopy.title)
+                .font(WarrenTypography.popoverItem)
+                .foregroundStyle(tokens.foreground)
+            Text(
+                "Configure an optional custom Edge URL and an Invite Key or Approval Key in "
+                    + "Settings → Public Access. Approval Key takes priority. Leave the Edge "
+                    + "URL empty to use Warren's release default; Warren never saves either key."
+            )
+                .font(WarrenTypography.popoverMeta)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let onOpenSettings {
+                Button("Open Public Access Settings", action: onOpenSettings)
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.popoverItem))
+                    .accessibilityIdentifier("public-access.open-settings")
+            }
+        }
     }
 
     private func unavailableContent(tokens: WarrenColorTokens) -> some View {
@@ -219,18 +346,21 @@ public struct WarrenDesktopWebPanel: View {
 private struct WarrenDesktopWebAddressRow: View {
     let address: WarrenDesktopWebAddress
     let onOpen: (() -> Void)?
-    let onCopy: () -> Void
+    let onCopy: (URL) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let displayURL = address.kind == .publicAccess
+            ? endpointWithoutFragment(address.url)
+            : address.url
         HStack(spacing: WarrenSpacing.xs) {
             Text(address.kind.title)
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
-                .frame(width: 36, alignment: .leading)
-            Text(address.url.absoluteString)
+                .frame(width: address.kind == .publicAccess ? 104 : 36, alignment: .leading)
+            Text(displayURL.absoluteString)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(tokens.foreground.opacity(0.9))
                 .lineLimit(1)
@@ -248,7 +378,7 @@ private struct WarrenDesktopWebAddressRow: View {
                 systemImage: "doc.on.doc",
                 accessibilityLabel: "Copy \(address.kind.accessibilityTitle) address",
                 accessibilityHint: "Copy this address to the clipboard",
-                action: onCopy
+                action: { onCopy(displayURL) }
             )
         }
         .padding(.horizontal, WarrenSpacing.compact)
@@ -260,13 +390,21 @@ private struct WarrenDesktopWebAddressRow: View {
                 .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(address.kind.accessibilityTitle) address: \(address.url.absoluteString)")
+        .accessibilityLabel("\(address.kind.accessibilityTitle) address: \(displayURL.absoluteString)")
+    }
+
+    private func endpointWithoutFragment(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        components.fragment = nil
+        return components.url ?? url
     }
 }
 
-private struct WarrenDesktopWebSharingRow: View {
+private struct WarrenDesktopWebPublicAccessRow: View {
     let isActive: Bool
     let isEnabled: Bool
+    let isBusy: Bool
+    let hasError: Bool
     let onStart: () -> Void
     let onStop: () -> Void
 
@@ -279,20 +417,20 @@ private struct WarrenDesktopWebSharingRow: View {
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(isActive ? tokens.info : tokens.mutedForeground)
                 .accessibilityHidden(true)
-            Text("Public sharing")
+            Text(WarrenPublicAccessCopy.title)
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
             Spacer(minLength: 0)
-            Text(isActive ? "On" : "Off")
+            Text(isBusy ? "Working…" : (isActive ? "On" : "Off"))
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(isActive ? tokens.info : tokens.mutedForeground)
             WarrenDesktopWebCommandButton(
-                title: isActive ? "Stop" : "Share",
+                title: isBusy ? "Working…" : (hasError && !isActive ? "Retry" : (isActive ? "Disable" : "Enable")),
                 isEnabled: isEnabled,
                 isEmphasized: isActive,
                 accessibilityLabel: isActive
-                    ? "Stop public sharing"
-                    : "Share the Web UI publicly"
+                    ? "Disable Public Access"
+                    : (hasError ? "Retry Public Access" : "Enable Public Access")
             ) {
                 if isActive {
                     onStop()
@@ -303,8 +441,8 @@ private struct WarrenDesktopWebSharingRow: View {
         }
         .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Public sharing")
-        .accessibilityValue(isActive ? "On" : "Off")
+        .accessibilityLabel(WarrenPublicAccessCopy.title)
+        .accessibilityValue(isBusy ? "Working" : (isActive ? "On" : "Off"))
     }
 }
 

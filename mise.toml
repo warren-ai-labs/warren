@@ -24,7 +24,7 @@ run = "bash scripts/build-app.sh debug"
 
 [tasks."build:headless"]
 description = "Build cross-platform headless daemon and CLI"
-run = "mkdir -p .build/headless && go build -ldflags \"-X main.version=$(bash scripts/version.sh)\" -o .build/headless/warren-headless ./Headless/cmd/warren-headless && go build -ldflags \"-X main.version=$(bash scripts/version.sh)\" -o .build/headless/warren ./Headless/cmd/warren"
+run = "bash scripts/build-headless.sh .build/headless"
 
 [tasks."test:headless"]
 description = "Run headless daemon and CLI tests"

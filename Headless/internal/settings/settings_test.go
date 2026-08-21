@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/abcdlsj/warren/Headless/internal/releaseconfig"
 )
 
 func TestNormalizedDefaultsToGhostline(t *testing.T) {
@@ -24,6 +26,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		DefaultRuntime: RuntimeTmux,
 		RuntimeEnv:     map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
 		GnarEdge:       "https://gnar.example.com",
+		GnarAccount:    "personal",
 		TunnelEnabled:  map[string]bool{"gnar": true},
 		AutoOpenShell:  true,
 		AutoStartAI:    true,
@@ -44,6 +47,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if loaded.GnarEdge != "https://gnar.example.com" {
 		t.Fatalf("loaded gnarEdge = %q", loaded.GnarEdge)
 	}
+	if loaded.GnarAccount != "personal" {
+		t.Fatalf("loaded gnarAccount = %q", loaded.GnarAccount)
+	}
 	if !loaded.TunnelEnabled["gnar"] {
 		t.Fatalf("loaded tunnelEnabled = %#v, want gnar restored", loaded.TunnelEnabled)
 	}
@@ -52,6 +58,65 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.AutoStartAI {
 		t.Fatal("loaded autoStartAI = false, want true")
+	}
+}
+
+func TestNormalizedGnarAccountUsesSafeDefault(t *testing.T) {
+	if got := NormalizedGnarAccount(""); got != DefaultGnarAccount {
+		t.Fatalf("empty gnar account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := NormalizedGnarAccount("  "); got != DefaultGnarAccount {
+		t.Fatalf("blank gnar account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := NormalizedGnarAccount("personal"); got != "personal" {
+		t.Fatalf("account = %q", got)
+	}
+	if got := NormalizedGnarAccount("bad\naccount"); got != DefaultGnarAccount {
+		t.Fatalf("control character account = %q, want %q", got, DefaultGnarAccount)
+	}
+}
+
+func TestNormalizeConfiguredGnarAccountMatchesV17Contract(t *testing.T) {
+	for _, value := range []string{"", "  ", "personal", "My-Account"} {
+		got, err := NormalizeConfiguredGnarAccount(value)
+		if err != nil {
+			t.Fatalf("NormalizeConfiguredGnarAccount(%q): %v", value, err)
+		}
+		if value == "My-Account" && got != "my-account" {
+			t.Fatalf("canonical account = %q, want my-account", got)
+		}
+	}
+	for _, value := range []string{"-leading", "trailing-", "has space", "too-long-account-name"} {
+		if _, err := NormalizeConfiguredGnarAccount(value); err == nil {
+			t.Fatalf("NormalizeConfiguredGnarAccount(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestDefaultGnarAccountForHostProducesV17Name(t *testing.T) {
+	if got := DefaultGnarAccountForHost("My Host_Name.example"); got != "my-host-name-exa" {
+		t.Fatalf("host account = %q, want my-host-name-exa", got)
+	}
+	if got := DefaultGnarAccountForHost("中文主机"); got != DefaultGnarAccount {
+		t.Fatalf("unicode-only host account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := EffectiveGnarAccount("", "MacBook-Pro"); got != "macbook-pro" {
+		t.Fatalf("effective account = %q, want macbook-pro", got)
+	}
+	if got := EffectiveGnarAccount("Custom-Name", "MacBook-Pro"); got != "custom-name" {
+		t.Fatalf("custom effective account = %q, want custom-name", got)
+	}
+}
+
+func TestBuiltInGnarEdgeReadsReleaseInjectedValueWithoutPersistingIt(t *testing.T) {
+	previous := releaseconfig.DefaultGnarEdge
+	t.Cleanup(func() { releaseconfig.DefaultGnarEdge = previous })
+	releaseconfig.DefaultGnarEdge = "  https://release.example.com/  "
+	if got := BuiltInGnarEdge(); got != "https://release.example.com/" {
+		t.Fatalf("built-in gnar edge = %q", got)
+	}
+	if (Settings{}).GnarEdge != "" {
+		t.Fatal("release default must not become a persisted settings override")
 	}
 }
 
