@@ -271,12 +271,14 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 	switch request.Method {
 	case http.MethodGet:
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime": s.Service.DefaultRuntime,
-			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
-			"gnarEdge":       s.Service.Settings.GnarEdge,
-			"gnarAccount":    settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-			"autoOpenShell":  s.Service.Settings.AutoOpenShell,
-			"autoStartAI":    s.Service.Settings.AutoStartAI,
+			"defaultRuntime":    s.Service.DefaultRuntime,
+			"runtimeEnv":        s.Service.Settings.RuntimeEnv,
+			"gnarEdge":          safeEdgeURL(s.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":   safeEdgeURL(s.gnarDefaultEdge()),
+			"gnarEffectiveEdge": safeEdgeURL(s.gnarEffectiveEdge()),
+			"gnarAccount":       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
+			"autoOpenShell":     s.Service.Settings.AutoOpenShell,
+			"autoStartAI":       s.Service.Settings.AutoStartAI,
 		})
 	case http.MethodPut:
 		var body struct {
@@ -325,15 +327,17 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			}
 		}
 		if s.Tunnels != nil {
-			s.Tunnels.SetGnarEdge(s.Service.Settings.GnarEdge)
+			s.Tunnels.SetGnarEdgeOverride(s.Service.Settings.GnarEdge)
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime": s.Service.DefaultRuntime,
-			"runtimeEnv":     s.Service.Settings.RuntimeEnv,
-			"gnarEdge":       s.Service.Settings.GnarEdge,
-			"gnarAccount":    settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-			"autoOpenShell":  s.Service.Settings.AutoOpenShell,
-			"autoStartAI":    s.Service.Settings.AutoStartAI,
+			"defaultRuntime":    s.Service.DefaultRuntime,
+			"runtimeEnv":        s.Service.Settings.RuntimeEnv,
+			"gnarEdge":          safeEdgeURL(s.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":   safeEdgeURL(s.gnarDefaultEdge()),
+			"gnarEffectiveEdge": safeEdgeURL(s.gnarEffectiveEdge()),
+			"gnarAccount":       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
+			"autoOpenShell":     s.Service.Settings.AutoOpenShell,
+			"autoStartAI":       s.Service.Settings.AutoStartAI,
 		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -421,9 +425,9 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
 		return
 	}
-	edge := strings.TrimSpace(body.EdgeURL)
-	if edge == "" {
-		edge = strings.TrimSpace(s.Service.Settings.GnarEdge)
+	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	if body.EdgeURL != nil {
+		edge = strings.TrimSpace(*body.EdgeURL)
 	}
 	if edge != "" {
 		if err := tunnel.ValidateEdgeURL(edge); err != nil {
@@ -448,9 +452,14 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
 		return
 	}
-	// An empty request Edge URL means "use the configured/default gnar Edge".
-	// Preserve an effective WARREN_GNAR_EDGE value instead of clearing it.
-	if edge != "" {
+	// Keep the effective launcher/release fallback in the manager when the
+	// request explicitly clears the persisted override.
+	if body.EdgeURL != nil {
+		// An explicit empty edge clears the persisted override and returns to
+		// the release/launcher default. An omitted edge keeps the current
+		// configured override for compatibility with existing callers.
+		s.Tunnels.SetGnarEdgeOverride(edge)
+	} else if edge != "" {
 		s.Tunnels.SetGnarEdge(edge)
 	}
 	// Re-enrollment or a changed non-secret configuration must not leave an
@@ -509,7 +518,7 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	edge := s.gnarEffectiveEdge()
 	if edge != "" {
 		if err := tunnel.ValidateEdgeURL(edge); err != nil {
 			s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("Public Access is not configured: "+err.Error()))
@@ -539,14 +548,16 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 }
 
 func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
-	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	if edge == "" && s.Tunnels != nil {
-		edge = s.Tunnels.GnarEdge()
-	}
+	edge := s.gnarEffectiveEdge()
+	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	defaultEdge := s.gnarDefaultEdge()
 	status := api.PublicAccessStatus{
-		EdgeURL:     edge,
-		AccountName: settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-		Enabled:     s.Service.PublicAccessEnabled(),
+		EdgeURL:           edge,
+		ConfiguredEdgeURL: configuredEdge,
+		DefaultEdgeURL:    defaultEdge,
+		UsingDefaultEdge:  configuredEdge == "",
+		AccountName:       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
+		Enabled:           s.Service.PublicAccessEnabled(),
 	}
 	if status.EdgeURL != "" {
 		if err := tunnel.ValidateEdgeURL(status.EdgeURL); err != nil {
@@ -554,6 +565,24 @@ func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 			// Do not echo an invalid Edge URL: it may contain userinfo or other
 			// material that must never cross the Public Access API boundary.
 			status.EdgeURL = ""
+		}
+	}
+	if status.ConfiguredEdgeURL != "" {
+		if err := tunnel.ValidateEdgeURL(status.ConfiguredEdgeURL); err != nil {
+			// Never echo a malformed or credential-bearing override through the
+			// status API, but retain an actionable configuration error.
+			status.ConfiguredEdgeURL = ""
+			if status.Error == "" {
+				status.Error = err.Error()
+			}
+		}
+	}
+	if status.DefaultEdgeURL != "" {
+		if err := tunnel.ValidateEdgeURL(status.DefaultEdgeURL); err != nil {
+			status.DefaultEdgeURL = ""
+			if status.Error == "" {
+				status.Error = err.Error()
+			}
 		}
 	}
 	if s.Tunnels == nil {
@@ -569,6 +598,32 @@ func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 		}
 	}
 	return status
+}
+
+func (s *HTTPServer) gnarDefaultEdge() string {
+	if s.Tunnels != nil {
+		if edge := s.Tunnels.GnarDefaultEdge(); edge != "" {
+			return edge
+		}
+	}
+	return settings.BuiltInGnarEdge()
+}
+
+func (s *HTTPServer) gnarEffectiveEdge() string {
+	if s.Tunnels != nil {
+		if edge := s.Tunnels.GnarEdge(); edge != "" || strings.TrimSpace(s.Service.Settings.GnarEdge) == "" {
+			return edge
+		}
+	}
+	return strings.TrimSpace(s.Service.Settings.GnarEdge)
+}
+
+func safeEdgeURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || tunnel.ValidateEdgeURL(value) != nil {
+		return ""
+	}
+	return value
 }
 
 func (s *HTTPServer) writePublicAccessStatus(writer http.ResponseWriter, code int, status api.PublicAccessStatus) {
@@ -1050,12 +1105,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: session, Snapshot: snapshot})
 	case "settings.get":
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime": p.server.Service.DefaultRuntime,
-			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":       p.server.Service.Settings.GnarEdge,
-			"gnarAccount":    settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
-			"autoOpenShell":  p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":    p.server.Service.Settings.AutoStartAI,
+			"defaultRuntime":    p.server.Service.DefaultRuntime,
+			"runtimeEnv":        p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":          safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":   safeEdgeURL(p.server.gnarDefaultEdge()),
+			"gnarEffectiveEdge": safeEdgeURL(p.server.gnarEffectiveEdge()),
+			"gnarAccount":       settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
+			"autoOpenShell":     p.server.Service.Settings.AutoOpenShell,
+			"autoStartAI":       p.server.Service.Settings.AutoStartAI,
 		})
 	case "settings.put":
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
@@ -1080,7 +1137,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 		}
 		if p.server.Tunnels != nil {
-			p.server.Tunnels.SetGnarEdge(p.server.Service.Settings.GnarEdge)
+			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.Settings.GnarEdge)
 		}
 		if _, specified := params["gnarAccount"]; specified {
 			p.server.Service.Settings.GnarAccount = settings.NormalizedGnarAccount(stringParam(params, "gnarAccount"))
@@ -1091,12 +1148,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 		}
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime": p.server.Service.DefaultRuntime,
-			"runtimeEnv":     p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":       p.server.Service.Settings.GnarEdge,
-			"gnarAccount":    settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
-			"autoOpenShell":  p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":    p.server.Service.Settings.AutoStartAI,
+			"defaultRuntime":    p.server.Service.DefaultRuntime,
+			"runtimeEnv":        p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":          safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":   safeEdgeURL(p.server.gnarDefaultEdge()),
+			"gnarEffectiveEdge": safeEdgeURL(p.server.gnarEffectiveEdge()),
+			"gnarAccount":       settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
+			"autoOpenShell":     p.server.Service.Settings.AutoOpenShell,
+			"autoStartAI":       p.server.Service.Settings.AutoStartAI,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(

@@ -649,7 +649,7 @@ Default Host files:
 | --- | --- |
 | `state.json` | Host resources, Runtime bindings, lifecycle, output positions |
 | `config.json` | Desktop/CLI endpoint catalog and selected endpoint |
-| `settings.json` | Default Runtime, Runtime environment, gnar Edge/account label, tunnel intent, and empty-workspace Shell/AI defaults; Enrollment Keys are never persisted; worktree import policy lives on each Project |
+| `settings.json` | Default Runtime, Runtime environment, optional gnar Edge override/account label, tunnel intent, and empty-workspace Shell/AI defaults; the release default Edge is injected at build time and Enrollment Keys are never persisted; worktree import policy lives on each Project |
 | `token` | Direct Host bearer token |
 | `output/` | Per-Session raw PTY spools and archives |
 | `agent-bind/` | Warren Session to external agent conversation binding |

@@ -88,8 +88,14 @@ go test -race ./Headless/...
 3. Build the release archive from the tagged release commit:
 
    ```sh
-   bash scripts/package.sh
+   WARREN_GNAR_DEFAULT_EDGE="https://edge.example.com" bash scripts/package.sh
    ```
+
+   `WARREN_GNAR_DEFAULT_EDGE` is injected into the headless binaries at
+   release build time. It is a public, credential-free URL; do not put an
+   enrollment key or account token in it. Users who saved a custom Edge in
+   Settings keep that override across releases, while users without an
+   override follow the newly embedded default.
 
    Confirm that `Warren.app/Contents/Info.plist` contains the release version,
    `Warren.app/Contents/MacOS/warren-headless --version` prints the release

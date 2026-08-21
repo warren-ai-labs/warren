@@ -80,7 +80,7 @@ func main() {
 	cloudflaredPath := flag.String("cloudflared-path", os.Getenv("WARREN_CLOUDFLARED_PATH"), "cloudflared binary path")
 	tailscalePath := flag.String("tailscale-path", os.Getenv("WARREN_TAILSCALE_PATH"), "tailscale binary path")
 	gnarPath := flag.String("gnar-path", os.Getenv("WARREN_GNAR_PATH"), "gnar binary path")
-	gnarEdge := flag.String("gnar-edge", env("WARREN_GNAR_EDGE", ""), "gnar edge URL (overrides settings.json)")
+	gnarEdge := flag.String("gnar-edge", env("WARREN_GNAR_EDGE", ""), "gnar edge URL (overrides settings.json and the release default)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
@@ -109,6 +109,18 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	builtInGnarEdge := settings.BuiltInGnarEdge()
+	if builtInGnarEdge != "" {
+		if err := tunnel.ValidateEdgeURL(builtInGnarEdge); err != nil {
+			fatal(fmt.Errorf("invalid release gnar Edge: %w", err))
+		}
+	}
+	// A launcher override remains useful for development and operators. When
+	// it is absent, the release-injected Edge is the non-persisted fallback.
+	gnarDefaultEdge := strings.TrimSpace(*gnarEdge)
+	if gnarDefaultEdge == "" {
+		gnarDefaultEdge = builtInGnarEdge
+	}
 	gnarEdgeValue := loadedSettings.GnarEdge
 	gnarEdgeExplicit := false
 	flag.Visit(func(entry *flag.Flag) {
@@ -119,9 +131,10 @@ func main() {
 	if gnarEdgeExplicit {
 		gnarEdgeValue = *gnarEdge
 	} else if gnarEdgeValue == "" {
-		// Fall back to the launcher environment when the settings file does
-		// not pin an edge, so a single gnar login or GNAR_EDGE still works.
-		gnarEdgeValue = *gnarEdge
+		// Fall back to the launcher environment, then the release default, when
+		// settings.json does not pin an Edge. Source builds with no injected
+		// default still let gnar use its own GNAR_EDGE discovery.
+		gnarEdgeValue = gnarDefaultEdge
 	}
 	// Strip launcher-only pager/TERM semantics (agent/CI shells export
 	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline/tmux children
@@ -241,6 +254,7 @@ func main() {
 	}
 	webBaseURL := "http://127.0.0.1:" + listenerPort(listener)
 	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
+	tunnelManager.SetGnarDefaultEdge(gnarDefaultEdge)
 	tunnelManager.SetGnarEdge(gnarEdgeValue)
 	// Restore the tunnels the user left running before the previous daemon
 	// exited, so the Public Endpoint survives Warren restarts and upgrades. Start is

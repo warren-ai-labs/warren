@@ -214,6 +214,53 @@ func TestHTTPSettingsRejectCredentialBearingGnarEdge(t *testing.T) {
 	}
 }
 
+func TestHTTPSettingsClearGnarOverrideRestoresReleaseDefault(t *testing.T) {
+	service := &Service{
+		Runtime:        &memoryRuntime{sessions: map[string][]byte{}},
+		DefaultRuntime: settings.RuntimeGhostline,
+		Settings:       settings.Settings{GnarEdge: "https://custom.example.com"},
+		SettingsPath:   filepath.Join(t.TempDir(), "settings.json"),
+	}
+	handler := NewHTTPServer(service, "secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9873", "", "", "/missing/gnar")
+	handler.Tunnels.SetGnarDefaultEdge("https://release.example.com")
+	handler.Tunnels.SetGnarEdge("https://custom.example.com")
+	httpServer := httptest.NewServer(handler.Handler())
+	defer httpServer.Close()
+
+	request, err := http.NewRequest(http.MethodPut, httpServer.URL+"/v1/settings", bytes.NewBufferString(`{"gnarEdge":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer secret")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("clear gnar edge status = %d", response.StatusCode)
+	}
+	var result map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result["gnarEdge"] != "" || result["gnarEffectiveEdge"] != "https://release.example.com" {
+		t.Fatalf("clear gnar edge response = %#v", result)
+	}
+	if got := handler.Tunnels.GnarEdge(); got != "https://release.example.com" {
+		t.Fatalf("effective edge after clear = %q", got)
+	}
+	loaded, err := settings.Load(service.SettingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.GnarEdge != "" {
+		t.Fatalf("persisted gnar override = %q", loaded.GnarEdge)
+	}
+}
+
 func TestPublicAccessLifecycleUsesPrivateEnrollmentAndCredentialFreeResponse(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "gnar-key")
 	loginCountPath := filepath.Join(t.TempDir(), "gnar-login-count")
@@ -442,6 +489,46 @@ func TestPublicAccessStatusDoesNotEchoCredentialBearingEdge(t *testing.T) {
 	}
 	if status.EdgeURL != "" || status.Error == "" {
 		t.Fatalf("invalid Edge status = %#v", status)
+	}
+}
+
+func TestPublicAccessStatusSeparatesReleaseDefaultFromUserOverride(t *testing.T) {
+	service := &Service{Settings: settings.Settings{}}
+	handler := NewHTTPServer(service, "daemon-secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9874", "", "", "/missing/gnar")
+	handler.Tunnels.SetGnarDefaultEdge("https://release.example.com")
+	handler.Tunnels.SetGnarEdgeOverride("")
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	getStatus := func() api.PublicAccessStatus {
+		request, err := http.NewRequest(http.MethodGet, server.URL+"/v1/public-access", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer daemon-secret")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var status api.PublicAccessStatus
+		if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+
+	status := getStatus()
+	if status.EdgeURL != "https://release.example.com" || status.DefaultEdgeURL != "https://release.example.com" || status.ConfiguredEdgeURL != "" || !status.UsingDefaultEdge {
+		t.Fatalf("release default status = %#v", status)
+	}
+
+	service.Settings.GnarEdge = "https://custom.example.com"
+	handler.Tunnels.SetGnarEdge("https://custom.example.com")
+	status = getStatus()
+	if status.EdgeURL != "https://custom.example.com" || status.ConfiguredEdgeURL != "https://custom.example.com" || status.DefaultEdgeURL != "https://release.example.com" || status.UsingDefaultEdge {
+		t.Fatalf("custom override status = %#v", status)
 	}
 }
 
