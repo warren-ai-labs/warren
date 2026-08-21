@@ -97,6 +97,15 @@ go test -race ./Headless/...
    Settings keep that override across releases, while users without an
    override follow the newly embedded default.
 
+   Warren can ship the matching gnar worker in
+   `Warren.app/Contents/Resources/gnar`. Set `WARREN_GNAR_BINARY` to the
+   release gnar binary before running `scripts/build-app.sh`, or place a
+   release binary at `../gnar/target/release/gnar` for local packaging. The
+   bundled worker uses `~/.warren/gnar` for its credential store; an explicit
+   `WARREN_GNAR_PATH` continues to use the system gnar store unless
+   `WARREN_GNAR_CONFIG_DIR` is supplied. Existing system credentials are not
+   migrated.
+
    Confirm that `Warren.app/Contents/Info.plist` contains the release version,
    `Warren.app/Contents/MacOS/warren-headless --version` prints the release
    tag, and `Warren-<version>.zip` exists. Do not commit `Warren.app`, zip

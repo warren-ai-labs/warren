@@ -142,3 +142,29 @@ func TestValidateGhostlinePaths(t *testing.T) {
 		})
 	}
 }
+
+func TestBundledGnarPathOnlyAcceptsWarrenAppResource(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "Warren.app", "Contents", "MacOS", "warren-headless")
+	resource := filepath.Join(root, "Warren.app", "Contents", "Resources", "gnar")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(resource), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resource, []byte("gnar"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundledGnarPathFor(executable); got != resource {
+		t.Fatalf("bundled gnar path = %q, want %q", got, resource)
+	}
+
+	outside := filepath.Join(root, "build", "warren-headless")
+	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundledGnarPathFor(outside); got != "" {
+		t.Fatalf("non-app executable selected bundled gnar %q", got)
+	}
+}

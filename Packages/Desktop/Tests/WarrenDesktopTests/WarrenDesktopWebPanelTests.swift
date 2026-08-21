@@ -18,7 +18,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         XCTAssertEqual(addresses.map(\.kind), [.local, .lan, .publicAccess])
         XCTAssertEqual(addresses.map(\.url), [localURL, lanURL, publicURL])
-        XCTAssertEqual(addresses.map { $0.kind.canOpenInBrowser }, [true, false, false])
+        XCTAssertEqual(addresses.map { $0.kind.canOpenInBrowser }, [true, false, true])
     }
 
     func testAddressPresentationDoesNotRepeatTheLocalURLAsLAN() throws {

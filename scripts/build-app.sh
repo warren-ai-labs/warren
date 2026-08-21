@@ -50,6 +50,32 @@ install -m 755 "$binary_directory/WarrenDaemonMenuBar" "$staging_path/Contents/M
 install -m 755 "$repository_root/.build/warren-cli" "$staging_path/Contents/MacOS/warren-cli"
 install -m 755 "$repository_root/.build/warren-headless" "$staging_path/Contents/MacOS/warren-headless"
 install -m 644 "$repository_root/Support/Info.plist" "$staging_path/Contents/Info.plist"
+
+# Release builds may ship the gnar worker inside Warren.app. The source tree
+# remains usable without it, while WARREN_GNAR_BINARY gives CI/release jobs an
+# explicit, reproducible input. A sibling ../gnar checkout is accepted for
+# local packaging only; Warren never edits that checkout or its credentials.
+gnar_binary="${WARREN_GNAR_BINARY:-}"
+if [[ -n "$gnar_binary" ]]; then
+    if [[ ! -f "$gnar_binary" || ! -x "$gnar_binary" ]]; then
+        echo "WARREN_GNAR_BINARY must name an executable file: $gnar_binary" >&2
+        exit 66
+    fi
+else
+    for candidate in \
+        "$repository_root/../gnar/target/release/gnar" \
+        "$repository_root/../gnar/gnar"; do
+        if [[ -f "$candidate" && -x "$candidate" ]]; then
+            gnar_binary="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -n "$gnar_binary" ]]; then
+    install -m 755 "$gnar_binary" "$staging_path/Contents/Resources/gnar"
+else
+    echo "warning: no gnar binary found; Warren will use WARREN_GNAR_PATH/system discovery" >&2
+fi
 install -m 644 "$repository_root/Assets/Brand/Warren.icns" "$staging_path/Contents/Resources/Warren.icns"
 install -m 755 "$repository_root/Support/Raycast/warren-terminal.sh" "$staging_path/Contents/Resources/warren-terminal.sh"
 install -m 644 "$repository_root/Assets/Brand/warren-app-icon.png" "$staging_path/Contents/Resources/warren-terminal.png"

@@ -53,6 +53,10 @@ type Manager struct {
 	cloudflaredPath string
 	tailscalePath   string
 	gnarPath        string
+	// gnarConfigDir is passed only to the gnar child process. A bundled gnar
+	// binary uses Warren's private credential store while an explicitly
+	// selected/system binary keeps its normal gnar location unless this is set.
+	gnarConfigDir   string
 	gnarEdge        string
 	gnarDefaultEdge string
 	pollInterval    time.Duration
@@ -152,6 +156,28 @@ func (m *Manager) SetGnarEdge(edge string) {
 	m.gnarAuthenticated = false
 }
 
+// SetGnarConfigDir selects the credential directory for gnar child processes.
+// Warren never reads the credential store; gnar remains the owner of its
+// long-lived account token. An empty value deliberately leaves the child
+// environment untouched for system gnar compatibility.
+func (m *Manager) SetGnarConfigDir(directory string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	directory = strings.TrimSpace(directory)
+	if directory != m.gnarConfigDir {
+		m.gnarAuthenticated = false
+		delete(m.lastErrors, KindGnar)
+	}
+	m.gnarConfigDir = directory
+}
+
+// GnarConfigDir returns the configured child-process credential directory.
+func (m *Manager) GnarConfigDir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gnarConfigDir
+}
+
 // SetGnarDefaultEdge sets the release/launcher fallback used when the user
 // has no persisted Edge override. It never writes settings.json.
 func (m *Manager) SetGnarDefaultEdge(edge string) {
@@ -209,6 +235,9 @@ func (m *Manager) GnarAuthenticated() bool {
 func (m *Manager) setGnarAuthenticated(value bool) {
 	m.mu.Lock()
 	m.gnarAuthenticated = value
+	if value {
+		delete(m.lastErrors, KindGnar)
+	}
 	m.mu.Unlock()
 }
 
@@ -226,7 +255,29 @@ func (m *Manager) loginGnar(edge, account string, keyKind LoginKeyKind, key []by
 	if path == "" {
 		return errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
 	}
-	return loginGnar(path, edge, account, keyKind, key)
+	return loginGnarWithEnvironment(path, edge, account, keyKind, key, m.gnarEnvironment())
+}
+
+func (m *Manager) gnarEnvironment() []string {
+	m.mu.Lock()
+	directory := m.gnarConfigDir
+	m.mu.Unlock()
+	return gnarEnvironmentFor(directory)
+}
+
+func gnarEnvironmentFor(directory string) []string {
+	if directory == "" {
+		return nil
+	}
+	environment := os.Environ()
+	filtered := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "GNAR_CONFIG_DIR=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return append(filtered, "GNAR_CONFIG_DIR="+directory)
 }
 
 // StartPublicAccess preserves the legacy API, treating its key as an approval
@@ -305,11 +356,10 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 	return status, errors.New(status.Error)
 }
 
-// TestPublicAccess authenticates gnar when a bootstrap key is supplied, then
-// starts and stops one normal tunnel to verify the persisted token and Edge
-// connection. The tunnel is never left running by this configuration action;
-// the caller can use StartPublicAccessWithKey with an empty key afterwards to
-// make the Public Endpoint live.
+// TestPublicAccess authenticates gnar when a bootstrap key is supplied. That
+// login is sufficient for the first Save & Test result; the normal tunnel is
+// only started and stopped when no key is supplied, which verifies an already
+// persisted gnar token without leaving a Public Endpoint live.
 func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
 	// A failed re-test must not leave the UI claiming that an older connection
 	// still authenticates the newly submitted configuration.
@@ -320,7 +370,8 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		clearBytes(key)
 		return Status{Error: err.Error()}, err
 	}
-	if len(key) > 0 {
+	hasBootstrapKey := len(key) > 0
+	if hasBootstrapKey {
 		defer clearBytes(key)
 	}
 	// Start is idempotent by design. A connection test must not accidentally
@@ -356,11 +407,19 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
-	if len(key) > 0 {
+	if hasBootstrapKey {
 		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
+	}
+	// A bootstrap login is the connection test. The login command has already
+	// contacted the configured Edge and gnar has durably stored its token. Do
+	// not make Save & Test depend on the normal tunnel's readiness window: the
+	// top Web control starts the live endpoint after the user sees success.
+	if hasBootstrapKey {
+		m.setGnarAuthenticated(true)
+		return Status{}, nil
 	}
 	status, err := m.Start(KindGnar)
 	if err != nil {
@@ -653,6 +712,7 @@ func (m *Manager) startGnar() (Status, error) {
 	}
 	args = append(args, gnarNameArgs()...)
 	command := exec.Command(path, args...)
+	command.Env = gnarEnvironmentFor(m.gnarConfigDir)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		m.mu.Unlock()
@@ -962,6 +1022,10 @@ func NormalizePublicEndpoint(raw string) (string, error) {
 }
 
 func loginGnar(path, edge, account string, keyKind LoginKeyKind, key []byte) error {
+	return loginGnarWithEnvironment(path, edge, account, keyKind, key, nil)
+}
+
+func loginGnarWithEnvironment(path, edge, account string, keyKind LoginKeyKind, key []byte, environment []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gnarLoginTimeout)
 	defer cancel()
 	args := []string{"login", "--edge", edge, "--account", account}
@@ -979,6 +1043,9 @@ func loginGnar(path, edge, account string, keyKind LoginKeyKind, key []byte) err
 		path,
 		args...,
 	)
+	if len(environment) > 0 {
+		command.Env = environment
+	}
 	command.Stdin = bytes.NewReader(key)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout

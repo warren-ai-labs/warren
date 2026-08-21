@@ -109,7 +109,7 @@ enum WarrenDesktopWebAddressKind: String, Hashable, Sendable {
     }
 
     var canOpenInBrowser: Bool {
-        self == .local
+        self == .local || self == .publicAccess
     }
 }
 
@@ -313,15 +313,13 @@ public struct WarrenDesktopWebPanel: View {
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
             Text(
-                "Configure the Edge URL and one Invite Key or Approval Key in Settings → "
-                    + "Public Access. Approval Key takes priority. Warren never saves either "
-                    + "key; Save & Test verifies the connection before a Public Endpoint can run."
+                "Set up Public Access in Settings, then start it here."
             )
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
             if let onOpenSettings {
-                Button("Open Public Access Settings", action: onOpenSettings)
+                Button("Open Settings", action: onOpenSettings)
                     .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.popoverItem))
                     .accessibilityIdentifier("public-access.open-settings")
             }

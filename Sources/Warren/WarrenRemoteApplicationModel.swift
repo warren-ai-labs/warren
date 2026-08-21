@@ -1288,8 +1288,8 @@ final class WarrenRemoteApplicationModel {
     }
 
     /// Persists the non-secret Public Access configuration and verifies the
-    /// gnar Edge. Bootstrap keys are cleared by the Settings view before this
-    /// callback returns and are forwarded only through the headless API.
+    /// gnar Edge. Bootstrap keys are forwarded only through the headless API;
+    /// Settings clears them after a successful response and keeps only a mask.
     func testPublicAccess(
         edgeURL: String,
         accountName: String,
@@ -1298,6 +1298,7 @@ final class WarrenRemoteApplicationModel {
     ) {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
+        webStatus.publicAccessAuthenticated = false
         Task {
             defer { webStatus.publicAccessBusy = false }
             do {
@@ -1368,7 +1369,14 @@ final class WarrenRemoteApplicationModel {
             }
         }
     }
-    func openWebURL(_ url: URL) { NSWorkspace.shared.open(url) }
+    func openWebURL(_ url: URL) {
+        let browserURL = Self.publicAccessBrowserURL(
+            url,
+            currentEndpoint: webStatus.secureURL,
+            daemonToken: endpointConfiguration?.token ?? ""
+        )
+        NSWorkspace.shared.open(browserURL)
+    }
     func copyWebURL(_ url: URL) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
@@ -1402,6 +1410,37 @@ final class WarrenRemoteApplicationModel {
                 forType: .string
             )
         }
+    }
+
+    /// Returns the URL used only for an explicit browser-open action. Public
+    /// Access responses and clipboard paths stay canonical and credential-free;
+    /// the existing Warren fragment is added at the last possible moment so
+    /// the protected WebSocket can authenticate. This compatibility mechanism
+    /// remains a residual risk for browser history and is never persisted or
+    /// sent through analytics.
+    static func publicAccessBrowserURL(
+        _ url: URL,
+        currentEndpoint: URL?,
+        daemonToken: String
+    ) -> URL {
+        guard !daemonToken.isEmpty,
+              let currentEndpoint,
+              canonicalWebURL(url) == canonicalWebURL(currentEndpoint) else {
+            return url
+        }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.fragment = "t=\(daemonToken)"
+        return components.url ?? url
+    }
+
+    private static func canonicalWebURL(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.fragment = nil
+        return components.url ?? url
     }
 
     private enum TunnelAction: String {
