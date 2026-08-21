@@ -55,6 +55,11 @@ type HTTPServer struct {
 
 	peersMu sync.Mutex
 	peers   map[*wsPeer]struct{}
+	// tunnelMu serializes configuration persistence with all lifecycle routes.
+	// Manager has its own process-operation lock, but this server-level lock also
+	// keeps an enable/test/restart from observing half-written Edge/account
+	// settings while a legacy route is changing the enabled intent.
+	tunnelMu sync.Mutex
 }
 
 type rosterMessage struct {
@@ -393,6 +398,8 @@ func (s *HTTPServer) handleTunnelControl(writer http.ResponseWriter, request *ht
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
 	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
 	var err error
 	if start {
 		_, err = s.Tunnels.Start(body.Kind)
@@ -437,6 +444,8 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
 		return
 	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
 	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
 	if body.EdgeURL != nil {
 		edge = strings.TrimSpace(*body.EdgeURL)
@@ -546,6 +555,8 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access test request"))
 		return
 	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
 	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
 	if body.EdgeURL != nil {
 		configuredEdge = strings.TrimSpace(*body.EdgeURL)
@@ -659,6 +670,8 @@ func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, reque
 		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
 	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
 		return
@@ -679,6 +692,8 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
 	edge := s.gnarEffectiveEdge()
 	if edge != "" {
 		if err := tunnel.ValidateEdgeURL(edge); err != nil {
@@ -808,7 +823,7 @@ func tunnelResponse(status map[string]tunnel.Status, token string) map[string]an
 		item := map[string]any{"running": value.Running}
 		if value.URL != "" {
 			item["url"] = value.URL
-			item["web_url"] = value.URL + "#t=" + token
+			item["web_url"] = authenticatedWebURL(value.URL, token)
 		}
 		if value.Error != "" {
 			item["error"] = value.Error
@@ -816,6 +831,22 @@ func tunnelResponse(status map[string]tunnel.Status, token string) map[string]an
 		result[kind] = item
 	}
 	return map[string]any{"tunnels": result}
+}
+
+// authenticatedWebURL is retained only for the lower-level legacy tunnel
+// routes. Public Access responses stay credential-free; browser-open code adds
+// the same fragment at the last possible moment. QueryEscape gives the Web UI
+// a form-safe value, while replacing its space encoding keeps arbitrary legacy
+// tokens RFC3986-compatible as well.
+func authenticatedWebURL(raw, token string) string {
+	if token == "" {
+		return raw
+	}
+	base := raw
+	if fragment := strings.IndexByte(base, '#'); fragment >= 0 {
+		base = base[:fragment]
+	}
+	return base + "#t=" + strings.ReplaceAll(url.QueryEscape(token), "+", "%20")
 }
 
 func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.Request) {

@@ -129,6 +129,33 @@ sleep 30
 	}
 }
 
+func TestGnarStderrIsDrainedWhileStdoutStaysOpen(t *testing.T) {
+	binary := writeScript(t, `#!/bin/sh
+printf '%s\n' '{"type":"error","message":"no persisted gnar token; enrollment required"}' >&2
+i=0
+while [ "$i" -lt 20000 ]; do
+  printf 'gnar diagnostic line %s\n' "$i" >&2
+  i=$((i + 1))
+done
+sleep 30
+`)
+	manager := NewManager(slog.New(slog.NewTextHandler(os.Stderr, nil)), "http://127.0.0.1:8789", "", "", binary)
+	manager.pollInterval = 10 * time.Millisecond
+	manager.pollAttempts = 20
+
+	started := time.Now()
+	status, err := manager.Start(KindGnar)
+	if err != nil {
+		t.Fatalf("start should return the child error status without hanging: %v", err)
+	}
+	if status.Error == "" || status.Running || status.URL != "" {
+		t.Fatalf("stderr error status = %#v", status)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("stderr drain took too long: %v", elapsed)
+	}
+}
+
 func TestManagerStopAllTearsDownEveryRunningAdapter(t *testing.T) {
 	cloudflared := writeScript(t, `#!/bin/sh
 printf 'https://fake-%s.trycloudflare.com\n' "$(date +%s)"

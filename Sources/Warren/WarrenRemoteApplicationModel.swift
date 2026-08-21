@@ -820,9 +820,11 @@ final class WarrenRemoteApplicationModel {
         autoStartAI = false
         if configuration.url.hasPrefix("http://127.0.0.1:8789"),
            !configuration.token.isEmpty,
-           let url = URL(string: "http://127.0.0.1:8789/#t=\(configuration.token)") {
-            let lanURL = WarrenLANAddress.primaryIPv4().flatMap { ip in
-                URL(string: "http://\(ip):8789/#t=\(configuration.token)")
+           let localBaseURL = URL(string: "http://127.0.0.1:8789/") {
+            let url = Self.authenticatedWebURL(localBaseURL, daemonToken: configuration.token)
+            let lanURL: URL? = WarrenLANAddress.primaryIPv4().flatMap { ip in
+                guard let baseURL = URL(string: "http://\(ip):8789/") else { return nil }
+                return Self.authenticatedWebURL(baseURL, daemonToken: configuration.token)
             }
             webStatus = WarrenDesktopWebStatus(
                 isRunning: true,
@@ -1311,18 +1313,21 @@ final class WarrenRemoteApplicationModel {
                 )
             } catch {
                 // Older headless builds do not know the first-class test
-                // route. Complete the equivalent check through the legacy
-                // enable/disable pair without changing the final intent.
+                // route. A token-only check can still use the compatibility
+                // tunnel lifecycle; bootstrap keys cannot be forwarded to an
+                // old daemon because it has no enrollment contract.
                 if isMissingPublicAccessEndpoint(error) {
+                    if !inviteKey.isEmpty || !approvalKey.isEmpty {
+                        let unsupported = NSError(domain: "WarrenRemote", code: 404, userInfo: [
+                            NSLocalizedDescriptionKey: "This Warren daemon does not support Public Access enrollment. Upgrade the daemon or sign in to gnar first, then retry without a key.",
+                        ])
+                        webStatus.publicAccessError = unsupported.localizedDescription
+                        present(unsupported)
+                        return
+                    }
                     do {
-                        try await publicAccessRequest(
-                            .enable,
-                            edgeURL: edgeURL,
-                            accountName: accountName,
-                            inviteKey: inviteKey,
-                            approvalKey: approvalKey
-                        )
-                        try await publicAccessRequest(.disable)
+                        try await tunnelRequest(.start, kind: "gnar")
+                        try await tunnelRequest(.stop, kind: "gnar")
                         webStatus.publicAccessAuthenticated = true
                         webStatus.publicAccessError = nil
                         return
@@ -1377,7 +1382,10 @@ final class WarrenRemoteApplicationModel {
         )
         NSWorkspace.shared.open(browserURL)
     }
-    func copyWebURL(_ url: URL) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
+    func copyWebURL(_ url: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Self.canonicalWebURL(url).absoluteString, forType: .string)
+    }
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
     }
@@ -1431,19 +1439,39 @@ final class WarrenRemoteApplicationModel {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url
         }
-        // URL fragments are parsed as form-like values by the Web client. A
-        // raw `+` in a base64 daemon token would therefore be decoded as a
-        // space and make the protected WebSocket fail authentication. Keep
-        // only RFC3986 unreserved characters literal and percent-encode the
-        // rest at the last possible moment before opening the browser.
-        let allowedFragmentValueCharacters = CharacterSet(
+        components.fragment = nil
+        return authenticatedWebURL(components.url ?? url, daemonToken: daemonToken)
+    }
+
+    /// Adds the legacy Warren Web authentication fragment only to a URL being
+    /// opened in a browser. The value is encoded as an RFC3986 fragment field
+    /// so base64 tokens containing `+`, `/`, or `=` survive URLSearchParams.
+    static func authenticatedWebURL(_ url: URL, daemonToken: String) -> URL {
+        guard !daemonToken.isEmpty,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.percentEncodedFragment = "t=\(percentEncodeFragmentValue(daemonToken))"
+        return components.url ?? url
+    }
+
+    private static func percentEncodeFragmentValue(_ value: String) -> String {
+        let allowed = CharacterSet(
             charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
         )
-        let encodedToken = daemonToken.addingPercentEncoding(
-            withAllowedCharacters: allowedFragmentValueCharacters
-        ) ?? daemonToken
-        components.percentEncodedFragment = "t=\(encodedToken)"
-        return components.url ?? url
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
+    private static func normalizeAuthenticatedWebURL(_ url: URL) -> URL {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let fragment = components.fragment,
+              fragment.hasPrefix("t=") else {
+            return url
+        }
+        let token = String(fragment.dropFirst(2))
+        var canonical = components
+        canonical.fragment = nil
+        return authenticatedWebURL(canonical.url ?? url, daemonToken: token)
     }
 
     private static func canonicalWebURL(_ url: URL) -> URL {
@@ -1499,9 +1527,14 @@ final class WarrenRemoteApplicationModel {
 
     private func refreshTunnelStatus() async {
         guard let configuration = endpointConfiguration else { return }
-        if await refreshPublicAccessStatus(configuration: configuration) {
+        let publicAccessAvailable = await refreshPublicAccessStatus(configuration: configuration)
+        if publicAccessAvailable && webStatus.tunnelRunning {
             return
         }
+        await refreshLegacyTunnelStatus(configuration: configuration)
+    }
+
+    private func refreshLegacyTunnelStatus(configuration: WarrenRemoteEndpointConfiguration) async {
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
@@ -1711,17 +1744,27 @@ final class WarrenRemoteApplicationModel {
                 case webURL = "web_url"
             }
         }
-        guard let response = try? JSONDecoder().decode(Response.self, from: data),
-              let tunnel = response.tunnels.values.first(where: { $0.running && $0.webURL != nil }),
-              let url = tunnel.webURL.flatMap(URL.init(string:)) else {
+        guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
             webStatus.secureURL = nil
             webStatus.tunnelRunning = false
             return
         }
-        webStatus.secureURL = url
+        let active = response.tunnels.first(where: { kind, tunnel in
+            kind == "gnar" && tunnel.running && tunnel.webURL != nil
+        }) ?? response.tunnels.first(where: { $0.value.running && $0.value.webURL != nil })
+        guard let active,
+              let rawURL = active.value.webURL,
+              let url = URL(string: rawURL) else {
+            webStatus.secureURL = nil
+            webStatus.tunnelRunning = false
+            return
+        }
+        webStatus.secureURL = Self.normalizeAuthenticatedWebURL(url)
         webStatus.tunnelRunning = true
-        webStatus.publicAccessAuthenticated = true
-        webStatus.publicAccessError = nil
+        if active.key == "gnar" {
+            webStatus.publicAccessAuthenticated = true
+            webStatus.publicAccessError = nil
+        }
     }
 
     func previewSupersetImport() async throws -> SupersetImportPreview {

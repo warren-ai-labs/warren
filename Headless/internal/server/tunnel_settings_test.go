@@ -874,6 +874,15 @@ sleep 30
 	}
 }
 
+func TestLegacyTunnelURLEscapesBase64DaemonToken(t *testing.T) {
+	if got := authenticatedWebURL("https://legacy.example.com/t/warren/", "a+/="); got != "https://legacy.example.com/t/warren/#t=a%2B%2F%3D" {
+		t.Fatalf("legacy web URL = %q", got)
+	}
+	if got := authenticatedWebURL("https://legacy.example.com/t/warren/#old", "token"); got != "https://legacy.example.com/t/warren/#t=token" {
+		t.Fatalf("legacy web URL did not replace fragment: %q", got)
+	}
+}
+
 func writeExecutableScript(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gnar")
