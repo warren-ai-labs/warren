@@ -8,6 +8,7 @@ xcuserdata/
 .idea/
 Web/node_modules/
 Warren.app/
+Warren-*.zip
 Frameworks/
 .local/force-push-once.sh
 __pycache__/

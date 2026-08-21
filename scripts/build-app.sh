@@ -91,8 +91,7 @@ if [[ "$configuration" == "release" ]]; then
 fi
 printf '%s\n' "$build_variant" > "$staging_path/Contents/Resources/build-variant.txt"
 
-codesign --force --sign - "$staging_path/Contents/Frameworks/libghostty-vt.dylib"
-codesign --force --sign - "$staging_path"
+bash "$repository_root/scripts/sign-app.sh" "$staging_path"
 rm -rf "$app_path"
 mv "$staging_path" "$app_path"
 trap - EXIT
