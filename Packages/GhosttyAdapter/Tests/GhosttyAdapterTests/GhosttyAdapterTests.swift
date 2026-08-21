@@ -219,8 +219,15 @@ final class GhosttyAdapterTests: XCTestCase {
     @MainActor
     func testHostManagedTerminalAnswersWarrenColorQueriesAfterMount() async throws {
         let recorder = LockedInputRecorder()
-        let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
+        let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
         defer { window.orderOut(nil) }
+
+        // AppKit can report a light appearance for this host-managed view even
+        // though Warren's product theme is dark-only. Pin that lifecycle input
+        // so the regression test does not depend on the test runner's theme.
+        view.appearance = NSAppearance(named: .aqua)
+        view.viewDidChangeEffectiveAppearance()
+        try await Task.sleep(for: .milliseconds(50))
 
         // Codex batches OSC 10/11 during its startup probe. Exercise the
         // production output writer so the assertion covers the host-managed
