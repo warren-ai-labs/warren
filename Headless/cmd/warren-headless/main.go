@@ -80,12 +80,31 @@ func main() {
 	cloudflaredPath := flag.String("cloudflared-path", os.Getenv("WARREN_CLOUDFLARED_PATH"), "cloudflared binary path")
 	tailscalePath := flag.String("tailscale-path", os.Getenv("WARREN_TAILSCALE_PATH"), "tailscale binary path")
 	gnarPath := flag.String("gnar-path", os.Getenv("WARREN_GNAR_PATH"), "gnar binary path")
+	gnarConfigDir := flag.String("gnar-config-dir", os.Getenv("WARREN_GNAR_CONFIG_DIR"), "gnar credential directory (bundled gnar defaults to ~/.warren/gnar)")
 	gnarEdge := flag.String("gnar-edge", env("WARREN_GNAR_EDGE", ""), "gnar edge URL (overrides settings.json and the release default)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+	gnarPathExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_PATH")) != ""
+	gnarConfigDirExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_CONFIG_DIR")) != ""
+	flag.Visit(func(entry *flag.Flag) {
+		switch entry.Name {
+		case "gnar-path":
+			gnarPathExplicit = true
+		case "gnar-config-dir":
+			gnarConfigDirExplicit = true
+		}
+	})
+	if !gnarPathExplicit {
+		if bundled := bundledGnarPath(); bundled != "" {
+			*gnarPath = bundled
+			if !gnarConfigDirExplicit && strings.TrimSpace(*gnarConfigDir) == "" {
+				*gnarConfigDir = filepath.Join(configDir, "gnar")
+			}
+		}
 	}
 	ghostlineSocketExplicit := os.Getenv("WARREN_GHOSTLINE_SOCKET") != ""
 	flag.Visit(func(entry *flag.Flag) {
@@ -255,6 +274,7 @@ func main() {
 	}
 	webBaseURL := "http://127.0.0.1:" + listenerPort(listener)
 	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
+	tunnelManager.SetGnarConfigDir(*gnarConfigDir)
 	tunnelManager.SetGnarDefaultEdge(gnarDefaultEdge)
 	tunnelManager.SetGnarEdge(gnarEdgeValue)
 	// Restore the tunnels the user left running before the previous daemon
@@ -718,6 +738,35 @@ func writeTokenFile(path, token string) error {
 func defaultConfigDirectory() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".warren")
+}
+
+// bundledGnarPath returns the gnar binary shipped beside the headless daemon
+// in a Warren.app bundle. Development checkouts intentionally fall back to
+// normal system discovery, so a missing release asset never makes source
+// builds unusable.
+func bundledGnarPath() string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return bundledGnarPathFor(executable)
+}
+
+func bundledGnarPathFor(executable string) string {
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+		executable = resolved
+	}
+	macOSDirectory := filepath.Dir(executable)
+	if filepath.Base(macOSDirectory) != "MacOS" ||
+		filepath.Base(filepath.Dir(macOSDirectory)) != "Contents" {
+		return ""
+	}
+	candidate := filepath.Join(macOSDirectory, "..", "Resources", "gnar")
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		return ""
+	}
+	return candidate
 }
 
 // validateGhostlinePaths prevents a temporary or alternate Warren state from

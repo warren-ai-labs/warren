@@ -635,7 +635,11 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
 		return
 	}
-	if wasRunning {
+	// A bootstrap-key test is complete after gnar login succeeds. Do not make
+	// that first authentication depend on restarting the live tunnel; the top
+	// Web control owns the subsequent Public Endpoint start. Token-only tests
+	// still restore an endpoint that was already running before the test.
+	if wasRunning && keyValue == "" {
 		if _, restartErr := s.Tunnels.StartPublicAccess(effectiveEdge, account, nil); restartErr != nil {
 			projected := s.publicAccessStatus()
 			projected.Error = restartErr.Error()

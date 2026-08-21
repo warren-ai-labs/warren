@@ -41,7 +41,26 @@ struct WarrenDesktopSettingsView: View {
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
     @State private var publicAccessApprovalKey = ""
+    @State private var publicAccessKeyKind: PublicAccessKeyKind = .approval
+    @State private var publicAccessMaskedKeyKind: PublicAccessKeyKind?
+    @State private var publicAccessSubmittedKeyKind: PublicAccessKeyKind?
     @Environment(\.colorScheme) private var colorScheme
+
+    private enum PublicAccessKeyKind: String, CaseIterable, Identifiable {
+        case approval
+        case invite
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .approval: "Approval Key"
+            case .invite: "Invite Key"
+            }
+        }
+
+        var accessibilityTitle: String { title }
+    }
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
         case terminalFont = "Font"
@@ -743,8 +762,7 @@ struct WarrenDesktopSettingsView: View {
             Text(
                 "Reach this Mac's Web UI through a self-hosted gnar Edge. Save the non-secret "
                     + "configuration here, then use Save & Test to finish the first gnar "
-                    + "authentication. Enter one Invite Key or Approval Key only; Approval "
-                    + "Key takes priority when both are supplied. Keys stay in memory, go "
+                    + "authentication. Choose one Invite Key or Approval Key. Keys stay in memory, go "
                     + "directly to gnar, and are never saved by Warren."
             )
             .font(WarrenTypography.settingsSupporting)
@@ -791,21 +809,21 @@ struct WarrenDesktopSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Text(WarrenPublicAccessCopy.inviteKey)
-                    .font(WarrenTypography.settingsBody)
-                SecureField("Enter one key only", text: $publicAccessInviteKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WarrenTypography.settingsControl)
-                    .accessibilityLabel("Invite Key")
-                    .accessibilityIdentifier("settings.public-access.invite-key")
+                Picker("Key type", selection: $publicAccessKeyKind) {
+                    ForEach(PublicAccessKeyKind.allCases) { kind in
+                        Text(kind.title).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityIdentifier("settings.public-access.key-kind")
 
-                Text(WarrenPublicAccessCopy.approvalKey)
-                    .font(WarrenTypography.settingsBody)
-                SecureField("Enter one key only", text: $publicAccessApprovalKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WarrenTypography.settingsControl)
-                    .accessibilityLabel("Approval Key")
-                    .accessibilityIdentifier("settings.public-access.approval-key")
+                Text("Enter one key only. Approval Key and Invite Key are two ways to enroll this host.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                publicAccessKeyField(tokens: tokens)
 
                 Text(
                     "After a successful test, leave both keys empty; gnar's persisted "
@@ -830,12 +848,10 @@ struct WarrenDesktopSettingsView: View {
                 Button(publicAccessActionTitle) {
                     let edgeURL = publicAccessEdgeURL
                     let accountName = publicAccessAccountName
-                    let inviteKey = publicAccessInviteKey
-                    let approvalKey = publicAccessApprovalKey
-                    // Keys are bootstrap-only. Clear both fields before the
-                    // callback returns so they cannot remain in view state.
-                    publicAccessInviteKey = ""
-                    publicAccessApprovalKey = ""
+                    let inviteKey = publicAccessKeyKind == .invite ? publicAccessInviteKey : ""
+                    let approvalKey = publicAccessKeyKind == .approval ? publicAccessApprovalKey : ""
+                    publicAccessSubmittedKeyKind =
+                        inviteKey.isEmpty && approvalKey.isEmpty ? nil : publicAccessKeyKind
                     onWebTest?(edgeURL, accountName, inviteKey, approvalKey)
                 }
                 .buttonStyle(
@@ -874,6 +890,68 @@ struct WarrenDesktopSettingsView: View {
         .onChange(of: webStatus.configuredAccountName) { _, _ in
             seedPublicAccessFields()
         }
+        .onChange(of: webStatus.publicAccessAuthenticated) { _, authenticated in
+            guard authenticated else { return }
+            guard let submittedKeyKind = publicAccessSubmittedKeyKind else { return }
+            publicAccessInviteKey = ""
+            publicAccessApprovalKey = ""
+            publicAccessMaskedKeyKind = submittedKeyKind
+            publicAccessSubmittedKeyKind = nil
+        }
+    }
+
+    @ViewBuilder
+    private func publicAccessKeyField(tokens: WarrenColorTokens) -> some View {
+        switch publicAccessKeyKind {
+        case .approval:
+            Text(WarrenPublicAccessCopy.approvalKey)
+                .font(WarrenTypography.settingsBody)
+            SecureField(
+                publicAccessMaskedKeyKind == .approval ? "••••••••" : "Enter Approval Key",
+                text: publicAccessKeyBinding(.approval)
+            )
+            .textFieldStyle(.roundedBorder)
+            .font(WarrenTypography.settingsControl)
+            .accessibilityLabel(PublicAccessKeyKind.approval.accessibilityTitle)
+            .accessibilityIdentifier("settings.public-access.approval-key")
+        case .invite:
+            Text(WarrenPublicAccessCopy.inviteKey)
+                .font(WarrenTypography.settingsBody)
+            SecureField(
+                publicAccessMaskedKeyKind == .invite ? "••••••••" : "Enter Invite Key",
+                text: publicAccessKeyBinding(.invite)
+            )
+            .textFieldStyle(.roundedBorder)
+            .font(WarrenTypography.settingsControl)
+            .accessibilityLabel(PublicAccessKeyKind.invite.accessibilityTitle)
+            .accessibilityIdentifier("settings.public-access.invite-key")
+        }
+
+        if publicAccessMaskedKeyKind == publicAccessKeyKind {
+            Text("A key was accepted. gnar keeps the account token; Warren does not retain the key.")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func publicAccessKeyBinding(_ kind: PublicAccessKeyKind) -> Binding<String> {
+        Binding(
+            get: {
+                switch kind {
+                case .approval: publicAccessApprovalKey
+                case .invite: publicAccessInviteKey
+                }
+            },
+            set: { value in
+                publicAccessMaskedKeyKind = nil
+                publicAccessSubmittedKeyKind = nil
+                switch kind {
+                case .approval: publicAccessApprovalKey = value
+                case .invite: publicAccessInviteKey = value
+                }
+            }
+        )
     }
 
     private var publicAccessActionTitle: String {
@@ -914,6 +992,15 @@ struct WarrenDesktopSettingsView: View {
            let accountName = webStatus.configuredAccountName,
            !accountName.isEmpty {
             publicAccessAccountName = accountName
+        }
+        if webStatus.publicAccessAuthenticated,
+           publicAccessMaskedKeyKind == nil,
+           publicAccessInviteKey.isEmpty,
+           publicAccessApprovalKey.isEmpty {
+            // The bootstrap key is intentionally not persisted. A generic
+            // masked placeholder still communicates that gnar is enrolled
+            // when Settings is reopened without echoing which secret was used.
+            publicAccessMaskedKeyKind = .approval
         }
     }
 

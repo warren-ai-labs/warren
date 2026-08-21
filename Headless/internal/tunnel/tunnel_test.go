@@ -278,6 +278,48 @@ sleep 30
 	}
 }
 
+func TestGnarUsesDedicatedConfigDirForLoginAndTunnel(t *testing.T) {
+	loginConfigPath := filepath.Join(t.TempDir(), "login-config-dir")
+	tunnelConfigPath := filepath.Join(t.TempDir(), "tunnel-config-dir")
+	configDir := filepath.Join(t.TempDir(), "warren", "gnar")
+	t.Setenv("GNAR_CONFIG_DIR", "system-gnar-config")
+	t.Setenv("GNAR_LOGIN_CONFIG_FILE", loginConfigPath)
+	t.Setenv("GNAR_TUNNEL_CONFIG_FILE", tunnelConfigPath)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s' "$GNAR_CONFIG_DIR" > "$GNAR_LOGIN_CONFIG_FILE"
+  cat >/dev/null
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+printf '%s' "$GNAR_CONFIG_DIR" > "$GNAR_TUNNEL_CONFIG_FILE"
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/warren"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	manager.SetGnarConfigDir(configDir)
+	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", []byte("approval-key"))
+	if err != nil {
+		t.Fatalf("start public access: %v", err)
+	}
+	defer manager.Stop(KindGnar)
+	if !status.Running || status.URL == "" {
+		t.Fatalf("public access status = %#v", status)
+	}
+	for path, label := range map[string]string{
+		loginConfigPath:  "login",
+		tunnelConfigPath: "tunnel",
+	} {
+		value, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read %s config directory: %v", label, readErr)
+		}
+		if string(value) != configDir {
+			t.Fatalf("%s GNAR_CONFIG_DIR = %q, want %q", label, value, configDir)
+		}
+	}
+}
+
 func TestStartPublicAccessInviteKeyUsesKeyStdinAndKeepsAccountPrivate(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "invite-key")
 	loginArgsFile := filepath.Join(t.TempDir(), "login-args")

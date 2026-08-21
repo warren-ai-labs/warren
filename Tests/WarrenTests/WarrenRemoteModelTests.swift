@@ -12,6 +12,35 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPublicAccessBrowserOpenAddsAuthFragmentOnlyForCurrentEndpoint() throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
+        let opened = WarrenRemoteApplicationModel.publicAccessBrowserURL(
+            endpoint,
+            currentEndpoint: endpoint,
+            daemonToken: "daemon-token"
+        )
+        XCTAssertEqual(opened.absoluteString, "https://tunnel.example/t/host/#t=daemon-token")
+
+        let canonical = URL(string: "https://tunnel.example/t/host/")!
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.publicAccessBrowserURL(
+                opened,
+                currentEndpoint: endpoint,
+                daemonToken: "daemon-token"
+            ),
+            opened
+        )
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.publicAccessBrowserURL(
+                canonical,
+                currentEndpoint: URL(string: "https://other.example/t/host/")!,
+                daemonToken: "daemon-token"
+            ),
+            canonical
+        )
+    }
+
+    @MainActor
     func testConnectIsIdempotentForTheSameEndpoint() {
         let model = WarrenRemoteApplicationModel()
         let endpoint = WarrenRemoteEndpointConfiguration(
