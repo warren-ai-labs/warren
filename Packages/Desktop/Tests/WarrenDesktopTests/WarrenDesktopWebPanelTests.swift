@@ -52,4 +52,15 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertEqual(WarrenLayoutMetrics.webPopoverWidth, 288)
         XCTAssertLessThan(WarrenLayoutMetrics.webPopoverWidth, 340)
     }
+
+    func testPublicAccessIntentIsSeparateFromDesktopControlPermission() {
+        let status = WarrenDesktopWebStatus(
+            canControl: false,
+            publicAccessEnabled: true
+        )
+
+        XCTAssertTrue(status.publicAccessEnabled)
+        XCTAssertFalse(status.canControl)
+        XCTAssertFalse(status.tunnelRunning)
+    }
 }

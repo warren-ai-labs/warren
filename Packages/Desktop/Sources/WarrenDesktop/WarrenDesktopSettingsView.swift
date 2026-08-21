@@ -9,6 +9,9 @@ import WarrenDomain
 /// a page-headed detail column (`max-w-5xl`) on the right.
 struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
+    let webStatus: WarrenDesktopWebStatus
+    let onWebEnable: ((String, String, String) -> Void)?
+    let onWebStop: () -> Void
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -36,6 +39,9 @@ struct WarrenDesktopSettingsView: View {
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
     private var publicAccessEnabled = true
+    @State private var publicAccessEdgeURL = ""
+    @State private var publicAccessAccountName = "warren"
+    @State private var publicAccessEnrollmentKey = ""
     @Environment(\.colorScheme) private var colorScheme
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -735,19 +741,134 @@ struct WarrenDesktopSettingsView: View {
 
     private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
-            Toggle("Allow Public Access controls", isOn: $publicAccessEnabled)
+            Toggle("Show Public Access controls", isOn: $publicAccessEnabled)
                 .toggleStyle(.switch)
                 .font(WarrenTypography.settingsControl)
                 .accessibilityIdentifier("settings.public-access.enabled")
             Text(
-                "Reach this Mac's Web UI through the self-hosted gnar Edge installed "
-                    + "and signed in on this Mac. Configure the Edge URL and use the "
-                    + "one-time Enrollment Key in the Web panel; Warren never saves the key. "
-                    + "Turning controls off only disables this Desktop control surface."
+                "Reach this Mac's Web UI through your self-hosted gnar Edge. Enter the "
+                    + "Edge URL and optional account name below. The one-time Enrollment "
+                    + "Key is sent privately to gnar and is never saved by Warren. "
+                    + "Turning controls off only hides the Web surface controls."
             )
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                Text(WarrenPublicAccessCopy.edgeURL)
+                    .font(WarrenTypography.settingsBody)
+                TextField("https://edge.example.com", text: $publicAccessEdgeURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
+                    .accessibilityIdentifier("settings.public-access.edge-url")
+
+                Text("Account name (optional)")
+                    .font(WarrenTypography.settingsBody)
+                TextField("warren", text: $publicAccessAccountName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("gnar account name")
+                    .accessibilityIdentifier("settings.public-access.account-name")
+
+                Text(WarrenPublicAccessCopy.enrollmentKey)
+                    .font(WarrenTypography.settingsBody)
+                SecureField("Enter only when gnar needs enrollment", text: $publicAccessEnrollmentKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Enrollment Key")
+                    .accessibilityIdentifier("settings.public-access.enrollment-key")
+
+                Text(
+                    "Leave the Enrollment Key empty after a successful enrollment; gnar's "
+                        + "persisted account token will be reused."
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .disabled(webStatus.publicAccessBusy)
+
+            HStack(spacing: WarrenSpacing.compact) {
+                WarrenStatusIndicator(
+                    color: publicAccessStatusColor(tokens: tokens),
+                    isActive: webStatus.publicAccessBusy,
+                    accessibilityLabel: publicAccessStatusLabel
+                )
+                Text(publicAccessStatusLabel)
+                    .font(WarrenTypography.settingsBody)
+                    .foregroundStyle(tokens.foreground)
+                Spacer(minLength: 0)
+                Button(publicAccessActionTitle) {
+                    if webStatus.tunnelRunning {
+                        onWebStop()
+                    } else {
+                        let edgeURL = publicAccessEdgeURL
+                        let accountName = publicAccessAccountName
+                        let enrollmentKey = publicAccessEnrollmentKey
+                        // The key is bootstrap-only. Clear the field before the
+                        // callback returns so it cannot remain in the view state.
+                        publicAccessEnrollmentKey = ""
+                        onWebEnable?(edgeURL, accountName, enrollmentKey)
+                    }
+                }
+                .buttonStyle(
+                    WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction)
+                )
+                .disabled(
+                    webStatus.publicAccessBusy
+                        || onWebEnable == nil
+                )
+                .accessibilityIdentifier("settings.public-access.action")
+            }
+
+            if let error = webStatus.publicAccessError, !error.isEmpty {
+                Text(error)
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Public Access error: \(error)")
+            }
+        }
+        .onAppear(perform: seedPublicAccessFields)
+        .onChange(of: webStatus.configuredEdgeURL) { _, _ in
+            seedPublicAccessFields()
+        }
+        .onChange(of: webStatus.configuredAccountName) { _, _ in
+            seedPublicAccessFields()
+        }
+    }
+
+    private var publicAccessActionTitle: String {
+        if webStatus.publicAccessBusy { return "Working…" }
+        return webStatus.tunnelRunning ? "Disable Public Access" : "Enable Public Access"
+    }
+
+    private var publicAccessStatusLabel: String {
+        if webStatus.publicAccessBusy { return "Working…" }
+        if webStatus.tunnelRunning { return "Running" }
+        if webStatus.publicAccessEnabled { return "Enabled, not running" }
+        return "Not running"
+    }
+
+    private func publicAccessStatusColor(tokens: WarrenColorTokens) -> Color {
+        if webStatus.publicAccessBusy { return tokens.info }
+        if webStatus.tunnelRunning { return tokens.success }
+        if webStatus.publicAccessError != nil { return tokens.warning }
+        return tokens.mutedForeground
+    }
+
+    private func seedPublicAccessFields() {
+        if publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let edgeURL = webStatus.configuredEdgeURL?.absoluteString,
+           !edgeURL.isEmpty {
+            publicAccessEdgeURL = edgeURL
+        }
+        if publicAccessAccountName == "warren",
+           let accountName = webStatus.configuredAccountName,
+           !accountName.isEmpty {
+            publicAccessAccountName = accountName
         }
     }
 
