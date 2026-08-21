@@ -32,7 +32,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let actions: WarrenDesktopActions
     private let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     private let onWebStart: () -> Void
-    private let onWebEnable: ((String, String, String, String) -> Void)?
+    private let onWebTest: ((String, String, String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
@@ -68,8 +68,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
     private var terminalFontSize = TerminalFontPreference.defaultSize
-    @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
-    private var publicAccessEnabled = true
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -101,7 +99,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onWebStart: @escaping () -> Void = {},
-        onWebEnable: ((String, String, String, String) -> Void)? = nil,
+        onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
@@ -130,7 +128,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.actions = actions
         self.terminalSurface = terminalSurface
         self.onWebStart = onWebStart
-        self.onWebEnable = onWebEnable
+        self.onWebTest = onWebTest
         self.onWebStop = onWebStop
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
@@ -305,9 +303,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             if settingsPresented {
                 WarrenDesktopSettingsView(
                     onBack: closeSettings,
+                    hostName: projection.host.name,
                     webStatus: webStatus,
-                    onWebEnable: onWebEnable,
-                    onWebStop: onWebStop,
+                    onWebTest: onWebTest,
                     defaultRuntime: defaultRuntime,
                     onSetRuntime: onSetRuntime,
                     autoOpenShell: autoOpenShell,
@@ -471,7 +469,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 case .web:
                     WarrenDesktopWebPanel(
                         status: webStatus,
-                        canControl: publicAccessEnabled,
+                        canControl: webStatus.canControl,
                         onStart: {
                             onWebStart()
                             refreshWebDismissal()

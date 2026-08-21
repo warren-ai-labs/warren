@@ -165,6 +165,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/tunnels/stop", s.handleTunnelStop)
 	mux.HandleFunc("GET /v1/public-access", s.handlePublicAccess)
 	mux.HandleFunc("POST /v1/public-access/enable", s.handlePublicAccessEnable)
+	mux.HandleFunc("POST /v1/public-access/test", s.handlePublicAccessTest)
 	mux.HandleFunc("POST /v1/public-access/disable", s.handlePublicAccessDisable)
 	mux.HandleFunc("POST /v1/public-access/restart", s.handlePublicAccessRestart)
 	mux.HandleFunc("GET /", s.handleWebAsset)
@@ -528,6 +529,123 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
+// handlePublicAccessTest saves only the non-secret Edge/account configuration
+// and verifies one complete gnar connection. It deliberately does not set the
+// user's enabled intent; the Web chrome starts the live Public Endpoint later.
+func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var body api.PublicAccessTestRequest
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access test request"))
+		return
+	}
+	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	if body.EdgeURL != nil {
+		configuredEdge = strings.TrimSpace(*body.EdgeURL)
+	}
+	if configuredEdge != "" {
+		if err := tunnel.ValidateEdgeURL(configuredEdge); err != nil {
+			s.writePublicAccessError(writer, http.StatusBadRequest, err)
+			return
+		}
+	}
+	configuredAccount := settings.ConfiguredGnarAccount(s.Service.Settings.GnarAccount)
+	account := s.Service.EffectiveGnarAccount()
+	if body.AccountName != nil {
+		var err error
+		configuredAccount, err = settings.NormalizeConfiguredGnarAccount(*body.AccountName)
+		if err != nil {
+			s.writePublicAccessError(writer, http.StatusBadRequest, err)
+			return
+		}
+		account = settings.EffectiveGnarAccount(configuredAccount, s.Service.HostName)
+	}
+	// Stop any existing process before applying the new configuration. Manager.Start
+	// is intentionally idempotent, so testing first would otherwise reuse the old
+	// Edge/account connection and report a false success.
+	approvalKey := body.ApprovalKey
+	if strings.TrimSpace(approvalKey) == "" {
+		approvalKey = body.EnrollmentKey
+	}
+	inviteKey := body.InviteKey
+	keyKind := tunnel.LoginKeyKind("")
+	keyValue := ""
+	if strings.TrimSpace(approvalKey) != "" {
+		keyKind = tunnel.LoginKeyApproval
+		keyValue = approvalKey
+	} else if strings.TrimSpace(inviteKey) != "" {
+		keyKind = tunnel.LoginKeyInvite
+		keyValue = inviteKey
+	}
+	prospectiveEdge := s.gnarEffectiveEdge()
+	if body.EdgeURL != nil {
+		prospectiveEdge = configuredEdge
+		if prospectiveEdge == "" {
+			prospectiveEdge = s.Tunnels.GnarDefaultEdge()
+		}
+	}
+	if keyValue != "" && strings.TrimSpace(prospectiveEdge) == "" {
+		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when testing gnar"))
+		return
+	}
+	wasRunning := false
+	if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok {
+		wasRunning = current.Running && current.URL != ""
+		if current.Running {
+			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
+				s.writePublicAccessError(writer, http.StatusBadGateway, err)
+				return
+			}
+		}
+	}
+	if err := s.Service.UpdatePublicAccessConfig(configuredEdge, configuredAccount); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if body.EdgeURL != nil {
+		s.Tunnels.SetGnarEdgeOverride(configuredEdge)
+	} else if configuredEdge != "" {
+		s.Tunnels.SetGnarEdge(configuredEdge)
+	}
+	effectiveEdge := s.gnarEffectiveEdge()
+	if keyValue != "" && effectiveEdge == "" {
+		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when testing gnar"))
+		return
+	}
+	key := []byte(keyValue)
+	// Clear the request fields before handing the private buffer to the tunnel
+	// manager. The manager clears the byte slice after gnar consumes it.
+	body.InviteKey = ""
+	body.ApprovalKey = ""
+	body.EnrollmentKey = ""
+	status, err := s.Tunnels.TestPublicAccess(effectiveEdge, account, keyKind, key)
+	if err != nil {
+		projected := s.publicAccessStatus()
+		projected.Error = err.Error()
+		if status.Error != "" {
+			projected.Error = status.Error
+		}
+		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+		return
+	}
+	if wasRunning {
+		if _, restartErr := s.Tunnels.StartPublicAccess(effectiveEdge, account, nil); restartErr != nil {
+			projected := s.publicAccessStatus()
+			projected.Error = restartErr.Error()
+			s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+			return
+		}
+	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
 func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, request *http.Request) {
 	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
@@ -599,6 +717,7 @@ func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 		ConfiguredAccountName: s.Service.ConfiguredGnarAccount(),
 		UsingDefaultAccount:   s.Service.ConfiguredGnarAccount() == "",
 		Enabled:               s.Service.PublicAccessEnabled(),
+		Authenticated:         s.Tunnels != nil && s.Tunnels.GnarAuthenticated(),
 	}
 	if status.EdgeURL != "" {
 		if err := tunnel.ValidateEdgeURL(status.EdgeURL); err != nil {

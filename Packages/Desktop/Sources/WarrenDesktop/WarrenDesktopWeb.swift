@@ -14,6 +14,7 @@ public enum WarrenPublicAccessCopy {
     /// key name. New UI uses `approvalKey` explicitly.
     public static let enrollmentKey = "Enrollment Key (one time)"
     public static let publicEndpoint = "Public Endpoint"
+    public static let gnarProjectURL = "https://github.com/abcdlsj/gnar"
 }
 
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
@@ -38,6 +39,9 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     /// The persisted user intent reported by the headless daemon. This is
     /// distinct from `canControl`, which only gates the Desktop controls.
     public var publicAccessEnabled: Bool
+    /// True after Warren has completed a gnar login or a token-backed
+    /// connection test. This is a presentation hint, not a token-store query.
+    public var publicAccessAuthenticated: Bool
     public var canControl: Bool
     /// True while the daemon reports a live public tunnel
     /// (gnar/cloudflared/tailscale). Independent of `isRunning`, which only
@@ -60,6 +64,7 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         effectiveAccountName: String? = nil,
         usingDefaultAccount: Bool = false,
         publicAccessEnabled: Bool = false,
+        publicAccessAuthenticated: Bool = false,
         publicAccessBusy: Bool = false,
         publicAccessError: String? = nil
     ) {
@@ -74,6 +79,7 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         self.effectiveAccountName = effectiveAccountName
         self.usingDefaultAccount = usingDefaultAccount
         self.publicAccessEnabled = publicAccessEnabled
+        self.publicAccessAuthenticated = publicAccessAuthenticated
         self.canControl = canControl
         self.tunnelRunning = tunnelRunning
         self.publicAccessBusy = publicAccessBusy
@@ -270,11 +276,14 @@ public struct WarrenDesktopWebPanel: View {
 
             WarrenDesktopWebPublicAccessRow(
                 isActive: status.secureURL != nil,
+                isAuthenticated: status.publicAccessAuthenticated,
                 isEnabled: canControl && status.canControl && !status.publicAccessBusy,
                 isBusy: status.publicAccessBusy,
                 hasError: status.publicAccessError != nil,
                 onStart: {
-                    if let onOpenSettings {
+                    if status.publicAccessAuthenticated || status.publicAccessEnabled {
+                        onStart()
+                    } else if let onOpenSettings {
                         onOpenSettings()
                     } else if let onEnable {
                         // Preserve the old signed-in gnar path for clients
@@ -304,9 +313,9 @@ public struct WarrenDesktopWebPanel: View {
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
             Text(
-                "Configure an optional custom Edge URL and an Invite Key or Approval Key in "
-                    + "Settings → Public Access. Approval Key takes priority. Leave the Edge "
-                    + "URL empty to use Warren's release default; Warren never saves either key."
+                "Configure the Edge URL and one Invite Key or Approval Key in Settings → "
+                    + "Public Access. Approval Key takes priority. Warren never saves either "
+                    + "key; Save & Test verifies the connection before a Public Endpoint can run."
             )
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
@@ -402,6 +411,7 @@ private struct WarrenDesktopWebAddressRow: View {
 
 private struct WarrenDesktopWebPublicAccessRow: View {
     let isActive: Bool
+    let isAuthenticated: Bool
     let isEnabled: Bool
     let isBusy: Bool
     let hasError: Bool
@@ -425,12 +435,18 @@ private struct WarrenDesktopWebPublicAccessRow: View {
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(isActive ? tokens.info : tokens.mutedForeground)
             WarrenDesktopWebCommandButton(
-                title: isBusy ? "Working…" : (hasError && !isActive ? "Retry" : (isActive ? "Disable" : "Enable")),
+                title: isBusy
+                    ? "Working…"
+                    : (hasError && !isActive
+                        ? "Retry"
+                        : (isActive ? "Disable" : (isAuthenticated ? "Start" : "Configure"))),
                 isEnabled: isEnabled,
                 isEmphasized: isActive,
                 accessibilityLabel: isActive
                     ? "Disable Public Access"
-                    : (hasError ? "Retry Public Access" : "Enable Public Access")
+                    : (isAuthenticated
+                        ? (hasError ? "Retry Public Access" : "Start Public Access")
+                        : (hasError ? "Retry Public Access" : "Configure Public Access"))
             ) {
                 if isActive {
                     onStop()

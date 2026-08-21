@@ -132,8 +132,8 @@ func main() {
 		gnarEdgeValue = *gnarEdge
 	} else if gnarEdgeValue == "" {
 		// Fall back to the launcher environment, then the release default, when
-		// settings.json does not pin an Edge. Source builds with no injected
-		// default still let gnar use its own GNAR_EDGE discovery.
+		// settings.json does not pin an Edge. The source-build default is a safe
+		// documented placeholder and release builds may replace it at link time.
 		gnarEdgeValue = gnarDefaultEdge
 	}
 	// Strip launcher-only pager/TERM semantics (agent/CI shells export

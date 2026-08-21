@@ -1245,7 +1245,7 @@ final class WarrenRemoteApplicationModel {
         surfaceManager.apply(font: preference)
     }
     func startWebFromUI() {
-        enablePublicAccess(edgeURL: "", accountName: "", inviteKey: "", approvalKey: "")
+        controlPublicAccess(.enable)
     }
     func stopWeb() {
         controlPublicAccess(.disable)
@@ -1287,8 +1287,59 @@ final class WarrenRemoteApplicationModel {
         }
     }
 
+    /// Persists the non-secret Public Access configuration and verifies the
+    /// gnar Edge. Bootstrap keys are cleared by the Settings view before this
+    /// callback returns and are forwarded only through the headless API.
+    func testPublicAccess(
+        edgeURL: String,
+        accountName: String,
+        inviteKey: String,
+        approvalKey: String
+    ) {
+        webStatus.publicAccessBusy = true
+        webStatus.publicAccessError = nil
+        Task {
+            defer { webStatus.publicAccessBusy = false }
+            do {
+                try await publicAccessRequest(
+                    .test,
+                    edgeURL: edgeURL,
+                    accountName: accountName,
+                    inviteKey: inviteKey,
+                    approvalKey: approvalKey
+                )
+            } catch {
+                // Older headless builds do not know the first-class test
+                // route. Complete the equivalent check through the legacy
+                // enable/disable pair without changing the final intent.
+                if isMissingPublicAccessEndpoint(error) {
+                    do {
+                        try await publicAccessRequest(
+                            .enable,
+                            edgeURL: edgeURL,
+                            accountName: accountName,
+                            inviteKey: inviteKey,
+                            approvalKey: approvalKey
+                        )
+                        try await publicAccessRequest(.disable)
+                        webStatus.publicAccessAuthenticated = true
+                        webStatus.publicAccessError = nil
+                        return
+                    } catch {
+                        webStatus.publicAccessError = error.localizedDescription
+                        present(error)
+                        return
+                    }
+                }
+                webStatus.publicAccessError = error.localizedDescription
+                present(error)
+            }
+        }
+    }
+
     private enum PublicAccessAction: String {
         case enable
+        case test
         case disable
         case restart
     }
@@ -1339,7 +1390,7 @@ final class WarrenRemoteApplicationModel {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and an Invite Key or Approval Key in Settings → Public Access, then enable Public Access.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and one Invite Key or Approval Key in Settings → Public Access, then use Save & Test.",
                 ]))
                 return
             }
@@ -1442,6 +1493,14 @@ final class WarrenRemoteApplicationModel {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if action == .enable {
             request.httpBody = try JSONEncoder().encode(PublicAccessEnableRequest(
+                edgeURL: edgeURL.isEmpty ? nil : edgeURL,
+                accountName: accountName.isEmpty ? nil : accountName,
+                inviteKey: inviteKey,
+                approvalKey: approvalKey,
+                enrollmentKey: approvalKey
+            ))
+        } else if action == .test {
+            request.httpBody = try JSONEncoder().encode(PublicAccessTestRequest(
                 edgeURL: edgeURL,
                 accountName: accountName,
                 inviteKey: inviteKey,
@@ -1487,8 +1546,28 @@ final class WarrenRemoteApplicationModel {
     }
 
     private struct PublicAccessEnableRequest: Encodable {
-        /// nil keeps an existing override for compatibility; an explicit
-        /// empty string clears it and selects the release/launcher default.
+        /// The top chrome sends nil so an enable action keeps the configured
+        /// Edge/account. Settings uses the test route when it needs to save
+        /// an explicit empty value and return to the release default.
+        let edgeURL: String?
+        let accountName: String?
+        let inviteKey: String
+        let approvalKey: String
+        /// Legacy Warren daemons called the approval key an enrollment key.
+        /// Sending the alias only on the compatibility enable request keeps
+        /// older headless clients usable without changing the v1.7 gnar call.
+        let enrollmentKey: String
+
+        enum CodingKeys: String, CodingKey {
+            case edgeURL = "edgeUrl"
+            case accountName
+            case inviteKey
+            case approvalKey
+            case enrollmentKey
+        }
+    }
+
+    private struct PublicAccessTestRequest: Encodable {
         let edgeURL: String?
         let accountName: String
         let inviteKey: String
@@ -1511,6 +1590,7 @@ final class WarrenRemoteApplicationModel {
         let configuredAccountName: String?
         let usingDefaultAccount: Bool?
         let enabled: Bool
+        let authenticated: Bool?
         let running: Bool
         let publicEndpoint: String?
         let error: String?
@@ -1524,6 +1604,7 @@ final class WarrenRemoteApplicationModel {
             case configuredAccountName = "configuredAccountName"
             case usingDefaultAccount = "usingDefaultAccount"
             case enabled
+            case authenticated
             case running
             case publicEndpoint
             case error
@@ -1541,6 +1622,7 @@ final class WarrenRemoteApplicationModel {
             webStatus.effectiveAccountName = nil
             webStatus.usingDefaultAccount = false
             webStatus.publicAccessEnabled = false
+            webStatus.publicAccessAuthenticated = false
             return
         }
         webStatus.configuredEdgeURL = response.configuredEdgeURL.flatMap(URL.init(string:))
@@ -1550,7 +1632,10 @@ final class WarrenRemoteApplicationModel {
         webStatus.effectiveAccountName = response.accountName
         webStatus.usingDefaultAccount = response.usingDefaultAccount ?? (response.configuredAccountName == nil)
         webStatus.publicAccessEnabled = response.enabled
-        webStatus.publicAccessError = response.error
+        webStatus.publicAccessAuthenticated = response.authenticated ?? false
+        webStatus.publicAccessError = response.error.flatMap { error in
+            error.isEmpty ? nil : error
+        }
         guard response.running,
               let endpoint = response.publicEndpoint,
               let url = URL(string: endpoint) else {
@@ -1560,6 +1645,7 @@ final class WarrenRemoteApplicationModel {
         }
         webStatus.secureURL = url
         webStatus.tunnelRunning = true
+        webStatus.publicAccessAuthenticated = true
     }
 
     private func applyTunnelStatus(from data: Data) {
@@ -1584,6 +1670,7 @@ final class WarrenRemoteApplicationModel {
         }
         webStatus.secureURL = url
         webStatus.tunnelRunning = true
+        webStatus.publicAccessAuthenticated = true
         webStatus.publicAccessError = nil
     }
 

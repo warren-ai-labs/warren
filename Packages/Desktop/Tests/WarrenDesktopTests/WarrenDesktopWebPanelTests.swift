@@ -63,4 +63,16 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertFalse(status.canControl)
         XCTAssertFalse(status.tunnelRunning)
     }
+
+    func testPublicAccessAuthenticationIsSeparateFromLiveEndpoint() {
+        let status = WarrenDesktopWebStatus(publicAccessAuthenticated: true)
+
+        XCTAssertTrue(status.publicAccessAuthenticated)
+        XCTAssertFalse(status.tunnelRunning)
+        XCTAssertNil(status.secureURL)
+    }
+
+    func testGnarProjectLinkUsesTheSelfHostedWorkerRepository() {
+        XCTAssertEqual(WarrenPublicAccessCopy.gnarProjectURL, "https://github.com/abcdlsj/gnar")
+    }
 }
