@@ -23,6 +23,9 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var configuredEdgeURL: URL?
     /// Configured non-secret gnar account label.
     public var configuredAccountName: String?
+    /// The persisted user intent reported by the headless daemon. This is
+    /// distinct from `canControl`, which only gates the Desktop controls.
+    public var publicAccessEnabled: Bool
     public var canControl: Bool
     /// True while the daemon reports a live public tunnel
     /// (gnar/cloudflared/tailscale). Independent of `isRunning`, which only
@@ -40,6 +43,7 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         tunnelRunning: Bool = false,
         configuredEdgeURL: URL? = nil,
         configuredAccountName: String? = nil,
+        publicAccessEnabled: Bool = false,
         publicAccessBusy: Bool = false,
         publicAccessError: String? = nil
     ) {
@@ -49,6 +53,7 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         self.secureURL = secureURL
         self.configuredEdgeURL = configuredEdgeURL
         self.configuredAccountName = configuredAccountName
+        self.publicAccessEnabled = publicAccessEnabled
         self.canControl = canControl
         self.tunnelRunning = tunnelRunning
         self.publicAccessBusy = publicAccessBusy
@@ -120,9 +125,11 @@ public struct WarrenDesktopWebPanel: View {
     @available(*, deprecated, message: "Use canControl for Public Access controls.")
     public var canShare: Bool { canControl }
     public let onStart: () -> Void
-    /// Optional Public Access setup callback. The Enrollment Key is supplied
-    /// only for this invocation and is cleared from the form immediately.
+    /// Deprecated callback for callers that already have a signed-in gnar
+    /// installation. New callers should configure Public Access in Settings.
     public let onEnable: ((String, String, String) -> Void)?
+    /// Opens the canonical Public Access setup page in Settings.
+    public let onOpenSettings: (() -> Void)?
     public let onStop: () -> Void
     public let onOpenURL: (URL) -> Void
     public let onCopyURL: (URL) -> Void
@@ -135,6 +142,7 @@ public struct WarrenDesktopWebPanel: View {
         canControl: Bool = true,
         onStart: @escaping () -> Void,
         onEnable: ((String, String, String) -> Void)? = nil,
+        onOpenSettings: (() -> Void)? = nil,
         onStop: @escaping () -> Void,
         onOpenURL: @escaping (URL) -> Void,
         onCopyURL: @escaping (URL) -> Void,
@@ -144,6 +152,7 @@ public struct WarrenDesktopWebPanel: View {
         self.canControl = canControl
         self.onStart = onStart
         self.onEnable = onEnable
+        self.onOpenSettings = onOpenSettings
         self.onStop = onStop
         self.onOpenURL = onOpenURL
         self.onCopyURL = onCopyURL
@@ -164,16 +173,13 @@ public struct WarrenDesktopWebPanel: View {
             status: status,
             canControl: canShare,
             onStart: onStart,
+            onOpenSettings: nil,
             onStop: onStop,
             onOpenURL: onOpenURL,
             onCopyURL: onCopyURL,
             onDismiss: onDismiss
         )
     }
-
-    @State private var edgeURL = ""
-    @State private var accountName = "warren"
-    @State private var enrollmentKey = ""
 
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -239,7 +245,7 @@ public struct WarrenDesktopWebPanel: View {
                 .padding(.vertical, WarrenSpacing.xs)
 
             if status.secureURL == nil {
-                publicAccessSetup(tokens: tokens)
+                publicAccessSetupHint(tokens: tokens)
             }
 
             WarrenDesktopWebPublicAccessRow(
@@ -248,9 +254,12 @@ public struct WarrenDesktopWebPanel: View {
                 isBusy: status.publicAccessBusy,
                 hasError: status.publicAccessError != nil,
                 onStart: {
-                    if let onEnable {
-                        onEnable(edgeURL, accountName, enrollmentKey)
-                        enrollmentKey = ""
+                    if let onOpenSettings {
+                        onOpenSettings()
+                    } else if let onEnable {
+                        // Preserve the old signed-in gnar path for clients
+                        // that have not yet adopted the Settings callback.
+                        onEnable("", "", "")
                     } else {
                         onStart()
                     }
@@ -267,47 +276,26 @@ public struct WarrenDesktopWebPanel: View {
             }
         }
         .padding(WarrenSpacing.medium)
-        .onAppear {
-            if edgeURL.isEmpty {
-                edgeURL = status.configuredEdgeURL?.absoluteString ?? ""
-            }
-            if accountName == "warren", let configured = status.configuredAccountName, !configured.isEmpty {
-                accountName = configured
-            }
-        }
-        .onChange(of: status.configuredEdgeURL) { _, value in
-            guard enrollmentKey.isEmpty else { return }
-            edgeURL = value?.absoluteString ?? ""
-        }
-        .onChange(of: status.configuredAccountName) { _, value in
-            guard enrollmentKey.isEmpty, let value, !value.isEmpty else { return }
-            accountName = value
-        }
     }
 
-    private func publicAccessSetup(tokens: WarrenColorTokens) -> some View {
+    private func publicAccessSetupHint(tokens: WarrenColorTokens) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             Text(WarrenPublicAccessCopy.title)
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
-            Text("Use a self-hosted gnar Edge. The Enrollment Key is used once and never saved.")
+            Text(
+                "Configure the Edge URL and one-time Enrollment Key in Settings → Public Access. "
+                    + "Warren never saves the key."
+            )
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField(WarrenPublicAccessCopy.edgeURL, text: $edgeURL)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Self-hosted Edge URL")
-                .accessibilityIdentifier("public-access.edge-url")
-            TextField("Account name (optional)", text: $accountName)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("gnar account name")
-                .accessibilityIdentifier("public-access.account-name")
-            SecureField(WarrenPublicAccessCopy.enrollmentKey, text: $enrollmentKey)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Enrollment Key")
-                .accessibilityIdentifier("public-access.enrollment-key")
+            if let onOpenSettings {
+                Button("Open Public Access Settings", action: onOpenSettings)
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.popoverItem))
+                    .accessibilityIdentifier("public-access.open-settings")
+            }
         }
-        .disabled(!canControl || !status.canControl || status.publicAccessBusy)
     }
 
     private func unavailableContent(tokens: WarrenColorTokens) -> some View {

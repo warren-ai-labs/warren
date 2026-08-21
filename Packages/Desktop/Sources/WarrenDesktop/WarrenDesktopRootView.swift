@@ -228,17 +228,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         isInspectorVisible: inspectorVisible,
                         onToggleSidebar: toggleSidebar,
                         onToggleInspector: toggleInspector,
-                        onSettings: {
-                            setCommandPalettePresented(false)
-                            navigationBeforeSettings = navigation
-                            // Settings overlays a still-mounted shell so its
-                            // Ghostty grid survives the trip; drop keyboard
-                            // ownership so keystrokes go to Settings instead
-                            // of the hidden terminal.
-                            NSApp.keyWindow?.makeFirstResponder(nil)
-                            setChromePopover(nil)
-                            setSettingsPresented(true)
-                        },
+                        onSettings: openSettings,
                         onChromePopover: { popover in
                             setChromePopover(chromePopover == popover ? nil : popover)
                         },
@@ -315,6 +305,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             if settingsPresented {
                 WarrenDesktopSettingsView(
                     onBack: closeSettings,
+                    webStatus: webStatus,
+                    onWebEnable: onWebEnable,
+                    onWebStop: onWebStop,
                     defaultRuntime: defaultRuntime,
                     onSetRuntime: onSetRuntime,
                     autoOpenShell: autoOpenShell,
@@ -483,11 +476,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             onWebStart()
                             refreshWebDismissal()
                         },
-                        onEnable: onWebEnable.map { callback in
-                            { edgeURL, accountName, enrollmentKey in
-                                callback(edgeURL, accountName, enrollmentKey)
-                                refreshWebDismissal()
-                            }
+                        onOpenSettings: {
+                            setChromePopover(nil)
+                            openSettings()
                         },
                         onStop: {
                             onWebStop()
@@ -677,6 +668,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func dispatch(_ action: WarrenDesktopAction) {
         actions(action)
+    }
+
+    private func openSettings() {
+        setCommandPalettePresented(false)
+        navigationBeforeSettings = navigation
+        // Settings overlays a still-mounted shell so its Ghostty grid
+        // survives the trip; drop keyboard ownership so keystrokes go to
+        // Settings instead of the hidden terminal.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        setChromePopover(nil)
+        setSettingsPresented(true)
     }
 
     private func closeSettings() {

@@ -1333,7 +1333,7 @@ final class WarrenRemoteApplicationModel {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and Enrollment Key in the Web panel, then enable Public Access.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and Enrollment Key in Settings → Public Access, then enable Public Access.",
                 ]))
                 return
             }
@@ -1514,10 +1514,12 @@ final class WarrenRemoteApplicationModel {
             webStatus.tunnelRunning = false
             webStatus.configuredEdgeURL = nil
             webStatus.configuredAccountName = nil
+            webStatus.publicAccessEnabled = false
             return
         }
         webStatus.configuredEdgeURL = response.edgeURL.flatMap(URL.init(string:))
         webStatus.configuredAccountName = response.accountName
+        webStatus.publicAccessEnabled = response.enabled
         webStatus.publicAccessError = response.error
         guard response.running,
               let endpoint = response.publicEndpoint,
