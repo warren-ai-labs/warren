@@ -270,7 +270,7 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
     let onToggleSidebar: () -> Void
 
     var body: some View {
-        HStack(spacing: WarrenSpacing.small) {
+        HStack(spacing: WarrenSpacing.xs) {
             WarrenDesktopWindowDragRegion()
                 .frame(width: max(
                     WarrenLayoutMetrics.macTrafficLightInset

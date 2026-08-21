@@ -9,9 +9,9 @@ import WarrenDomain
 /// a page-headed detail column (`max-w-5xl`) on the right.
 struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
+    let hostName: String
     let webStatus: WarrenDesktopWebStatus
-    let onWebEnable: ((String, String, String, String) -> Void)?
-    let onWebStop: () -> Void
+    let onWebTest: ((String, String, String, String) -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -37,8 +37,6 @@ struct WarrenDesktopSettingsView: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
-    @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
-    private var publicAccessEnabled = true
     @State private var publicAccessEdgeURL = ""
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
@@ -742,17 +740,12 @@ struct WarrenDesktopSettingsView: View {
 
     private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
-            Toggle("Show Public Access controls", isOn: $publicAccessEnabled)
-                .toggleStyle(.switch)
-                .font(WarrenTypography.settingsControl)
-                .accessibilityIdentifier("settings.public-access.enabled")
             Text(
-                "Reach this Mac's Web UI through your self-hosted gnar Edge. Enter the "
-                    + "optional custom Edge URL and account name below, or leave the Edge "
-                    + "URL empty to use Warren's release default. Enter an Invite Key or "
-                    + "Approval Key when gnar needs enrollment; Approval Key takes priority. "
-                    + "Keys are sent privately to gnar and are never saved by Warren. "
-                    + "Turning controls off only hides the Web surface controls."
+                "Reach this Mac's Web UI through a self-hosted gnar Edge. Save the non-secret "
+                    + "configuration here, then use Save & Test to finish the first gnar "
+                    + "authentication. Enter one Invite Key or Approval Key only; Approval "
+                    + "Key takes priority when both are supplied. Keys stay in memory, go "
+                    + "directly to gnar, and are never saved by Warren."
             )
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
@@ -761,7 +754,7 @@ struct WarrenDesktopSettingsView: View {
             VStack(alignment: .leading, spacing: WarrenSpacing.small) {
                 Text(WarrenPublicAccessCopy.edgeURL)
                     .font(WarrenTypography.settingsBody)
-                TextField("Leave empty for Warren's built-in Edge", text: $publicAccessEdgeURL)
+                TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
@@ -770,26 +763,29 @@ struct WarrenDesktopSettingsView: View {
                 if let defaultEdgeURL = webStatus.defaultEdgeURL {
                     Text(
                         publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "Using Warren's built-in Edge: \(defaultEdgeURL.absoluteString)"
-                            : "Built-in default: \(defaultEdgeURL.absoluteString). Clear the custom URL to use it."
+                            ? "Built-in default: \(defaultEdgeURL.absoluteString)"
+                            : "Clear the custom URL to use the built-in default: \(defaultEdgeURL.absoluteString)"
                     )
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Text("Account name (optional)")
+                Text("Account name")
                     .font(WarrenTypography.settingsBody)
-                TextField("Leave empty for this system's name", text: $publicAccessAccountName)
+                TextField(accountNamePlaceholder, text: $publicAccessAccountName)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel("gnar account name")
                     .accessibilityIdentifier("settings.public-access.account-name")
 
-                if webStatus.usingDefaultAccount,
-                   let accountName = webStatus.effectiveAccountName,
+                if let accountName = webStatus.effectiveAccountName,
                    !accountName.isEmpty {
-                    Text("Using system account name: \(accountName)")
+                    Text(
+                        webStatus.usingDefaultAccount
+                            ? "Default account name: \(accountName)"
+                            : "Configured account name: \(accountName)"
+                    )
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -797,7 +793,7 @@ struct WarrenDesktopSettingsView: View {
 
                 Text(WarrenPublicAccessCopy.inviteKey)
                     .font(WarrenTypography.settingsBody)
-                SecureField("Enter only when gnar needs an invite", text: $publicAccessInviteKey)
+                SecureField("Enter one key only", text: $publicAccessInviteKey)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel("Invite Key")
@@ -805,14 +801,14 @@ struct WarrenDesktopSettingsView: View {
 
                 Text(WarrenPublicAccessCopy.approvalKey)
                     .font(WarrenTypography.settingsBody)
-                SecureField("Enter only when gnar needs approval", text: $publicAccessApprovalKey)
+                SecureField("Enter one key only", text: $publicAccessApprovalKey)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel("Approval Key")
                     .accessibilityIdentifier("settings.public-access.approval-key")
 
                 Text(
-                    "Leave both keys empty after a successful enrollment; gnar's persisted "
+                    "After a successful test, leave both keys empty; gnar's persisted "
                         + "account token will be reused."
                 )
                 .font(WarrenTypography.settingsSupporting)
@@ -832,29 +828,36 @@ struct WarrenDesktopSettingsView: View {
                     .foregroundStyle(tokens.foreground)
                 Spacer(minLength: 0)
                 Button(publicAccessActionTitle) {
-                    if webStatus.tunnelRunning {
-                        onWebStop()
-                    } else {
-                        let edgeURL = publicAccessEdgeURL
-                        let accountName = publicAccessAccountName
-                        let inviteKey = publicAccessInviteKey
-                        let approvalKey = publicAccessApprovalKey
-                        // Keys are bootstrap-only. Clear both fields before the
-                        // callback returns so they cannot remain in view state.
-                        publicAccessInviteKey = ""
-                        publicAccessApprovalKey = ""
-                        onWebEnable?(edgeURL, accountName, inviteKey, approvalKey)
-                    }
+                    let edgeURL = publicAccessEdgeURL
+                    let accountName = publicAccessAccountName
+                    let inviteKey = publicAccessInviteKey
+                    let approvalKey = publicAccessApprovalKey
+                    // Keys are bootstrap-only. Clear both fields before the
+                    // callback returns so they cannot remain in view state.
+                    publicAccessInviteKey = ""
+                    publicAccessApprovalKey = ""
+                    onWebTest?(edgeURL, accountName, inviteKey, approvalKey)
                 }
                 .buttonStyle(
                     WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction)
                 )
                 .disabled(
                     webStatus.publicAccessBusy
-                        || onWebEnable == nil
+                        || onWebTest == nil
                 )
-                .accessibilityIdentifier("settings.public-access.action")
+                .accessibilityIdentifier("settings.public-access.save-test")
             }
+
+            HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
+                Text("Public Access uses the open-source gnar worker and self-hosted Edge.")
+                if let gnarURL = URL(string: WarrenPublicAccessCopy.gnarProjectURL) {
+                    Link("View gnar on GitHub", destination: gnarURL)
+                        .foregroundStyle(tokens.info)
+                }
+            }
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
 
             if let error = webStatus.publicAccessError, !error.isEmpty {
                 Text(error)
@@ -874,22 +877,31 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private var publicAccessActionTitle: String {
-        if webStatus.publicAccessBusy { return "Working…" }
-        return webStatus.tunnelRunning ? "Disable Public Access" : "Enable Public Access"
+        if webStatus.publicAccessBusy { return "Testing…" }
+        return "Save & Test"
     }
 
     private var publicAccessStatusLabel: String {
-        if webStatus.publicAccessBusy { return "Working…" }
-        if webStatus.tunnelRunning { return "Running" }
-        if webStatus.publicAccessEnabled { return "Enabled, not running" }
-        return "Not running"
+        if webStatus.publicAccessBusy { return "Testing connection…" }
+        if webStatus.publicAccessError != nil { return "Connection failed" }
+        if webStatus.tunnelRunning { return "Public Access is on" }
+        if webStatus.publicAccessAuthenticated { return "Connected" }
+        return "Not tested"
     }
 
     private func publicAccessStatusColor(tokens: WarrenColorTokens) -> Color {
         if webStatus.publicAccessBusy { return tokens.info }
-        if webStatus.tunnelRunning { return tokens.success }
         if webStatus.publicAccessError != nil { return tokens.warning }
+        if webStatus.publicAccessAuthenticated { return tokens.success }
         return tokens.mutedForeground
+    }
+
+    private var edgeURLPlaceholder: String {
+        webStatus.defaultEdgeURL?.absoluteString ?? "https://tunnel.example.com"
+    }
+
+    private var accountNamePlaceholder: String {
+        webStatus.effectiveAccountName ?? (hostName.isEmpty ? "this-host" : hostName)
     }
 
     private func seedPublicAccessFields() {

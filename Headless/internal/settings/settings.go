@@ -49,8 +49,9 @@ type Settings struct {
 	// an empty value unsets the variable instead of passing an empty string.
 	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
 	// GnarEdge is the optional user-selected gnar Edge URL used for Public
-	// Access. Empty selects Warren's release/launcher default, or lets gnar
-	// use its own default for source builds without one.
+	// Access. Empty selects Warren's release/launcher default, which is
+	// https://tunnel.example.com in source builds and can be replaced at link
+	// time for a release.
 	GnarEdge string `json:"gnarEdge,omitempty"`
 	// GnarAccount is the non-secret account label passed to gnar login.
 	GnarAccount string `json:"gnarAccount,omitempty"`

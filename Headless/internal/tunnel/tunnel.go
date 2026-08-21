@@ -60,6 +60,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	states map[string]*state
+	// gnarAuthenticated is an in-memory presentation hint. The durable token
+	// remains owned by gnar; Warren never reads or persists that credential.
+	gnarAuthenticated bool
 	// lastErrors keeps an actionable failure visible even when a process could
 	// not be created (for example a missing gnar binary). It is memory-only.
 	lastErrors map[string]string
@@ -146,6 +149,7 @@ func (m *Manager) SetGnarEdge(edge string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gnarEdge = strings.TrimSpace(edge)
+	m.gnarAuthenticated = false
 }
 
 // SetGnarDefaultEdge sets the release/launcher fallback used when the user
@@ -165,9 +169,11 @@ func (m *Manager) SetGnarEdgeOverride(edge string) {
 	edge = strings.TrimSpace(edge)
 	if edge == "" {
 		m.gnarEdge = m.gnarDefaultEdge
+		m.gnarAuthenticated = false
 		return
 	}
 	m.gnarEdge = edge
+	m.gnarAuthenticated = false
 }
 
 // GnarEdge returns the effective Edge URL selected for future gnar starts.
@@ -183,11 +189,44 @@ func (m *Manager) GnarEdge() string {
 }
 
 // GnarDefaultEdge returns the non-persisted fallback used when no custom Edge
-// is configured. It may be empty for source builds without release injection.
+// is configured. Source builds use the documented tunnel.example.com value;
+// release builds may replace it at link time.
 func (m *Manager) GnarDefaultEdge() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.gnarDefaultEdge
+}
+
+// GnarAuthenticated reports whether this manager has completed a gnar login or
+// a token-backed connection test during its lifetime. It is intentionally not
+// persisted and must not be treated as a credential-store query.
+func (m *Manager) GnarAuthenticated() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gnarAuthenticated
+}
+
+func (m *Manager) setGnarAuthenticated(value bool) {
+	m.mu.Lock()
+	m.gnarAuthenticated = value
+	m.mu.Unlock()
+}
+
+// InvalidateGnarAuthentication clears the presentation hint after a
+// non-secret Edge/account change. It does not touch gnar's credential store.
+func (m *Manager) InvalidateGnarAuthentication() {
+	m.setGnarAuthenticated(false)
+}
+
+func (m *Manager) loginGnar(edge, account string, keyKind LoginKeyKind, key []byte) error {
+	path := m.gnarPath
+	if path == "" {
+		path = findExecutable(gnarCandidates())
+	}
+	if path == "" {
+		return errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
+	}
+	return loginGnar(path, edge, account, keyKind, key)
 }
 
 // StartPublicAccess preserves the legacy API, treating its key as an approval
@@ -219,15 +258,6 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 		m.SetGnarEdge(edge)
 	}
 	if len(key) > 0 {
-		path := m.gnarPath
-		if path == "" {
-			path = findExecutable(gnarCandidates())
-		}
-		if path == "" {
-			err := errors.New("gnar binary not found; install it or set WARREN_GNAR_PATH")
-			m.recordError(KindGnar, err.Error())
-			return Status{Error: err.Error()}, err
-		}
 		if edge == "" {
 			edge = m.GnarEdge()
 		}
@@ -245,7 +275,7 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
-		if err := loginGnar(path, edge, account, keyKind, key); err != nil {
+		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
@@ -262,6 +292,7 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 		return status, err
 	}
 	if status.Running && status.URL != "" {
+		m.setGnarAuthenticated(true)
 		return status, nil
 	}
 	if status.Error == "" {
@@ -272,6 +303,91 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 	}
 	m.recordError(KindGnar, status.Error)
 	return status, errors.New(status.Error)
+}
+
+// TestPublicAccess authenticates gnar when a bootstrap key is supplied, then
+// starts and stops one normal tunnel to verify the persisted token and Edge
+// connection. The tunnel is never left running by this configuration action;
+// the caller can use StartPublicAccessWithKey with an empty key afterwards to
+// make the Public Endpoint live.
+func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
+	// A failed re-test must not leave the UI claiming that an older connection
+	// still authenticates the newly submitted configuration.
+	m.InvalidateGnarAuthentication()
+	if len(key) > 0 && keyKind != LoginKeyApproval && keyKind != LoginKeyInvite {
+		err := errors.New("unsupported gnar bootstrap key type")
+		m.recordError(KindGnar, err.Error())
+		clearBytes(key)
+		return Status{Error: err.Error()}, err
+	}
+	if len(key) > 0 {
+		defer clearBytes(key)
+	}
+	// Start is idempotent by design. A connection test must not accidentally
+	// reuse a live process that was started with a different Edge or account.
+	if current, ok := m.Status()[KindGnar]; ok && current.Running {
+		if err := m.Stop(KindGnar); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+	}
+	edge = strings.TrimSpace(edge)
+	if edge != "" {
+		if err := ValidateEdgeURL(edge); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+		m.SetGnarEdge(edge)
+	}
+	if edge == "" {
+		edge = m.GnarEdge()
+	}
+	if edge == "" {
+		err := errors.New("an Edge URL is required to test the gnar connection")
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
+	}
+	if err := ValidateEdgeURL(edge); err != nil {
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
+	}
+	account, err := normalizeGnarAccount(account)
+	if err != nil {
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
+	}
+	if len(key) > 0 {
+		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+	}
+	status, err := m.Start(KindGnar)
+	if err != nil {
+		err = actionableGnarStartError(err)
+		status.Error = err.Error()
+		m.recordError(KindGnar, status.Error)
+		return status, err
+	}
+	if !status.Running || status.URL == "" {
+		message := status.Error
+		if message == "" {
+			message = "gnar did not report a public endpoint during the connection test"
+		}
+		message = actionableGnarStartError(errors.New(message)).Error()
+		m.recordError(KindGnar, message)
+		_ = m.Stop(KindGnar)
+		return Status{Error: message}, errors.New(message)
+	}
+	if err := m.Stop(KindGnar); err != nil {
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
+	}
+	m.setGnarAuthenticated(true)
+	status.Running = false
+	status.URL = ""
+	status.Error = ""
+	return status, nil
 }
 
 func actionableGnarStartError(err error) error {
@@ -587,6 +703,7 @@ func (m *Manager) startGnar() (Status, error) {
 		m.mu.Lock()
 		delete(m.lastErrors, KindGnar)
 		m.mu.Unlock()
+		m.setGnarAuthenticated(true)
 	}
 	if status.URL == "" {
 		if status.Error == "" {

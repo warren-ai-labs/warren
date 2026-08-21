@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -393,6 +395,205 @@ sleep 30
 	}
 	if string(loginCount) != "1" {
 		t.Fatalf("restart repeated enrollment login: count=%q", loginCount)
+	}
+}
+
+func TestPublicAccessTestSavesConfigWithoutEnablingAndTopStartReusesToken(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "gnar-key")
+	loginCountPath := filepath.Join(t.TempDir(), "gnar-login-count")
+	t.Setenv("GNAR_KEY_FILE", keyPath)
+	t.Setenv("GNAR_LOGIN_COUNT", loginCountPath)
+	gnar := writeExecutableScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  count=0
+  if [ -f "$GNAR_LOGIN_COUNT" ]; then count=$(cat "$GNAR_LOGIN_COUNT"); fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$GNAR_LOGIN_COUNT"
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/office"}'
+sleep 30
+`)
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	service := &Service{HostName: "Office Mac", SettingsPath: settingsPath}
+	handler := NewHTTPServer(service, "daemon-secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9879", "", "", gnar)
+	defer handler.Tunnels.StopAll()
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	testRequest, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/public-access/test",
+		bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","approvalKey":"approval-secret"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testRequest.Header.Set("Authorization", "Bearer daemon-secret")
+	testRequest.Header.Set("Content-Type", "application/json")
+	testResponse, err := http.DefaultClient.Do(testRequest)
+	if err != nil {
+		t.Fatalf("test public access: %v", err)
+	}
+	defer testResponse.Body.Close()
+	if testResponse.StatusCode != http.StatusOK {
+		t.Fatalf("test status = %d", testResponse.StatusCode)
+	}
+	var tested api.PublicAccessStatus
+	if err := json.NewDecoder(testResponse.Body).Decode(&tested); err != nil {
+		t.Fatalf("decode test status: %v", err)
+	}
+	if !tested.Authenticated || tested.Enabled || tested.Running || tested.PublicEndpoint != "" {
+		t.Fatalf("test status = %#v", tested)
+	}
+
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if strings.Contains(string(settingsData), "approval-secret") || strings.Contains(string(settingsData), "office-mac") {
+		t.Fatalf("test persisted a secret or derived account: %s", settingsData)
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read gnar stdin: %v", err)
+	}
+	if string(key) != "approval-secret" {
+		t.Fatalf("gnar stdin = %q", key)
+	}
+
+	startRequest, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/public-access/enable",
+		bytes.NewBufferString(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startRequest.Header.Set("Authorization", "Bearer daemon-secret")
+	startRequest.Header.Set("Content-Type", "application/json")
+	startResponse, err := http.DefaultClient.Do(startRequest)
+	if err != nil {
+		t.Fatalf("start public access: %v", err)
+	}
+	defer startResponse.Body.Close()
+	if startResponse.StatusCode != http.StatusOK {
+		t.Fatalf("start status = %d", startResponse.StatusCode)
+	}
+	var started api.PublicAccessStatus
+	if err := json.NewDecoder(startResponse.Body).Decode(&started); err != nil {
+		t.Fatalf("decode start status: %v", err)
+	}
+	if !started.Authenticated || !started.Enabled || !started.Running || started.PublicEndpoint == "" {
+		t.Fatalf("start status = %#v", started)
+	}
+	loginCount, err := os.ReadFile(loginCountPath)
+	if err != nil {
+		t.Fatalf("read login count: %v", err)
+	}
+	if string(loginCount) != "1" {
+		t.Fatalf("start unexpectedly repeated login: %q", loginCount)
+	}
+}
+
+func TestPublicAccessTestStopsExistingProcessBeforeTestingNewEdge(t *testing.T) {
+	edgeLogPath := filepath.Join(t.TempDir(), "gnar-edge-log")
+	t.Setenv("GNAR_EDGE_LOG", edgeLogPath)
+	gnar := writeExecutableScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  cat >/dev/null
+  exit 0
+fi
+edge=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--edge" ]; then edge="$argument"; fi
+  previous="$argument"
+done
+printf '%s\n' "$edge" >> "$GNAR_EDGE_LOG"
+if [ "$edge" = "https://new.example.com" ]; then
+  printf '%s\n' '{"type":"tunnel_ready","public_url":"https://new.example.com/host"}'
+else
+  printf '%s\n' '{"type":"tunnel_ready","public_url":"https://old.example.com/host"}'
+fi
+sleep 30
+`)
+	service := &Service{
+		HostName:     "Office Mac",
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
+	}
+	handler := NewHTTPServer(service, "daemon-secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9879", "", "", gnar)
+	defer handler.Tunnels.StopAll()
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	start := func(edge string) api.PublicAccessStatus {
+		request, err := http.NewRequest(
+			http.MethodPost,
+			server.URL+"/v1/public-access/enable",
+			bytes.NewBufferString(fmt.Sprintf(`{"edgeUrl":%q,"accountName":"warren"}`, edge)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer daemon-secret")
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("enable %s status = %d", edge, response.StatusCode)
+		}
+		var status api.PublicAccessStatus
+		if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+
+	if status := start("https://old.example.com"); status.PublicEndpoint != "https://old.example.com/host/" {
+		t.Fatalf("initial status = %#v", status)
+	}
+	testRequest, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/public-access/test",
+		bytes.NewBufferString(`{"edgeUrl":"https://new.example.com","accountName":"warren"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testRequest.Header.Set("Authorization", "Bearer daemon-secret")
+	testRequest.Header.Set("Content-Type", "application/json")
+	testResponse, err := http.DefaultClient.Do(testRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer testResponse.Body.Close()
+	if testResponse.StatusCode != http.StatusOK {
+		t.Fatalf("test status = %d", testResponse.StatusCode)
+	}
+	var tested api.PublicAccessStatus
+	if err := json.NewDecoder(testResponse.Body).Decode(&tested); err != nil {
+		t.Fatal(err)
+	}
+	if !tested.Running || tested.PublicEndpoint != "https://new.example.com/host/" {
+		t.Fatalf("tested status = %#v", tested)
+	}
+
+	data, err := os.ReadFile(edgeLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(string(data))
+	want := []string{"https://old.example.com", "https://new.example.com", "https://new.example.com"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("gnar edge invocations = %#v, want %#v", got, want)
 	}
 }
 

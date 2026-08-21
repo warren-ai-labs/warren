@@ -1,6 +1,7 @@
 // Package releaseconfig contains values injected into Warren release
-// binaries. Development builds intentionally leave these values empty so
-// local installations keep using gnar's own edge discovery behavior.
+// binaries. A release can replace the public default with -ldflags; source
+// builds retain a safe documentation endpoint so Public Access always has an
+// actionable Edge URL to show in Settings.
 package releaseconfig
 
 // DefaultGnarEdge is the non-secret gnar Edge URL shipped by a release.
@@ -11,4 +12,4 @@ package releaseconfig
 //
 // It is deliberately a variable (rather than a constant) so the release
 // pipeline can replace it without editing user-facing source or settings.
-var DefaultGnarEdge = ""
+var DefaultGnarEdge = "https://tunnel.example.com"

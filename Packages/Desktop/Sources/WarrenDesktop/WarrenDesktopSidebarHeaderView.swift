@@ -45,8 +45,6 @@ struct WarrenDesktopSidebarHeader: View {
                     .padding(.top, WarrenSpacing.medium)
             } else {
                 trafficRow
-                    .padding(.top, WarrenLayoutMetrics.sidebarHeaderTopPadding)
-                    .padding(.bottom, WarrenLayoutMetrics.sidebarHeaderBottomGap)
 
                 expandedSearchButton
             }
@@ -54,23 +52,18 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var trafficRow: some View {
-        HStack(spacing: WarrenSpacing.small) {
+        HStack(spacing: WarrenSpacing.xs) {
             // Superset owns an 80pt traffic-light pad; Warren renders the
             // lights itself because the window is borderless.
             WarrenDesktopTrafficLights()
                 .frame(width: WarrenLayoutMetrics.macTrafficLightInset, alignment: .leading)
 
-            Button(action: onToggle) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                    .accessibilityHidden(true)
-            }
-            .buttonStyle(.plain)
-            .frame(width: 28, height: 28)
-            .contentShape(.rect)
-            .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
-            .accessibilityLabel("Collapse sidebar")
-            .accessibilityHint("Collapse the project and session list")
+            WarrenDesktopChromeButton(
+                systemImage: "sidebar.leading",
+                label: "Collapse sidebar",
+                hint: "Collapse the project and session list",
+                action: onToggle
+            )
 
             WarrenDesktopWindowDragRegion()
                 .frame(minWidth: 0, maxWidth: .infinity)
@@ -86,7 +79,7 @@ struct WarrenDesktopSidebarHeader: View {
                 .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .frame(height: WarrenLayoutMetrics.sidebarTrafficRowHeight)
+        .frame(height: WarrenLayoutMetrics.tabBarHeight)
     }
 
     private var expandedSearchButton: some View {
@@ -140,32 +133,24 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var collapsedDashboardHeader: some View {
-        Button(action: onToggle) {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                .accessibilityHidden(true)
-        }
-        .buttonStyle(.plain)
-        .frame(width: 32, height: WarrenLayoutMetrics.sidebarHeaderRowHeight)
-        .contentShape(.rect)
-        .accessibilityLabel("Expand sidebar")
-        .accessibilityHint("Show the project and workspace list")
+        WarrenDesktopChromeButton(
+            systemImage: "sidebar.left",
+            label: "Expand sidebar",
+            hint: "Show the project and workspace list",
+            action: onToggle
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, WarrenSpacing.compact)
     }
 
     private var expandedDashboardHeader: some View {
-        HStack(spacing: WarrenSpacing.compact) {
-            Button(action: onToggle) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                    .accessibilityHidden(true)
-            }
-            .buttonStyle(.plain)
-            .frame(width: 32, height: WarrenLayoutMetrics.sidebarHeaderRowHeight)
-            .contentShape(.rect)
-            .accessibilityLabel("Collapse sidebar")
-            .accessibilityHint("Collapse the sidebar to icons")
+        HStack(spacing: WarrenSpacing.xs) {
+            WarrenDesktopChromeButton(
+                systemImage: "sidebar.leading",
+                label: "Collapse sidebar",
+                hint: "Collapse the sidebar to icons",
+                action: onToggle
+            )
 
             Spacer(minLength: 0)
         }
