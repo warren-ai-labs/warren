@@ -271,14 +271,15 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 	switch request.Method {
 	case http.MethodGet:
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":    s.Service.DefaultRuntime,
-			"runtimeEnv":        s.Service.Settings.RuntimeEnv,
-			"gnarEdge":          safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":   safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge": safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-			"autoOpenShell":     s.Service.Settings.AutoOpenShell,
-			"autoStartAI":       s.Service.Settings.AutoStartAI,
+			"defaultRuntime":        s.Service.DefaultRuntime,
+			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
+			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
+			"gnarAccount":           s.Service.EffectiveGnarAccount(),
+			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
+			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
+			"autoStartAI":           s.Service.Settings.AutoStartAI,
 		})
 	case http.MethodPut:
 		var body struct {
@@ -301,12 +302,21 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 		if body.GnarEdge != nil {
 			gnarEdge = *body.GnarEdge
 		}
+		var normalizedAccount string
+		if body.GnarAccount != nil {
+			var err error
+			normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(*body.GnarAccount)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if err := s.Service.UpdateSettings(body.DefaultRuntime, runtimeEnv, gnarEdge); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if body.GnarAccount != nil {
-			s.Service.Settings.GnarAccount = settings.NormalizedGnarAccount(*body.GnarAccount)
+			s.Service.Settings.GnarAccount = normalizedAccount
 			if s.Service.SettingsPath != "" {
 				if err := settings.Save(s.Service.SettingsPath, s.Service.Settings); err != nil {
 					http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -330,14 +340,15 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			s.Tunnels.SetGnarEdgeOverride(s.Service.Settings.GnarEdge)
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":    s.Service.DefaultRuntime,
-			"runtimeEnv":        s.Service.Settings.RuntimeEnv,
-			"gnarEdge":          safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":   safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge": safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-			"autoOpenShell":     s.Service.Settings.AutoOpenShell,
-			"autoStartAI":       s.Service.Settings.AutoStartAI,
+			"defaultRuntime":        s.Service.DefaultRuntime,
+			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
+			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
+			"gnarAccount":           s.Service.EffectiveGnarAccount(),
+			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
+			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
+			"autoStartAI":           s.Service.Settings.AutoStartAI,
 		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -434,17 +445,43 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 			s.writePublicAccessError(writer, http.StatusBadRequest, err)
 			return
 		}
-	} else if body.EnrollmentKey != "" && s.Tunnels.GnarEdge() == "" {
+	}
+	approvalKey := body.ApprovalKey
+	if strings.TrimSpace(approvalKey) == "" {
+		// enrollmentKey is the legacy JSON spelling for an approval key.
+		approvalKey = body.EnrollmentKey
+	}
+	inviteKey := body.InviteKey
+	keyKind := tunnel.LoginKeyKind("")
+	keyValue := ""
+	if strings.TrimSpace(approvalKey) != "" {
+		keyKind = tunnel.LoginKeyApproval
+		keyValue = approvalKey
+	} else if strings.TrimSpace(inviteKey) != "" {
+		keyKind = tunnel.LoginKeyInvite
+		keyValue = inviteKey
+	}
+	if keyValue != "" && s.gnarEffectiveEdge() == "" && edge == "" {
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when enrolling gnar"))
 		return
 	}
-	account := settings.NormalizedGnarAccount(body.AccountName)
-	if strings.TrimSpace(body.AccountName) == "" {
-		account = settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
+	configuredAccount := s.Service.Settings.GnarAccount
+	if body.AccountName != nil {
+		configuredAccount = *body.AccountName
 	}
+	normalizedAccount := settings.ConfiguredGnarAccount(configuredAccount)
+	if body.AccountName != nil {
+		var err error
+		normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(configuredAccount)
+		if err != nil {
+			s.writePublicAccessError(writer, http.StatusBadRequest, err)
+			return
+		}
+	}
+	account := settings.EffectiveGnarAccount(normalizedAccount, s.Service.HostName)
 	previousEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	previousAccount := settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
-	if err := s.Service.UpdatePublicAccessConfig(edge, account); err != nil {
+	previousAccount := s.Service.EffectiveGnarAccount()
+	if err := s.Service.UpdatePublicAccessConfig(edge, normalizedAccount); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
 		return
 	}
@@ -464,7 +501,7 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 	}
 	// Re-enrollment or a changed non-secret configuration must not leave an
 	// older gnar process serving the previous account or Edge URL.
-	if len(body.EnrollmentKey) > 0 || previousEdge != edge || previousAccount != account {
+	if keyValue != "" || previousEdge != edge || previousAccount != account {
 		if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok && current.Running {
 			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
 				s.writePublicAccessError(writer, http.StatusBadRequest, err)
@@ -472,11 +509,13 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 			}
 		}
 	}
-	key := []byte(body.EnrollmentKey)
+	key := []byte(keyValue)
 	// Do not retain the request string after converting it to the private
 	// stdin buffer. The manager clears this byte slice after login returns.
+	body.InviteKey = ""
+	body.ApprovalKey = ""
 	body.EnrollmentKey = ""
-	status, err := s.Tunnels.StartPublicAccess(edge, account, key)
+	status, err := s.Tunnels.StartPublicAccessWithKey(edge, account, keyKind, key)
 	if err != nil {
 		projected := s.publicAccessStatus()
 		projected.Error = err.Error()
@@ -525,7 +564,7 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 			return
 		}
 	}
-	account := settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount)
+	account := s.Service.EffectiveGnarAccount()
 	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
 		return
@@ -552,12 +591,14 @@ func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
 	defaultEdge := s.gnarDefaultEdge()
 	status := api.PublicAccessStatus{
-		EdgeURL:           edge,
-		ConfiguredEdgeURL: configuredEdge,
-		DefaultEdgeURL:    defaultEdge,
-		UsingDefaultEdge:  configuredEdge == "",
-		AccountName:       settings.NormalizedGnarAccount(s.Service.Settings.GnarAccount),
-		Enabled:           s.Service.PublicAccessEnabled(),
+		EdgeURL:               edge,
+		ConfiguredEdgeURL:     configuredEdge,
+		DefaultEdgeURL:        defaultEdge,
+		UsingDefaultEdge:      configuredEdge == "",
+		AccountName:           s.Service.EffectiveGnarAccount(),
+		ConfiguredAccountName: s.Service.ConfiguredGnarAccount(),
+		UsingDefaultAccount:   s.Service.ConfiguredGnarAccount() == "",
+		Enabled:               s.Service.PublicAccessEnabled(),
 	}
 	if status.EdgeURL != "" {
 		if err := tunnel.ValidateEdgeURL(status.EdgeURL); err != nil {
@@ -1105,14 +1146,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: session, Snapshot: snapshot})
 	case "settings.get":
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":    p.server.Service.DefaultRuntime,
-			"runtimeEnv":        p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":          safeEdgeURL(p.server.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":   safeEdgeURL(p.server.gnarDefaultEdge()),
-			"gnarEffectiveEdge": safeEdgeURL(p.server.gnarEffectiveEdge()),
-			"gnarAccount":       settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
-			"autoOpenShell":     p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":       p.server.Service.Settings.AutoStartAI,
+			"defaultRuntime":        p.server.Service.DefaultRuntime,
+			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
+			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
+			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
+			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
+			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
+			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
 		})
 	case "settings.put":
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
@@ -1122,6 +1164,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		gnarEdge := p.server.Service.Settings.GnarEdge
 		if _, specified := params["gnarEdge"]; specified {
 			gnarEdge = stringParam(params, "gnarEdge")
+		}
+		var normalizedAccount string
+		if _, specified := params["gnarAccount"]; specified {
+			var err error
+			normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(stringParam(params, "gnarAccount"))
+			if err != nil {
+				return err
+			}
 		}
 		if err := p.server.Service.UpdateSettings(stringParam(params, "defaultRuntime"), runtimeEnv, gnarEdge); err != nil {
 			return err
@@ -1140,7 +1190,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.Settings.GnarEdge)
 		}
 		if _, specified := params["gnarAccount"]; specified {
-			p.server.Service.Settings.GnarAccount = settings.NormalizedGnarAccount(stringParam(params, "gnarAccount"))
+			p.server.Service.Settings.GnarAccount = normalizedAccount
 			if p.server.Service.SettingsPath != "" {
 				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
 					return err
@@ -1148,14 +1198,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 		}
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":    p.server.Service.DefaultRuntime,
-			"runtimeEnv":        p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":          safeEdgeURL(p.server.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":   safeEdgeURL(p.server.gnarDefaultEdge()),
-			"gnarEffectiveEdge": safeEdgeURL(p.server.gnarEffectiveEdge()),
-			"gnarAccount":       settings.NormalizedGnarAccount(p.server.Service.Settings.GnarAccount),
-			"autoOpenShell":     p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":       p.server.Service.Settings.AutoStartAI,
+			"defaultRuntime":        p.server.Service.DefaultRuntime,
+			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
+			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
+			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
+			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
+			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
+			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(

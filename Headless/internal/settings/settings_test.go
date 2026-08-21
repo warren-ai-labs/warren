@@ -76,6 +76,38 @@ func TestNormalizedGnarAccountUsesSafeDefault(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfiguredGnarAccountMatchesV17Contract(t *testing.T) {
+	for _, value := range []string{"", "  ", "personal", "My-Account"} {
+		got, err := NormalizeConfiguredGnarAccount(value)
+		if err != nil {
+			t.Fatalf("NormalizeConfiguredGnarAccount(%q): %v", value, err)
+		}
+		if value == "My-Account" && got != "my-account" {
+			t.Fatalf("canonical account = %q, want my-account", got)
+		}
+	}
+	for _, value := range []string{"-leading", "trailing-", "has space", "too-long-account-name"} {
+		if _, err := NormalizeConfiguredGnarAccount(value); err == nil {
+			t.Fatalf("NormalizeConfiguredGnarAccount(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestDefaultGnarAccountForHostProducesV17Name(t *testing.T) {
+	if got := DefaultGnarAccountForHost("My Host_Name.example"); got != "my-host-name-exa" {
+		t.Fatalf("host account = %q, want my-host-name-exa", got)
+	}
+	if got := DefaultGnarAccountForHost("中文主机"); got != DefaultGnarAccount {
+		t.Fatalf("unicode-only host account = %q, want %q", got, DefaultGnarAccount)
+	}
+	if got := EffectiveGnarAccount("", "MacBook-Pro"); got != "macbook-pro" {
+		t.Fatalf("effective account = %q, want macbook-pro", got)
+	}
+	if got := EffectiveGnarAccount("Custom-Name", "MacBook-Pro"); got != "custom-name" {
+		t.Fatalf("custom effective account = %q, want custom-name", got)
+	}
+}
+
 func TestBuiltInGnarEdgeReadsReleaseInjectedValueWithoutPersistingIt(t *testing.T) {
 	previous := releaseconfig.DefaultGnarEdge
 	t.Cleanup(func() { releaseconfig.DefaultGnarEdge = previous })

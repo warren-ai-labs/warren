@@ -27,6 +27,15 @@ const (
 	gnarLoginTimeout = 30 * time.Second
 )
 
+// LoginKeyKind selects the gnar v1.7 bootstrap contract. Approval keys are
+// the historical enrollment keys; invite keys use gnar's invite-key flow.
+type LoginKeyKind string
+
+const (
+	LoginKeyApproval LoginKeyKind = "approval"
+	LoginKeyInvite   LoginKeyKind = "invite"
+)
+
 // Status is the runtime projection of one tunnel. URL is empty until the
 // reachability adapter reports a public address.
 type Status struct {
@@ -167,6 +176,9 @@ func (m *Manager) SetGnarEdgeOverride(edge string) {
 func (m *Manager) GnarEdge() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.gnarEdge == "" {
+		return m.gnarDefaultEdge
+	}
 	return m.gnarEdge
 }
 
@@ -178,13 +190,26 @@ func (m *Manager) GnarDefaultEdge() string {
 	return m.gnarDefaultEdge
 }
 
-// StartPublicAccess enrolls gnar when a one-time enrollment key is supplied,
-// then starts the normal gnar tunnel. The key is accepted as bytes so callers
-// can clear their request buffer immediately after this method returns.
-// gnar remains responsible for its long-lived token and credential store.
+// StartPublicAccess preserves the legacy API, treating its key as an approval
+// (enrollment) key. New callers should use StartPublicAccessWithKey so invite
+// keys select gnar's --key-stdin contract.
 func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) (Status, error) {
-	if len(enrollmentKey) > 0 {
-		defer clearBytes(enrollmentKey)
+	return m.StartPublicAccessWithKey(edge, account, LoginKeyApproval, enrollmentKey)
+}
+
+// StartPublicAccessWithKey enrolls gnar when a one-time key is supplied, then
+// starts the normal gnar tunnel. The key is accepted as bytes so callers can
+// clear their request buffer immediately after this method returns. gnar
+// remains responsible for its long-lived token and credential store.
+func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
+	if len(key) > 0 && keyKind != LoginKeyApproval && keyKind != LoginKeyInvite {
+		err := errors.New("unsupported gnar bootstrap key type")
+		m.recordError(KindGnar, err.Error())
+		clearBytes(key)
+		return Status{Error: err.Error()}, err
+	}
+	if len(key) > 0 {
+		defer clearBytes(key)
 	}
 	edge = strings.TrimSpace(edge)
 	if edge != "" {
@@ -193,7 +218,7 @@ func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) 
 		}
 		m.SetGnarEdge(edge)
 	}
-	if len(enrollmentKey) > 0 {
+	if len(key) > 0 {
 		path := m.gnarPath
 		if path == "" {
 			path = findExecutable(gnarCandidates())
@@ -204,9 +229,7 @@ func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) 
 			return Status{Error: err.Error()}, err
 		}
 		if edge == "" {
-			m.mu.Lock()
-			edge = m.gnarEdge
-			m.mu.Unlock()
+			edge = m.GnarEdge()
 		}
 		if edge == "" {
 			err := errors.New("an Edge URL is required before enrolling gnar")
@@ -217,27 +240,25 @@ func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) 
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
-		account = strings.TrimSpace(account)
-		if account == "" {
-			account = "warren"
+		account, err := normalizeGnarAccount(account)
+		if err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
 		}
-		for _, character := range account {
-			if character < 0x20 || character == 0x7f {
-				err := errors.New("gnar account name contains a control character")
-				m.recordError(KindGnar, err.Error())
-				return Status{Error: err.Error()}, err
-			}
-		}
-		if err := loginGnar(path, edge, account, enrollmentKey); err != nil {
+		if err := loginGnar(path, edge, account, keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
 		// The key is bootstrap-only. Clear it before the long-lived tunnel
 		// process is started; the deferred clear covers every early return.
-		clearBytes(enrollmentKey)
+		clearBytes(key)
 	}
 	status, err := m.Start(KindGnar)
 	if err != nil {
+		if len(key) == 0 {
+			err = actionableGnarStartError(err)
+			status.Error = err.Error()
+		}
 		return status, err
 	}
 	if status.Running && status.URL != "" {
@@ -246,8 +267,25 @@ func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) 
 	if status.Error == "" {
 		status.Error = "gnar did not report a public endpoint before the startup timeout"
 	}
+	if len(key) == 0 {
+		status.Error = actionableGnarStartError(errors.New(status.Error)).Error()
+	}
 	m.recordError(KindGnar, status.Error)
 	return status, errors.New(status.Error)
+}
+
+func actionableGnarStartError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "enroll") || strings.Contains(lower, "no persisted gnar token") || strings.Contains(lower, "sign in") || strings.Contains(lower, "login") {
+		if !strings.Contains(lower, "approval key") && !strings.Contains(lower, "invite key") {
+			return fmt.Errorf("%s; enter an Approval Key or Invite Key in Settings → Public Access", message)
+		}
+	}
+	return err
 }
 
 // StopAll tears down every running reachability adapter. The daemon calls it
@@ -482,16 +520,20 @@ func (m *Manager) startGnar() (Status, error) {
 		return Status{Error: err.Error()}, err
 	}
 	reapStaleGnar(m.target)
-	if m.gnarEdge != "" {
-		if err := ValidateEdgeURL(m.gnarEdge); err != nil {
+	edge := m.gnarEdge
+	if edge == "" {
+		edge = m.gnarDefaultEdge
+	}
+	if edge != "" {
+		if err := ValidateEdgeURL(edge); err != nil {
 			m.mu.Unlock()
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
 	}
 	args := []string{m.target, "--no-tui", "--json"}
-	if m.gnarEdge != "" {
-		args = append(args, "--edge", m.gnarEdge)
+	if edge != "" {
+		args = append(args, "--edge", edge)
 	}
 	args = append(args, gnarNameArgs()...)
 	command := exec.Command(path, args...)
@@ -588,6 +630,7 @@ func (m *Manager) scanGnar(st *state, reader io.Reader) {
 			continue
 		}
 		message := redactGnarText(event.Message)
+		actionable := actionableGnarStartError(errors.New(message)).Error()
 		m.mu.Lock()
 		if m.states[st.kind] == st {
 			switch event.Type {
@@ -600,7 +643,7 @@ func (m *Manager) scanGnar(st *state, reader io.Reader) {
 					}
 				}
 			case "error":
-				st.err = message
+				st.err = actionable
 			}
 		}
 		m.mu.Unlock()
@@ -610,7 +653,7 @@ func (m *Manager) scanGnar(st *state, reader io.Reader) {
 				m.logger.Info("tunnel ready", "kind", st.kind, "url", endpoint)
 			}
 		case "error":
-			m.logger.Warn("gnar tunnel error", "kind", st.kind, "error", message)
+			m.logger.Warn("gnar tunnel error", "kind", st.kind, "error", actionable)
 		}
 		if event.Type == "tunnel_ready" || event.Type == "error" {
 			st.readyOnce.Do(func() { close(st.ready) })
@@ -801,19 +844,25 @@ func NormalizePublicEndpoint(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-func loginGnar(path, edge, account string, enrollmentKey []byte) error {
+func loginGnar(path, edge, account string, keyKind LoginKeyKind, key []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gnarLoginTimeout)
 	defer cancel()
+	args := []string{"login", "--edge", edge, "--account", account}
+	switch keyKind {
+	case LoginKeyApproval:
+		args = append(args, "--enrollment-key-stdin")
+	case LoginKeyInvite:
+		args = append(args, "--key-stdin")
+	default:
+		return errors.New("unsupported gnar bootstrap key type")
+	}
+	args = append(args, "--json")
 	command := exec.CommandContext(
 		ctx,
 		path,
-		"login",
-		"--edge", edge,
-		"--account", account,
-		"--enrollment-key-stdin",
-		"--json",
+		args...,
 	)
-	command.Stdin = bytes.NewReader(enrollmentKey)
+	command.Stdin = bytes.NewReader(key)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -827,12 +876,58 @@ func loginGnar(path, edge, account string, enrollmentKey []byte) error {
 		if message == "" {
 			message = "gnar login failed"
 		}
-		return fmt.Errorf("%s: %w", redactGnarText(message, string(enrollmentKey)), err)
+		return fmt.Errorf("%s: %w", redactGnarText(message, string(key)), err)
 	}
 	if message != "" && strings.HasPrefix(strings.ToLower(message), "error:") {
-		return errors.New(redactGnarText(message, string(enrollmentKey)))
+		return errors.New(redactGnarText(message, string(key)))
 	}
 	return nil
+}
+
+func normalizeGnarAccount(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		normalized = defaultGnarAccount()
+	}
+	if normalized == "" {
+		normalized = "warren"
+	}
+	if len(normalized) == 0 || len(normalized) > 16 {
+		return "", errors.New("gnar account name must be 1 to 16 lowercase letters, numbers, or hyphens")
+	}
+	for index, character := range normalized {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') || character == '-' {
+			if (index == 0 || index == len(normalized)-1) && character == '-' {
+				return "", errors.New("gnar account name must start and end with a letter or number")
+			}
+			continue
+		}
+		return "", errors.New("gnar account name must be 1 to 16 lowercase letters, numbers, or hyphens")
+	}
+	return normalized, nil
+}
+
+func defaultGnarAccount() string {
+	hostName, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, character := range strings.ToLower(strings.TrimSpace(hostName)) {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			builder.WriteRune(character)
+			continue
+		}
+		if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "-") {
+			builder.WriteByte('-')
+		}
+	}
+	normalized := strings.Trim(builder.String(), "-")
+	if len(normalized) > 16 {
+		normalized = strings.TrimRight(normalized[:16], "-")
+	}
+	return normalized
 }
 
 func gnarLoginMessage(data []byte) string {
@@ -881,9 +976,9 @@ func redactGnarText(value string, secrets ...string) string {
 	return sensitiveBareValuePattern.ReplaceAllString(value, `$1<redacted>`)
 }
 
-var sensitiveGnarPattern = regexp.MustCompile(`(?i)(enrollment[-_ ]?key|access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token)(\s*[:=]\s*["']?)[^\s,"'}]+`)
-var sensitiveValuePattern = regexp.MustCompile(`(?i)((?:token|secret|credential|enrollment[-_ ]?key)(?:\s+is)?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}`)
-var sensitiveBareValuePattern = regexp.MustCompile(`(?i)((?:access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token|token|secret|credential|enrollment[-_ ]?key)\s+)[A-Za-z0-9._~+/=-]{12,}`)
+var sensitiveGnarPattern = regexp.MustCompile(`(?i)(enrollment[-_ ]?key|approval[-_ ]?key|invite[-_ ]?key|access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token)(\s*[:=]\s*["']?)[^\s,"'}]+`)
+var sensitiveValuePattern = regexp.MustCompile(`(?i)((?:token|secret|credential|enrollment[-_ ]?key|approval[-_ ]?key|invite[-_ ]?key)(?:\s+is)?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}`)
+var sensitiveBareValuePattern = regexp.MustCompile(`(?i)((?:access[-_ ]?token|daemon[-_ ]?token|account[-_ ]?token|token|secret|credential|enrollment[-_ ]?key|approval[-_ ]?key|invite[-_ ]?key)\s+)[A-Za-z0-9._~+/=-]{12,}`)
 
 func clearBytes(value []byte) {
 	for index := range value {

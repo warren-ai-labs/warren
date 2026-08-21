@@ -10,7 +10,7 @@ import WarrenDomain
 struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
     let webStatus: WarrenDesktopWebStatus
-    let onWebEnable: ((String, String, String) -> Void)?
+    let onWebEnable: ((String, String, String, String) -> Void)?
     let onWebStop: () -> Void
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
@@ -40,8 +40,9 @@ struct WarrenDesktopSettingsView: View {
     @AppStorage(WarrenPreferenceKey.publicAccessEnabled)
     private var publicAccessEnabled = true
     @State private var publicAccessEdgeURL = ""
-    @State private var publicAccessAccountName = "warren"
-    @State private var publicAccessEnrollmentKey = ""
+    @State private var publicAccessAccountName = ""
+    @State private var publicAccessInviteKey = ""
+    @State private var publicAccessApprovalKey = ""
     @Environment(\.colorScheme) private var colorScheme
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -87,7 +88,7 @@ struct WarrenDesktopSettingsView: View {
             case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
             case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
             case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
-            case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "enrollment key", "tunnel", "internet"]
+            case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
             }
         }
 
@@ -748,8 +749,9 @@ struct WarrenDesktopSettingsView: View {
             Text(
                 "Reach this Mac's Web UI through your self-hosted gnar Edge. Enter the "
                     + "optional custom Edge URL and account name below, or leave the Edge "
-                    + "URL empty to use Warren's release default. The one-time Enrollment "
-                    + "Key is sent privately to gnar and is never saved by Warren. "
+                    + "URL empty to use Warren's release default. Enter an Invite Key or "
+                    + "Approval Key when gnar needs enrollment; Approval Key takes priority. "
+                    + "Keys are sent privately to gnar and are never saved by Warren. "
                     + "Turning controls off only hides the Web surface controls."
             )
             .font(WarrenTypography.settingsSupporting)
@@ -778,23 +780,40 @@ struct WarrenDesktopSettingsView: View {
 
                 Text("Account name (optional)")
                     .font(WarrenTypography.settingsBody)
-                TextField("warren", text: $publicAccessAccountName)
+                TextField("Leave empty for this system's name", text: $publicAccessAccountName)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel("gnar account name")
                     .accessibilityIdentifier("settings.public-access.account-name")
 
-                Text(WarrenPublicAccessCopy.enrollmentKey)
+                if webStatus.usingDefaultAccount,
+                   let accountName = webStatus.effectiveAccountName,
+                   !accountName.isEmpty {
+                    Text("Using system account name: \(accountName)")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text(WarrenPublicAccessCopy.inviteKey)
                     .font(WarrenTypography.settingsBody)
-                SecureField("Enter only when gnar needs enrollment", text: $publicAccessEnrollmentKey)
+                SecureField("Enter only when gnar needs an invite", text: $publicAccessInviteKey)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
-                    .accessibilityLabel("Enrollment Key")
-                    .accessibilityIdentifier("settings.public-access.enrollment-key")
+                    .accessibilityLabel("Invite Key")
+                    .accessibilityIdentifier("settings.public-access.invite-key")
+
+                Text(WarrenPublicAccessCopy.approvalKey)
+                    .font(WarrenTypography.settingsBody)
+                SecureField("Enter only when gnar needs approval", text: $publicAccessApprovalKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Approval Key")
+                    .accessibilityIdentifier("settings.public-access.approval-key")
 
                 Text(
-                    "Leave the Enrollment Key empty after a successful enrollment; gnar's "
-                        + "persisted account token will be reused."
+                    "Leave both keys empty after a successful enrollment; gnar's persisted "
+                        + "account token will be reused."
                 )
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.mutedForeground)
@@ -818,11 +837,13 @@ struct WarrenDesktopSettingsView: View {
                     } else {
                         let edgeURL = publicAccessEdgeURL
                         let accountName = publicAccessAccountName
-                        let enrollmentKey = publicAccessEnrollmentKey
-                        // The key is bootstrap-only. Clear the field before the
-                        // callback returns so it cannot remain in the view state.
-                        publicAccessEnrollmentKey = ""
-                        onWebEnable?(edgeURL, accountName, enrollmentKey)
+                        let inviteKey = publicAccessInviteKey
+                        let approvalKey = publicAccessApprovalKey
+                        // Keys are bootstrap-only. Clear both fields before the
+                        // callback returns so they cannot remain in view state.
+                        publicAccessInviteKey = ""
+                        publicAccessApprovalKey = ""
+                        onWebEnable?(edgeURL, accountName, inviteKey, approvalKey)
                     }
                 }
                 .buttonStyle(
@@ -877,7 +898,7 @@ struct WarrenDesktopSettingsView: View {
            !edgeURL.isEmpty {
             publicAccessEdgeURL = edgeURL
         }
-        if publicAccessAccountName == "warren",
+        if publicAccessAccountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let accountName = webStatus.configuredAccountName,
            !accountName.isEmpty {
             publicAccessAccountName = accountName

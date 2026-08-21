@@ -66,6 +66,10 @@ const (
 
 type Service struct {
 	Store *store.Store
+	// HostName is the Warren Host/system name used for the default gnar
+	// account. It is injected by the daemon from --name/WARREN_HOST_NAME;
+	// embedded callers may leave it empty and use os.Hostname as a fallback.
+	HostName string
 	// Runtime is the adapter for DefaultRuntime, kept for compatibility with
 	// existing construction sites and tests.
 	Runtime Runtime
@@ -2252,8 +2256,8 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 }
 
 // UpdatePublicAccessConfig persists the non-secret gnar Edge configuration.
-// Enrollment keys are intentionally not accepted here; they belong only to
-// the in-memory enable request and are forwarded to gnar over stdin.
+// Invite and approval keys are intentionally not accepted here; they belong
+// only to the in-memory enable request and are forwarded to gnar over stdin.
 func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
 	edge = strings.TrimSpace(edge)
 	if edge != "" {
@@ -2261,12 +2265,29 @@ func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
 			return err
 		}
 	}
+	normalizedAccount, err := settings.NormalizeConfiguredGnarAccount(account)
+	if err != nil {
+		return err
+	}
 	s.Settings.GnarEdge = edge
-	s.Settings.GnarAccount = settings.NormalizedGnarAccount(account)
+	// An omitted account is intentional: keep the system-name default dynamic
+	// instead of persisting a machine-specific value as a user override.
+	s.Settings.GnarAccount = normalizedAccount
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
 	}
 	return nil
+}
+
+// EffectiveGnarAccount returns the account label Warren will pass to gnar for
+// a bootstrap login. The value is never a credential.
+func (s *Service) EffectiveGnarAccount() string {
+	return settings.EffectiveGnarAccount(s.Settings.GnarAccount, s.HostName)
+}
+
+// ConfiguredGnarAccount returns only a user-provided account override.
+func (s *Service) ConfiguredGnarAccount() string {
+	return settings.ConfiguredGnarAccount(s.Settings.GnarAccount)
 }
 
 // PublicAccessEnabled reports the persisted user intent independently of the

@@ -1245,13 +1245,18 @@ final class WarrenRemoteApplicationModel {
         surfaceManager.apply(font: preference)
     }
     func startWebFromUI() {
-        enablePublicAccess(edgeURL: "", accountName: "", enrollmentKey: "")
+        enablePublicAccess(edgeURL: "", accountName: "", inviteKey: "", approvalKey: "")
     }
     func stopWeb() {
         controlPublicAccess(.disable)
     }
 
-    func enablePublicAccess(edgeURL: String, accountName: String, enrollmentKey: String) {
+    func enablePublicAccess(
+        edgeURL: String,
+        accountName: String,
+        inviteKey: String,
+        approvalKey: String
+    ) {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
         Task {
@@ -1261,11 +1266,12 @@ final class WarrenRemoteApplicationModel {
                     .enable,
                     edgeURL: edgeURL,
                     accountName: accountName,
-                    enrollmentKey: enrollmentKey
+                    inviteKey: inviteKey,
+                    approvalKey: approvalKey
                 )
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
-                if enrollmentKey.isEmpty, isMissingPublicAccessEndpoint(error) {
+                if inviteKey.isEmpty, approvalKey.isEmpty, isMissingPublicAccessEndpoint(error) {
                     do {
                         try await tunnelRequest(.start, kind: "gnar")
                         webStatus.publicAccessError = nil
@@ -1333,7 +1339,7 @@ final class WarrenRemoteApplicationModel {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and Enrollment Key in Settings → Public Access, then enable Public Access.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and an Invite Key or Approval Key in Settings → Public Access, then enable Public Access.",
                 ]))
                 return
             }
@@ -1415,7 +1421,8 @@ final class WarrenRemoteApplicationModel {
         _ action: PublicAccessAction,
         edgeURL: String = "",
         accountName: String = "",
-        enrollmentKey: String = ""
+        inviteKey: String = "",
+        approvalKey: String = ""
     ) async throws {
         guard let configuration = endpointConfiguration else {
             throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
@@ -1437,7 +1444,8 @@ final class WarrenRemoteApplicationModel {
             request.httpBody = try JSONEncoder().encode(PublicAccessEnableRequest(
                 edgeURL: edgeURL,
                 accountName: accountName,
-                enrollmentKey: enrollmentKey
+                inviteKey: inviteKey,
+                approvalKey: approvalKey
             ))
         }
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -1483,12 +1491,14 @@ final class WarrenRemoteApplicationModel {
         /// empty string clears it and selects the release/launcher default.
         let edgeURL: String?
         let accountName: String
-        let enrollmentKey: String
+        let inviteKey: String
+        let approvalKey: String
 
         enum CodingKeys: String, CodingKey {
             case edgeURL = "edgeUrl"
             case accountName
-            case enrollmentKey
+            case inviteKey
+            case approvalKey
         }
     }
 
@@ -1498,6 +1508,8 @@ final class WarrenRemoteApplicationModel {
         let defaultEdgeURL: String?
         let usingDefaultEdge: Bool?
         let accountName: String?
+        let configuredAccountName: String?
+        let usingDefaultAccount: Bool?
         let enabled: Bool
         let running: Bool
         let publicEndpoint: String?
@@ -1509,6 +1521,8 @@ final class WarrenRemoteApplicationModel {
             case defaultEdgeURL = "defaultEdgeUrl"
             case usingDefaultEdge = "usingDefaultEdge"
             case accountName
+            case configuredAccountName = "configuredAccountName"
+            case usingDefaultAccount = "usingDefaultAccount"
             case enabled
             case running
             case publicEndpoint
@@ -1524,13 +1538,17 @@ final class WarrenRemoteApplicationModel {
             webStatus.defaultEdgeURL = nil
             webStatus.usingDefaultEdge = false
             webStatus.configuredAccountName = nil
+            webStatus.effectiveAccountName = nil
+            webStatus.usingDefaultAccount = false
             webStatus.publicAccessEnabled = false
             return
         }
         webStatus.configuredEdgeURL = response.configuredEdgeURL.flatMap(URL.init(string:))
         webStatus.defaultEdgeURL = response.defaultEdgeURL.flatMap(URL.init(string:))
         webStatus.usingDefaultEdge = response.usingDefaultEdge ?? (response.configuredEdgeURL == nil)
-        webStatus.configuredAccountName = response.accountName
+        webStatus.configuredAccountName = response.configuredAccountName
+        webStatus.effectiveAccountName = response.accountName
+        webStatus.usingDefaultAccount = response.usingDefaultAccount ?? (response.configuredAccountName == nil)
         webStatus.publicAccessEnabled = response.enabled
         webStatus.publicAccessError = response.error
         guard response.running,
