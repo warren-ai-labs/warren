@@ -1,13 +1,14 @@
 import SwiftUI
 import WarrenDesignSystem
 
-/// The three top-right workspace controls (Web, endpoint, external IDE) share
-/// one app-owned popover contract. A control only reports which popover it
-/// wants; the window root owns presentation, dismissal and outside clicks.
+/// Top-right workspace controls share one app-owned popover contract. A
+/// control only reports which popover it wants; the window root owns
+/// presentation, dismissal and outside clicks.
 enum WarrenDesktopChromePopover: Equatable {
     case web
     case endpoint
     case externalIDE
+    case notices
 }
 
 /// Shared surface for every top-right chrome popover: same radius, border,

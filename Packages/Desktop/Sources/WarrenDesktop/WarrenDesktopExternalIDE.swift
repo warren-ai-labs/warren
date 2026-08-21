@@ -188,17 +188,6 @@ struct WarrenDesktopExternalIDEMenu: View {
     }
 }
 
-struct WarrenDesktopExternalIDEFailure: Identifiable {
-    let id = UUID()
-    let title: String
-    let message: String
-
-    init(ideName: String, error: Error) {
-        title = "Unable to Open \(ideName)"
-        message = error.localizedDescription
-    }
-}
-
 @MainActor
 struct WarrenDesktopExternalIDEService {
     typealias Launch = (URL, URL) async throws -> Void

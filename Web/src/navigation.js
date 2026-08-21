@@ -93,3 +93,103 @@ export function resolveRestoredWorkspace(catalog, preferredWorkspaceID, sessionI
   }
   return catalog.workspaces[0]?.id || null;
 }
+
+// Link selectors may be either stable UUIDs or the current user-facing name.
+// Names are intentionally resolved against the live catalog: a renamed
+// resource makes an old name link fail instead of silently choosing a sibling.
+export function resolveProjectID(catalog, selector) {
+  return uniqueSelectorMatch(
+    catalog?.projects || [],
+    selector,
+    project => project.id,
+    project => [project.name],
+  )?.id || null;
+}
+
+export function resolveWorkspaceID(catalog, selector, projectID = null) {
+  const workspaces = (catalog?.workspaces || []).filter(workspace => (
+    !projectID || workspace.project === projectID || workspace.projectID === projectID
+  ));
+  return uniqueSelectorMatch(
+    workspaces,
+    selector,
+    workspace => workspace.id,
+    workspace => [workspace.name],
+  )?.id || null;
+}
+
+export function resolveSessionID(catalog, selector, workspaceID = null, projectID = null) {
+  const sessions = [...(catalog?.sessions?.values?.() || [])].filter(session => {
+    const sessionWorkspaceID = session.workspace || session.workspaceID || null;
+    if (workspaceID && sessionWorkspaceID !== workspaceID) return false;
+    if (projectID) {
+      const workspace = catalog?.workspaces?.find(value => value.id === sessionWorkspaceID);
+      if (!workspace || (workspace.project !== projectID && workspace.projectID !== projectID)) return false;
+    }
+    return true;
+  });
+  return uniqueSelectorMatch(
+    sessions,
+    selector,
+    session => session.id,
+    session => [session.customTitle, session.title],
+  )?.id || null;
+}
+
+/**
+ * Resolves a hash/deep-link positioning state without mutating navigation.
+ * `error` is set whenever a requested selector is missing or ambiguous.
+ */
+export function resolveNavigationTarget(catalog, state = {}) {
+  const requestedProject = state.projectID || null;
+  const requestedWorkspace = state.workspaceID || null;
+  const requestedSession = state.sessionID || null;
+  const projectID = requestedProject
+    ? resolveProjectID(catalog, requestedProject)
+    : null;
+  if (requestedProject && !projectID) {
+    return { error: `Project “${requestedProject}” was not found or is ambiguous.` };
+  }
+
+  let workspaceID = requestedWorkspace
+    ? resolveWorkspaceID(catalog, requestedWorkspace, projectID)
+    : null;
+  if (requestedWorkspace && !workspaceID) {
+    return { error: `Workspace “${requestedWorkspace}” was not found or is ambiguous.` };
+  }
+
+  let sessionID = requestedSession
+    ? resolveSessionID(catalog, requestedSession, workspaceID, projectID)
+    : null;
+  if (requestedSession && !sessionID) {
+    return { error: `Session “${requestedSession}” was not found or is ambiguous.` };
+  }
+
+  if (sessionID) {
+    const session = catalog.sessions.get(sessionID);
+    const sessionWorkspaceID = session?.workspace || null;
+    if (workspaceID && sessionWorkspaceID !== workspaceID) {
+      return { error: `Session “${requestedSession}” is outside the requested workspace.` };
+    }
+    workspaceID = sessionWorkspaceID || workspaceID;
+  }
+  if (!workspaceID && projectID) workspaceID = resolveProjectWorkspace(catalog, projectID);
+  if (workspaceID && projectID) {
+    const workspace = catalog.workspaces.find(value => value.id === workspaceID);
+    if (!workspace || (workspace.project !== projectID && workspace.projectID !== projectID)) {
+      return { error: "The requested project and workspace do not belong together." };
+    }
+  }
+  return { projectID, workspaceID, sessionID };
+}
+
+function uniqueSelectorMatch(values, selector, id, names) {
+  if (!selector) return null;
+  const normalized = String(selector).trim().toLocaleLowerCase();
+  if (!normalized) return null;
+  const matches = values.filter(value => {
+    const candidates = [id(value), ...names(value)].filter(Boolean);
+    return candidates.some(candidate => String(candidate).toLocaleLowerCase() === normalized);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}

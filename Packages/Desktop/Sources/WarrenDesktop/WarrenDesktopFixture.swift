@@ -89,25 +89,6 @@ public struct WarrenDesktopTerminalGroup: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Optional trailing inspector content. The shell owns its slot geometry.
-public struct WarrenDesktopInspectorContent: Identifiable, Hashable, Sendable {
-    public let id: String
-    public let title: String
-    public let detail: String
-
-    /// Text copied by the Inspector action. Keep the title with the detail so
-    /// a pasted diagnostic remains understandable outside the app.
-    public var clipboardText: String {
-        "\(title)\n\n\(detail)"
-    }
-
-    public init(id: String = "inspector", title: String, detail: String) {
-        self.id = id
-        self.title = title
-        self.detail = detail
-    }
-}
-
 /// Desktop read model for a Host-owned Warren Terminal Session. `tabID` is
 /// present only when the current Window Layout contains an entry for it.
 public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
@@ -229,21 +210,17 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         public let terminalGroupIDs: [TerminalGroupID]
         public let tabIDs: [String]
         public let sessionIDs: [TerminalSessionID]
-        public let inspectorID: String?
-
         fileprivate init(
             groups: [WarrenDesktopProjectGroup],
             terminalGroups: [TerminalGroup],
             sessions: [WarrenDesktopSession],
-            tabs: [ClientTab],
-            inspectorID: String?
+            tabs: [ClientTab]
         ) {
             self.projectIDs = groups.map(\.project.id)
             self.workspaceIDs = groups.flatMap { $0.workspaces.map(\.id) }
             self.terminalGroupIDs = terminalGroups.map(\.id)
             self.tabIDs = tabs.map(\.id)
             self.sessionIDs = sessions.map(\.id)
-            self.inspectorID = inspectorID
         }
     }
 
@@ -271,7 +248,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     private let workspaceActivitySummariesByID: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     private let activityByTerminalGroupID: [TerminalGroupID: AgentActivityState]
     private let terminalGroupsByID: [TerminalGroupID: TerminalGroup]
-    public let inspector: WarrenDesktopInspectorContent?
     public let connectionState: WarrenDesktopConnectionState
 
     public var isConnected: Bool {
@@ -305,7 +281,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             && lhs.sessionTerminalGroupIDs == rhs.sessionTerminalGroupIDs
             && lhs.tabWorkspaceIDs == rhs.tabWorkspaceIDs
             && lhs.tabTerminalGroupIDs == rhs.tabTerminalGroupIDs
-            && lhs.inspector == rhs.inspector
             && lhs.connectionState == rhs.connectionState
     }
 
@@ -319,7 +294,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         hasher.combine(sessionTerminalGroupIDs)
         hasher.combine(tabWorkspaceIDs)
         hasher.combine(tabTerminalGroupIDs)
-        hasher.combine(inspector)
         hasher.combine(connectionState)
     }
 
@@ -330,7 +304,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         tabs: [ClientTab] = [],
         sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID] = [:],
         tabWorkspaceIDs: [String: WorkspaceID] = [:],
-        inspector: WarrenDesktopInspectorContent? = nil,
         connectionState: WarrenDesktopConnectionState = .attached,
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
@@ -466,14 +439,12 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         }
         self.activityByTerminalGroupID = activityByTerminalGroupID
         self.terminalGroupsByID = Dictionary(uniqueKeysWithValues: terminalGroups.map { ($0.id, $0) })
-        self.inspector = inspector
         self.connectionState = connectionState
         self.reconciliationKey = ReconciliationKey(
             groups: groups,
             terminalGroups: terminalGroups,
             sessions: sessions,
-            tabs: tabs,
-            inspectorID: inspector?.id
+            tabs: tabs
         )
     }
 
@@ -487,7 +458,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         tabs: [ClientTab] = [],
         sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID] = [:],
         tabWorkspaceIDs: [String: WorkspaceID] = [:],
-        inspector: WarrenDesktopInspectorContent? = nil,
         connectionState: WarrenDesktopConnectionState = .attached,
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
@@ -510,7 +480,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
-            inspector: inspector,
             connectionState: connectionState,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
@@ -625,7 +594,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
-            inspector: inspector,
             connectionState: connectionState,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
@@ -658,7 +626,6 @@ public struct WarrenDesktopFixture: Sendable {
     public var terminalGroups: [TerminalGroup] { projection.terminalGroups }
     public var sessions: [WarrenDesktopSession] { projection.sessions }
     public var tabs: [ClientTab] { projection.tabs }
-    public var inspector: WarrenDesktopInspectorContent? { projection.inspector }
     public var isConnected: Bool { projection.isConnected }
 
     public init(projection: WarrenDesktopProjection) {
@@ -669,7 +636,6 @@ public struct WarrenDesktopFixture: Sendable {
         host: WarrenDomain.Host,
         groups: [WarrenDesktopProjectGroup],
         tabs: [ClientTab] = [],
-        inspector: WarrenDesktopInspectorContent? = nil,
         isConnected: Bool = true,
         terminalGroups: [TerminalGroup] = [],
         sessions: [WarrenDesktopSession] = []
@@ -680,7 +646,6 @@ public struct WarrenDesktopFixture: Sendable {
                 groups: groups,
                 sessions: sessions,
                 tabs: tabs,
-                inspector: inspector,
                 connectionState: isConnected ? .attached : .disconnected,
                 terminalGroups: terminalGroups
             )
@@ -692,7 +657,6 @@ public struct WarrenDesktopFixture: Sendable {
         projects: [Project],
         workspaces: [Workspace],
         tabs: [ClientTab] = [],
-        inspector: WarrenDesktopInspectorContent? = nil,
         isConnected: Bool = true,
         terminalGroups: [TerminalGroup] = [],
         sessions: [WarrenDesktopSession] = []
@@ -704,7 +668,6 @@ public struct WarrenDesktopFixture: Sendable {
                 workspaces: workspaces,
                 sessions: sessions,
                 tabs: tabs,
-                inspector: inspector,
                 connectionState: isConnected ? .attached : .disconnected,
                 terminalGroups: terminalGroups
             )
@@ -811,11 +774,7 @@ public struct WarrenDesktopFixture: Sendable {
                 sessionWorkspaceIDs: [
                     firstSessionID: firstWorkspaceID,
                     secondSessionID: thirdWorkspaceID,
-                ],
-                inspector: WarrenDesktopInspectorContent(
-                    title: "Workspace Inspector",
-                    detail: "Select a workspace to view local layout details."
-                )
+                ]
             )
         )
     }
@@ -902,7 +861,6 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case closeOtherTabs(String)
     case closeAllTabs
     case restoreNavigation(WarrenDesktopNavigationState)
-    case toggleInspector
     case toggleSidebar
 }
 

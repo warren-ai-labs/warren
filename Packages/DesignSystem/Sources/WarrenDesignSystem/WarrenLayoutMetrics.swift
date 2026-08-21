@@ -41,9 +41,6 @@ public enum WarrenLayoutMetrics {
     public static let paneMinimumHeight: CGFloat = 160
     /// Superset's v2 right workspace sidebar defaults to 340pt and can be
     /// resized independently by its host shell.
-    public static let inspectorDefaultWidth: CGFloat = 340
-    public static let inspectorMinimumWidth: CGFloat = 240
-    public static let inspectorMaximumWidth: CGFloat = 640
 
     // Sidebar row geometry from DashboardSidebar's Tailwind classes.
     public static let sidebarProjectRowHeight: CGFloat = 32

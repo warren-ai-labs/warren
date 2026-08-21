@@ -14,7 +14,6 @@ public enum WarrenDesktopCommand {
     public static let closeTab = Notification.Name("WarrenDesktopCommand.closeTab")
     public static let findInTerminal = Notification.Name("WarrenDesktopCommand.findInTerminal")
     public static let toggleSidebar = Notification.Name("WarrenDesktopCommand.toggleSidebar")
-    public static let toggleInspector = Notification.Name("WarrenDesktopCommand.toggleInspector")
     /// Posted when the in-app Settings page closes. The shell stays mounted
     /// underneath Settings, so the composition root uses this to return
     /// keyboard focus and force a repaint of the terminal.

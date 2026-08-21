@@ -109,3 +109,95 @@ export class MobileInputDeduper {
     return true;
   }
 }
+
+/**
+ * Applies the small readline/AppKit editing vocabulary to normal Web inputs.
+ * The xterm helper textarea is intentionally excluded by the caller so
+ * Control-A/Control-E continue to reach the shell through the PTY.
+ */
+export function handleUnixTextEditingKey(event) {
+  const target = event?.target;
+  if (!isEditableTextTarget(target) || event.isComposing) return false;
+  const key = String(event.key || "").toLowerCase();
+  const meta = Boolean(event.metaKey);
+  const control = Boolean(event.ctrlKey);
+  const alt = Boolean(event.altKey);
+  if (alt || (meta && control)) return false;
+
+  if (meta && key === "a") {
+    selectRange(target, 0, target.value.length);
+    event.preventDefault();
+    return true;
+  }
+  if (!control || meta) return false;
+
+  const start = Number.isInteger(target.selectionStart) ? target.selectionStart : 0;
+  const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : start;
+  switch (key) {
+  case "a":
+    selectRange(target, 0, 0);
+    event.preventDefault();
+    return true;
+  case "e":
+    selectRange(target, target.value.length, target.value.length);
+    event.preventDefault();
+    return true;
+  case "f":
+    selectRange(target, Math.min(target.value.length, end + 1), Math.min(target.value.length, end + 1));
+    event.preventDefault();
+    return true;
+  case "b":
+    selectRange(target, Math.max(0, start - 1), Math.max(0, start - 1));
+    event.preventDefault();
+    return true;
+  case "k":
+    replaceRange(target, start, target.value.length, "");
+    event.preventDefault();
+    return true;
+  case "u":
+    replaceRange(target, 0, start, "");
+    event.preventDefault();
+    return true;
+  case "w": {
+    let deleteStart = start;
+    while (deleteStart > 0 && /\s/.test(target.value[deleteStart - 1])) deleteStart -= 1;
+    while (deleteStart > 0 && !/\s/.test(target.value[deleteStart - 1])) deleteStart -= 1;
+    replaceRange(target, deleteStart, end, "");
+    event.preventDefault();
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+export function isEditableTextTarget(target) {
+  if (!target || target.disabled || target.readOnly) return false;
+  const tag = String(target.tagName || "").toLowerCase();
+  if (tag === "textarea") return !target.classList?.contains("xterm-helper-textarea");
+  if (tag !== "input") return false;
+  return !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(
+    String(target.type || "text").toLowerCase(),
+  );
+}
+
+function selectRange(target, start, end) {
+  try {
+    if (typeof target.setSelectionRange === "function") {
+      target.setSelectionRange(start, end);
+      return;
+    }
+    target.select?.();
+  } catch {
+    target.select?.();
+  }
+}
+
+function replaceRange(target, start, end, value) {
+  if (typeof target.setRangeText === "function") {
+    target.setRangeText(value, start, end, "end");
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+  } else {
+    selectRange(target, start, end);
+  }
+}
