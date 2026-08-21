@@ -237,6 +237,13 @@ func (m *Manager) setGnarAuthenticated(value bool) {
 	m.gnarAuthenticated = value
 	if value {
 		delete(m.lastErrors, KindGnar)
+		// A failed start is retained briefly so its actionable error can be
+		// reported. Once gnar login succeeds, that stopped state is stale and
+		// must not shadow the newly authenticated configuration in Public Access
+		// responses.
+		if st := m.states[KindGnar]; st != nil && st.stopped {
+			delete(m.states, KindGnar)
+		}
 	}
 	m.mu.Unlock()
 }

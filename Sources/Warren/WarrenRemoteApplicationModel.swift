@@ -1431,7 +1431,18 @@ final class WarrenRemoteApplicationModel {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url
         }
-        components.fragment = "t=\(daemonToken)"
+        // URL fragments are parsed as form-like values by the Web client. A
+        // raw `+` in a base64 daemon token would therefore be decoded as a
+        // space and make the protected WebSocket fail authentication. Keep
+        // only RFC3986 unreserved characters literal and percent-encode the
+        // rest at the last possible moment before opening the browser.
+        let allowedFragmentValueCharacters = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        )
+        let encodedToken = daemonToken.addingPercentEncoding(
+            withAllowedCharacters: allowedFragmentValueCharacters
+        ) ?? daemonToken
+        components.percentEncodedFragment = "t=\(encodedToken)"
         return components.url ?? url
     }
 

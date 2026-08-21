@@ -457,6 +457,55 @@ exit 1
 	}
 }
 
+func TestSuccessfulGnarLoginClearsPreviousStoppedFailure(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "gnar-key")
+	loginCountPath := filepath.Join(t.TempDir(), "gnar-login-count")
+	t.Setenv("GNAR_KEY_FILE", keyPath)
+	t.Setenv("GNAR_LOGIN_COUNT", loginCountPath)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+count=0
+if [ -f "$GNAR_LOGIN_COUNT" ]; then count=$(cat "$GNAR_LOGIN_COUNT"); fi
+count=$((count + 1))
+printf '%s' "$count" > "$GNAR_LOGIN_COUNT"
+if [ "$count" = "1" ]; then
+  printf '%s\n' '{"type":"error","message":"no persisted gnar token; enrollment required"}'
+  exit 1
+fi
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/warren"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+
+	failed, err := manager.StartPublicAccess("https://edge.example.com", "warren", nil)
+	if err == nil || failed.Error == "" {
+		t.Fatalf("initial token-backed start = %#v, err %v; want actionable failure", failed, err)
+	}
+	if current := manager.Status()[KindGnar]; current.Error == "" || current.Running {
+		t.Fatalf("stopped failure status = %#v", current)
+	}
+
+	tested, err := manager.TestPublicAccess(
+		"https://edge.example.com",
+		"warren",
+		LoginKeyApproval,
+		[]byte("approval-secret"),
+	)
+	if err != nil {
+		t.Fatalf("bootstrap login after failure: %v", err)
+	}
+	if !manager.GnarAuthenticated() || tested.Error != "" {
+		t.Fatalf("authenticated test status = %#v, authenticated=%v", tested, manager.GnarAuthenticated())
+	}
+	if _, ok := manager.Status()[KindGnar]; ok {
+		t.Fatalf("stale stopped failure remained after successful login: %#v", manager.Status()[KindGnar])
+	}
+}
+
 func TestStartPublicAccessRejectsGnarProcessThatExitsAfterReady(t *testing.T) {
 	binary := writeScript(t, `#!/bin/sh
 printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/warren"}'
