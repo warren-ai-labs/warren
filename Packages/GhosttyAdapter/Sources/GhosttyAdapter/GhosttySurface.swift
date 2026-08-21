@@ -65,21 +65,27 @@ public final class GhosttySurface: Identifiable {
         self.inMemory = inMemory
         self.outputWriter = outputWriter
 
-        let theme = TerminalTheme(
-            dark: TerminalConfiguration { builder in
-                builder.withBackground("#151110")
-                builder.withForeground("#eae8e6")
-                builder.withCursorColor("#e07850")
-                builder.withCursorText("#151110")
-                // Ghostty colors carry no alpha; blend Superset's 25% orange
-                // selection over #151110 instead of using its rgba() value.
-                builder.withSelectionBackground("#482b20")
-                builder.withCursorStyle(.block)
-                builder.withCursorStyleBlink(true)
-                for (index, color) in TerminalPalette.ember.enumerated() {
-                    builder.withPalette(index, color: Self.hex(color))
-                }
+        let themeConfiguration = TerminalConfiguration { builder in
+            builder.withBackground("#151110")
+            builder.withForeground("#eae8e6")
+            builder.withCursorColor("#e07850")
+            builder.withCursorText("#151110")
+            // Ghostty colors carry no alpha; blend Superset's 25% orange
+            // selection over #151110 instead of using its rgba() value.
+            builder.withSelectionBackground("#482b20")
+            builder.withCursorStyle(.block)
+            builder.withCursorStyleBlink(true)
+            for (index, color) in TerminalPalette.ember.enumerated() {
+                builder.withPalette(index, color: Self.hex(color))
             }
+        }
+        // Warren is dark-only, but AppTerminalView can briefly report the
+        // system's light appearance because it is mounted outside SwiftUI's
+        // preferredColorScheme environment. Keep both variants identical so
+        // that transient scheme updates cannot drop the colors Codex queries.
+        let theme = TerminalTheme(
+            light: themeConfiguration,
+            dark: themeConfiguration
         )
         let controller = TerminalController(theme: theme) { _ in }
         controller.setTerminalConfiguration(Self.makeConfiguration(font: font))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/abcdlsj/ghostline"
+	warrenruntime "github.com/abcdlsj/warren/Headless/internal/runtime"
 )
 
 func startGhostlineRuntime(t *testing.T) (*GhostlineRuntime, *ghostline.Client) {
@@ -101,8 +102,9 @@ func TestGhostlineRuntimeLifecycle(t *testing.T) {
 	}
 }
 
-func TestGhostlineRuntimeClearsInheritedNoColor(t *testing.T) {
+func TestGhostlineRuntimeUsesSanitizedEnvironment(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
+	warrenruntime.SanitizeEnvironment()
 	runtime, _ := startGhostlineRuntime(t)
 	ctx := context.Background()
 	if err := runtime.Create(ctx, "warren_ghost_color", t.TempDir(), "sh", nil); err != nil {
