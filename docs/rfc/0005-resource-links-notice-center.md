@@ -24,7 +24,7 @@ silently opening a different resource.
    - Extend the Web hash state with the optional project level and resolve all
      three levels before changing the active terminal.
 2. **Notice center**
-   - Replace desktop error Inspector content and one-shot message dialogs with
+   - Replace desktop error diagnostics and one-shot message dialogs with
      bounded notices owned by the application model.
    - Add a bell control to the existing top chrome. Opening it shows a compact
      floating popover; selecting an item switches to its detail view without
@@ -69,7 +69,7 @@ silently opening a different resource.
   similarly named resource.
 - Clicking the bell and opening notice details leaves terminal dimensions
   unchanged.
-- No right-side Inspector control or layout slot remains visible.
+- No right-side diagnostic control or layout slot remains visible.
 - Command/Control-A selects all, Control-A/Control-E move to line start/end,
   and the surrounding Unix editing chords work in every non-terminal input.
 
@@ -88,6 +88,6 @@ silently opening a different resource.
 - `swift test --package-path Packages/Desktop -Xswiftc -warnings-as-errors`
   — 95 tests passed.
 - `swift test -Xswiftc -warnings-as-errors` — 45 tests passed.
-- `npm --prefix Web run check` — 127 Node tests passed and the Vite build
+- `npm --prefix Web run check` — 129 Node tests passed and the Vite build
   completed successfully.
 - `git diff --check` — clean.

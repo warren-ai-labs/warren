@@ -226,3 +226,15 @@ test("Unix editing kills the active range without intercepting xterm", () => {
   };
   assert.equal(handleUnixTextEditingKey(keyEvent(terminalTarget, "a", { ctrlKey: true })), false);
 });
+
+test("Unix editing falls back when a control does not expose range editing", () => {
+  const target = {
+    ...editableTarget("hello world"),
+    setRangeText: undefined,
+  };
+  target.selectionStart = 5;
+  target.selectionEnd = 5;
+
+  assert.equal(handleUnixTextEditingKey(keyEvent(target, "k", { ctrlKey: true })), true);
+  assert.equal(target.value, "hello");
+});

@@ -189,15 +189,28 @@ function selectRange(target, start, end) {
     }
     target.select?.();
   } catch {
-    target.select?.();
+    try {
+      target.select?.();
+    } catch {
+      // Number/date controls do not expose a selectable text range.
+    }
   }
 }
 
 function replaceRange(target, start, end, value) {
-  if (typeof target.setRangeText === "function") {
-    target.setRangeText(value, start, end, "end");
-    target.dispatchEvent(new Event("input", { bubbles: true }));
-  } else {
-    selectRange(target, start, end);
+  try {
+    if (typeof target.setRangeText === "function") {
+      target.setRangeText(value, start, end, "end");
+      target.dispatchEvent?.(new Event("input", { bubbles: true }));
+      return;
+    }
+  } catch {
+    // Fall through for controls such as number inputs that reject ranges.
   }
+
+  const current = String(target.value ?? "");
+  target.value = `${current.slice(0, start)}${value}${current.slice(end)}`;
+  const cursor = start + value.length;
+  selectRange(target, cursor, cursor);
+  target.dispatchEvent?.(new Event("input", { bubbles: true }));
 }

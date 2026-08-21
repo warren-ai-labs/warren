@@ -93,3 +93,13 @@ test("resource link selectors fail closed for stale names", () => {
   });
   assert.match(result.error, /Workspace/);
 });
+
+test("session selectors do not escape the requested project", () => {
+  const catalog = fixtureCatalog();
+  const result = resolveNavigationTarget(catalog, {
+    projectID: "project",
+    sessionID: "Other",
+  });
+
+  assert.match(result.error, /Session/);
+});
