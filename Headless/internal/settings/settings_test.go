@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/abcdlsj/warren/Headless/internal/releaseconfig"
 )
 
 func TestNormalizedDefaultsToGhostline(t *testing.T) {
@@ -71,6 +73,18 @@ func TestNormalizedGnarAccountUsesSafeDefault(t *testing.T) {
 	}
 	if got := NormalizedGnarAccount("bad\naccount"); got != DefaultGnarAccount {
 		t.Fatalf("control character account = %q, want %q", got, DefaultGnarAccount)
+	}
+}
+
+func TestBuiltInGnarEdgeReadsReleaseInjectedValueWithoutPersistingIt(t *testing.T) {
+	previous := releaseconfig.DefaultGnarEdge
+	t.Cleanup(func() { releaseconfig.DefaultGnarEdge = previous })
+	releaseconfig.DefaultGnarEdge = "  https://release.example.com/  "
+	if got := BuiltInGnarEdge(); got != "https://release.example.com/" {
+		t.Fatalf("built-in gnar edge = %q", got)
+	}
+	if (Settings{}).GnarEdge != "" {
+		t.Fatal("release default must not become a persisted settings override")
 	}
 }
 

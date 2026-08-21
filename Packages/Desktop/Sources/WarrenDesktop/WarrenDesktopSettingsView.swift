@@ -747,7 +747,8 @@ struct WarrenDesktopSettingsView: View {
                 .accessibilityIdentifier("settings.public-access.enabled")
             Text(
                 "Reach this Mac's Web UI through your self-hosted gnar Edge. Enter the "
-                    + "Edge URL and optional account name below. The one-time Enrollment "
+                    + "optional custom Edge URL and account name below, or leave the Edge "
+                    + "URL empty to use Warren's release default. The one-time Enrollment "
                     + "Key is sent privately to gnar and is never saved by Warren. "
                     + "Turning controls off only hides the Web surface controls."
             )
@@ -758,11 +759,22 @@ struct WarrenDesktopSettingsView: View {
             VStack(alignment: .leading, spacing: WarrenSpacing.small) {
                 Text(WarrenPublicAccessCopy.edgeURL)
                     .font(WarrenTypography.settingsBody)
-                TextField("https://edge.example.com", text: $publicAccessEdgeURL)
+                TextField("Leave empty for Warren's built-in Edge", text: $publicAccessEdgeURL)
                     .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
                     .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
                     .accessibilityIdentifier("settings.public-access.edge-url")
+
+                if let defaultEdgeURL = webStatus.defaultEdgeURL {
+                    Text(
+                        publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "Using Warren's built-in Edge: \(defaultEdgeURL.absoluteString)"
+                            : "Built-in default: \(defaultEdgeURL.absoluteString). Clear the custom URL to use it."
+                    )
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Text("Account name (optional)")
                     .font(WarrenTypography.settingsBody)

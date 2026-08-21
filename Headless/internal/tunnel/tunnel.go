@@ -45,6 +45,7 @@ type Manager struct {
 	tailscalePath   string
 	gnarPath        string
 	gnarEdge        string
+	gnarDefaultEdge string
 	pollInterval    time.Duration
 	pollAttempts    int
 
@@ -138,6 +139,28 @@ func (m *Manager) SetGnarEdge(edge string) {
 	m.gnarEdge = strings.TrimSpace(edge)
 }
 
+// SetGnarDefaultEdge sets the release/launcher fallback used when the user
+// has no persisted Edge override. It never writes settings.json.
+func (m *Manager) SetGnarDefaultEdge(edge string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gnarDefaultEdge = strings.TrimSpace(edge)
+}
+
+// SetGnarEdgeOverride applies a user setting while preserving the fallback
+// selected by the release or launcher. An empty override deliberately resets
+// the effective Edge to that fallback.
+func (m *Manager) SetGnarEdgeOverride(edge string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	edge = strings.TrimSpace(edge)
+	if edge == "" {
+		m.gnarEdge = m.gnarDefaultEdge
+		return
+	}
+	m.gnarEdge = edge
+}
+
 // GnarEdge returns the effective Edge URL selected for future gnar starts.
 // It may come from WARREN_GNAR_EDGE or a command-line override and is not a
 // credential.
@@ -145,6 +168,14 @@ func (m *Manager) GnarEdge() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.gnarEdge
+}
+
+// GnarDefaultEdge returns the non-persisted fallback used when no custom Edge
+// is configured. It may be empty for source builds without release injection.
+func (m *Manager) GnarDefaultEdge() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gnarDefaultEdge
 }
 
 // StartPublicAccess enrolls gnar when a one-time enrollment key is supplied,

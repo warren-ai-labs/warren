@@ -431,19 +431,30 @@ type GitDiff struct {
 // gnar Edge lifecycle. Enrollment keys, gnar account tokens, and the Warren
 // daemon token are deliberately absent from this type.
 type PublicAccessStatus struct {
-	EdgeURL        string `json:"edgeUrl"`
-	AccountName    string `json:"accountName"`
-	Enabled        bool   `json:"enabled"`
-	Running        bool   `json:"running"`
-	PublicEndpoint string `json:"publicEndpoint"`
-	Error          string `json:"error"`
+	// EdgeURL is the effective Edge currently selected after applying the
+	// release default, launcher override, and user override.
+	EdgeURL string `json:"edgeUrl"`
+	// ConfiguredEdgeURL is the user's persisted override. It is empty when the
+	// release/launcher default is in use.
+	ConfiguredEdgeURL string `json:"configuredEdgeUrl"`
+	// DefaultEdgeURL is the non-secret fallback shipped by the release or
+	// supplied by the launcher.
+	DefaultEdgeURL   string `json:"defaultEdgeUrl"`
+	UsingDefaultEdge bool   `json:"usingDefaultEdge"`
+	AccountName      string `json:"accountName"`
+	Enabled          bool   `json:"enabled"`
+	Running          bool   `json:"running"`
+	PublicEndpoint   string `json:"publicEndpoint"`
+	Error            string `json:"error"`
 }
 
 // PublicAccessEnableRequest contains the one-time bootstrap input for a
 // self-hosted gnar Edge. EnrollmentKey is consumed in memory and is never
 // persisted or included in a URL or command-line argument.
 type PublicAccessEnableRequest struct {
-	EdgeURL       string `json:"edgeUrl,omitempty"`
-	AccountName   string `json:"accountName,omitempty"`
-	EnrollmentKey string `json:"enrollmentKey,omitempty"`
+	// A nil EdgeURL keeps the existing configured override. An explicit empty
+	// string clears that override and selects the release/launcher default.
+	EdgeURL       *string `json:"edgeUrl,omitempty"`
+	AccountName   string  `json:"accountName,omitempty"`
+	EnrollmentKey string  `json:"enrollmentKey,omitempty"`
 }

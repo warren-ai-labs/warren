@@ -1479,7 +1479,9 @@ final class WarrenRemoteApplicationModel {
     }
 
     private struct PublicAccessEnableRequest: Encodable {
-        let edgeURL: String
+        /// nil keeps an existing override for compatibility; an explicit
+        /// empty string clears it and selects the release/launcher default.
+        let edgeURL: String?
         let accountName: String
         let enrollmentKey: String
 
@@ -1492,6 +1494,9 @@ final class WarrenRemoteApplicationModel {
 
     private struct PublicAccessStatus: Decodable {
         let edgeURL: String?
+        let configuredEdgeURL: String?
+        let defaultEdgeURL: String?
+        let usingDefaultEdge: Bool?
         let accountName: String?
         let enabled: Bool
         let running: Bool
@@ -1500,6 +1505,9 @@ final class WarrenRemoteApplicationModel {
 
         enum CodingKeys: String, CodingKey {
             case edgeURL = "edgeUrl"
+            case configuredEdgeURL = "configuredEdgeUrl"
+            case defaultEdgeURL = "defaultEdgeUrl"
+            case usingDefaultEdge = "usingDefaultEdge"
             case accountName
             case enabled
             case running
@@ -1513,11 +1521,15 @@ final class WarrenRemoteApplicationModel {
             webStatus.secureURL = nil
             webStatus.tunnelRunning = false
             webStatus.configuredEdgeURL = nil
+            webStatus.defaultEdgeURL = nil
+            webStatus.usingDefaultEdge = false
             webStatus.configuredAccountName = nil
             webStatus.publicAccessEnabled = false
             return
         }
-        webStatus.configuredEdgeURL = response.edgeURL.flatMap(URL.init(string:))
+        webStatus.configuredEdgeURL = response.configuredEdgeURL.flatMap(URL.init(string:))
+        webStatus.defaultEdgeURL = response.defaultEdgeURL.flatMap(URL.init(string:))
+        webStatus.usingDefaultEdge = response.usingDefaultEdge ?? (response.configuredEdgeURL == nil)
         webStatus.configuredAccountName = response.accountName
         webStatus.publicAccessEnabled = response.enabled
         webStatus.publicAccessError = response.error

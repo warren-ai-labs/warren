@@ -21,6 +21,10 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var secureURL: URL?
     /// Configured self-hosted gnar Edge, without credentials.
     public var configuredEdgeURL: URL?
+    /// Release/launcher fallback used when no custom Edge override is saved.
+    public var defaultEdgeURL: URL?
+    /// True when the effective Edge comes from the release/launcher fallback.
+    public var usingDefaultEdge: Bool
     /// Configured non-secret gnar account label.
     public var configuredAccountName: String?
     /// The persisted user intent reported by the headless daemon. This is
@@ -42,6 +46,8 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         canControl: Bool = true,
         tunnelRunning: Bool = false,
         configuredEdgeURL: URL? = nil,
+        defaultEdgeURL: URL? = nil,
+        usingDefaultEdge: Bool = false,
         configuredAccountName: String? = nil,
         publicAccessEnabled: Bool = false,
         publicAccessBusy: Bool = false,
@@ -52,6 +58,8 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         self.lanURL = lanURL
         self.secureURL = secureURL
         self.configuredEdgeURL = configuredEdgeURL
+        self.defaultEdgeURL = defaultEdgeURL
+        self.usingDefaultEdge = usingDefaultEdge
         self.configuredAccountName = configuredAccountName
         self.publicAccessEnabled = publicAccessEnabled
         self.canControl = canControl
@@ -284,7 +292,8 @@ public struct WarrenDesktopWebPanel: View {
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
             Text(
-                "Configure the Edge URL and one-time Enrollment Key in Settings → Public Access. "
+                "Configure an optional custom Edge URL and one-time Enrollment Key in Settings "
+                    + "→ Public Access. Leave the Edge URL empty to use Warren's release default; "
                     + "Warren never saves the key."
             )
                 .font(WarrenTypography.popoverMeta)

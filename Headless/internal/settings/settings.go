@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/abcdlsj/warren/Headless/internal/releaseconfig"
 )
 
 // Runtime kinds supported by the headless daemon.
@@ -22,6 +24,13 @@ const DefaultRuntimeKind = RuntimeGhostline
 // explicit account name. It is a label only; gnar owns the account token.
 const DefaultGnarAccount = "warren"
 
+// BuiltInGnarEdge returns the Edge URL injected into the current Warren
+// release. It is not persisted in settings, so upgrading Warren can change
+// the default for users who have not configured an override.
+func BuiltInGnarEdge() string {
+	return strings.TrimSpace(releaseconfig.DefaultGnarEdge)
+}
+
 // Settings is the headless daemon configuration. Runtime selection is a
 // headless-side decision: it controls which engine owns newly created
 // sessions, not what clients render.
@@ -34,8 +43,9 @@ type Settings struct {
 	// daemon's built-in environment sanitization, so explicit values win;
 	// an empty value unsets the variable instead of passing an empty string.
 	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
-	// GnarEdge is the gnar Edge URL used for Public Access. Empty
-	// lets gnar use its own default (GNAR_EDGE or the single signed-in edge).
+	// GnarEdge is the optional user-selected gnar Edge URL used for Public
+	// Access. Empty selects Warren's release/launcher default, or lets gnar
+	// use its own default for source builds without one.
 	GnarEdge string `json:"gnarEdge,omitempty"`
 	// GnarAccount is the non-secret account label passed to gnar login.
 	GnarAccount string `json:"gnarAccount,omitempty"`

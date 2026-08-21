@@ -193,6 +193,19 @@ sleep 30
 	}
 }
 
+func TestGnarEdgeOverrideFallsBackToReleaseDefault(t *testing.T) {
+	manager := NewManager(nil, "http://127.0.0.1:8789", "", "", "/missing/gnar")
+	manager.SetGnarDefaultEdge("https://release.example.com")
+	manager.SetGnarEdge("https://custom.example.com")
+	manager.SetGnarEdgeOverride("")
+	if got := manager.GnarEdge(); got != "https://release.example.com" {
+		t.Fatalf("effective Edge after clearing override = %q", got)
+	}
+	if got := manager.GnarDefaultEdge(); got != "https://release.example.com" {
+		t.Fatalf("release default Edge = %q", got)
+	}
+}
+
 func TestGnarKeepsTheReportedErrorAfterExit(t *testing.T) {
 	binary := writeScript(t, `#!/bin/sh
 printf '%s\n' '{"type":"error","message":"no edge server is available; run gnar login first"}'
