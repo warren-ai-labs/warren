@@ -96,10 +96,14 @@ final class GhosttyAdapterTests: XCTestCase {
             onInput: { _ in },
             onResize: { _, _ in }
         )
-        surface.receive(Data("plain \u{1b}[1;38;2;224;120;80morange\u{1b}[0m \u{1b}[38;5;42mgreen\u{1b}[0m".utf8))
+        let output =
+            "plain \u{1b}[1;38;2;224;120;80morange\u{1b}[0m "
+                + "\u{1b}[38;5;42mgreen\u{1b}[0m "
+                + "\u{1b}[48;2;49;45;44mcomposer\u{1b}[0m"
+        surface.receive(Data(output.utf8))
 
         let snapshot = surface.semanticSnapshot()
-        XCTAssertEqual(snapshot.plainText, "plain orange green")
+        XCTAssertEqual(snapshot.plainText, "plain orange green composer")
         XCTAssertTrue(snapshot.containsStyledText)
         XCTAssertEqual(
             snapshot.runs.first { $0.text == "orange" }?.style.foreground,
@@ -109,6 +113,10 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertEqual(
             snapshot.runs.first { $0.text == "green" }?.style.foreground,
             .indexed(42)
+        )
+        XCTAssertEqual(
+            snapshot.runs.first { $0.text == "composer" }?.style.background,
+            .rgb(red: 49, green: 45, blue: 44)
         )
     }
 
@@ -217,22 +225,36 @@ final class GhosttyAdapterTests: XCTestCase {
     }
 
     @MainActor
-    func testHostManagedTerminalAnswersBackgroundColorQuery() async throws {
+    func testHostManagedTerminalAnswersWarrenColorQueriesAfterMount() async throws {
         let recorder = LockedInputRecorder()
-        let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
+        let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
         defer { window.orderOut(nil) }
 
-        surface.receive(Data("\u{1b}]11;?\u{1b}\\".utf8))
+        // AppKit can report a light appearance for this host-managed view even
+        // though Warren's product theme is dark-only. Pin that lifecycle input
+        // so the regression test does not depend on the test runner's theme.
+        view.appearance = NSAppearance(named: .aqua)
+        view.viewDidChangeEffectiveAppearance()
+        try await Task.sleep(for: .milliseconds(50))
 
-        let expected = Data("\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8)
+        // Codex batches OSC 10/11 during its startup probe. Exercise the
+        // production output writer so the assertion covers the host-managed
+        // PTY path rather than only the synchronous test helper.
+        surface.outputWriter.enqueueRaw(
+            Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8)
+        )
+
+        let expected = Data(
+            "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
+        )
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while recorder.allBytes().isEmpty, ContinuousClock.now < deadline {
+        while recorder.allBytes().count < expected.count, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(
             Array(recorder.allBytes()),
             Array(expected),
-            "the Warren Ghostty surface should answer OSC 11 from its configured background"
+            "the Warren Ghostty surface should answer Codex's OSC 10/11 startup probe"
         )
     }
 
