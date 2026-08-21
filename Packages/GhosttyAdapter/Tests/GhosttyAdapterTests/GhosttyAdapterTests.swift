@@ -217,22 +217,29 @@ final class GhosttyAdapterTests: XCTestCase {
     }
 
     @MainActor
-    func testHostManagedTerminalAnswersBackgroundColorQuery() async throws {
+    func testHostManagedTerminalAnswersWarrenColorQueriesAfterMount() async throws {
         let recorder = LockedInputRecorder()
         let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
         defer { window.orderOut(nil) }
 
-        surface.receive(Data("\u{1b}]11;?\u{1b}\\".utf8))
+        // Codex batches OSC 10/11 during its startup probe. Exercise the
+        // production output writer so the assertion covers the host-managed
+        // PTY path rather than only the synchronous test helper.
+        surface.outputWriter.enqueueRaw(
+            Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8)
+        )
 
-        let expected = Data("\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8)
+        let expected = Data(
+            "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
+        )
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while recorder.allBytes().isEmpty, ContinuousClock.now < deadline {
+        while recorder.allBytes().count < expected.count, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(
             Array(recorder.allBytes()),
             Array(expected),
-            "the Warren Ghostty surface should answer OSC 11 from its configured background"
+            "the Warren Ghostty surface should answer Codex's OSC 10/11 startup probe"
         )
     }
 
