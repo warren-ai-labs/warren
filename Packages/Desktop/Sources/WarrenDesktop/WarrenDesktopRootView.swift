@@ -32,7 +32,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let actions: WarrenDesktopActions
     private let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     private let onWebStart: () -> Void
-    private let onWebEnable: ((String, String, String) -> Void)?
+    private let onWebEnable: ((String, String, String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
@@ -101,7 +101,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onWebStart: @escaping () -> Void = {},
-        onWebEnable: ((String, String, String) -> Void)? = nil,
+        onWebEnable: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },

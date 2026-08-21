@@ -428,8 +428,8 @@ type GitDiff struct {
 }
 
 // PublicAccessStatus is the credential-free projection of the self-hosted
-// gnar Edge lifecycle. Enrollment keys, gnar account tokens, and the Warren
-// daemon token are deliberately absent from this type.
+// gnar Edge lifecycle. Invite/Approval Keys, gnar account tokens, and the
+// Warren daemon token are deliberately absent from this type.
 type PublicAccessStatus struct {
 	// EdgeURL is the effective Edge currently selected after applying the
 	// release default, launcher override, and user override.
@@ -441,20 +441,28 @@ type PublicAccessStatus struct {
 	// supplied by the launcher.
 	DefaultEdgeURL   string `json:"defaultEdgeUrl"`
 	UsingDefaultEdge bool   `json:"usingDefaultEdge"`
-	AccountName      string `json:"accountName"`
-	Enabled          bool   `json:"enabled"`
-	Running          bool   `json:"running"`
-	PublicEndpoint   string `json:"publicEndpoint"`
-	Error            string `json:"error"`
+	// AccountName is the effective non-secret account label, including the
+	// system-name default used when no override is configured.
+	AccountName           string `json:"accountName"`
+	ConfiguredAccountName string `json:"configuredAccountName,omitempty"`
+	UsingDefaultAccount   bool   `json:"usingDefaultAccount"`
+	Enabled               bool   `json:"enabled"`
+	Running               bool   `json:"running"`
+	PublicEndpoint        string `json:"publicEndpoint"`
+	Error                 string `json:"error"`
 }
 
 // PublicAccessEnableRequest contains the one-time bootstrap input for a
-// self-hosted gnar Edge. EnrollmentKey is consumed in memory and is never
-// persisted or included in a URL or command-line argument.
+// self-hosted gnar Edge. InviteKey and ApprovalKey are consumed in memory and
+// are never persisted or included in a URL or command-line argument.
+// ApprovalKey takes precedence when both are supplied. EnrollmentKey remains
+// as a deprecated approval-key alias for older clients.
 type PublicAccessEnableRequest struct {
 	// A nil EdgeURL keeps the existing configured override. An explicit empty
 	// string clears that override and selects the release/launcher default.
 	EdgeURL       *string `json:"edgeUrl,omitempty"`
-	AccountName   string  `json:"accountName,omitempty"`
+	AccountName   *string `json:"accountName,omitempty"`
+	InviteKey     string  `json:"inviteKey,omitempty"`
+	ApprovalKey   string  `json:"approvalKey,omitempty"`
 	EnrollmentKey string  `json:"enrollmentKey,omitempty"`
 }

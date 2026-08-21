@@ -422,6 +422,36 @@ func TestPublicAccessEnableRejectsInvalidEdgeBeforePersisting(t *testing.T) {
 	}
 }
 
+func TestPublicAccessEnableRejectsInvalidGnarV17Account(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	service := &Service{SettingsPath: settingsPath}
+	handler := NewHTTPServer(service, "secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9878", "", "", "/missing/gnar")
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/public-access/enable",
+		bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","accountName":"bad account"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer secret")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid account status = %d", response.StatusCode)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("invalid account unexpectedly persisted settings: %v", err)
+	}
+}
+
 func TestPublicAccessKeepsEffectiveDefaultEdgeForSignedInGnar(t *testing.T) {
 	gnar := writeExecutableScript(t, `#!/bin/sh
 if [ "$1" = "login" ]; then exit 1; fi
@@ -529,6 +559,77 @@ func TestPublicAccessStatusSeparatesReleaseDefaultFromUserOverride(t *testing.T)
 	status = getStatus()
 	if status.EdgeURL != "https://custom.example.com" || status.ConfiguredEdgeURL != "https://custom.example.com" || status.DefaultEdgeURL != "https://release.example.com" || status.UsingDefaultEdge {
 		t.Fatalf("custom override status = %#v", status)
+	}
+}
+
+func TestPublicAccessApprovalKeyWinsAndDefaultAccountIsNotPersisted(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "gnar-key")
+	loginArgsPath := filepath.Join(t.TempDir(), "gnar-login-args")
+	t.Setenv("GNAR_KEY_FILE", keyPath)
+	t.Setenv("GNAR_LOGIN_ARGS_FILE", loginArgsPath)
+	gnar := writeExecutableScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s\n' "$@" > "$GNAR_LOGIN_ARGS_FILE"
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"enrollment_succeeded","account":"office-mac"}'
+  exit 0
+fi
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/office"}'
+sleep 30
+`)
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	service := &Service{HostName: "Office Mac", SettingsPath: settingsPath}
+	handler := NewHTTPServer(service, "daemon-secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9879", "", "", gnar)
+	defer handler.Tunnels.StopAll()
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/public-access/enable",
+		bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","inviteKey":"invite-secret","approvalKey":"approval-secret"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer daemon-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("enable public access: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("enable status = %d", response.StatusCode)
+	}
+	var status api.PublicAccessStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.AccountName != "office-mac" || status.ConfiguredAccountName != "" || !status.UsingDefaultAccount {
+		t.Fatalf("account status = %#v", status)
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if string(key) != "approval-secret" {
+		t.Fatalf("approval key priority stdin = %q", key)
+	}
+	args, err := os.ReadFile(loginArgsPath)
+	if err != nil {
+		t.Fatalf("read login args: %v", err)
+	}
+	if !strings.Contains(string(args), "--enrollment-key-stdin") || strings.Contains(string(args), "--key-stdin") {
+		t.Fatalf("login args = %q", args)
+	}
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if strings.Contains(string(settingsData), "approval-secret") || strings.Contains(string(settingsData), "office-mac") {
+		t.Fatalf("secret or derived default account persisted: %s", settingsData)
 	}
 }
 

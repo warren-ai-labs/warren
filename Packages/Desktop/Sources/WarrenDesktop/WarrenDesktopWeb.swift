@@ -8,6 +8,10 @@ import WarrenDesignSystem
 public enum WarrenPublicAccessCopy {
     public static let title = "Public Access"
     public static let edgeURL = "Edge URL"
+    public static let inviteKey = "Invite Key (one time)"
+    public static let approvalKey = "Approval Key (one time)"
+    /// Compatibility label for callers that still refer to the old approval
+    /// key name. New UI uses `approvalKey` explicitly.
     public static let enrollmentKey = "Enrollment Key (one time)"
     public static let publicEndpoint = "Public Endpoint"
 }
@@ -27,6 +31,10 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var usingDefaultEdge: Bool
     /// Configured non-secret gnar account label.
     public var configuredAccountName: String?
+    /// Effective account label, including the system-name default.
+    public var effectiveAccountName: String?
+    /// True when the effective account comes from the Warren Host/system name.
+    public var usingDefaultAccount: Bool
     /// The persisted user intent reported by the headless daemon. This is
     /// distinct from `canControl`, which only gates the Desktop controls.
     public var publicAccessEnabled: Bool
@@ -49,6 +57,8 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         defaultEdgeURL: URL? = nil,
         usingDefaultEdge: Bool = false,
         configuredAccountName: String? = nil,
+        effectiveAccountName: String? = nil,
+        usingDefaultAccount: Bool = false,
         publicAccessEnabled: Bool = false,
         publicAccessBusy: Bool = false,
         publicAccessError: String? = nil
@@ -61,6 +71,8 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         self.defaultEdgeURL = defaultEdgeURL
         self.usingDefaultEdge = usingDefaultEdge
         self.configuredAccountName = configuredAccountName
+        self.effectiveAccountName = effectiveAccountName
+        self.usingDefaultAccount = usingDefaultAccount
         self.publicAccessEnabled = publicAccessEnabled
         self.canControl = canControl
         self.tunnelRunning = tunnelRunning
@@ -292,9 +304,9 @@ public struct WarrenDesktopWebPanel: View {
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
             Text(
-                "Configure an optional custom Edge URL and one-time Enrollment Key in Settings "
-                    + "→ Public Access. Leave the Edge URL empty to use Warren's release default; "
-                    + "Warren never saves the key."
+                "Configure an optional custom Edge URL and an Invite Key or Approval Key in "
+                    + "Settings → Public Access. Approval Key takes priority. Leave the Edge "
+                    + "URL empty to use Warren's release default; Warren never saves either key."
             )
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)

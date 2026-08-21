@@ -202,6 +202,7 @@ func main() {
 	}
 	service := &server.Service{
 		Store:           state,
+		HostName:        state.Snapshot().Host.Name,
 		Runtime:         runtimeAdapter,
 		Runtimes:        runtimes,
 		DefaultRuntime:  defaultKind,

@@ -278,6 +278,106 @@ sleep 30
 	}
 }
 
+func TestStartPublicAccessInviteKeyUsesKeyStdinAndKeepsAccountPrivate(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "invite-key")
+	loginArgsFile := filepath.Join(t.TempDir(), "login-args")
+	tunnelArgsFile := filepath.Join(t.TempDir(), "tunnel-args")
+	t.Setenv("GNAR_KEY_FILE", keyFile)
+	t.Setenv("GNAR_LOGIN_ARGS_FILE", loginArgsFile)
+	t.Setenv("GNAR_ARGS_FILE", tunnelArgsFile)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s\n' "$@" > "$GNAR_LOGIN_ARGS_FILE"
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+printf '%s\n' "$@" > "$GNAR_ARGS_FILE"
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/invite/path"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccessWithKey(
+		"https://edge.example.com",
+		"My-Host",
+		LoginKeyInvite,
+		[]byte("invite-secret"),
+	)
+	if err != nil {
+		t.Fatalf("start invite public access: %v", err)
+	}
+	defer manager.Stop(KindGnar)
+	if status.URL != "https://edge.example.com/invite/path/" {
+		t.Fatalf("invite endpoint = %q", status.URL)
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatalf("read invite stdin: %v", err)
+	}
+	if string(key) != "invite-secret" {
+		t.Fatalf("invite stdin = %q", key)
+	}
+	args, err := os.ReadFile(loginArgsFile)
+	if err != nil {
+		t.Fatalf("read login args: %v", err)
+	}
+	login := string(args)
+	if !strings.Contains(login, "--key-stdin") || strings.Contains(login, "--enrollment-key-stdin") {
+		t.Fatalf("invite login args = %q", login)
+	}
+	if !strings.Contains(login, "--account\nmy-host") {
+		t.Fatalf("invite account args = %q", login)
+	}
+	if strings.Contains(login, "invite-secret") {
+		t.Fatalf("invite key leaked into argv: %q", login)
+	}
+}
+
+func TestStartPublicAccessApprovalKeyUsesEnrollmentContract(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "approval-key")
+	loginArgsFile := filepath.Join(t.TempDir(), "login-args")
+	t.Setenv("GNAR_KEY_FILE", keyFile)
+	t.Setenv("GNAR_LOGIN_ARGS_FILE", loginArgsFile)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s\n' "$@" > "$GNAR_LOGIN_ARGS_FILE"
+  cat > "$GNAR_KEY_FILE"
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/approval"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccessWithKey(
+		"https://edge.example.com",
+		"host",
+		LoginKeyApproval,
+		[]byte("approval-secret"),
+	)
+	if err != nil {
+		t.Fatalf("start approval public access: %v", err)
+	}
+	defer manager.Stop(KindGnar)
+	if status.URL == "" {
+		t.Fatal("approval endpoint is empty")
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatalf("read approval stdin: %v", err)
+	}
+	if string(key) != "approval-secret" {
+		t.Fatalf("approval stdin = %q", key)
+	}
+	args, err := os.ReadFile(loginArgsFile)
+	if err != nil {
+		t.Fatalf("read approval args: %v", err)
+	}
+	if !strings.Contains(string(args), "--enrollment-key-stdin") || strings.Contains(string(args), "--key-stdin") {
+		t.Fatalf("approval login args = %q", args)
+	}
+}
+
 func TestStartPublicAccessRedactsEnrollmentKeyOnLoginFailure(t *testing.T) {
 	binary := writeScript(t, `#!/bin/sh
 if [ "$1" = "login" ]; then
@@ -352,6 +452,15 @@ func TestValidateEdgeURLRejectsCredentialBearingURLs(t *testing.T) {
 func TestRedactionKeepsActionableNonSecretWords(t *testing.T) {
 	if got := redactGnarText("gnar token required; run login"); got != "gnar token required; run login" {
 		t.Fatalf("redaction changed actionable error: %q", got)
+	}
+	for _, value := range []string{
+		"invite-key=invite-secret-value",
+		"approval key: approval-secret-value",
+	} {
+		redacted := redactGnarText(value)
+		if strings.Contains(redacted, "secret-value") {
+			t.Fatalf("secret was not redacted: %q", redacted)
+		}
 	}
 }
 
