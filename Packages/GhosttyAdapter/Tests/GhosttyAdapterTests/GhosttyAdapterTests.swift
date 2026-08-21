@@ -96,10 +96,14 @@ final class GhosttyAdapterTests: XCTestCase {
             onInput: { _ in },
             onResize: { _, _ in }
         )
-        surface.receive(Data("plain \u{1b}[1;38;2;224;120;80morange\u{1b}[0m \u{1b}[38;5;42mgreen\u{1b}[0m".utf8))
+        let output =
+            "plain \u{1b}[1;38;2;224;120;80morange\u{1b}[0m "
+                + "\u{1b}[38;5;42mgreen\u{1b}[0m "
+                + "\u{1b}[48;2;49;45;44mcomposer\u{1b}[0m"
+        surface.receive(Data(output.utf8))
 
         let snapshot = surface.semanticSnapshot()
-        XCTAssertEqual(snapshot.plainText, "plain orange green")
+        XCTAssertEqual(snapshot.plainText, "plain orange green composer")
         XCTAssertTrue(snapshot.containsStyledText)
         XCTAssertEqual(
             snapshot.runs.first { $0.text == "orange" }?.style.foreground,
@@ -109,6 +113,10 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertEqual(
             snapshot.runs.first { $0.text == "green" }?.style.foreground,
             .indexed(42)
+        )
+        XCTAssertEqual(
+            snapshot.runs.first { $0.text == "composer" }?.style.background,
+            .rgb(red: 49, green: 45, blue: 44)
         )
     }
 

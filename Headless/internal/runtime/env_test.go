@@ -10,6 +10,7 @@ func TestSanitizeEnvironmentRemovesAgentPagerOverrides(t *testing.T) {
 	t.Setenv("PAGER", "cat")
 	t.Setenv("GH_PAGER", "cat")
 	t.Setenv("TERM", "dumb")
+	t.Setenv("NO_COLOR", "1")
 
 	SanitizeEnvironment()
 
@@ -20,6 +21,9 @@ func TestSanitizeEnvironmentRemovesAgentPagerOverrides(t *testing.T) {
 	}
 	if got := os.Getenv("TERM"); got != DefaultTerm {
 		t.Errorf("TERM = %q, want %q", got, DefaultTerm)
+	}
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		t.Error("NO_COLOR remained set; want it unset")
 	}
 }
 
