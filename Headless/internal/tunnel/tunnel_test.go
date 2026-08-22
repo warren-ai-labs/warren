@@ -218,6 +218,19 @@ sleep 30
 	if !slices.Contains(args, "--edge") || !slices.Contains(args, "https://edge.example.com") {
 		t.Fatalf("gnar args = %q, want --edge https://edge.example.com", args)
 	}
+	nameIndex := slices.Index(args, "--name")
+	if nameIndex < 0 || nameIndex+1 >= len(args) {
+		t.Fatalf("gnar args = %q, want a --name endpoint", args)
+	}
+	name := args[nameIndex+1]
+	if len(name) != len("warren-")+4 || !strings.HasPrefix(name, "warren-") {
+		t.Fatalf("gnar endpoint name = %q, want warren- plus four uppercase letters", name)
+	}
+	for _, character := range name[len("warren-"):] {
+		if character < 'A' || character > 'Z' {
+			t.Fatalf("gnar endpoint name = %q, suffix contains non-uppercase letter", name)
+		}
+	}
 }
 
 func TestGnarEdgeOverrideFallsBackToReleaseDefault(t *testing.T) {
@@ -273,18 +286,24 @@ named=0
 for argument in "$@"; do
   if [ "$argument" = "--name" ]; then named=1; fi
 done
-if [ "$named" = "1" ]; then
+attempts=0
+if [ -f "$GNAR_ARGS_FILE" ]; then attempts=$(wc -l < "$GNAR_ARGS_FILE"); fi
+if [ "$named" = "1" ] && [ "$attempts" = "0" ]; then
   printf '%s\n' "named" >> "$GNAR_ARGS_FILE"
   printf '%s\n' '{"type":"error","message":"edge connection failed: the name warren-host is reserved by abcdlsj; choose another --name"}'
   exit 1
 fi
-printf '%s\n' "allocated" >> "$GNAR_ARGS_FILE"
+if [ "$named" = "1" ]; then
+  printf '%s\n' "fresh-named" >> "$GNAR_ARGS_FILE"
+else
+  printf '%s\n' "unexpected-unnamed" >> "$GNAR_ARGS_FILE"
+fi
 printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/allocated"}'
 sleep 30
 `)
-	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:19789", "", "", binary)
 	manager.pollInterval = 10 * time.Millisecond
-	manager.pollAttempts = 20
+	manager.pollAttempts = 100
 	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", nil)
 	if err != nil {
 		t.Fatalf("start public access should recover from a reserved name: %v", err)
@@ -297,8 +316,8 @@ sleep 30
 	if err != nil {
 		t.Fatalf("read gnar invocation log: %v", err)
 	}
-	if got := strings.Fields(string(args)); !slices.Equal(got, []string{"named", "allocated"}) {
-		t.Fatalf("gnar invocations = %#v, want named then allocated", got)
+	if got := strings.Fields(string(args)); !slices.Equal(got, []string{"named", "fresh-named"}) {
+		t.Fatalf("gnar invocations = %#v, want named then fresh named", got)
 	}
 	if current := manager.Status()[KindGnar]; current.Error != "" || !current.Running {
 		t.Fatalf("manager retained the failed named process: %#v", current)

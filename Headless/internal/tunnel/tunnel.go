@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -868,17 +869,20 @@ func (m *Manager) stopTailscale() error {
 }
 
 func (m *Manager) startGnar() (Status, error) {
-	return m.startGnarWithNameArgs(gnarNameArgs(), true)
+	nameArgs, err := gnarNameArgs()
+	if err != nil {
+		m.recordError(KindGnar, err.Error())
+		return Status{Error: err.Error()}, err
+	}
+	return m.startGnarWithNameArgs(nameArgs, true)
 }
 
 // startGnarWithNameArgs starts one gnar worker and waits for its first
-// readiness/error event. Warren normally asks for a readable host-derived
-// endpoint name. A name is a remote reservation, though, and it can survive
-// an earlier client or belong to an account created with an invite-key suffix.
-// In that one expected conflict case, retry once without --name so gnar can
-// allocate a fresh endpoint instead of making a successfully authenticated
-// Public Access setup unusable.
-func (m *Manager) startGnarWithNameArgs(nameArgs []string, retryUnnamed bool) (Status, error) {
+// readiness/error event. Warren asks for a short random endpoint name so a
+// stale reservation from an earlier client does not block a new Public Access
+// start. In the unlikely conflict case, retry once with another short Warren
+// name instead of making a successfully authenticated setup unusable.
+func (m *Manager) startGnarWithNameArgs(nameArgs []string, retryWithFreshName bool) (Status, error) {
 	m.mu.Lock()
 	if st := m.states[KindGnar]; st != nil && !st.stopped {
 		status := Status{Running: true, URL: st.url, Error: st.err}
@@ -895,7 +899,9 @@ func (m *Manager) startGnarWithNameArgs(nameArgs []string, retryUnnamed bool) (S
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
-	reapStaleGnar(m.target, gnarProcessName())
+	// The endpoint name is intentionally random, so reap all prior Warren
+	// workers forwarding this target instead of matching one fixed name.
+	reapStaleGnar(m.target, "")
 	edge := m.gnarEdge
 	if edge == "" {
 		edge = m.gnarDefaultEdge
@@ -991,14 +997,19 @@ func (m *Manager) startGnarWithNameArgs(nameArgs []string, retryUnnamed bool) (S
 		status.Running = false
 		status.URL = ""
 	}
-	if retryUnnamed && len(nameArgs) > 0 && status.Error != "" && isGnarEndpointNameConflict(status.Error) {
+	if retryWithFreshName && len(nameArgs) > 0 && status.Error != "" && isGnarEndpointNameConflict(status.Error) {
 		// stopGnar also waits for the failed child and removes its state, so a
 		// rejected reservation cannot be mistaken for a live Public Endpoint.
 		if err := m.stopGnar(); err != nil {
 			return status, err
 		}
+		freshNameArgs, err := gnarNameArgs()
+		if err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
 		m.logger.Warn("gnar endpoint name unavailable; retrying with an allocated name", "kind", KindGnar)
-		return m.startGnarWithNameArgs(nil, false)
+		return m.startGnarWithNameArgs(freshNameArgs, false)
 	}
 	return status, nil
 }
@@ -1111,41 +1122,25 @@ func gnarCandidates() []string {
 	return candidates
 }
 
-func gnarNameArgs() []string {
-	name := gnarProcessName()
-	if name == "" {
-		return nil
-	}
-	return []string{"--name", name}
-}
+func gnarNameArgs() ([]string, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	const suffixLength = 4
 
-func gnarProcessName() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return ""
+	var randomBytes [suffixLength]byte
+	if _, err := cryptorand.Read(randomBytes[:]); err != nil {
+		return nil, fmt.Errorf("generate gnar endpoint name: %w", err)
 	}
-	var name strings.Builder
-	for _, character := range strings.ToLower(hostname) {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
-			name.WriteRune(character)
-		} else if name.Len() > 0 && !strings.HasSuffix(name.String(), "-") {
-			name.WriteByte('-')
-		}
+	var suffix [suffixLength]byte
+	for index, value := range randomBytes {
+		suffix[index] = alphabet[int(value)%len(alphabet)]
 	}
-	normalized := strings.Trim(name.String(), "-")
-	if normalized == "" {
-		return ""
-	}
-	if len(normalized) > 32 {
-		normalized = strings.TrimRight(normalized[:32], "-")
-	}
-	return "warren-" + normalized
+	return []string{"--name", "warren-" + string(suffix[:])}, nil
 }
 
 // reapStaleGnar kills gnar processes left behind by a previous daemon that
-// was not stopped cleanly. Without this, a restarted daemon would start a
-// second client for the same reserved name and both processes would fight
-// over one public endpoint.
+// was not stopped cleanly. It only targets Warren's non-interactive JSON
+// workers forwarding the same local Web target, so unrelated gnar sessions
+// are not touched.
 func reapStaleGnar(target, name string) {
 	data, err := exec.Command("ps", "-axo", "pid=,command=").Output()
 	if err != nil {
@@ -1170,7 +1165,8 @@ func reapStaleGnar(target, name string) {
 			if !hasArgumentValue(arguments, "--name", name) {
 				continue
 			}
-		} else if target == "" || !strings.Contains(command, target) {
+		} else if target == "" || !strings.Contains(command, target) ||
+			!hasArgument(arguments, "--no-tui") || !hasArgument(arguments, "--json") {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
@@ -1200,6 +1196,15 @@ func isGnarProcess(arguments []string) bool {
 func hasArgumentValue(arguments []string, flag, value string) bool {
 	for index := 0; index+1 < len(arguments); index++ {
 		if arguments[index] == flag && arguments[index+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgument(arguments []string, value string) bool {
+	for _, argument := range arguments {
+		if argument == value {
 			return true
 		}
 	}
