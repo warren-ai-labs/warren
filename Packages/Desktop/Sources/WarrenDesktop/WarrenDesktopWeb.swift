@@ -7,6 +7,7 @@ import WarrenDesignSystem
 /// from leaking into Public Access controls.
 public enum WarrenPublicAccessCopy {
     public static let title = "Public Access"
+    public static let defaultTunnel = "Use default tunnel (gnar)"
     public static let edgeURL = "Edge URL"
     public static let inviteKey = "Invite Key (one time)"
     public static let approvalKey = "Approval Key (one time)"

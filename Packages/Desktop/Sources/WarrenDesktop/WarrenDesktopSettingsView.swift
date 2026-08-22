@@ -12,6 +12,7 @@ struct WarrenDesktopSettingsView: View {
     let hostName: String
     let webStatus: WarrenDesktopWebStatus
     let onWebTest: ((String, String, String, String) -> Void)?
+    let onWebStop: (() -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -41,7 +42,8 @@ struct WarrenDesktopSettingsView: View {
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
     @State private var publicAccessApprovalKey = ""
-    @State private var publicAccessKeyKind: PublicAccessKeyKind = .approval
+    @State private var publicAccessKeyKind: PublicAccessKeyKind = .invite
+    @State private var publicAccessUseDefaultTunnel = true
     @State private var publicAccessMaskedKeyKind: PublicAccessKeyKind?
     @State private var publicAccessSubmittedKeyKind: PublicAccessKeyKind?
     @Environment(\.colorScheme) private var colorScheme
@@ -769,99 +771,132 @@ struct WarrenDesktopSettingsView: View {
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                Text(WarrenPublicAccessCopy.edgeURL)
-                    .font(WarrenTypography.settingsBody)
-                TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WarrenTypography.settingsControl)
-                    .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
-                    .accessibilityIdentifier("settings.public-access.edge-url")
-
-                if let defaultEdgeURL = webStatus.defaultEdgeURL {
-                    Text(
-                        publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "Built-in default: \(defaultEdgeURL.absoluteString)"
-                            : "Clear the custom URL to use the built-in default: \(defaultEdgeURL.absoluteString)"
-                    )
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text("Account name")
-                    .font(WarrenTypography.settingsBody)
-                TextField(accountNamePlaceholder, text: $publicAccessAccountName)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WarrenTypography.settingsControl)
-                    .accessibilityLabel("gnar account name")
-                    .accessibilityIdentifier("settings.public-access.account-name")
-
-                if let accountName = webStatus.effectiveAccountName,
-                   !accountName.isEmpty {
-                    Text(
-                        webStatus.usingDefaultAccount
-                            ? "Default account name: \(accountName)"
-                            : "Configured account name: \(accountName)"
-                    )
+            Toggle(
+                isOn: $publicAccessUseDefaultTunnel
+            ) {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    Text(WarrenPublicAccessCopy.defaultTunnel)
+                        .font(WarrenTypography.settingsBody)
+                    Text("Turn this on to configure Warren's built-in gnar tunnel.")
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-
-                Picker("Key type", selection: $publicAccessKeyKind) {
-                    ForEach(PublicAccessKeyKind.allCases) { kind in
-                        Text(kind.title).tag(kind)
-                    }
+            }
+            .toggleStyle(.switch)
+            .disabled(webStatus.publicAccessBusy)
+            .accessibilityIdentifier("settings.public-access.use-default-tunnel")
+            .onChange(of: publicAccessUseDefaultTunnel) { _, enabled in
+                guard !enabled else { return }
+                publicAccessInviteKey = ""
+                publicAccessApprovalKey = ""
+                publicAccessMaskedKeyKind = nil
+                publicAccessSubmittedKeyKind = nil
+                if webStatus.tunnelRunning {
+                    onWebStop?()
                 }
-                .pickerStyle(.segmented)
-                .font(WarrenTypography.settingsControl)
-                .accessibilityIdentifier("settings.public-access.key-kind")
+            }
 
-                Text("Enter one key only. Approval Key and Invite Key are two ways to enroll this host.")
+            if publicAccessUseDefaultTunnel {
+                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                    Text(WarrenPublicAccessCopy.edgeURL)
+                        .font(WarrenTypography.settingsBody)
+                    TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WarrenTypography.settingsControl)
+                        .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
+                        .accessibilityIdentifier("settings.public-access.edge-url")
+
+                    if let defaultEdgeURL = webStatus.defaultEdgeURL {
+                        Text(
+                            publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? "Built-in default: \(defaultEdgeURL.absoluteString)"
+                                : "Clear the custom URL to use the built-in default: \(defaultEdgeURL.absoluteString)"
+                        )
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text("Account name")
+                        .font(WarrenTypography.settingsBody)
+                    TextField(accountNamePlaceholder, text: $publicAccessAccountName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WarrenTypography.settingsControl)
+                        .accessibilityLabel("gnar account name")
+                        .accessibilityIdentifier("settings.public-access.account-name")
+
+                    if let accountName = webStatus.effectiveAccountName,
+                       !accountName.isEmpty {
+                        Text(
+                            webStatus.usingDefaultAccount
+                                ? "Default account name: \(accountName)"
+                                : "Configured account name: \(accountName)"
+                        )
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Picker("Key type", selection: $publicAccessKeyKind) {
+                        ForEach(PublicAccessKeyKind.allCases) { kind in
+                            Text(kind.title).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityIdentifier("settings.public-access.key-kind")
+
+                    Text("Enter one key only. Approval Key and Invite Key are two ways to enroll this host.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    publicAccessKeyField(tokens: tokens)
+
+                    Text(
+                        "After a successful test, leave both keys empty; gnar's persisted "
+                            + "account token will be reused."
+                    )
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
-
-                publicAccessKeyField(tokens: tokens)
-
-                Text(
-                    "After a successful test, leave both keys empty; gnar's persisted "
-                        + "account token will be reused."
-                )
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .disabled(webStatus.publicAccessBusy)
-
-            HStack(spacing: WarrenSpacing.compact) {
-                WarrenStatusIndicator(
-                    color: publicAccessStatusColor(tokens: tokens),
-                    isActive: webStatus.publicAccessBusy,
-                    accessibilityLabel: publicAccessStatusLabel
-                )
-                Text(publicAccessStatusLabel)
-                    .font(WarrenTypography.settingsBody)
-                    .foregroundStyle(tokens.foreground)
-                Spacer(minLength: 0)
-                Button(publicAccessActionTitle) {
-                    let edgeURL = publicAccessEdgeURL
-                    let accountName = publicAccessAccountName
-                    let inviteKey = publicAccessKeyKind == .invite ? publicAccessInviteKey : ""
-                    let approvalKey = publicAccessKeyKind == .approval ? publicAccessApprovalKey : ""
-                    publicAccessSubmittedKeyKind =
-                        inviteKey.isEmpty && approvalKey.isEmpty ? nil : publicAccessKeyKind
-                    onWebTest?(edgeURL, accountName, inviteKey, approvalKey)
                 }
-                .buttonStyle(
-                    WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction)
-                )
-                .disabled(
-                    webStatus.publicAccessBusy
-                        || onWebTest == nil
-                )
-                .accessibilityIdentifier("settings.public-access.save-test")
+                .disabled(webStatus.publicAccessBusy)
+
+                HStack(spacing: WarrenSpacing.compact) {
+                    WarrenStatusIndicator(
+                        color: publicAccessStatusColor(tokens: tokens),
+                        isActive: webStatus.publicAccessBusy,
+                        accessibilityLabel: publicAccessStatusLabel
+                    )
+                    Text(publicAccessStatusLabel)
+                        .font(WarrenTypography.settingsBody)
+                        .foregroundStyle(tokens.foreground)
+                    Spacer(minLength: 0)
+                    Button(publicAccessActionTitle) {
+                        let edgeURL = publicAccessEdgeURL
+                        let accountName = publicAccessAccountName
+                        let inviteKey = publicAccessKeyKind == .invite ? publicAccessInviteKey : ""
+                        let approvalKey = publicAccessKeyKind == .approval ? publicAccessApprovalKey : ""
+                        publicAccessSubmittedKeyKind =
+                            inviteKey.isEmpty && approvalKey.isEmpty ? nil : publicAccessKeyKind
+                        onWebTest?(edgeURL, accountName, inviteKey, approvalKey)
+                    }
+                    .buttonStyle(
+                        WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction)
+                    )
+                    .disabled(
+                        webStatus.publicAccessBusy
+                            || onWebTest == nil
+                    )
+                    .accessibilityIdentifier("settings.public-access.save-test")
+                }
+            } else {
+                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and enrollment key.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
@@ -898,6 +933,11 @@ struct WarrenDesktopSettingsView: View {
             publicAccessMaskedKeyKind = submittedKeyKind
             publicAccessSubmittedKeyKind = nil
         }
+        .onChange(of: webStatus.tunnelRunning) { _, running in
+            if running {
+                publicAccessUseDefaultTunnel = true
+            }
+        }
     }
 
     @ViewBuilder
@@ -925,6 +965,11 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.settingsControl)
             .accessibilityLabel(PublicAccessKeyKind.invite.accessibilityTitle)
             .accessibilityIdentifier("settings.public-access.invite-key")
+
+            Text("Use the invite secret from gnar, not its key name. Invite secrets must be at least 12 characters.")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
         }
 
         if publicAccessMaskedKeyKind == publicAccessKeyKind {
@@ -1000,7 +1045,7 @@ struct WarrenDesktopSettingsView: View {
             // The bootstrap key is intentionally not persisted. A generic
             // masked placeholder still communicates that gnar is enrolled
             // when Settings is reopened without echoing which secret was used.
-            publicAccessMaskedKeyKind = .approval
+            publicAccessMaskedKeyKind = .invite
         }
     }
 

@@ -357,6 +357,10 @@ func (m *Manager) startPublicAccessWithKey(edge, account string, keyKind LoginKe
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
+		if err := validateBootstrapKey(keyKind, key); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
 		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
@@ -445,6 +449,10 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		return Status{Error: err.Error()}, err
 	}
 	if hasBootstrapKey {
+		if err := validateBootstrapKey(keyKind, key); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
 		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
@@ -484,6 +492,22 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 	status.URL = ""
 	status.Error = ""
 	return status, nil
+}
+
+// validateBootstrapKey mirrors gnar v1.7's invite-key contract before a
+// network request is made. The invite value is the generated secret, not the
+// operator-facing key name; gnar refuses configured invite secrets shorter
+// than twelve characters. Approval/enrollment keys have no equivalent local
+// length requirement because their policy belongs to the Edge operator.
+func validateBootstrapKey(kind LoginKeyKind, key []byte) error {
+	value := bytes.TrimSpace(key)
+	if len(value) == 0 {
+		return errors.New("the bootstrap key must not be empty")
+	}
+	if kind == LoginKeyInvite && len(value) < 12 {
+		return errors.New("Invite Key must be at least 12 characters; enter the invite secret, not its key name")
+	}
+	return nil
 }
 
 func actionableGnarStartError(err error) error {

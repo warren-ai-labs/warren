@@ -82,6 +82,7 @@ private func makeTabBar(
 final class WarrenDesktopTests: XCTestCase {
     func testPublicAccessUsesOwnerReachabilityTerminology() {
         XCTAssertEqual(WarrenPublicAccessCopy.title, "Public Access")
+        XCTAssertEqual(WarrenPublicAccessCopy.defaultTunnel, "Use default tunnel (gnar)")
         XCTAssertEqual(WarrenPublicAccessCopy.edgeURL, "Edge URL")
         XCTAssertEqual(WarrenPublicAccessCopy.inviteKey, "Invite Key (one time)")
         XCTAssertEqual(WarrenPublicAccessCopy.approvalKey, "Approval Key (one time)")

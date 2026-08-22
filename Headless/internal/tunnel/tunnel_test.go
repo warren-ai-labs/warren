@@ -402,6 +402,28 @@ sleep 30
 	}
 }
 
+func TestStartPublicAccessRejectsShortInviteKeyBeforeLaunchingGnar(t *testing.T) {
+	launched := filepath.Join(t.TempDir(), "launched")
+	t.Setenv("GNAR_LAUNCHED", launched)
+	binary := writeScript(t, `#!/bin/sh
+touch "$GNAR_LAUNCHED"
+exit 1
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	status, err := manager.StartPublicAccessWithKey(
+		"https://edge.example.com",
+		"host",
+		LoginKeyInvite,
+		[]byte("bilibili"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "at least 12 characters") {
+		t.Fatalf("short invite key error = %v, status=%#v", err, status)
+	}
+	if _, statErr := os.Stat(launched); !os.IsNotExist(statErr) {
+		t.Fatalf("gnar launched for invalid invite key: %v", statErr)
+	}
+}
+
 func TestStartPublicAccessApprovalKeyUsesEnrollmentContract(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "approval-key")
 	loginArgsFile := filepath.Join(t.TempDir(), "login-args")
