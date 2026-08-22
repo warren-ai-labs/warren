@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a local-first development workbench organized around **Workspaces**, with durable terminal sessions at its core. Terminal sessions live on a Host — your Mac or a remote VPS — and survive client disconnects, app quits, and network changes. The macOS desktop, CLI, and responsive Web/PWA all talk to the same Host through one versioned protocol.
+Warren is a local-first workspace for **AI coding sessions**, organized around **Workspaces** with durable terminal sessions at its core. Run Codex or Claude Code on a Host — your Mac or a remote VPS — then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
@@ -32,6 +32,14 @@ Warren is a local-first development workbench organized around **Workspaces**, w
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
 - **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
 - **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
+
+## Current scope
+
+Warren is an early, open-source phase-one project. The desktop client targets macOS 14+, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
+
+Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
+
+The current code is licensed under [Apache-2.0](LICENSE). This permits commercial use of the present open-source code without implying that Warren currently offers a hosted or enterprise product.
 
 ## Repository Layout
 
@@ -179,6 +187,9 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
 - [Web/README.md](Web/README.md) — Web/PWA client
 - [Assets/Brand/README.md](Assets/Brand/README.md) — brand and icon assets
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and contribution expectations
+- [SECURITY.md](SECURITY.md) — vulnerability reporting and deployment boundaries
+- [LICENSE](LICENSE) — Apache-2.0 license terms
 
 ## Contributors
 

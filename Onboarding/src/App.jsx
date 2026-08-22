@@ -288,6 +288,12 @@ function Footer() {
         <span className="footer-sep" aria-hidden="true">
           ·
         </span>
+        <a href="https://github.com/abcdlsj/warren/blob/main/LICENSE" target="_blank" rel="noreferrer">
+          {t("footer.license")}
+        </a>
+        <span className="footer-sep" aria-hidden="true">
+          ·
+        </span>
         <span>{t("footer.domain")}</span>
       </div>
     </footer>
