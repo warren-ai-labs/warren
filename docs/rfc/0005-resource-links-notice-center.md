@@ -66,10 +66,10 @@ silently opening a different resource.
   affordance reserves one slot whenever hidden controls remain; the original
   IDE, Web, and notification controls remain direct by default while endpoint
   switching and Settings are available from More.
-- The notification bell uses a quiet accent and a plain numeric unread marker;
-  muting changes only the external marker to `bell.slash` and never suppresses
-  notice creation or the notice-center history. The center provides compact
-  mark-all-read and mute controls.
+- The notification bell uses a quiet accent for unread state and no numeric
+  badge; muting changes only the external marker to `bell.slash` and never
+  suppresses notice creation or the notice-center history. The center provides
+  compact text buttons for mark-all-read and mute actions.
 
 ## Acceptance criteria
 
@@ -81,7 +81,7 @@ silently opening a different resource.
   similarly named resource.
 - Clicking the bell and opening notice details leaves terminal dimensions
   unchanged.
-- Muting removes the external unread marker without removing notices; clicking
+- Muting removes the external unread accent without removing notices; clicking
   the muted bell still opens the notice center.
 - No right-side diagnostic control or layout slot remains visible.
 - Command/Control-A selects all, Control-A/Control-E move to line start/end,

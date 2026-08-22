@@ -18,22 +18,12 @@ struct WarrenDesktopNoticeButton: View {
                 ? tokens.foreground
                 : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground))
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: isMuted ? "bell.slash" : "bell")
-                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
-                    .foregroundStyle(bellColor)
-                    .accessibilityHidden(true)
-                if unreadCount > 0 {
-                    Text(unreadCount > 9 ? "9+" : String(unreadCount))
-                        .font(.system(size: 5, weight: .regular, design: .rounded))
-                        .foregroundStyle(tokens.highlight.opacity(0.82))
-                        .fixedSize()
-                        .offset(x: 2, y: -2)
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.horizontal, WarrenSpacing.xs)
-            .frame(minHeight: 28)
+            Image(systemName: isMuted ? "bell.slash" : "bell")
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
+                .foregroundStyle(bellColor)
+                .accessibilityHidden(true)
+                .padding(.horizontal, WarrenSpacing.xs)
+                .frame(minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
         .frame(minHeight: 28)
@@ -61,15 +51,9 @@ struct WarrenDesktopNoticeTitleActions: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         HStack(spacing: WarrenSpacing.xs) {
-            Button(action: onMarkAllRead) {
-                Image(systemName: "envelope.open")
-                    .font(.system(size: WarrenDesktopChromeTitleMetrics.iconSize, weight: .regular))
-                    .frame(
-                        width: WarrenDesktopChromeTitleMetrics.buttonSize,
-                        height: WarrenDesktopChromeTitleMetrics.buttonSize
-                    )
-            }
+            Button("Mark all read", action: onMarkAllRead)
             .buttonStyle(.plain)
+            .font(WarrenTypography.popoverMeta)
             .foregroundStyle(
                 unreadCount > 0
                     ? tokens.mutedForeground
@@ -79,19 +63,13 @@ struct WarrenDesktopNoticeTitleActions: View {
             .accessibilityLabel("Mark all notifications as read")
             .accessibilityHint("Mark every unread notification as read")
 
-            Toggle(isOn: $isMuted) {
-                Image(systemName: "bell.slash")
-                    .font(.system(size: WarrenDesktopChromeTitleMetrics.iconSize, weight: .regular))
-                    .frame(
-                        width: WarrenDesktopChromeTitleMetrics.buttonSize,
-                        height: WarrenDesktopChromeTitleMetrics.buttonSize
-                    )
-                    .foregroundStyle(tokens.mutedForeground)
+            Button(isMuted ? "Unmute all" : "Mute all") {
+                isMuted.toggle()
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .accessibilityLabel("Mute notifications")
-            .accessibilityValue(isMuted ? "Muted" : "Active")
+            .buttonStyle(.plain)
+            .font(WarrenTypography.popoverMeta)
+            .foregroundStyle(tokens.mutedForeground)
+            .accessibilityLabel(isMuted ? "Unmute all notifications" : "Mute all notifications")
         }
     }
 }
