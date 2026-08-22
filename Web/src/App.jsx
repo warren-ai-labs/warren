@@ -490,6 +490,11 @@ export default function App() {
     });
   }, []);
 
+  const closeFileView = useCallback(() => {
+    setCurrentFileView(null);
+    persistCurrentGitUI(selectedWorkspaceID);
+  }, [persistCurrentGitUI, selectedWorkspaceID, setCurrentFileView]);
+
   const handleGitUIChange = useCallback(ui => {
     gitPanelUIStateRef.current = ui;
     persistCurrentGitUI(selectedWorkspaceID);
@@ -1675,6 +1680,10 @@ export default function App() {
     const target = hash || "#";
     if (window.location.hash !== target) {
       window.history.pushState(null, "", target);
+      // This hash was produced by the current UI, so catalog updates must
+      // not treat it as a new external navigation target.
+      hashApplyKeyRef.current = target;
+      hashApplyFailedRef.current = false;
     }
   }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, gitOpen, selectedWorkspace?.project, selectedWorkspaceID]);
 
@@ -2283,10 +2292,7 @@ export default function App() {
                   content={fileDiff.content}
                   error={fileDiff.error}
                   notice={fileDiff.notice}
-                  onClose={() => {
-                    setCurrentFileView(null);
-                    persistCurrentGitUI(selectedWorkspaceID);
-                  }}
+                  onClose={closeFileView}
                   viewTab={fileDiffViewTab}
                   diffStyle={fileDiffStyle}
                   onViewTabChange={setFileDiffViewTab}

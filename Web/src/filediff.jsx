@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { File, PatchDiff, Virtualizer, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import PierreDiffWorker from "@pierre/diffs/worker/worker.js?worker&type=module";
 
@@ -40,7 +40,7 @@ function DiffSurface({ children }) {
   );
 }
 
-export function FileDiffView({
+export const FileDiffView = memo(function FileDiffView({
   path,
   staged,
   commit,
@@ -133,4 +133,4 @@ export function FileDiffView({
       )}
     </section>
   );
-}
+});

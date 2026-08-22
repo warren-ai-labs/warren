@@ -484,7 +484,7 @@ export function GitPanel({
                   <div className="git-commit-actions">
                     <button
                       type="button"
-                      className="chrome-button"
+                      className="chrome-button git-pr-create-button"
                       onClick={submitCreatePR}
                       disabled={!prTitle.trim() || busy}
                     >
@@ -496,7 +496,7 @@ export function GitPanel({
                   </div>
                 </div>
               ) : (
-                <button type="button" className="chrome-button" onClick={openCreatePR} disabled={busy}>
+                <button type="button" className="chrome-button git-pr-create-button" onClick={openCreatePR} disabled={busy}>
                   Create pull request
                 </button>
               )

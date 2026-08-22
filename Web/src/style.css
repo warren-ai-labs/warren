@@ -3774,7 +3774,7 @@ button:disabled {
 
 .git-checkout-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-xs);
 }
 
@@ -3973,6 +3973,28 @@ button:disabled {
 .git-commit-actions .chrome-button:hover:not(:disabled) {
   color: var(--color-text-primary);
   background: var(--fill-hover);
+}
+
+.git-pr-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-height: 28px;
+  gap: var(--space-xs);
+  color: var(--color-accent-text);
+  background: var(--color-accent-subtle);
+  font-size: var(--text-sm);
+}
+
+.git-pr-create-button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--fill-hover);
+}
+
+.git-pr-create-button:disabled {
+  color: var(--color-text-disabled);
+  background: transparent;
 }
 
 .git-pr {
