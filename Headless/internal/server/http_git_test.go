@@ -5,10 +5,76 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/gorilla/websocket"
 )
+
+func TestBackgroundRequestClassification(t *testing.T) {
+	for _, method := range []string{"git.panel", "git.diff"} {
+		if !isBackgroundRequest(method) {
+			t.Errorf("%s is not scheduled as a background request", method)
+		}
+	}
+	for _, method := range []string{"session.attach", "session.input", "git.checkout"} {
+		if isBackgroundRequest(method) {
+			t.Errorf("%s should stay on the ordered request path", method)
+		}
+	}
+}
+
+func TestGitPanelDoesNotBlockFollowupRequests(t *testing.T) {
+	repository := newRepositoryForServiceTest(t)
+	service, workspaceID := gitPanelService(t, repository)
+	server := httptest.NewServer(NewHTTPServer(service, "secret", slog.Default()).Handler())
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/ws"
+	connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	var welcome map[string]any
+	if err := connection.ReadJSON(&welcome); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock := service.lockGitMutation(workspaceID)
+	if err := connection.WriteJSON(api.Envelope{
+		Type: "request", ID: "git-slow", Method: "git.panel",
+		Params: map[string]any{"workspace": workspaceID, "fetch": true, "force": true},
+	}); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	if err := connection.WriteJSON(api.Envelope{Type: "request", ID: "roster-fast", Method: "roster"}); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+
+	if err := connection.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	response := readGitResponse(t, connection, "roster-fast")
+	if !response.OK {
+		unlock()
+		t.Fatalf("roster failed while git.panel was running: %v", response.Error)
+	}
+	unlock()
+	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	response = readGitResponse(t, connection, "git-slow")
+	if !response.OK {
+		t.Fatalf("git.panel failed after releasing the mutation lock: %v", response.Error)
+	}
+}
 
 func readGitResponse(t *testing.T, connection *websocket.Conn, id string) api.Response {
 	t.Helper()

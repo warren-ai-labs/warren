@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  fileKind,
-  fileKindGlyphs,
-  fileKindLabels,
   normalizeGitPanel,
   relativeTime,
   statusLabel,
@@ -24,16 +21,47 @@ function changeKey(change, commit = "") {
   return commit ? `${commit}:${change.path}` : `${change.staged ? "s" : "u"}:${change.path}`;
 }
 
-function FileKindIcon({ path }) {
-  const kind = fileKind(path);
+function GitActionIcon({ kind }) {
+  if (kind === "refresh") {
+    return (
+      <svg className="git-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M13 5V2.5M13 2.5h-2.5M13 2.5A5.5 5.5 0 1 0 13.2 9" />
+      </svg>
+    );
+  }
+  if (kind === "pull") {
+    return (
+      <svg className="git-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 2v10M4.5 8.5 8 12l3.5-3.5" />
+      </svg>
+    );
+  }
   return (
-    <span
-      className={`git-file-icon git-file-icon-${kind}`}
-      title={fileKindLabels[kind] || fileKindLabels.file}
-      aria-hidden="true"
-    >
-      {fileKindGlyphs[kind] || fileKindGlyphs.file}
-    </span>
+    <svg className="git-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 14V4M4.5 7.5 8 4l3.5 3.5" />
+    </svg>
+  );
+}
+
+function PullRequestIcon() {
+  return (
+    <svg className="git-pane-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="4" cy="4" r="1.5" />
+      <circle cx="4" cy="12" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <path d="M4 5.5v5M5.5 4H8a4 4 0 0 1 4 4v2.5" />
+    </svg>
+  );
+}
+
+function BranchIcon() {
+  return (
+    <svg className="git-pane-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="4" cy="4" r="1.5" />
+      <circle cx="4" cy="12" r="1.5" />
+      <circle cx="12" cy="6" r="1.5" />
+      <path d="M4 5.5v5M4 5.5c2.5.4 4.5 1.8 5.2 4.1M12 7.5v.2a2.2 2.2 0 0 1-2.2 2.2" />
+    </svg>
   );
 }
 
@@ -49,7 +77,6 @@ function ChangeRow({ change, commit = "", selected, onOpenFile }) {
         <span className={`git-status git-status-${change.status}`} title={statusLabel(change.status)}>
           {statusSymbol(change.status)}
         </span>
-        <FileKindIcon path={change.path} />
         <span className="git-change-path">
           {change.path}
           {change.renameFrom && <span className="git-rename-from"> ← {change.renameFrom}</span>}
@@ -85,6 +112,7 @@ function PullRequestView({ pr }) {
   return (
     <div className="git-pr">
       <div className="git-pr-header">
+        <PullRequestIcon />
         <span className="git-pr-number">#{pr.number}</span>
         <span className={`git-pr-state git-pr-state-${pr.state}`}>{prStateLabels[pr.state] || pr.state}</span>
         {pr.draft && <span className="git-pr-draft">Draft</span>}
@@ -299,15 +327,12 @@ export function GitPanel({
               {operationLabels[data.operation] || data.operation} in progress — resolve it before pushing or pulling
             </div>
           )}
-          <div className="git-branch-line">
-            <span className="git-branch-name">{data?.branch || "—"}</span>
-            {data?.upstream && (
-              <>
-                <span className="git-branch-arrow" aria-hidden="true">→</span>
-                <span className="git-upstream">{data.upstream}</span>
-              </>
-            )}
-          </div>
+          {data?.upstream && (
+            <div className="git-tracking-line">
+              <span className="git-tracking-label">Tracks</span>
+              <span className="git-upstream">{data.upstream}</span>
+            </div>
+          )}
           {data?.mainBranch && !data.operation && data.merged && (
             <div className="git-merged-badge">Merged into {data.mainBranch}</div>
           )}
@@ -322,19 +347,24 @@ export function GitPanel({
           )}
           {data?.remote && <div className="git-remote">{data.remote}</div>}
           <div className="git-actions" role="group" aria-label="Git actions">
-            <button type="button" className="chrome-button" onClick={onRefresh} disabled={busy}>Refresh</button>
-            <button type="button" className="chrome-button" onClick={onPull} disabled={busy || !data}>
+            <button type="button" className="chrome-button git-action-refresh" onClick={onRefresh} disabled={busy}>
+              <GitActionIcon kind="refresh" />
+              Refresh
+            </button>
+            <button type="button" className="chrome-button git-action-pull" onClick={onPull} disabled={busy || !data}>
+              <GitActionIcon kind="pull" />
               {action === "git.pull" ? "Pulling…" : "Pull"}
             </button>
             <button
               type="button"
-              className="chrome-button"
+              className="chrome-button git-action-push"
               onClick={() => {
                 if (data && (data.staged.length || data.unstaged.length)) openCommit();
                 else onPush();
               }}
               disabled={busy || !data}
             >
+              <GitActionIcon kind="push" />
               {action === "git.push" ? "Pushing…" : "Push"}
             </button>
           </div>
@@ -365,26 +395,12 @@ export function GitPanel({
         </section>
 
         <GitPane
-          title="Checkout"
+          title={<><BranchIcon />Checkout</>}
           className="git-pane-checkout"
           open={openPanes.has("checkout")}
           onToggle={() => togglePane("checkout")}
         >
           <div className="git-checkout-row">
-            <select
-              className="git-select"
-              aria-label="Branch"
-              value={branch}
-              onChange={event => {
-                setBranch(event.target.value);
-                setBranchTouched(true);
-              }}
-              disabled={createMode || !data?.branches.local.length && !data?.branches.remote.length}
-            >
-              <option value="">Choose a branch…</option>
-              {data?.branches.local.map(name => <option key={`l-${name}`} value={name}>{name}</option>)}
-              {data?.branches.remote.map(name => <option key={`r-${name}`} value={name}>{name} (remote)</option>)}
-            </select>
             {createMode ? (
               <input
                 className="git-input"
@@ -395,28 +411,43 @@ export function GitPanel({
                   if (event.key === "Enter") submitCheckout();
                 }}
               />
-            ) : null}
+            ) : (
+              <select
+                className="git-select"
+                aria-label="Branch"
+                value={branch}
+                onChange={event => {
+                  setBranch(event.target.value);
+                  setBranchTouched(true);
+                }}
+                disabled={!data?.branches.local.length && !data?.branches.remote.length}
+              >
+                <option value="">Switch to a branch…</option>
+                {data?.branches.local.map(name => <option key={`l-${name}`} value={name}>{name}</option>)}
+                {data?.branches.remote.map(name => <option key={`r-${name}`} value={name}>{name} (remote)</option>)}
+              </select>
+            )}
             <div className="git-checkout-actions">
-              <button type="button" className="chrome-button" onClick={submitCheckout} disabled={busy || (createMode ? !newBranch.trim() : !branch)}>
-                {action === "git.checkout" ? "Switching…" : createMode ? "Create" : "Checkout"}
+              <button type="button" className="chrome-button git-checkout-submit" onClick={submitCheckout} disabled={busy || (createMode ? !newBranch.trim() : !branch)}>
+                {action === "git.checkout" ? "Switching…" : createMode ? "Create branch" : "Switch branch"}
               </button>
               <button
                 type="button"
-                className="chrome-button"
+                className="chrome-button git-checkout-toggle"
                 disabled={busy}
                 onClick={() => {
                   setCreateMode(!createMode);
                   setNewBranch("");
                 }}
               >
-                {createMode ? "Existing" : "New"}
+                {createMode ? "Existing branch" : "New branch"}
               </button>
             </div>
           </div>
         </GitPane>
 
         {data?.remote && (
-          <GitPane title="Pull Request" className="git-pane-pr" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
+          <GitPane title={<><PullRequestIcon />Pull Request</>} className="git-pane-pr" open={openPanes.has("pr")} onToggle={() => togglePane("pr")}>
             {data.aheadOfMain > 0 && data.mainBranch && (
               <p className="git-pr-meta git-pr-ahead">
                 <span className="git-ahead">↑ {data.aheadOfMain} commit{data.aheadOfMain === 1 ? "" : "s"} ahead of {data.mainBranch}</span>

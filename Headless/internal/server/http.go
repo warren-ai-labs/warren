@@ -913,6 +913,17 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			}(command)
 			continue
 		}
+		if isBackgroundRequest(command.Method) {
+			// Git inspection can invoke network-backed fetches and filesystem
+			// scans. Keep those reads off the WebSocket reader so terminal
+			// attach, resize, and input remain responsive on the same client.
+			go func(command api.Envelope) {
+				if err := peer.handle(request.Context(), command); err != nil {
+					_ = peer.writeError(command.ID, err)
+				}
+			}(command)
+			continue
+		}
 		if err := peer.handle(request.Context(), command); err != nil {
 			_ = peer.writeError(command.ID, err)
 		}
@@ -922,6 +933,15 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 func isSlowMutation(method string) bool {
 	switch method {
 	case "project.remove", "workspace.remove":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBackgroundRequest(method string) bool {
+	switch method {
+	case "git.panel", "git.diff":
 		return true
 	default:
 		return false
