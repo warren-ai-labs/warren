@@ -21,11 +21,18 @@ struct WarrenAppMessage: Identifiable {
     let title: String
     let message: String
     let actionLabel: String
+    let kind: WarrenDesktopNotice.Kind
 
-    init(title: String, message: String, actionLabel: String = "OK") {
+    init(
+        title: String,
+        message: String,
+        actionLabel: String = "OK",
+        kind: WarrenDesktopNotice.Kind = .info
+    ) {
         self.title = title
         self.message = message
         self.actionLabel = actionLabel
+        self.kind = kind
     }
 }
 
@@ -165,7 +172,8 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 NSLog("Unable to check for Warren updates automatically: %@", error.localizedDescription)
                 NotificationCenter.default.post(
                     name: WarrenUpdateNotification.failed,
-                    object: nil
+                    object: nil,
+                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
                 )
             }
         }
@@ -201,7 +209,8 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 NSLog("Unable to check for Warren updates: %@", error.localizedDescription)
                 NotificationCenter.default.post(
                     name: WarrenUpdateNotification.failed,
-                    object: nil
+                    object: nil,
+                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
                 )
             }
         }
@@ -247,7 +256,8 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 NSLog("Unable to install Warren update: %@", error.localizedDescription)
                 NotificationCenter.default.post(
                     name: WarrenUpdateNotification.failed,
-                    object: nil
+                    object: nil,
+                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
                 )
             }
         }
@@ -452,10 +462,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         message: String,
         style: NSAlert.Style
     ) {
-        _ = style
+        let kind: WarrenDesktopNotice.Kind = switch style {
+        case .critical: .error
+        case .warning: .warning
+        default: .info
+        }
         NotificationCenter.default.post(
             name: WarrenAppPresentation.message,
-            object: WarrenAppMessage(title: title, message: message)
+            object: WarrenAppMessage(title: title, message: message, kind: kind)
         )
     }
 

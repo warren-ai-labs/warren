@@ -13,6 +13,7 @@ import {
   captureNavigationPosition,
   createNavigationMemory,
   rememberNavigation,
+  resolveNavigationTarget,
   resolveProjectWorkspace,
   resolveRestoredWorkspace,
   restoreNavigationPosition,
@@ -44,7 +45,7 @@ import {
 import { mergeAgentEvents } from "./agent.js";
 import { AgentView } from "./agent.jsx";
 const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
-import { InputQueue, MobileInputDeduper } from "./input.js";
+import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
 import { decodeOutputFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
@@ -214,6 +215,15 @@ export default function App() {
     [hiddenPresets, orderedPresets],
   );
   useKeyboardInset(mainRef);
+  useEffect(() => {
+    const handleKeyDown = event => {
+      handleUnixTextEditingKey(event);
+    };
+    // Capture before component handlers so every input shares the same
+    // readline vocabulary, while the xterm helper textarea opts out.
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, []);
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
       limit: pendingInputLimit,
@@ -1624,13 +1634,20 @@ export default function App() {
   }, [gitOpen, persistCurrentGitUI, restoreGitUIForWorkspace, selectedWorkspaceID]);
 
   const hashInitializedRef = useRef(false);
+  const hashApplyKeyRef = useRef(null);
+  const hashApplyFailedRef = useRef(false);
   useEffect(() => {
     if (!hashInitializedRef.current) {
       hashInitializedRef.current = true;
       return;
     }
+    const hashState = uiStateFromHash(window.location.hash);
+    const hasPendingResourceTarget = hashState.projectID || hashState.workspaceID || hashState.sessionID;
+    if (hasPendingResourceTarget && hashApplyKeyRef.current !== window.location.hash) return;
+    if (hashApplyFailedRef.current && hashApplyKeyRef.current === window.location.hash) return;
     if (!selectedWorkspaceID) return;
     const hash = uiStateToHash({
+      projectID: selectedWorkspace?.project || null,
       workspaceID: selectedWorkspaceID,
       sessionID: activeSession,
       fileView: gitOpen && fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
@@ -1641,20 +1658,33 @@ export default function App() {
     if (window.location.hash !== target) {
       window.history.pushState(null, "", target);
     }
-  }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, gitOpen, selectedWorkspaceID]);
+  }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, gitOpen, selectedWorkspace?.project, selectedWorkspaceID]);
 
   const applyHashStateRef = useRef(null);
   applyHashStateRef.current = () => {
-    const hashState = uiStateFromHash(window.location.hash);
-    if (!hashState.workspaceID) {
+    const currentHash = window.location.hash;
+    if (hashApplyKeyRef.current === currentHash) return;
+    const hashState = uiStateFromHash(currentHash);
+    const hasResourceTarget = hashState.projectID || hashState.workspaceID || hashState.sessionID;
+    if (hasResourceTarget && !connectionStatus.online) return;
+    const target = resolveNavigationTarget(catalog, hashState);
+    if (target.error) {
+      setEmptyOverride({ loading: false, message: target.error });
+      hashApplyKeyRef.current = currentHash;
+      hashApplyFailedRef.current = true;
+      return;
+    }
+    hashApplyKeyRef.current = currentHash;
+    hashApplyFailedRef.current = false;
+    if (!target.workspaceID) {
       setCurrentFileView(null);
       setFileDiffView(hashState);
       return;
     }
-    chooseWorkspace(hashState.workspaceID, hashState.sessionID || null, false);
+    chooseWorkspace(target.workspaceID, target.sessionID || null, false);
     if (hashState.fileView) {
       setGitOpenState(true);
-      openFileView(hashState.fileView, hashState.fileView.commit || "", hashState.workspaceID);
+      openFileView(hashState.fileView, hashState.fileView.commit || "", target.workspaceID);
     } else {
       setCurrentFileView(null);
     }
@@ -1669,6 +1699,10 @@ export default function App() {
       window.removeEventListener("hashchange", listener);
     };
   }, []);
+
+  useEffect(() => {
+    applyHashStateRef.current?.();
+  }, [catalog, connectionStatus.online]);
 
   useEffect(() => {
     localStorage.setItem(storageKeys.navigationMemory, JSON.stringify(navigationMemory));

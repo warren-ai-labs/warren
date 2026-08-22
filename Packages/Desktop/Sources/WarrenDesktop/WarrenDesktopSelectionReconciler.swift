@@ -194,7 +194,7 @@ public enum WarrenDesktopNavigationReducer {
              .requestNewTerminalGroupSession, .launchTerminalGroupSession,
              .createTerminalGroup, .renameTerminalGroup, .setTerminalGroupHome,
              .deleteTerminalGroup, .moveTerminalGroup,
-             .toggleInspector, .toggleSidebar:
+             .toggleSidebar:
             return state
         }
     }

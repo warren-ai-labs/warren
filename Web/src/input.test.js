@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InputQueue, MobileInputDeduper } from "./input.js";
+import {
+  handleUnixTextEditingKey,
+  InputQueue,
+  MobileInputDeduper,
+} from "./input.js";
 
 function encoded(value) {
   return new TextEncoder().encode(value);
@@ -160,4 +164,77 @@ test("mobile deduper keeps genuine fast repeats outside composition", () => {
   now += 20;
   // A true OS echo of the same keystroke still lands inside the tiny window.
   assert.equal(deduper.shouldSend("!"), false);
+});
+
+function editableTarget(value) {
+  return {
+    tagName: "INPUT",
+    type: "text",
+    value,
+    selectionStart: value.length,
+    selectionEnd: value.length,
+    classList: { contains: () => false },
+    setSelectionRange(start, end) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+    },
+    setRangeText(text, start, end, selectionMode) {
+      this.value = `${this.value.slice(0, start)}${text}${this.value.slice(end)}`;
+      const cursor = start + text.length;
+      this.setSelectionRange(selectionMode === "end" ? cursor : start, cursor);
+    },
+    dispatchEvent() {},
+  };
+}
+
+function keyEvent(target, key, modifiers = {}) {
+  return {
+    target,
+    key,
+    ...modifiers,
+    preventDefault() { this.prevented = true; },
+  };
+}
+
+test("Unix editing handles command select-all and control line movement", () => {
+  const target = editableTarget("hello world");
+  const selectAll = keyEvent(target, "a", { metaKey: true });
+  assert.equal(handleUnixTextEditingKey(selectAll), true);
+  assert.deepEqual([target.selectionStart, target.selectionEnd], [0, 11]);
+
+  const beginning = keyEvent(target, "a", { ctrlKey: true });
+  handleUnixTextEditingKey(beginning);
+  assert.deepEqual([target.selectionStart, target.selectionEnd], [0, 0]);
+
+  const end = keyEvent(target, "e", { ctrlKey: true });
+  handleUnixTextEditingKey(end);
+  assert.deepEqual([target.selectionStart, target.selectionEnd], [11, 11]);
+});
+
+test("Unix editing kills the active range without intercepting xterm", () => {
+  const target = editableTarget("hello world");
+  target.selectionStart = 5;
+  target.selectionEnd = 5;
+  const kill = keyEvent(target, "k", { ctrlKey: true });
+  assert.equal(handleUnixTextEditingKey(kill), true);
+  assert.equal(target.value, "hello");
+
+  const terminalTarget = {
+    ...editableTarget("shell"),
+    tagName: "TEXTAREA",
+    classList: { contains: className => className === "xterm-helper-textarea" },
+  };
+  assert.equal(handleUnixTextEditingKey(keyEvent(terminalTarget, "a", { ctrlKey: true })), false);
+});
+
+test("Unix editing falls back when a control does not expose range editing", () => {
+  const target = {
+    ...editableTarget("hello world"),
+    setRangeText: undefined,
+  };
+  target.selectionStart = 5;
+  target.selectionEnd = 5;
+
+  assert.equal(handleUnixTextEditingKey(keyEvent(target, "k", { ctrlKey: true })), true);
+  assert.equal(target.value, "hello");
 });
