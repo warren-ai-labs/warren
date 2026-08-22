@@ -88,8 +88,6 @@ go test -race ./Headless/...
 3. Build the release archive from the tagged release commit:
 
    ```sh
-   WARREN_BUILD_UNIVERSAL=1 \
-   WARREN_GHOSTTY_DIR=../ghostty \
    WARREN_GNAR_DEFAULT_EDGE="https://edge.example.com" \
    bash scripts/package.sh
    ```
@@ -99,13 +97,10 @@ go test -race ./Headless/...
    `mise run build` and `mise run dev` intentionally produce debug artifacts
    and stamp the marker as `build`; they are not release commands.
 
-   The package task defaults to a Universal macOS archive. On macOS, the
-   Universal and Intel slices require an x86_64 `libghostty-vt.dylib`. The
-   build resolves a sibling `../ghostty` checkout automatically, or accepts a
-   prebuilt library through `WARREN_GHOSTTY_VT_X86_64`. If neither is
-   available, the release build stops with an explicit missing-library error;
-   it does not produce a partial archive. Building from a Ghostty checkout
-   also requires `zig`.
+   The package task produces an arm64 macOS archive for macOS 13 and later and
+   must run on an arm64 Apple Silicon Mac. The build uses the arm64
+   `libghostty-vt.dylib` bundled by the Ghostline module; no separate Ghostty
+   checkout or architecture-specific environment variable is required.
 
    `WARREN_GNAR_DEFAULT_EDGE` is injected into the headless binaries at
    release build time. It is a public, credential-free URL; do not put an
@@ -117,7 +112,11 @@ go test -race ./Headless/...
    `Warren.app/Contents/Resources/gnar`. Set `WARREN_GNAR_BINARY` to the
    release gnar binary before running `scripts/build-app.sh`, or place a
    release binary at `../gnar/target/release/gnar` for local packaging. The
-   bundled worker uses `~/.warren/gnar` for its credential store; an explicit
+   The bundled worker must be an arm64 macOS executable. If the auto-discovered
+   sibling binary is unavailable, packaging skips it and falls back to
+   `WARREN_GNAR_PATH`/system discovery; an explicit `WARREN_GNAR_BINARY` must
+   point to an executable file.
+   The bundled worker uses `~/.warren/gnar` for its credential store; an explicit
    `WARREN_GNAR_PATH` continues to use the system gnar store unless
    `WARREN_GNAR_CONFIG_DIR` is supplied. Existing system credentials are not
    migrated.

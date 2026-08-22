@@ -21,11 +21,10 @@ Or build the current revision from the repository:
 mise run build:headless
 ```
 
-On macOS, `WARREN_BUILD_UNIVERSAL=1` builds both arm64 and Intel binaries and
-creates a Universal `libghostty-vt.dylib`. The x86_64 library is built from a
-Ghostty checkout when `WARREN_GHOSTTY_DIR` is set (or when a sibling
-`../ghostty` checkout exists); alternatively provide a prebuilt path through
-`WARREN_GHOSTTY_VT_X86_64`.
+On macOS, the headless binaries are built for arm64 and require macOS 13 or
+later on an Apple Silicon Mac. The build uses the arm64
+`libghostty-vt.dylib` bundled by the Ghostline module and does not require a
+separate Ghostty checkout.
 
 `warren-headless` listens on `0.0.0.0:8789` by default so phones and tablets on the same LAN can open the Web UI directly. It also serves the same UI over HTTPS on `0.0.0.0:8788` (see "LAN HTTPS" below). The HTTP port has no TLS, so do not expose it to the public internet.
 
@@ -236,7 +235,7 @@ Known limits:
   and retires the old process without ending children. If adoption is not
   possible (for example a server predating the admin socket), the daemon
   keeps the old server running and retries on a later start.
-- The release app bundles a Universal libghostty-vt dylib for macOS. Other
+- The release app bundles the arm64 libghostty-vt dylib for macOS. Other
   platforms must rebuild it (see the ghostline README).
 
 ## Agent Transcript Projection

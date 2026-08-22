@@ -43,7 +43,7 @@ you want a structured conversation around the same session.
 
 ## Current scope
 
-Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 and Intel Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
+Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
@@ -79,22 +79,11 @@ mise install
 mise run dev
 ```
 
-`mise run dev` builds for the current Mac architecture. Release packaging
-(`mise run package`) produces one Universal app containing arm64 and x86_64
-executables. Intel and Universal builds need either a Ghostty checkout (set
-`WARREN_GHOSTTY_DIR`) or a prebuilt x86_64 `libghostty-vt.dylib` (set
-`WARREN_GHOSTTY_VT_X86_64`); the Ghostline module only bundles its arm64
-library. From a checkout with Ghostty as a sibling directory, package with:
-
-```sh
-WARREN_BUILD_UNIVERSAL=1 WARREN_GHOSTTY_DIR=../ghostty mise run package
-```
-
-To exercise a Universal debug build locally, run:
-
-```sh
-WARREN_BUILD_UNIVERSAL=1 bash scripts/build-app.sh debug
-```
+`mise run dev` and `mise run package` build arm64 binaries for macOS 13 and
+later. macOS app builds require an arm64 Apple Silicon Mac; the headless
+daemon and CLI can still be built for non-macOS hosts. The macOS build uses the
+arm64 `libghostty-vt.dylib` bundled by the Ghostline module, so no separate
+Ghostty checkout or architecture environment variable is required.
 
 The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when

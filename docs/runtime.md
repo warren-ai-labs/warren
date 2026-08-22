@@ -78,8 +78,8 @@ Good:
 Not so good:
 
 - Newer and less battle-tested than tmux; the API is still evolving.
-- Requires libghostty-vt, which must be built with Zig and is bundled as a
-  Universal dylib for supported macOS architectures.
+- Requires the arm64 libghostty-vt dylib bundled by the Ghostline module on
+  macOS 13 and later.
 - A forced restart of the ghostline server process ends its sessions. Normal
   protocol upgrades are rolled in place: a fresh server adopts every session
   from the old one before the old process exits, so children keep running.
