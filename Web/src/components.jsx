@@ -79,7 +79,7 @@ const ChevronRightIcon = (
 );
 
 const GitIcon = (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+  <svg className="git-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <circle cx="4" cy="4" r="1.6" />
     <circle cx="4" cy="12" r="1.6" />
     <circle cx="12" cy="6" r="1.6" />

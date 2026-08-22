@@ -759,6 +759,8 @@ button:disabled {
 }
 
 .new-session {
+  display: grid;
+  place-items: center;
   width: 40px;
   height: 36px;
   flex: 0 0 auto;
@@ -772,6 +774,11 @@ button:disabled {
 .new-session svg {
   width: 16px;
   height: 16px;
+}
+
+.topbar .git-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .chrome-spacer {
