@@ -868,6 +868,17 @@ func (m *Manager) stopTailscale() error {
 }
 
 func (m *Manager) startGnar() (Status, error) {
+	return m.startGnarWithNameArgs(gnarNameArgs(), true)
+}
+
+// startGnarWithNameArgs starts one gnar worker and waits for its first
+// readiness/error event. Warren normally asks for a readable host-derived
+// endpoint name. A name is a remote reservation, though, and it can survive
+// an earlier client or belong to an account created with an invite-key suffix.
+// In that one expected conflict case, retry once without --name so gnar can
+// allocate a fresh endpoint instead of making a successfully authenticated
+// Public Access setup unusable.
+func (m *Manager) startGnarWithNameArgs(nameArgs []string, retryUnnamed bool) (Status, error) {
 	m.mu.Lock()
 	if st := m.states[KindGnar]; st != nil && !st.stopped {
 		status := Status{Running: true, URL: st.url, Error: st.err}
@@ -884,7 +895,6 @@ func (m *Manager) startGnar() (Status, error) {
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
-	nameArgs := gnarNameArgs()
 	reapStaleGnar(m.target, gnarProcessName())
 	edge := m.gnarEdge
 	if edge == "" {
@@ -981,7 +991,22 @@ func (m *Manager) startGnar() (Status, error) {
 		status.Running = false
 		status.URL = ""
 	}
+	if retryUnnamed && len(nameArgs) > 0 && status.Error != "" && isGnarEndpointNameConflict(status.Error) {
+		// stopGnar also waits for the failed child and removes its state, so a
+		// rejected reservation cannot be mistaken for a live Public Endpoint.
+		if err := m.stopGnar(); err != nil {
+			return status, err
+		}
+		m.logger.Warn("gnar endpoint name unavailable; retrying with an allocated name", "kind", KindGnar)
+		return m.startGnarWithNameArgs(nil, false)
+	}
 	return status, nil
+}
+
+func isGnarEndpointNameConflict(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "choose another --name") ||
+		(strings.Contains(lower, "name") && strings.Contains(lower, "reserved by"))
 }
 
 func (m *Manager) scanGnar(st *state, reader io.Reader) {

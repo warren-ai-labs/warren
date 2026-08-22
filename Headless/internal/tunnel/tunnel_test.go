@@ -265,6 +265,46 @@ exit 1
 	}
 }
 
+func TestGnarRetriesWithAllocatedNameWhenReservationConflicts(t *testing.T) {
+	argsPath := filepath.Join(t.TempDir(), "gnar-args")
+	t.Setenv("GNAR_ARGS_FILE", argsPath)
+	binary := writeScript(t, `#!/bin/sh
+named=0
+for argument in "$@"; do
+  if [ "$argument" = "--name" ]; then named=1; fi
+done
+if [ "$named" = "1" ]; then
+  printf '%s\n' "named" >> "$GNAR_ARGS_FILE"
+  printf '%s\n' '{"type":"error","message":"edge connection failed: the name warren-host is reserved by abcdlsj; choose another --name"}'
+  exit 1
+fi
+printf '%s\n' "allocated" >> "$GNAR_ARGS_FILE"
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/allocated"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+	manager.pollInterval = 10 * time.Millisecond
+	manager.pollAttempts = 20
+	status, err := manager.StartPublicAccess("https://edge.example.com", "warren", nil)
+	if err != nil {
+		t.Fatalf("start public access should recover from a reserved name: %v", err)
+	}
+	defer manager.Stop(KindGnar)
+	if !status.Running || status.URL != "https://edge.example.com/allocated/" {
+		t.Fatalf("recovered public access status = %#v", status)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read gnar invocation log: %v", err)
+	}
+	if got := strings.Fields(string(args)); !slices.Equal(got, []string{"named", "allocated"}) {
+		t.Fatalf("gnar invocations = %#v, want named then allocated", got)
+	}
+	if current := manager.Status()[KindGnar]; current.Error != "" || !current.Running {
+		t.Fatalf("manager retained the failed named process: %#v", current)
+	}
+}
+
 func TestStartPublicAccessFeedsEnrollmentKeyOnlyToLoginStdin(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "enrollment-key")
 	argsFile := filepath.Join(t.TempDir(), "gnar-args")
