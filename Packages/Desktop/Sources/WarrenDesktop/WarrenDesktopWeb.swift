@@ -532,11 +532,18 @@ private struct WarrenDesktopWebIconButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 11, weight: .medium))
-                .frame(width: 24, height: 24)
+                .frame(
+                    width: WarrenLayoutMetrics.sidebarActionButtonSize,
+                    height: WarrenLayoutMetrics.sidebarActionButtonSize
+                )
                 .contentShape(.rect)
                 .accessibilityHidden(true)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
+        .frame(
+            width: WarrenLayoutMetrics.sidebarActionButtonSize,
+            height: WarrenLayoutMetrics.sidebarActionButtonSize
+        )
         .focused($isFocused)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel(accessibilityLabel)
