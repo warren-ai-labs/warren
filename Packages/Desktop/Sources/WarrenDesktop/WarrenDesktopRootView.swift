@@ -219,47 +219,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 )
                 .frame(width: sidebarState.renderedWidth)
 
-                VStack(spacing: 0) {
-                    if chromeMode.showsIndependentTopBar {
-                        WarrenDesktopTopBar(
-                            hostName: projection.host.name,
-                            isSidebarCollapsed: sidebarState.isCollapsed,
-                            onToggleSidebar: toggleSidebar
-                        )
-                    }
-                    tabBarView
-                    WarrenDesktopPresetBar(
-                        workspace: presentation.workspace,
-                        terminalGroup: presentation.terminalGroup,
-                        isBusy: isAddingSession,
-                        onLaunch: { request in
-                            launchSession(request, in: presentation)
-                        }
-                    )
-                    HStack(spacing: 0) {
-                        WarrenDesktopWorkspaceContent(
-                            workspace: presentation.contentWorkspace,
-                            terminalGroup: presentation.contentTerminalGroup,
-                            tab: presentation.tab,
-                            hasProjects: !projection.groups.isEmpty,
-                            connectionState: projection.connectionState,
-                            // Superset keeps the 28pt pane toolbar in workspace
-                            // mode too. It is pane chrome, not a duplicate top bar.
-                            showsPaneHeader: true,
-                            session: presentation.session,
-                            hostName: projection.host.name,
-                            titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
-                            terminalFont: TerminalFontPreference(
-                                family: terminalFontFamily,
-                                size: terminalFontSize
-                            ),
-                            wantsTerminalFocus: !commandPalettePresented && !settingsPresented,
-                            onAddProject: { dispatch(.addProject) },
-                            onImportSuperset: { dispatch(.importSuperset) },
-                            terminalSurface: terminalSurface
-                        )
-                    }
-                }
+                makeWorkspaceColumn(
+                    presentation: presentation,
+                    tabBarView: tabBarView,
+                    isAddingSession: isAddingSession
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             }
@@ -269,19 +233,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             .accessibilityHidden(settingsPresented)
 
             if settingsPresented {
-                WarrenDesktopSettingsView(
-                    onBack: closeSettings,
-                    hostName: projection.host.name,
-                    webStatus: webStatus,
-                    onWebTest: onWebTest,
-                    defaultRuntime: defaultRuntime,
-                    onSetRuntime: onSetRuntime,
-                    autoOpenShell: autoOpenShell,
-                    onSetAutoOpenShell: onSetAutoOpenShell,
-                    autoStartAI: autoStartAI,
-                    onSetAutoStartAI: onSetAutoStartAI
-                )
-                    .transition(.opacity)
+                settingsOverlay
             }
         }
         .frame(
@@ -310,37 +262,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentCommandPalette()
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.newSession)) { _ in
-            addSession(in: presentation)
+            handleNewSession(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.nextTab)) { _ in
-            guard let tabID = WarrenDesktopTabCycler.tabID(
-                forward: true,
-                in: presentation.tabs,
-                selectedTabID: navigation.selectedTabID
-            ) else { return }
-            dispatch(.selectTab(tabID))
+            handleTabMove(forward: true, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.previousTab)) { _ in
-            guard let tabID = WarrenDesktopTabCycler.tabID(
-                forward: false,
-                in: presentation.tabs,
-                selectedTabID: navigation.selectedTabID
-            ) else { return }
-            dispatch(.selectTab(tabID))
+            handleTabMove(forward: false, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.selectTab)) { note in
-            let rawIndex = note.userInfo?[WarrenDesktopCommand.selectTabIndexKey]
-            let index = rawIndex as? Int ?? (rawIndex as? NSNumber)?.intValue
-            guard let index,
-                  let tabID = WarrenDesktopTabSelector.tabID(
-                    in: presentation.tabs,
-                    number: index
-                  ) else { return }
-            dispatch(.selectTab(tabID))
+            handleSelectTab(note, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.closeTab)) { _ in
-            guard let tab = presentation.tab, tab.sessionID != nil else { return }
-            dispatch(.closeTab(tab.id))
+            handleCloseTab(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleSidebar)) { _ in
             toggleSidebar()
@@ -585,6 +519,75 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         ))
     }
 
+    private func makeWorkspaceColumn(
+        presentation: Presentation,
+        tabBarView: AnyView,
+        isAddingSession: Bool
+    ) -> AnyView {
+        AnyView(
+            VStack(spacing: 0) {
+                if chromeMode.showsIndependentTopBar {
+                    WarrenDesktopTopBar(
+                        hostName: projection.host.name,
+                        isSidebarCollapsed: sidebarState.isCollapsed,
+                        onToggleSidebar: toggleSidebar
+                    )
+                }
+                tabBarView
+                WarrenDesktopPresetBar(
+                    workspace: presentation.workspace,
+                    terminalGroup: presentation.terminalGroup,
+                    isBusy: isAddingSession,
+                    onLaunch: { request in
+                        launchSession(request, in: presentation)
+                    }
+                )
+                HStack(spacing: 0) {
+                    WarrenDesktopWorkspaceContent(
+                        workspace: presentation.contentWorkspace,
+                        terminalGroup: presentation.contentTerminalGroup,
+                        tab: presentation.tab,
+                        hasProjects: !projection.groups.isEmpty,
+                        connectionState: projection.connectionState,
+                        // Superset keeps the 28pt pane toolbar in workspace
+                        // mode too. It is pane chrome, not a duplicate top bar.
+                        showsPaneHeader: true,
+                        session: presentation.session,
+                        hostName: projection.host.name,
+                        titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
+                        terminalFont: TerminalFontPreference(
+                            family: terminalFontFamily,
+                            size: terminalFontSize
+                        ),
+                        wantsTerminalFocus: !commandPalettePresented && !settingsPresented,
+                        onAddProject: { dispatch(.addProject) },
+                        onImportSuperset: { dispatch(.importSuperset) },
+                        terminalSurface: terminalSurface
+                    )
+                }
+            }
+        )
+    }
+
+    private var settingsOverlay: AnyView {
+        AnyView(
+            WarrenDesktopSettingsView(
+                onBack: closeSettings,
+                hostName: projection.host.name,
+                webStatus: webStatus,
+                onWebTest: onWebTest,
+                onWebStop: onWebStop,
+                defaultRuntime: defaultRuntime,
+                onSetRuntime: onSetRuntime,
+                autoOpenShell: autoOpenShell,
+                onSetAutoOpenShell: onSetAutoOpenShell,
+                autoStartAI: autoStartAI,
+                onSetAutoStartAI: onSetAutoStartAI
+            )
+            .transition(.opacity)
+        )
+    }
+
     private func makePresentation() -> Presentation {
         let interval = WarrenDesktopPerformance.signposter.beginInterval("SwiftUI Presentation")
         defer { WarrenDesktopPerformance.signposter.endInterval("SwiftUI Presentation", interval) }
@@ -788,6 +791,47 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             commandPalettePresented = presented
         }
+    }
+
+    private func tabIndex(from rawValue: Any?) -> Int? {
+        if let index = rawValue as? Int {
+            return index
+        }
+        if let number = rawValue as? NSNumber {
+            return number.intValue
+        }
+        return nil
+    }
+
+    private func handleNewSession(in presentation: Presentation) {
+        addSession(in: presentation)
+    }
+
+    private func handleTabMove(forward: Bool, in presentation: Presentation) {
+        guard let tabID = WarrenDesktopTabCycler.tabID(
+            forward: forward,
+            in: presentation.tabs,
+            selectedTabID: navigation.selectedTabID
+        ) else { return }
+        dispatch(.selectTab(tabID))
+    }
+
+    private func handleSelectTab(
+        _ note: Notification,
+        in presentation: Presentation
+    ) {
+        let rawIndex = note.userInfo?[WarrenDesktopCommand.selectTabIndexKey]
+        guard let index = tabIndex(from: rawIndex),
+              let tabID = WarrenDesktopTabSelector.tabID(
+                in: presentation.tabs,
+                number: index
+              ) else { return }
+        dispatch(.selectTab(tabID))
+    }
+
+    private func handleCloseTab(in presentation: Presentation) {
+        guard let tab = presentation.tab, tab.sessionID != nil else { return }
+        dispatch(.closeTab(tab.id))
     }
 
     private func presentCommandPalette() {
