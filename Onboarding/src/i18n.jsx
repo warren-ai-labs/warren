@@ -118,6 +118,38 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.8.1",
+        dateISO: "2026-08-22",
+        date: "August 22, 2026",
+        title: "Warren reaches macOS 13+.",
+        summary:
+          "A compatibility release for arm64 Apple Silicon Macs with Ghostline v0.6.4, safer runtime cleanup, and a bundled Raycast terminal launcher.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add macOS 13 deployment support across the desktop app and Swift packages, with compatibility fallbacks for APIs introduced in macOS 14.",
+              "Add a bundled Raycast terminal command and Warren icon for launching terminal groups from Raycast.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Update the Ghostline runtime dependency to v0.6.4 and keep rolling upgrades keyed to the expected release tag.",
+              "Build and package the release app for arm64 macOS 13+ with the Ghostline-provided libghostty-vt.dylib and stable release signing checks.",
+              "Refresh terminal environment defaults before starting Ghostline or tmux child processes.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Clean up stale Ghostline sockets, pid files, and logs before reconnecting or adopting a runtime.",
+              "Preserve desktop state observation and file-dialog behavior on macOS 13 while keeping newer macOS affordances available when supported.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.8.0",
         dateISO: "2026-08-22",
         date: "August 22, 2026",
@@ -636,6 +668,38 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.8.1",
+        dateISO: "2026-08-22",
+        date: "2026 年 8 月 22 日",
+        title: "Warren 支持 macOS 13+。",
+        summary:
+          "兼容性版本：面向 arm64 Apple Silicon Mac，升级 Ghostline v0.6.4，清理运行时残留，并内置 Raycast 终端启动命令。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "桌面端和 Swift 包全面支持 macOS 13，并为 macOS 14 才提供的 API 增加兼容回退。",
+              "内置 Raycast 终端命令和 Warren 图标，可从 Raycast 启动 Terminal Group。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "Ghostline 运行时依赖升级到 v0.6.4，并继续按预期发布 tag 执行滚动升级。",
+              "发布版改为使用 Ghostline 提供的 libghostty-vt.dylib 构建 arm64 macOS 13+ 应用，并执行稳定签名校验。",
+              "启动 Ghostline 或 tmux 子进程前刷新终端环境默认值。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "在重新连接或接管运行时前清理残留的 Ghostline socket、pid 文件和日志，避免旧残留阻塞会话启动。",
+              "在 macOS 13 上保持桌面状态观察和文件选择器行为，同时在支持时保留更新系统的能力。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.8.0",
         dateISO: "2026-08-22",

@@ -86,7 +86,7 @@ export default function TerminalDemo() {
 
     async function boot() {
       const lines = [
-        `${dim}warren-headless${reset} v0.1.0 ${dim}(ghostline runtime)${reset}`,
+        `${dim}warren-headless${reset} v0.8.1 ${dim}(ghostline v0.6.4 runtime)${reset}`,
         `${dim}host${reset} ${cyan}mac-studio${reset} ${dim}· ws://127.0.0.1:8789${reset}`,
         `${green}✓${reset} ${dim}restored${reset} ${cyan}warren/dev${reset} ${dim}· survived 2 detaches${reset}`,
         `${dim}terminal${reset} ${cyan}ghostty-wasm${reset} ${dim}· same VT parser as desktop${reset}`,
@@ -183,7 +183,7 @@ export default function TerminalDemo() {
             `${cyan}warren@mac-studio${reset}`,
             `${dim}--------------------------${reset}`,
             `${green}OS${reset}:        macOS 26.0`,
-            `${green}Runtime${reset}:   ghostline v0.1.0`,
+            `${green}Runtime${reset}:   ghostline v0.6.4`,
             `${green}Terminal${reset}:  Ghostty VT parser (wasm)`,
             `${green}Uptime${reset}:    4 days, 2 hours`,
             `${green}Sessions${reset}:  3 durable`,

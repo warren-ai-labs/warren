@@ -6,6 +6,28 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.8.1] - 2026-08-22
+
+> Patch release: Warren now runs on macOS 13 and later on arm64 Apple Silicon,
+> with a refreshed Ghostline runtime and a bundled Raycast terminal launcher.
+> Intel macOS support is intentionally out of scope for this release.
+
+### Added
+
+- Add macOS 13 deployment support across the desktop app and Swift packages, including compatibility fallbacks for APIs introduced in macOS 14.
+- Add a bundled Raycast terminal command and Warren icon for launching terminal groups from Raycast.
+
+### Changed
+
+- Update the Ghostline runtime dependency to v0.6.4 and keep rolling upgrades keyed to the expected release tag.
+- Build and package the release app for arm64 macOS 13+ with the Ghostline-provided `libghostty-vt.dylib`, stable release markers, and explicit signing checks.
+- Refresh terminal environment defaults before starting Ghostline or tmux child processes.
+
+### Fixed
+
+- Clean up stale Ghostline sockets, pid files, and logs before reconnecting or adopting a runtime so old artifacts cannot block session startup.
+- Preserve desktop state observation and file-dialog behavior on macOS 13 while keeping newer macOS affordances available when supported.
+
 ## [0.8.0] - 2026-08-22
 
 > Major release: Warren can share a Host through a self-hosted gnar Edge,
