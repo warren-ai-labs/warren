@@ -431,6 +431,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         detail: overflowControlDetail,
                         supportsSecondary: overflowControlSupportsSecondary,
                         secondaryContent: overflowSecondaryContent,
+                        secondaryTitleAccessory: overflowSecondaryTitleAccessory,
                         onSelect: selectOverflowControl,
                         onDismiss: { setChromePopover(nil) }
                     )
@@ -828,14 +829,25 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     notices: notices,
                     onRead: onNoticeRead,
                     onDismissNotice: onNoticeDismiss,
-                    isMuted: $notificationsMuted,
-                    onMarkAllRead: markAllNoticesRead,
                     onDismiss: onBack
                 )
             )
         case .settings:
             return nil
         }
+    }
+
+    private func overflowSecondaryTitleAccessory(
+        _ control: WarrenDesktopWorkspaceTabTrailingControl
+    ) -> AnyView? {
+        guard control == .notifications else { return nil }
+        return AnyView(
+            WarrenDesktopNoticeTitleActions(
+                unreadCount: notices.filter(\.isUnread).count,
+                isMuted: $notificationsMuted,
+                onMarkAllRead: markAllNoticesRead
+            )
+        )
     }
 
     private func markAllNoticesRead() {

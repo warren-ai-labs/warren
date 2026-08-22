@@ -25,6 +25,7 @@ struct WarrenDesktopOverflowPopover: View {
     let detail: (WarrenDesktopWorkspaceTabTrailingControl) -> String?
     let supportsSecondary: (WarrenDesktopWorkspaceTabTrailingControl) -> Bool
     let secondaryContent: (WarrenDesktopWorkspaceTabTrailingControl, @escaping () -> Void) -> AnyView?
+    let secondaryTitleAccessory: (WarrenDesktopWorkspaceTabTrailingControl) -> AnyView?
     let onSelect: (WarrenDesktopWorkspaceTabTrailingControl) -> Void
     let onDismiss: () -> Void
 
@@ -33,30 +34,34 @@ struct WarrenDesktopOverflowPopover: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let titleLeading: AnyView? = selectedControl == nil
+            ? nil
+            : AnyView(
+                Button(action: returnToMenu) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: WarrenDesktopChromeTitleMetrics.iconSize, weight: .regular))
+                        .frame(
+                            width: WarrenDesktopChromeTitleMetrics.buttonSize,
+                            height: WarrenDesktopChromeTitleMetrics.buttonSize
+                        )
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to More")
+            )
+        let titleTrailing = selectedControl.flatMap(secondaryTitleAccessory)
         WarrenDesktopChromePopoverSurface(
             title: selectedControl?.title ?? "More",
             width: surfaceWidth,
             onDismiss: onDismiss,
             titleFont: WarrenTypography.body,
-            role: .menu
+            role: .menu,
+            titleLeading: titleLeading,
+            titleTrailing: titleTrailing
         ) {
             if let selectedControl,
                let content = secondaryContent(selectedControl, returnToMenu) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Button(action: returnToMenu) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 22, height: 22)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(WarrenInteractiveRowStyle(cornerRadius: WarrenRadius.small))
-                    .padding(.horizontal, WarrenSpacing.xs)
-                    .padding(.top, WarrenSpacing.xs)
-                    .accessibilityLabel("Back to More")
-
-                    content
-                }
+                content
             } else {
                 listView(tokens: tokens)
             }

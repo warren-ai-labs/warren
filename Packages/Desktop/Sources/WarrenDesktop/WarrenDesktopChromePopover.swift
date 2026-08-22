@@ -14,12 +14,19 @@ enum WarrenDesktopChromePopover: Equatable {
 
 /// Shared surface for every top-right chrome popover: same radius, border,
 /// elevation, header typography and close affordance.
+enum WarrenDesktopChromeTitleMetrics {
+    static let iconSize: CGFloat = 12
+    static let buttonSize: CGFloat = 22
+}
+
 struct WarrenDesktopChromePopoverSurface<Content: View>: View {
     let title: String
     let width: CGFloat
     let onDismiss: () -> Void
     let titleFont: Font
     let role: WarrenPresentationRole
+    let titleLeading: AnyView?
+    let titleTrailing: AnyView?
     let content: Content
 
     @Environment(\.colorScheme) private var colorScheme
@@ -30,6 +37,8 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
         onDismiss: @escaping () -> Void,
         titleFont: Font = WarrenTypography.popoverTitle,
         role: WarrenPresentationRole = .popover,
+        titleLeading: AnyView? = nil,
+        titleTrailing: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -37,22 +46,33 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
         self.onDismiss = onDismiss
         self.titleFont = titleFont
         self.role = role
+        self.titleLeading = titleLeading
+        self.titleTrailing = titleTrailing
         self.content = content()
     }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: WarrenSpacing.compact) {
+            HStack(spacing: WarrenSpacing.xs) {
+                if let titleLeading {
+                    titleLeading
+                }
                 Text(title)
                     .font(titleFont)
                     .foregroundStyle(tokens.foreground)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if let titleTrailing {
+                    titleTrailing
+                }
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
-                        .font(WarrenTypography.popoverMeta)
-                        .frame(width: 22, height: 22)
+                        .font(.system(size: WarrenDesktopChromeTitleMetrics.iconSize, weight: .regular))
+                        .frame(
+                            width: WarrenDesktopChromeTitleMetrics.buttonSize,
+                            height: WarrenDesktopChromeTitleMetrics.buttonSize
+                        )
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tokens.mutedForeground)
