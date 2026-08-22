@@ -1,0 +1,54 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "warren",
+  "title": "Warren",
+  "description": "Quick actions for Warren terminal groups and durable workflows.",
+  "icon": "warren.png",
+  "author": "abcdlsj",
+  "license": "MIT",
+  "categories": ["Developer Tools"],
+  "commands": [
+    {
+      "name": "terminal",
+      "title": "Terminal",
+      "description": "Open a new shell in a Warren terminal group.",
+      "mode": "no-view",
+      "keywords": ["terminal", "shell", "warren"],
+      "preferences": [
+        {
+          "name": "group",
+          "type": "textfield",
+          "required": false,
+          "title": "Terminal Group",
+          "description": "Warren terminal group name or ID.",
+          "default": "Inbox"
+        },
+        {
+          "name": "application",
+          "type": "textfield",
+          "required": false,
+          "title": "Warren Application",
+          "description": "Application name or bundle ID used to open the Warren URL.",
+          "default": "Warren"
+        }
+      ]
+    }
+  ],
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.104.23"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
+    "@types/node": "^22.19.17",
+    "@types/react": "^19.0.10",
+    "eslint": "^9.39.4",
+    "prettier": "^3.7.4",
+    "typescript": "^5.9.3"
+  }
+}

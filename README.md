@@ -83,7 +83,24 @@ The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when
 needed. Use `Tools > Install CLI` to reinstall it manually.
 
-### Raycast terminal launcher
+### Raycast integration
+
+The repository includes a Raycast extension whose command is named **Terminal**.
+Search for `terminal` in Raycast to open a new Warren shell; the command
+defaults to the `Inbox` terminal group and can be changed in its preferences.
+For local development or installation from this checkout:
+
+```sh
+cd Support/Raycast
+npm install
+npm run dev
+```
+
+The extension is intentionally kept as a separate package so future Warren
+actions can be added as additional Raycast commands without changing the
+desktop app.
+
+#### Script Command fallback
 
 Warren registers the `warren://terminal?group=Inbox` URL for external
 launchers. Release app bundles include an optional Raycast Script Command and
@@ -104,7 +121,7 @@ install -m 644 \
 ```
 
 Then open Raycast **Settings → Script Commands → Add Script Directory**, add
-`~/.warren`, and search for **Warren Terminal**. The command can be given the
+`~/.warren`, and search for **Terminal**. The command can be given the
 alias `terminal` or a global hotkey from Raycast's **Configure Command** menu.
 
 When working from a source checkout, use the same commands with
