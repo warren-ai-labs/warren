@@ -254,3 +254,29 @@ func TestGitPanelFetchWaitsForWorkspaceMutation(t *testing.T) {
 		t.Fatal("git panel fetch did not resume after the mutation")
 	}
 }
+
+func TestGitPanelLoadSurvivesCallerCancellation(t *testing.T) {
+	repository := newRepositoryForServiceTest(t)
+	service, workspaceID := gitPanelService(t, repository)
+	unlock := service.lockGitMutation(workspaceID)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.GitPanel(ctx, workspaceID, true, true)
+		done <- err
+	}()
+
+	// Keep the shared load blocked while its original observer disappears.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("git panel load inherited caller cancellation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("git panel load did not finish after the mutation lock was released")
+	}
+}

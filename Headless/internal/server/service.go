@@ -1799,8 +1799,13 @@ func (s *Service) GitPanel(ctx context.Context, workspaceID string, fetch, force
 		}
 	}
 	version := cache.Version(workspaceID)
+	// panelLoad coalesces callers for one workspace. Detach the actual load
+	// from one observer's WebSocket so a reconnect cannot cancel the shared
+	// operation and poison every waiter with context.Canceled.
+	loadContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), panelLoadTimeout)
+	defer cancel()
 	panel, err := s.panelLoad.Do(workspaceID, func() (api.GitPanel, error) {
-		return s.loadGitPanel(ctx, workspaceID, workspace.Path, fetch)
+		return s.loadGitPanel(loadContext, workspaceID, workspace.Path, fetch)
 	})
 	if err != nil {
 		return api.GitPanel{}, err

@@ -12,6 +12,10 @@ const (
 	panelCacheCapacity     = 16
 	panelRevalidateAfter   = 5 * time.Minute
 	panelRevalidateTimeout = 30 * time.Second
+	// A panel load may include a remote fetch plus several repository scans.
+	// It must outlive the WebSocket request that started it so a reconnect does
+	// not publish a canceled result to the next request.
+	panelLoadTimeout = 90 * time.Second
 )
 
 type panelCacheEntry struct {
