@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -384,12 +383,16 @@ func resourceCommand(args []string) error {
 	if resource == "session" && action == "list" && boolValue(params, "all") && boolValue(params, "ended") {
 		return newUsageError("--all and --ended are mutually exclusive", actionUsageText(commandName, action))
 	}
-	if resource == "session" && action == "send" && stringValue(params, "timeout") != "" && !boolValue(params, "wait") {
-		return newUsageError("--timeout requires --wait", actionUsageText(commandName, action))
+	if resource == "session" && action == "send" && (boolValue(params, "wait") || stringValue(params, "timeout") != "") {
+		return newUsageError("session send does not support Agent turn options; use agent send", actionUsageText(commandName, action))
 	}
-	if resource == "session" && action == "send" && boolValue(params, "wait") {
-		if _, err := agentWaitTimeout(params); err != nil {
-			return newUsageError(err.Error(), actionUsageText(commandName, action))
+	if resource == "session" && action == "read" && sessionAgentReadFlag(params) {
+		return newUsageError("session read only returns PTY output; use agent read for transcript data", actionUsageText(commandName, action))
+	}
+	if resource == "session" && (action == "create" || action == "add") {
+		kind := strings.ToLower(strings.TrimSpace(stringValue(params, "kind")))
+		if kind == "codex" || kind == "claude" {
+			return newUsageError("session create cannot create Codex or Claude agents; use agent create", actionUsageText(commandName, action))
 		}
 	}
 	var resolvedCurrentID string
@@ -520,47 +523,12 @@ func resourceCommand(args []string) error {
 			data, _ := io.ReadAll(os.Stdin)
 			text = string(data)
 		}
-		session, err := c.Attach(ctx, id)
+		_, err := c.Attach(ctx, id)
 		if err != nil {
 			return err
 		}
-		var snapshot api.AgentSnapshotResult
-		agentInput := isAgentSession(session) && !boolValue(params, "raw")
-		if agentInput {
-			// A newly-created Agent may still be on its first-run trust/resume
-			// prompt. Do not mistake that prompt's Enter key for a submitted
-			// message; wait until the transcript watcher is live first.
-			subscription, readyErr := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
-			if readyErr != nil {
-				return readyErr
-			}
-			snapshot = subscription.Snapshot
-			if boolValue(params, "wait") {
-				if err := validateAgentSendWait(snapshot); err != nil {
-					return err
-				}
-			}
-		} else if boolValue(params, "wait") && isAgentSession(session) {
-			subscription, readyErr := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
-			if readyErr != nil {
-				return readyErr
-			}
-			snapshot = subscription.Snapshot
-			if err := validateAgentSendWait(snapshot); err != nil {
-				return err
-			}
-		} else if boolValue(params, "wait") {
-			return fmt.Errorf("session is not bound to an agent: %s", session.ID)
-		}
-		if err := sendSessionText(ctx, c, session, text, boolValue(params, "raw")); err != nil {
+		if err := sendTerminalText(ctx, c, text, boolValue(params, "raw")); err != nil {
 			return err
-		}
-		if boolValue(params, "wait") {
-			timeout, err := agentWaitTimeout(params)
-			if err != nil {
-				return newUsageError(err.Error(), actionUsageText(commandName, action))
-			}
-			return waitAndPrintAgentTurn(c, id, snapshot, snapshot.Turn.ID, 0, timeout)
 		}
 		return printValue(map[string]any{"sent": true})
 	case "session.read", "session.attach":
@@ -617,29 +585,28 @@ func resourceCommand(args []string) error {
 
 func sessionRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	id := positional(params, 0, "session id")
-	session, err := c.Attach(ctx, id)
-	if err != nil {
+	if _, err := c.Attach(ctx, id); err != nil {
 		return err
-	}
-	// Agent sessions have a structured transcript side channel. Reading that
-	// projection by default avoids leaking cursor movement, spinners, and other
-	// TUI chrome into automation. `--terminal`/`--raw` keeps the old PTY view;
-	// attach is always an explicit live terminal operation.
-	if !follow && isAgentSession(session) && !sessionReadTerminal(params) {
-		return sessionAgentRead(ctx, c, session, params)
 	}
 	return sessionTerminalRead(ctx, c, params, follow)
 }
 
-func sessionReadTerminal(params map[string]any) bool {
-	return boolValue(params, "terminal") || boolValue(params, "raw")
+func sessionAgentReadFlag(params map[string]any) bool {
+	for _, key := range []string{"recent", "limit", "count", "all", "include", "filter", "exclude", "text-only", "text", "plain", "full", "full-content", "no-truncate", "chars", "max-chars", "head"} {
+		if _, ok := params[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionTerminalRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	timeout := durationValue(params, "timeout", 8*time.Second)
 	needle := stringValue(params, "contains")
 	if follow {
-		ctx, _ = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		ctx = signalContext
 	} else {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), timeout)
@@ -661,10 +628,7 @@ func sessionTerminalRead(ctx context.Context, c *client.Client, params map[strin
 	return err
 }
 
-func sessionAgentRead(ctx context.Context, c *client.Client, session api.Session, params map[string]any) error {
-	if _, err := c.SubscribeAgent(ctx, session.ID); err != nil {
-		return err
-	}
+func agentReadSession(ctx context.Context, c *client.Client, session api.Session, params map[string]any) error {
 	options, err := agentReadOptions(params)
 	if err != nil {
 		return err
@@ -677,7 +641,7 @@ func sessionAgentRead(ctx context.Context, c *client.Client, session api.Session
 	if err != nil {
 		return err
 	}
-	if sessionReadTextOnly(params) {
+	if agentReadTextOnly(params) {
 		return printAgentText(events)
 	}
 	return printValue(events)
@@ -749,7 +713,7 @@ func readAgentHistory(ctx context.Context, c *client.Client, sessionID string, o
 	return pages, nil
 }
 
-func sessionReadTextOnly(params map[string]any) bool {
+func agentReadTextOnly(params map[string]any) bool {
 	return boolValue(params, "text") || boolValue(params, "text-only") || boolValue(params, "plain")
 }
 
@@ -778,13 +742,268 @@ func agentCommand(args []string) error {
 		fmt.Print(agentUsageText())
 		return nil
 	}
-	if args[0] == "wait" {
+	switch args[0] {
+	case "create":
+		return agentCreateCommand(args[1:])
+	case "list":
+		return agentListCommand(args[1:])
+	case "current":
+		return agentCurrentCommand(args[1:])
+	case "send":
+		return agentSendCommand(args[1:])
+	case "read":
+		return agentReadCommand(args[1:])
+	case "wait":
 		return agentWaitCommand(args[1:])
-	}
-	if args[0] != "read" {
+	case "attach":
+		return agentAttachCommand(args[1:])
+	case "remove", "delete", "rename", "pin", "move":
+		return agentSessionMutationCommand(args[0], args[1:])
+	default:
 		return newUsageError(fmt.Sprintf("unknown agent command: %s", args[0]), agentUsageText())
 	}
-	help, err := validateAgentReadArgs(args[1:])
+}
+
+func agentCreateCommand(args []string) error {
+	help, err := validateAgentCreateArgs(args)
+	if err != nil {
+		return newUsageError(err.Error(), agentCreateUsageText())
+	}
+	if help {
+		fmt.Print(agentCreateUsageText())
+		return nil
+	}
+	params := parseFlags(args)
+	positions := positionals(params)
+	if len(positions) > 1 {
+		return newUsageError("agent create accepts at most one workspace ID", agentCreateUsageText())
+	}
+	if len(positions) > 0 && stringValue(params, "group") != "" {
+		return newUsageError("workspace and --group are mutually exclusive", agentCreateUsageText())
+	}
+	provider := strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
+	if provider != "codex" && provider != "claude" {
+		return newUsageError("--provider must be codex or claude", agentCreateUsageText())
+	}
+	command := strings.TrimSpace(stringValue(params, "command"))
+	if command == "" {
+		command = provider
+	}
+	if err := validateAgentCommand(command, provider); err != nil {
+		return newUsageError(err.Error(), agentCreateUsageText())
+	}
+	prompt := stringValue(params, "prompt")
+	hasPrompt := prompt != ""
+	noPrompt := boolValue(params, "no-prompt")
+	if !hasPrompt && !noPrompt {
+		return newUsageError("specify --prompt TEXT or --no-prompt", agentCreateUsageText())
+	}
+	if boolValue(params, "wait") && !hasPrompt {
+		return newUsageError("--wait requires --prompt", agentCreateUsageText())
+	}
+	if stringValue(params, "timeout") != "" && !boolValue(params, "wait") {
+		return newUsageError("--timeout requires --wait", agentCreateUsageText())
+	}
+	var waitTimeout time.Duration
+	if boolValue(params, "wait") {
+		waitTimeout, err = agentWaitTimeout(params)
+		if err != nil {
+			return newUsageError(err.Error(), agentCreateUsageText())
+		}
+	}
+
+	request := normalizedParams(params, "session", "create")
+	request["kind"] = provider
+	if hasPrompt {
+		// Codex and Claude both accept an initial prompt as the final
+		// positional argument. Let the provider create its first turn so the
+		// transcript exists before Warren starts waiting on it; subsequent
+		// messages still use the interactive composer path below.
+		command = appendAgentInitialPrompt(command, prompt)
+	}
+	request["command"] = command
+	for _, key := range []string{"provider", "prompt", "no-prompt", "wait", "timeout", "help", "h"} {
+		delete(request, key)
+	}
+
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	var session api.Session
+	if err := c.Request(ctx, "session.create", request, &session); err != nil {
+		return err
+	}
+	result := agentCreateResult{Session: session, PromptSent: hasPrompt}
+	if hasPrompt && boolValue(params, "wait") {
+		subscription, readyErr := waitForAgentSubscription(ctx, c, session.ID, agentStartupTimeout)
+		if readyErr != nil {
+			return fmt.Errorf("agent %s created with initial prompt but transcript was not ready: %w", session.ID, readyErr)
+		}
+		after, current := agentWaitCursor(subscription.Snapshot)
+		waitResult, err := waitAgentTurnResultForInitialPrompt(c, session.ID, subscription.Snapshot, after, current, waitTimeout)
+		if err != nil {
+			return err
+		}
+		result.Wait = &waitResult
+	}
+	if err := printValue(result); err != nil {
+		return err
+	}
+	if result.Wait != nil && result.Wait.Status != api.AgentTurnCompleted {
+		return fmt.Errorf("agent turn %d ended with status %s", result.Wait.Turn, result.Wait.Status)
+	}
+	return nil
+}
+
+type agentCreateResult struct {
+	Session    api.Session          `json:"session"`
+	PromptSent bool                 `json:"promptSent"`
+	Wait       *api.AgentWaitResult `json:"wait,omitempty"`
+}
+
+func agentListCommand(args []string) error {
+	params := parseFlags(args)
+	if boolValue(params, "help") || boolValue(params, "h") {
+		fmt.Print(agentListUsageText())
+		return nil
+	}
+	if len(positionals(params)) > 0 {
+		return newUsageError("agent list does not accept an ID", agentListUsageText())
+	}
+	if boolValue(params, "all") && boolValue(params, "ended") {
+		return newUsageError("--all and --ended are mutually exclusive", agentListUsageText())
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	state, err := c.Roster(ctx)
+	if err != nil {
+		return err
+	}
+	rows := sessionRowsForCurrent(state, boolValue(params, "all"), boolValue(params, "ended"), strings.TrimSpace(os.Getenv(agent.BindEnvSession)))
+	filtered := rows[:0]
+	for _, row := range rows {
+		if isAgentSession(row.Session) {
+			filtered = append(filtered, row)
+		}
+	}
+	return printValue(filtered)
+}
+
+func agentCurrentCommand(args []string) error {
+	params := parseFlags(args)
+	if boolValue(params, "help") || boolValue(params, "h") {
+		fmt.Print(agentCurrentUsageText())
+		return nil
+	}
+	if len(positionals(params)) > 0 {
+		return newUsageError("agent current does not accept an ID", agentCurrentUsageText())
+	}
+	id, err := currentSessionID()
+	if err != nil {
+		return err
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	var session api.Session
+	if err := c.Request(ctx, "session.current", map[string]any{"id": id}, &session); err != nil {
+		return err
+	}
+	if !isAgentSession(session) {
+		return fmt.Errorf("current session is not a Codex or Claude agent: %s", session.ID)
+	}
+	return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
+}
+
+func agentSendCommand(args []string) error {
+	help, err := validateAgentSendArgs(args)
+	if err != nil {
+		return newUsageError(err.Error(), agentSendUsageText())
+	}
+	if help {
+		fmt.Print(agentSendUsageText())
+		return nil
+	}
+	params := parseFlags(args)
+	if values := collectAgentTypeFlags(args, "include"); len(values) > 0 {
+		params["include"] = strings.Join(values, ",")
+	}
+	if values := collectAgentTypeFlags(args, "filter", "exclude"); len(values) > 0 {
+		params["exclude"] = strings.Join(values, ",")
+		delete(params, "filter")
+	}
+	positions := positionals(params)
+	var id string
+	var text string
+	if boolValue(params, "current") {
+		id, err = currentSessionID()
+		if err != nil {
+			return err
+		}
+		text = strings.Join(positions, " ")
+	} else {
+		if len(positions) == 0 {
+			return newUsageError("missing AGENT_ID", agentSendUsageText())
+		}
+		id = positions[0]
+		text = strings.Join(positions[1:], " ")
+	}
+	if text == "" {
+		data, readErr := io.ReadAll(os.Stdin)
+		if readErr != nil {
+			return readErr
+		}
+		text = string(data)
+	}
+	if text == "" {
+		return newUsageError("missing TEXT or stdin input", agentSendUsageText())
+	}
+	var waitTimeout time.Duration
+	if boolValue(params, "wait") {
+		waitTimeout, err = agentWaitTimeout(params)
+		if err != nil {
+			return newUsageError(err.Error(), agentSendUsageText())
+		}
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	session, err := c.Attach(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !isAgentSession(session) {
+		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+	}
+	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
+	if err != nil {
+		return err
+	}
+	if boolValue(params, "wait") {
+		if err := validateAgentSendWait(subscription.Snapshot); err != nil {
+			return err
+		}
+	}
+	if err := sendAgentText(ctx, c, text); err != nil {
+		return err
+	}
+	if !boolValue(params, "wait") {
+		return printValue(map[string]any{"sent": true, "agent": id})
+	}
+	return waitAndPrintAgentTurn(c, id, subscription.Snapshot, subscription.Snapshot.Turn.ID, 0, waitTimeout)
+}
+
+func agentReadCommand(args []string) error {
+	help, err := validateAgentReadArgs(args)
 	if err != nil {
 		return newUsageError(err.Error(), agentReadUsageText())
 	}
@@ -792,103 +1011,103 @@ func agentCommand(args []string) error {
 		fmt.Print(agentReadUsageText())
 		return nil
 	}
-	params := parseFlags(args[1:])
-	if boolValue(params, "help") || boolValue(params, "h") {
-		fmt.Print(agentReadUsageText())
-		return nil
+	params := parseFlags(args)
+	if values := collectAgentTypeFlags(args, "include"); len(values) > 0 {
+		params["include"] = strings.Join(values, ",")
+	}
+	if values := collectAgentTypeFlags(args, "filter", "exclude"); len(values) > 0 {
+		params["exclude"] = strings.Join(values, ",")
 	}
 	positions := positionals(params)
-	if len(positions) == 0 {
-		return newUsageError("missing PROVIDER", agentReadUsageText())
-	}
-	if len(positions) > 2 {
-		return newUsageError("agent read accepts at most one transcript path", agentReadUsageText())
-	}
-	provider := strings.ToLower(strings.TrimSpace(positions[0]))
-	if provider != "codex" && provider != "claude" {
-		return newUsageError("PROVIDER must be codex or claude", agentReadUsageText())
-	}
-	path := stringValue(params, "path")
-	if path == "" {
-		path = stringValue(params, "file")
-	}
-	if len(positions) == 2 {
-		if path != "" {
-			return newUsageError("transcript path was provided twice", agentReadUsageText())
+	var id string
+	if boolValue(params, "current") {
+		if len(positions) > 0 {
+			return newUsageError("--current cannot be combined with AGENT_ID", agentReadUsageText())
 		}
-		path = positions[1]
-	}
-
-	recent := agent.DefaultReadRecent
-	if boolValue(params, "all") {
-		recent = 0
-	}
-	if value := firstFlagValue(params, "recent", "limit", "count"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			return newUsageError("--recent must be a non-negative integer", agentReadUsageText())
-		}
-		recent = parsed
-	}
-	contentLimit := agent.DefaultReadContentLimit
-	if value := firstFlagValue(params, "chars", "max-chars", "head"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			return newUsageError("--chars must be a non-negative integer", agentReadUsageText())
-		}
-		contentLimit = parsed
-	}
-	full := boolValue(params, "full") || boolValue(params, "full-content") || boolValue(params, "no-truncate")
-	if full {
-		contentLimit = 0
-	}
-	include := collectAgentTypeFlags(args[1:], "include", "types")
-	exclude := collectAgentTypeFlags(args[1:], "filter", "exclude")
-	// `collectAgentTypeFlags` preserves repeated flags. The map parser above is
-	// still used for the common single-flag case and for validation.
-	if len(include) == 0 {
-		include = splitTypeFlag(firstFlagValue(params, "include", "types"))
-	}
-	if len(exclude) == 0 {
-		exclude = append(splitTypeFlag(stringValue(params, "filter")), splitTypeFlag(stringValue(params, "exclude"))...)
-	}
-
-	if path == "" {
-		workspace := stringValue(params, "workspace")
-		if workspace == "" {
-			var err error
-			workspace, err = os.Getwd()
-			if err != nil {
-				return fmt.Errorf("resolve current workspace: %w", err)
-			}
-		}
-		var err error
-		path, err = (agent.DefaultFinder{}).Find(context.Background(), provider, workspace, time.Time{})
+		id, err = currentSessionID()
 		if err != nil {
 			return err
 		}
-		if path == "" {
-			return fmt.Errorf("no %s transcript found for workspace %s; pass a JSONL path", provider, workspace)
+	} else {
+		if len(positions) == 0 {
+			return newUsageError("missing AGENT_ID", agentReadUsageText())
+		}
+		if len(positions) > 1 {
+			return newUsageError("agent read accepts exactly one AGENT_ID", agentReadUsageText())
+		}
+		id = positions[0]
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
+	if err != nil {
+		return err
+	}
+	session := subscription.Session
+	if !isAgentSession(session) {
+		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+	}
+	return agentReadSession(ctx, c, session, params)
+}
+
+func agentAttachCommand(args []string) error {
+	params := parseFlags(args)
+	if boolValue(params, "help") || boolValue(params, "h") {
+		fmt.Print(agentAttachUsageText())
+		return nil
+	}
+	positions := positionals(params)
+	var id string
+	var err error
+	if boolValue(params, "current") {
+		if len(positions) > 0 {
+			return newUsageError("--current cannot be combined with AGENT_ID", agentAttachUsageText())
+		}
+		id, err = currentSessionID()
+		if err != nil {
+			return err
 		}
 	} else {
-		absolute, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("resolve transcript path: %w", err)
+		if len(positions) == 0 {
+			return newUsageError("missing AGENT_ID", agentAttachUsageText())
 		}
-		path = absolute
+		if len(positions) > 1 {
+			return newUsageError("agent attach accepts exactly one AGENT_ID", agentAttachUsageText())
+		}
+		id = positions[0]
 	}
-
-	events, err := agent.ReadTranscript(context.Background(), provider, path, agent.ReadOptions{
-		Recent:       recent,
-		ContentLimit: contentLimit,
-		Full:         full,
-		IncludeTypes: include,
-		ExcludeTypes: exclude,
-	})
+	ctx, c, err := connect()
 	if err != nil {
-		return fmt.Errorf("read %s transcript %s: %w", provider, path, err)
+		return err
 	}
-	return printValue(events)
+	defer c.Close()
+	session, err := c.Attach(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !isAgentSession(session) {
+		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+	}
+	return sessionTerminalRead(ctx, c, map[string]any{"timeout": ""}, true)
+}
+
+func agentSessionMutationCommand(action string, args []string) error {
+	params := parseFlags(args)
+	if boolValue(params, "help") || boolValue(params, "h") {
+		fmt.Print(agentActionUsageText(action))
+		return nil
+	}
+	if sessionTargetAction(action) && boolValue(params, "current") && len(positionals(params)) > 0 {
+		return newUsageError("--current cannot be combined with AGENT_ID", agentActionUsageText(action))
+	}
+	if !boolValue(params, "current") && len(positionals(params)) == 0 {
+		return newUsageError("missing AGENT_ID", agentActionUsageText(action))
+	}
+	translated := append([]string{"session", action}, args...)
+	return resourceCommand(translated)
 }
 
 const (
@@ -948,34 +1167,255 @@ func retryAgentSubscription(err error) bool {
 		strings.Contains(message, "not bound to an agent")
 }
 
-func sendSessionText(ctx context.Context, c *client.Client, session api.Session, text string, raw bool) error {
-	return sendSessionTextWithInput(ctx, c.Input, session, text, raw)
+func sendTerminalText(ctx context.Context, c *client.Client, text string, raw bool) error {
+	return sendTerminalTextWithInput(ctx, c.Input, text, raw)
 }
 
-func sendSessionTextWithInput(
+func sendTerminalTextWithInput(
 	ctx context.Context,
 	input func(context.Context, []byte) error,
-	session api.Session,
 	text string,
 	raw bool,
 ) error {
-	if isAgentSession(session) && !raw {
-		// Preserve deliberate line breaks as composer returns, then submit with
-		// the same kitty Enter event used by the web Agent view. A CR in the
-		// message itself is text; it is not the submit action.
-		text = strings.ReplaceAll(text, "\n", "\r")
-		if err := input(ctx, []byte(text)); err != nil {
-			return err
-		}
-		if err := waitForInputDelay(ctx, agentSubmitDelay); err != nil {
-			return err
-		}
-		return input(ctx, []byte(agentSubmitEvent))
-	}
 	if !strings.HasSuffix(text, "\n") && !raw {
 		text += "\r"
 	}
 	return input(ctx, []byte(text))
+}
+
+func sendAgentText(ctx context.Context, c *client.Client, text string) error {
+	return sendAgentTextWithInput(ctx, c.Input, text)
+}
+
+// validateAgentCommand keeps the command field focused on the executable and
+// its options. A positional argument is the provider's startup prompt for
+// both Codex and Claude, so accepting one alongside --prompt would create two
+// competing initial turns.
+func validateAgentCommand(command, provider string) error {
+	if err := validateAgentCommandShellSyntax(command); err != nil {
+		return err
+	}
+	tokens, err := splitShellWords(command)
+	if err != nil {
+		return fmt.Errorf("invalid --command: %w", err)
+	}
+	if len(tokens) == 0 {
+		return errors.New("--command must not be empty")
+	}
+	for _, token := range tokens {
+		if agentCommandShellOperator[token] {
+			return errors.New("--command must be an executable with options; shell operators are not supported")
+		}
+	}
+	valueFlags := agentCommandValueFlags[provider]
+	for index := 1; index < len(tokens); index++ {
+		token := tokens[index]
+		if token == "--" {
+			if index+1 < len(tokens) {
+				return fmt.Errorf("--command for %s must not include a positional prompt; pass it with --prompt", provider)
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			flagName := token
+			equal := strings.IndexByte(flagName, '=')
+			if equal >= 0 {
+				flagName = flagName[:equal]
+			}
+			if agentCommandPromptFlags[provider][flagName] {
+				return fmt.Errorf("--command for %s must not provide a prompt; pass it with --prompt", provider)
+			}
+			if agentCommandNonInteractiveFlags[provider][flagName] {
+				return fmt.Errorf("--command for %s must use interactive mode; remove %s and pass initial text with --prompt", provider, flagName)
+			}
+			if valueFlags[flagName] && equal < 0 {
+				if index+1 >= len(tokens) || strings.HasPrefix(tokens[index+1], "-") {
+					return fmt.Errorf("--command option %s requires a value", flagName)
+				}
+				index++
+			}
+			continue
+		}
+		return fmt.Errorf("--command for %s must not include a positional prompt; pass it with --prompt", provider)
+	}
+	return nil
+}
+
+func validateAgentCommandShellSyntax(command string) error {
+	inSingle, inDouble, escaped := false, false, false
+	for _, char := range command {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if char == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			switch char {
+			case '\\':
+				escaped = true
+			case '"':
+				inDouble = false
+			case '`', '$':
+				return errors.New("--command must not contain shell operators or substitutions")
+			}
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case ';', '&', '|', '>', '<', '`', '(', ')', '\n', '$':
+			return errors.New("--command must be an executable with options; shell operators and substitutions are not supported")
+		}
+	}
+	return nil
+}
+
+var agentCommandPromptFlags = map[string]map[string]bool{
+	"codex":  {"--prompt": true},
+	"claude": {"--prompt": true},
+}
+
+var agentCommandNonInteractiveFlags = map[string]map[string]bool{
+	"claude": {"-p": true, "--print": true},
+}
+
+var agentCommandShellOperator = map[string]bool{
+	";": true, "&&": true, "||": true, "|": true,
+	"&": true, ">": true, ">>": true, "<": true, "<<": true,
+}
+
+// These options consume the following shell word. Unknown options are left
+// conservative: a following non-option word is treated as a conflicting
+// prompt instead of being silently appended after it.
+var agentCommandValueFlags = map[string]map[string]bool{
+	"codex": {
+		"-c": true, "--config": true, "--enable": true, "--disable": true,
+		"-i": true, "--image": true, "-m": true, "--model": true,
+		"-p": true, "--profile": true, "-s": true, "--sandbox": true,
+		"-a": true, "--ask-for-approval": true, "-C": true, "--cd": true,
+		"--add-dir": true, "--local-provider": true, "--remote": true,
+		"--remote-auth-token-env": true,
+	},
+	"claude": {
+		"--add-dir": true, "--agent": true, "--agents": true,
+		"--allowedTools": true, "--allowed-tools": true, "--append-system-prompt": true,
+		"--append-system-prompt-file": true, "--betas": true, "-d": true,
+		"--debug": true, "--debug-file": true, "--effort": true,
+		"--fallback-model": true, "--file": true, "--from-pr": true,
+		"--json-schema": true, "--max-budget-usd": true, "--mcp-config": true,
+		"--model": true, "-n": true, "--name": true, "--output-format": true,
+		"--permission-mode": true, "--plugin-dir": true, "--plugin-url": true,
+		"--prompt-suggestions": true, "-r": true, "--resume": true,
+		"--settings": true, "--setting-sources": true, "--system-prompt": true,
+		"--system-prompt-file": true, "--tools": true, "--input-format": true,
+		"--session-id": true, "--disallowedTools": true, "--disallowed-tools": true,
+		"--remote-control-session-name-prefix": true,
+	},
+}
+
+// splitShellWords handles the quoting needed by executable arguments without
+// attempting to evaluate shell expansions. Commands containing operators are
+// rejected by validateAgentCommand before they reach the runtime.
+func splitShellWords(command string) ([]string, error) {
+	var words []string
+	var current strings.Builder
+	inSingle, inDouble, escaped, started := false, false, false, false
+	flush := func() {
+		if started {
+			words = append(words, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	for _, char := range command {
+		switch {
+		case escaped:
+			current.WriteRune(char)
+			escaped = false
+			started = true
+		case inSingle:
+			if char == '\'' {
+				inSingle = false
+			} else {
+				current.WriteRune(char)
+			}
+			started = true
+		case inDouble:
+			switch char {
+			case '"':
+				inDouble = false
+			case '\\':
+				escaped = true
+			default:
+				current.WriteRune(char)
+			}
+			started = true
+		default:
+			switch {
+			case char == '\\':
+				escaped = true
+				started = true
+			case char == '\'':
+				inSingle = true
+				started = true
+			case char == '"':
+				inDouble = true
+				started = true
+			case char == ' ' || char == '\t' || char == '\r' || char == '\n':
+				flush()
+			default:
+				current.WriteRune(char)
+				started = true
+			}
+		}
+	}
+	if escaped {
+		return nil, errors.New("trailing escape")
+	}
+	if inSingle || inDouble {
+		return nil, errors.New("unterminated quote")
+	}
+	flush()
+	return words, nil
+}
+
+// appendAgentInitialPrompt adds a provider CLI's positional startup prompt to
+// an executable command that may already contain arbitrary arguments. The
+// command is evaluated by a POSIX shell inside the terminal runtime, so quote
+// the prompt as one shell word instead of interpolating it literally.
+func appendAgentInitialPrompt(command, prompt string) string {
+	return strings.TrimSpace(command) + " " + shellQuote(prompt)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func sendAgentTextWithInput(
+	ctx context.Context,
+	input func(context.Context, []byte) error,
+	text string,
+) error {
+	// Preserve deliberate line breaks as composer returns, then submit with
+	// the same kitty Enter event used by the web Agent view. A CR in the
+	// message itself is text; it is not the submit action.
+	text = strings.ReplaceAll(text, "\n", "\r")
+	if err := input(ctx, []byte(text)); err != nil {
+		return err
+	}
+	if err := waitForInputDelay(ctx, agentSubmitDelay); err != nil {
+		return err
+	}
+	return input(ctx, []byte(agentSubmitEvent))
 }
 
 func waitForInputDelay(ctx context.Context, delay time.Duration) error {
@@ -1002,7 +1442,7 @@ func agentWaitCommand(args []string) error {
 	positions := positionals(params)
 	if boolValue(params, "current") {
 		if len(positions) > 0 {
-			return newUsageError("--current cannot be combined with SESSION_ID", agentWaitUsageText())
+			return newUsageError("--current cannot be combined with AGENT_ID", agentWaitUsageText())
 		}
 		id, err := currentSessionID()
 		if err != nil {
@@ -1011,10 +1451,10 @@ func agentWaitCommand(args []string) error {
 		positions = []string{id}
 	}
 	if len(positions) == 0 {
-		return newUsageError("missing SESSION_ID", agentWaitUsageText())
+		return newUsageError("missing AGENT_ID", agentWaitUsageText())
 	}
 	if len(positions) > 1 {
-		return newUsageError("agent wait accepts exactly one session ID", agentWaitUsageText())
+		return newUsageError("agent wait accepts exactly one AGENT_ID", agentWaitUsageText())
 	}
 	timeout, err := agentWaitTimeout(params)
 	if err != nil {
@@ -1026,13 +1466,16 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
+	session, err := c.Attach(ctx, positions[0])
 	if err != nil {
 		return err
 	}
-	session := subscription.Session
-	if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
-		return fmt.Errorf("session is not bound to an agent: %s", session.ID)
+	if !isAgentSession(session) {
+		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+	}
+	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
+	if err != nil {
+		return err
 	}
 	snapshot := subscription.Snapshot
 	after, current := agentWaitCursor(snapshot)
@@ -1102,7 +1545,7 @@ func agentWaitTimeout(params map[string]any) (time.Duration, error) {
 
 func validateAgentSendWait(snapshot api.AgentSnapshotResult) error {
 	if snapshot.Turn.Status == api.AgentTurnStarted {
-		return errors.New("agent already has a running turn; wait for it before using session send --wait")
+		return errors.New("agent already has a running turn; wait for it before using agent send --wait")
 	}
 	return nil
 }
@@ -1115,6 +1558,58 @@ func waitAndPrintAgentTurn(
 	current uint64,
 	timeout time.Duration,
 ) error {
+	result, err := waitAgentTurnResult(c, sessionID, snapshot, after, current, timeout)
+	if err != nil {
+		return err
+	}
+	if err := printValue(result); err != nil {
+		return err
+	}
+	if result.Status != api.AgentTurnCompleted {
+		return fmt.Errorf("agent turn %d ended with status %s", result.Turn, result.Status)
+	}
+	return nil
+}
+
+func waitAgentTurnResult(
+	c *client.Client,
+	sessionID string,
+	snapshot api.AgentSnapshotResult,
+	after uint64,
+	current uint64,
+	timeout time.Duration,
+) (api.AgentWaitResult, error) {
+	return waitAgentTurnResultMode(c, sessionID, snapshot, after, current, timeout, false)
+}
+
+func waitAgentTurnResultForInitialPrompt(
+	c *client.Client,
+	sessionID string,
+	snapshot api.AgentSnapshotResult,
+	after uint64,
+	current uint64,
+	timeout time.Duration,
+) (api.AgentWaitResult, error) {
+	return waitAgentTurnResultMode(c, sessionID, snapshot, after, current, timeout, true)
+}
+
+func waitAgentTurnResultMode(
+	c *client.Client,
+	sessionID string,
+	snapshot api.AgentSnapshotResult,
+	after uint64,
+	current uint64,
+	timeout time.Duration,
+	acceptCompletedSnapshot bool,
+) (api.AgentWaitResult, error) {
+	// A subscription only broadcasts boundaries observed after it is
+	// registered. The initial-prompt path may have completed before the
+	// subscription was registered, so its terminal snapshot is a valid result.
+	// Standalone `agent wait` deliberately continues to the next turn when the
+	// Agent is idle; otherwise it would repeat the latest historical turn.
+	if acceptCompletedSnapshot && current == 0 && snapshot.Turn.ID > after && terminalAgentTurnStatus(snapshot.Turn.Status) {
+		return completedAgentTurnResult(c, sessionID, snapshot)
+	}
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	waitContext, cancel := context.WithTimeout(signalContext, timeout)
@@ -1122,49 +1617,133 @@ func waitAndPrintAgentTurn(
 	turn, err := c.WaitAgentTurn(waitContext, sessionID, snapshot.Epoch, after, current)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("agent turn did not complete before timeout %s", timeout)
+			return api.AgentWaitResult{}, fmt.Errorf("agent turn did not complete before timeout %s", timeout)
 		}
-		return err
+		return api.AgentWaitResult{}, err
 	}
 	fetchContext, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer fetchCancel()
 	events, err := c.AgentTurnEvents(fetchContext, sessionID, turn.ID)
 	if err != nil {
-		return fmt.Errorf("read completed agent turn %d: %w", turn.ID, err)
+		return api.AgentWaitResult{}, fmt.Errorf("read completed agent turn %d: %w", turn.ID, err)
 	}
-	result := api.AgentWaitResult{
+	return api.AgentWaitResult{
 		Session: sessionID,
 		Epoch:   snapshot.Epoch,
 		Turn:    turn.ID,
 		Status:  turn.Status,
 		Events:  events,
+	}, nil
+}
+
+func terminalAgentTurnStatus(status api.AgentTurnStatus) bool {
+	switch status {
+	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnAborted:
+		return true
+	default:
+		return false
 	}
-	if err := printValue(result); err != nil {
-		return err
+}
+
+func completedAgentTurnResult(
+	c *client.Client,
+	sessionID string,
+	snapshot api.AgentSnapshotResult,
+) (api.AgentWaitResult, error) {
+	fetchContext, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer fetchCancel()
+	events, err := c.AgentTurnEvents(fetchContext, sessionID, snapshot.Turn.ID)
+	if err != nil {
+		return api.AgentWaitResult{}, fmt.Errorf("read completed agent turn %d: %w", snapshot.Turn.ID, err)
 	}
-	if turn.Status != api.AgentTurnCompleted {
-		return fmt.Errorf("agent turn %d ended with status %s", turn.ID, turn.Status)
-	}
-	return nil
+	return api.AgentWaitResult{
+		Session: sessionID,
+		Epoch:   snapshot.Epoch,
+		Turn:    snapshot.Turn.ID,
+		Status:  snapshot.Turn.Status,
+		Events:  events,
+	}, nil
 }
 
 var agentReadValueFlags = map[string]bool{
-	"path": true, "file": true, "workspace": true,
 	"recent": true, "limit": true, "count": true,
 	"chars": true, "max-chars": true, "head": true,
-	"include": true, "types": true, "filter": true, "exclude": true,
+	"include": true, "filter": true, "exclude": true,
 }
 
 var agentReadBooleanFlags = map[string]bool{
 	"all": true, "full": true, "full-content": true,
-	"no-truncate": true, "help": true,
+	"no-truncate": true, "text": true, "text-only": true, "plain": true,
+	"current": true, "help": true,
 }
 
-// validateAgentReadArgs gives the transcript reader a strict flag schema.
+var agentCreateValueFlags = map[string]bool{
+	"provider": true, "command": true, "prompt": true, "title": true,
+	"group": true, "runtime-kind": true, "timeout": true,
+}
+
+var agentCreateBooleanFlags = map[string]bool{
+	"no-prompt": true, "wait": true, "help": true,
+}
+
+var agentSendValueFlags = map[string]bool{"timeout": true}
+
+var agentSendBooleanFlags = map[string]bool{
+	"current": true, "wait": true, "help": true,
+}
+
+// validateAgentReadArgs gives the remote transcript reader a strict flag schema.
 // parseFlags is intentionally permissive because the other resource commands
 // accept arbitrary daemon parameters; using it directly here would silently
 // ignore typos and malformed flag invocations.
 func validateAgentReadArgs(args []string) (bool, error) {
+	help, present, err := validateStrictFlags(args, agentReadValueFlags, agentReadBooleanFlags)
+	if err != nil || help {
+		return help, err
+	}
+	recentFlag := present["recent"] || present["limit"] || present["count"]
+	if present["all"] && recentFlag {
+		return false, errors.New("--all cannot be combined with --recent, --limit, or --count")
+	}
+	contentFlag := present["chars"] || present["max-chars"] || present["head"]
+	if (present["full"] || present["full-content"] || present["no-truncate"]) && contentFlag {
+		return false, errors.New("--full cannot be combined with --chars, --max-chars, or --head")
+	}
+	return help, nil
+}
+
+func validateAgentCreateArgs(args []string) (bool, error) {
+	help, present, err := validateStrictFlags(args, agentCreateValueFlags, agentCreateBooleanFlags)
+	if err != nil || help {
+		return help, err
+	}
+	if !present["provider"] {
+		return false, errors.New("--provider is required")
+	}
+	if !present["prompt"] && !present["no-prompt"] {
+		return false, errors.New("specify --prompt TEXT or --no-prompt")
+	}
+	if present["prompt"] && present["no-prompt"] {
+		return false, errors.New("--prompt and --no-prompt are mutually exclusive")
+	}
+	if present["timeout"] && !present["wait"] {
+		return false, errors.New("--timeout requires --wait")
+	}
+	return false, nil
+}
+
+func validateAgentSendArgs(args []string) (bool, error) {
+	help, present, err := validateStrictFlags(args, agentSendValueFlags, agentSendBooleanFlags)
+	if err != nil || help {
+		return help, err
+	}
+	if present["timeout"] && !present["wait"] {
+		return false, errors.New("--timeout requires --wait")
+	}
+	return false, nil
+}
+
+func validateStrictFlags(args []string, valueFlags, booleanFlags map[string]bool) (bool, map[string]bool, error) {
 	present := make(map[string]bool)
 	help := false
 	for index := 0; index < len(args); index++ {
@@ -1177,12 +1756,12 @@ func validateAgentReadArgs(args []string) (bool, error) {
 			continue
 		}
 		if !strings.HasPrefix(item, "--") {
-			return false, fmt.Errorf("unknown flag %q", item)
+			return false, nil, fmt.Errorf("unknown flag %q", item)
 		}
 		name, value, hasValue := splitFlag(item)
-		if agentReadBooleanFlags[name] {
+		if booleanFlags[name] {
 			if hasValue {
-				return false, fmt.Errorf("--%s does not take a value", name)
+				return false, nil, fmt.Errorf("--%s does not take a value", name)
 			}
 			present[name] = true
 			if name == "help" {
@@ -1190,29 +1769,20 @@ func validateAgentReadArgs(args []string) (bool, error) {
 			}
 			continue
 		}
-		if !agentReadValueFlags[name] {
-			return false, fmt.Errorf("unknown flag %q", item)
+		if !valueFlags[name] {
+			return false, nil, fmt.Errorf("unknown flag %q", item)
 		}
 		if !hasValue {
 			if index+1 >= len(args) || args[index+1] == "-h" || strings.HasPrefix(args[index+1], "--") {
-				return false, fmt.Errorf("--%s requires a value", name)
+				return false, nil, fmt.Errorf("--%s requires a value", name)
 			}
 			index++
 		} else if value == "" {
-			return false, fmt.Errorf("--%s requires a non-empty value", name)
+			return false, nil, fmt.Errorf("--%s requires a non-empty value", name)
 		}
 		present[name] = true
 	}
-
-	recentFlag := present["recent"] || present["limit"] || present["count"]
-	if present["all"] && recentFlag {
-		return false, errors.New("--all cannot be combined with --recent, --limit, or --count")
-	}
-	contentFlag := present["chars"] || present["max-chars"] || present["head"]
-	if (present["full"] || present["full-content"] || present["no-truncate"]) && contentFlag {
-		return false, errors.New("--full cannot be combined with --chars, --max-chars, or --head")
-	}
-	return help, nil
+	return help, present, nil
 }
 
 func firstFlagValue(params map[string]any, keys ...string) string {
@@ -1242,18 +1812,17 @@ func collectAgentTypeFlags(args []string, names ...string) []string {
 		if !strings.HasPrefix(item, "--") {
 			continue
 		}
-		key := strings.TrimPrefix(item, "--")
-		if split := strings.SplitN(key, "=", 2); len(split) == 2 {
-			if wanted[split[0]] {
-				values = append(values, split[1])
-			}
+		name, value, hasValue := splitFlag(item)
+		if !wanted[name] {
 			continue
 		}
-		if !wanted[key] || index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
-			continue
+		if !hasValue && index+1 < len(args) {
+			index++
+			value = args[index]
 		}
-		values = append(values, args[index+1])
-		index++
+		if strings.TrimSpace(value) != "" {
+			values = append(values, value)
+		}
 	}
 	return values
 }
@@ -1438,6 +2007,7 @@ var bareBooleanFlags = map[string]bool{
 	"preflight":             true,
 	"yes":                   true,
 	"no-truncate":           true,
+	"no-prompt":             true,
 	"raw":                   true,
 	"terminal":              true,
 	"text":                  true,
@@ -1735,6 +2305,10 @@ func printValue(value any) error {
 		printKVTable(sessionPairs(items))
 	case *api.Session:
 		printKVTable(sessionPairs(*items))
+	case agentCreateResult:
+		printKVTable(agentCreatePairs(items))
+	case *agentCreateResult:
+		printKVTable(agentCreatePairs(*items))
 	case currentSessionValue:
 		printKVTable(currentSessionPairs(items))
 	case *currentSessionValue:
@@ -1891,6 +2465,24 @@ func sessionPairs(value api.Session) [][2]string {
 	}
 }
 
+func agentCreatePairs(value agentCreateResult) [][2]string {
+	pairs := [][2]string{
+		{"AGENT ID", value.Session.ID},
+		{"PROVIDER", value.Session.Kind},
+		{"COMMAND", displayValue(value.Session.Command)},
+		{"TITLE", effectiveSessionTitle(value.Session)},
+		{"PROMPT SENT", displayBool(value.PromptSent)},
+		{"LIFECYCLE", value.Session.Lifecycle},
+	}
+	if value.Wait != nil {
+		pairs = append(pairs,
+			[2]string{"TURN", strconv.FormatUint(value.Wait.Turn, 10)},
+			[2]string{"TURN STATUS", string(value.Wait.Status)},
+		)
+	}
+	return pairs
+}
+
 func currentSessionPairs(value currentSessionValue) [][2]string {
 	pairs := sessionPairs(value.Session)
 	pairs = append([][2]string{{"CURRENT", displayBool(value.Current)}, {"WARREN SESSION ID", value.WarrenSessionID}, {"AGENT/THREAD ID", displayValue(value.AgentThreadID)}}, pairs...)
@@ -2039,8 +2631,7 @@ Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
 
 Commands:
-  agent read codex|claude [SESSION_FILE]
-  agent wait SESSION_ID [--timeout DURATION]
+  agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
@@ -2058,9 +2649,11 @@ Global flags:
 Run 'warren <command> --help' for command-specific help.
 
 Examples:
-  warren agent read codex --recent 10 --include user,assistant
-  warren agent read claude ~/.claude/projects/-work-demo/session.jsonl --full
-  warren agent wait SESSION_ID --timeout 30m
+  warren agent create WORKSPACE_ID --provider codex --prompt "Run the tests"
+  warren agent create WORKSPACE_ID --provider codex --command codex-alias --prompt "Fix the bug"
+  warren agent list
+  warren agent read AGENT_ID --text-only
+  warren agent wait AGENT_ID --timeout 30m
   warren endpoint add vps --url http://127.0.0.1:8789 --token TOKEN --use
   warren project add /srv/my-repo
   warren project move PROJECT_ID --before OTHER_PROJECT_ID
@@ -2073,7 +2666,7 @@ Examples:
   warren terminal-group create --name NAME [--home PATH]
   warren terminal-group move GROUP_ID --before OTHER_GROUP_ID
   warren terminal-group remove GROUP_ID --force
-  warren session create WORKSPACE_ID --kind codex --command codex
+  warren session create WORKSPACE_ID --kind shell --command bash
   warren session create --group GROUP_ID
   warren session create
   warren session current
@@ -2087,40 +2680,106 @@ Examples:
 
 func agentUsageText() string {
 	return `Usage:
-  warren agent read codex|claude [SESSION_FILE] [FLAGS]
-  warren agent wait SESSION_ID [--timeout DURATION] [--current]
+  warren agent create [WORKSPACE_ID] --provider codex|claude [--command CMD] [--prompt TEXT | --no-prompt]
+  warren agent list [--all | --ended]
+  warren agent current
+  warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
+  warren agent read AGENT_ID [--current] [--recent N | --all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
+  warren agent wait AGENT_ID [--timeout DURATION] [--current]
+  warren agent attach AGENT_ID [--current]
+  warren agent remove AGENT_ID [--force] [--current] [--dry-run]
+  warren agent rename AGENT_ID --title TITLE [--current]
+  warren agent pin AGENT_ID --pinned BOOL [--current]
+  warren agent move AGENT_ID --workspace WORKSPACE_ID [--confirm] [--dry-run]
 
-Run 'warren agent read --help' or 'warren agent wait --help' for options.
+Run 'warren agent <command> --help' for command-specific help.
+`
+}
+
+func agentCreateUsageText() string {
+	return `Usage:
+  warren agent create [WORKSPACE_ID]
+      --provider codex|claude
+      [--command CMD]
+      [--prompt TEXT | --no-prompt]
+      [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]
+
+Create an Agent backed by a Codex or Claude session. --prompt is appended as
+the provider's initial positional prompt. Use --no-prompt to create an idle
+Agent explicitly. --command defaults to the provider executable and may name
+an alias or wrapper command with options, but must not include a positional
+prompt; pass that through --prompt instead.
+`
+}
+
+func agentListUsageText() string {
+	return `Usage:
+  warren agent list [--all | --ended]
+`
+}
+
+func agentCurrentUsageText() string {
+	return `Usage:
+  warren agent current
+
+Read the Agent bound to WARREN_SESSION_ID.
+`
+}
+
+func agentSendUsageText() string {
+	return `Usage:
+  warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
+
+If TEXT is omitted, Warren reads the prompt from stdin.
 `
 }
 
 func agentReadUsageText() string {
 	return `Usage:
-  warren agent read PROVIDER [SESSION_FILE]
-      [--workspace PATH] [--recent N | --all]
+  warren agent read AGENT_ID [--current]
+      [--recent N | --all]
       [--include TYPE,...] [--filter TYPE,...]
-      [--chars N | --full]
+      [--chars N | --full] [--text-only]
 
-PROVIDER is codex or claude. Without SESSION_FILE, Warren finds the newest
-transcript for the current workspace (or --workspace PATH).
-
-By default, only the newest 20 useful activities are returned and text fields
-are limited to 2000 characters. --full disables text truncation; --all returns
-all matching activities (up to 100000). Low-value usage, attachment, and
-system instruction events are omitted unless selected explicitly with
---include.
+Read the normalized transcript for a Warren Agent. By default, only the
+newest 20 useful activities are returned and text fields are limited to 2000
+characters. --full disables text truncation; --all returns all matching
+activities (up to 100000). --text-only prints user and assistant text.
 `
 }
 
 func agentWaitUsageText() string {
 	return `Usage:
-  warren agent wait SESSION_ID [--timeout DURATION]
+  warren agent wait AGENT_ID [--timeout DURATION]
   warren agent wait --current [--timeout DURATION]
 
 Wait for the running turn, or the next turn when the agent is idle. The
 default timeout is 30 minutes. On completion, Warren prints the normalized
 events belonging to that turn.
 `
+}
+
+func agentAttachUsageText() string {
+	return `Usage:
+  warren agent attach AGENT_ID [--current]
+
+Attach to the Agent's live terminal. Use agent read for transcript data.
+`
+}
+
+func agentActionUsageText(action string) string {
+	switch action {
+	case "remove", "delete":
+		return "Usage:\n  warren agent remove AGENT_ID [--force] [--current] [--dry-run]\n"
+	case "rename":
+		return "Usage:\n  warren agent rename AGENT_ID --title TITLE [--current]\n"
+	case "pin":
+		return "Usage:\n  warren agent pin AGENT_ID --pinned BOOL [--current]\n"
+	case "move":
+		return "Usage:\n  warren agent move AGENT_ID --workspace WORKSPACE_ID [--confirm] [--dry-run]\n"
+	default:
+		return agentUsageText()
+	}
 }
 
 func resourceUsageText(commandName string) string {
@@ -2172,10 +2831,12 @@ func resourceUsageText(commandName string) string {
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
-  warren session send SESSION_ID [TEXT...] [--current] [--raw] [--wait] [--timeout DURATION]
-  warren session read SESSION_ID [--recent N|--all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--terminal|--raw] [--current]
+  warren session send SESSION_ID [TEXT...] [--current] [--raw]
+  warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
+
+Session is a generic PTY resource. Use agent create for Codex or Claude.
 `
 	}
 	return ""
@@ -2230,9 +2891,9 @@ func actionUsageText(commandName, action string) string {
 	case "session.move":
 		return fmt.Sprintf("Usage:\n  warren %s move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]\n  warren %s move --current --workspace WORKSPACE_ID [--dry-run]\n  warren %s move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]\n", name, name, name)
 	case "session.send":
-		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--raw] [--wait] [--timeout DURATION]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--raw]\n", name)
 	case "session.read":
-		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--recent N|--all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--terminal|--raw] [--current]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]\n", name)
 	case "session.attach":
 		return fmt.Sprintf("Usage:\n  warren %s attach SESSION_ID [--current]\n", name)
 	case "session.current":

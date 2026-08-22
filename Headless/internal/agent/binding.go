@@ -38,6 +38,11 @@ const (
 	// the CLI session ends, so the daemon can switch the status light from
 	// agent activity back to the surrounding shell.
 	BindEnvState = "WARREN_STATE_FILE"
+	// CodexSessionID and CodexThreadID are launcher-provided identity hints.
+	// An interactive shell can inherit them from its parent Codex process; an
+	// independently-created Warren session must not reuse that conversation.
+	BindEnvCodexSessionID = "CODEX_SESSION_ID"
+	BindEnvCodexThreadID  = "CODEX_THREAD_ID"
 	// hookCommandMarker identifies the Warren-managed hook entry so repeated
 	// daemon starts can merge idempotently. It is also the first argument to
 	// the hook script; the provider follows it as a real shell argument (the
@@ -53,6 +58,11 @@ func BindEnvironment(warrenSessionID, kind string) []string {
 		BindEnvSession + "=" + warrenSessionID,
 		BindEnvFile + "=" + BindPath(warrenSessionID),
 		BindEnvState + "=" + StatePath(warrenSessionID),
+		// Empty overrides intentionally shadow inherited values. Ghostline
+		// merges these entries into the child environment, and Codex treats an
+		// empty identity as unset, so each Warren session starts a new thread.
+		BindEnvCodexSessionID + "=",
+		BindEnvCodexThreadID + "=",
 	}
 	// Dedicated agent sessions know their provider up front. Plain shell and
 	// custom sessions must not pin a provider: whichever agent CLI the user

@@ -60,14 +60,14 @@ func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	}
 }
 
-func TestSendSessionTextSubmitsAgentComposerWithKittyEnter(t *testing.T) {
+func TestSendAgentTextSubmitsComposerWithKittyEnter(t *testing.T) {
 	var frames [][]byte
 	input := func(_ context.Context, data []byte) error {
 		frames = append(frames, append([]byte(nil), data...))
 		return nil
 	}
 	started := time.Now()
-	err := sendSessionTextWithInput(context.Background(), input, api.Session{Kind: "codex"}, "first\nsecond", false)
+	err := sendAgentTextWithInput(context.Background(), input, "first\nsecond")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,26 +82,26 @@ func TestSendSessionTextSubmitsAgentComposerWithKittyEnter(t *testing.T) {
 	}
 }
 
-func TestSendSessionTextKeepsRawAgentInput(t *testing.T) {
+func TestSendTerminalTextUsesPlainPTYInput(t *testing.T) {
 	var frames [][]byte
 	input := func(_ context.Context, data []byte) error {
 		frames = append(frames, append([]byte(nil), data...))
 		return nil
 	}
-	if err := sendSessionTextWithInput(context.Background(), input, api.Session{Kind: "claude"}, "draft", true); err != nil {
+	if err := sendTerminalTextWithInput(context.Background(), input, "draft", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(frames) != 1 || string(frames[0]) != "draft" {
-		t.Fatalf("raw agent frames = %#v, want one unchanged frame", frames)
+	if len(frames) != 1 || string(frames[0]) != "draft\r" {
+		t.Fatalf("terminal frames = %#v, want one CR-terminated frame", frames)
 	}
 }
 
-func TestSessionReadAgentModeDefaultsToTranscript(t *testing.T) {
-	if sessionReadTerminal(parseFlags(nil)) {
-		t.Fatal("default session read unexpectedly selects terminal output")
+func TestSessionReadUsesPTYUnlessTranscriptFlagsAreExplicit(t *testing.T) {
+	if sessionAgentReadFlag(parseFlags(nil)) {
+		t.Fatal("default session read unexpectedly selects transcript output")
 	}
-	if !sessionReadTerminal(parseFlags([]string{"--terminal"})) || !sessionReadTerminal(parseFlags([]string{"--raw"})) {
-		t.Fatal("terminal/raw session read flags did not select terminal output")
+	if !sessionAgentReadFlag(parseFlags([]string{"--text-only"})) || !sessionAgentReadFlag(parseFlags([]string{"--recent", "5"})) {
+		t.Fatal("explicit transcript flags did not select the Agent projection")
 	}
 }
 
@@ -331,9 +331,34 @@ func TestParseFlagsBooleanEqualsStillWorks(t *testing.T) {
 	}
 }
 
+func TestValidateAgentReadArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "all and recent", args: []string{"codex", "--all", "--recent", "10"}, want: "--all cannot"},
+		{name: "full and chars", args: []string{"codex", "--full", "--chars", "10"}, want: "--full cannot"},
+		{name: "unknown flag", args: []string{"agent-1", "--recnet", "10"}, want: "unknown flag"},
+		{name: "missing value", args: []string{"agent-1", "--recent"}, want: "requires a value"},
+		{name: "missing include value", args: []string{"codex", "--include", "--all"}, want: "requires a value"},
+		{name: "short flag", args: []string{"codex", "-v"}, want: "unknown flag"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := validateAgentReadArgs(test.args); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validate(%q) = %v, want error containing %q", test.args, err, test.want)
+			}
+		})
+	}
+	if help, err := validateAgentReadArgs([]string{"-h"}); err != nil || !help {
+		t.Fatalf("validate -h = help %v, err %v; want help", help, err)
+	}
+}
+
 func TestCollectAgentTypeFlagsPreservesRepeatedValues(t *testing.T) {
 	values := collectAgentTypeFlags([]string{
-		"codex",
+		"agent-1",
 		"--include", "user,assistant",
 		"--include=tool_call",
 		"--filter", "usage",
@@ -347,28 +372,101 @@ func TestCollectAgentTypeFlagsPreservesRepeatedValues(t *testing.T) {
 	}
 }
 
-func TestValidateAgentReadArgs(t *testing.T) {
+func TestValidateAgentCreateRequiresExplicitPromptMode(t *testing.T) {
+	if _, err := validateAgentCreateArgs([]string{"workspace-1", "--provider", "codex"}); err == nil || !strings.Contains(err.Error(), "--prompt") {
+		t.Fatalf("missing prompt mode error = %v", err)
+	}
+	if _, err := validateAgentCreateArgs([]string{"workspace-1", "--provider", "codex", "--prompt", "hello", "--no-prompt"}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("conflicting prompt mode error = %v", err)
+	}
+	if help, err := validateAgentCreateArgs([]string{"--help"}); err != nil || !help {
+		t.Fatalf("validate create help = %v, %v; want true, nil", help, err)
+	}
+}
+
+func TestAgentCreateProviderValidationHappensBeforeConnect(t *testing.T) {
+	err := run([]string{"agent", "create", "workspace-1", "--provider", "shell", "--no-prompt"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex or claude") {
+		t.Fatalf("invalid provider error = %v, want local provider validation", err)
+	}
+}
+
+func TestAgentCreateSeparatesProviderAndCommand(t *testing.T) {
+	params := parseFlags([]string{
+		"workspace-1", "--provider", "codex", "--command", "codex-alias", "--prompt", "run tests",
+	})
+	request := normalizedParams(params, "session", "create")
+	request["kind"] = stringValue(params, "provider")
+	request["command"] = stringValue(params, "command")
+	delete(request, "provider")
+	delete(request, "prompt")
+	if request["kind"] != "codex" || request["command"] != "codex-alias" || request["workspace"] != "workspace-1" {
+		t.Fatalf("agent create request = %#v, want provider and command kept separate", request)
+	}
+}
+
+func TestAgentCommandRejectsProviderPrompt(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want string
+		name     string
+		provider string
+		command  string
+		want     string
 	}{
-		{name: "all and recent", args: []string{"codex", "--all", "--recent", "10"}, want: "--all cannot"},
-		{name: "full and chars", args: []string{"codex", "--full", "--chars", "10"}, want: "--full cannot"},
-		{name: "unknown flag", args: []string{"codex", "--recnet", "10"}, want: "unknown flag"},
-		{name: "missing value", args: []string{"codex", "--workspace"}, want: "requires a value"},
-		{name: "missing include value", args: []string{"codex", "--include", "--all"}, want: "requires a value"},
-		{name: "short flag", args: []string{"codex", "-v"}, want: "unknown flag"},
+		{name: "codex positional", provider: "codex", command: "codex-alias 'old prompt'", want: "pass it with --prompt"},
+		{name: "codex prompt option", provider: "codex", command: "codex-alias --prompt='old prompt'", want: "pass it with --prompt"},
+		{name: "claude positional", provider: "claude", command: "claude \"old prompt\"", want: "pass it with --prompt"},
+		{name: "claude prompt option", provider: "claude", command: "claude --prompt='old prompt'", want: "pass it with --prompt"},
+		{name: "explicit delimiter", provider: "codex", command: "codex-alias -- old prompt", want: "pass it with --prompt"},
+		{name: "attached shell operator", provider: "codex", command: "codex-alias;echo", want: "shell"},
+		{name: "command substitution", provider: "codex", command: "codex-alias \"$(printf old)\"", want: "shell"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := validateAgentReadArgs(test.args); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validate(%q) = %v, want error containing %q", test.args, err, test.want)
+			err := validateAgentCommand(test.command, test.provider)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateAgentCommand(%q) = %v, want error containing %q", test.command, err, test.want)
 			}
 		})
 	}
-	if help, err := validateAgentReadArgs([]string{"-h"}); err != nil || !help {
-		t.Fatalf("validate -h = help %v, err %v; want help", help, err)
+}
+
+func TestAgentCommandRejectsClaudePrintMode(t *testing.T) {
+	for _, command := range []string{"claude -p", "claude --print=true"} {
+		if err := validateAgentCommand(command, "claude"); err == nil || !strings.Contains(err.Error(), "interactive mode") {
+			t.Fatalf("validateAgentCommand(%q) = %v, want print mode rejection", command, err)
+		}
+	}
+}
+
+func TestAgentCommandAllowsProviderOptions(t *testing.T) {
+	for _, test := range []struct {
+		provider string
+		command  string
+	}{
+		{provider: "codex", command: "codex-alias --dangerously-bypass-hook-trust --model gpt-5.6"},
+		{provider: "claude", command: "claude --dangerously-skip-permissions --model sonnet"},
+	} {
+		if err := validateAgentCommand(test.command, test.provider); err != nil {
+			t.Fatalf("validateAgentCommand(%q) = %v, want options accepted", test.command, err)
+		}
+	}
+}
+
+func TestAgentCommandRejectsMissingOptionValue(t *testing.T) {
+	if err := validateAgentCommand("codex-alias --model", "codex"); err == nil || !strings.Contains(err.Error(), "requires a value") {
+		t.Fatalf("missing Codex option value = %v", err)
+	}
+	if err := validateAgentCommand("claude --session-id --bare", "claude"); err == nil || !strings.Contains(err.Error(), "requires a value") {
+		t.Fatalf("missing Claude option value = %v", err)
+	}
+}
+
+func TestAppendAgentInitialPromptShellQuotesText(t *testing.T) {
+	got := appendAgentInitialPrompt("codex-alias --dangerously-bypass-hook-trust", "ship it's ready\nnow")
+	want := "codex-alias --dangerously-bypass-hook-trust 'ship it'\"'\"'s ready\nnow'"
+	if got != want {
+		t.Fatalf("appendAgentInitialPrompt = %q, want %q", got, want)
 	}
 }
 
@@ -708,6 +806,11 @@ func TestRunHelpExitsSuccessfully(t *testing.T) {
 		{"help"},
 		{"-h"},
 		{"--help"},
+		{"agent", "--help"},
+		{"agent", "create", "--help"},
+		{"agent", "send", "--help"},
+		{"agent", "read", "--help"},
+		{"agent", "attach", "--help"},
 		{"workspace", "--help"},
 		{"workspace", "-h"},
 		{"worktree", "--help"},
@@ -728,6 +831,7 @@ func TestRunResourceHelpDoesNotConnect(t *testing.T) {
 		{"workspace", "create", "--help"},
 		{"worktree", "create", "--help"},
 		{"session", "attach", "--help"},
+		{"agent", "current", "--help"},
 	} {
 		if err := run(arguments); err != nil {
 			t.Errorf("run(%v) = %v, want nil", arguments, err)
@@ -761,6 +865,35 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		}
 		if !contains(usageErr.text, test.usage) {
 			t.Errorf("run(%v) usage = %q, want it to contain %q", test.arguments, usageErr.text, test.usage)
+		}
+	}
+}
+
+func TestSessionCreateRejectsAgentProviders(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		err := run([]string{"session", "create", "workspace-1", "--kind", provider})
+		var usageErr *usageError
+		if !errors.As(err, &usageErr) {
+			t.Fatalf("session create %s error = %v, want usage error", provider, err)
+		}
+		if !strings.Contains(usageErr.message, "use agent create") {
+			t.Fatalf("session create %s message = %q, want agent guidance", provider, usageErr.message)
+		}
+	}
+}
+
+func TestSessionAgentTurnFlagsRequireAgentCommands(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"session", "send", "session-1", "hello", "--wait"}, want: "use agent send"},
+		{args: []string{"session", "read", "session-1", "--text-only"}, want: "use agent read"},
+	} {
+		err := run(test.args)
+		var usageErr *usageError
+		if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, test.want) {
+			t.Fatalf("run(%v) = %v, want usage error containing %q", test.args, err, test.want)
 		}
 	}
 }

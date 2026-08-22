@@ -66,7 +66,8 @@ warren --endpoint my-vps project list
 warren --endpoint my-vps project move PROJECT_ID --before OTHER_PROJECT_ID
 warren --endpoint my-vps workspace create PROJECT_ID --branch release/my-feature
 warren --endpoint my-vps workspace move WORKSPACE_ID --before OTHER_WORKSPACE_ID
-warren --endpoint my-vps session create WORKSPACE_ID --kind codex --command codex --title "My Agent"
+warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --prompt "Run the relevant tests"
+warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --command codex-alias --no-prompt
 warren --endpoint my-vps session move SESSION_ID --group GROUP_ID --confirm
 warren --endpoint my-vps session move SESSION_ID --workspace WORKSPACE_ID --confirm
 warren --endpoint my-vps session current
@@ -74,12 +75,13 @@ warren --endpoint my-vps session move --current --workspace WORKSPACE_ID --dry-r
 warren --endpoint my-vps session move --current --workspace WORKSPACE_ID
 warren --endpoint my-vps session list
 warren --endpoint my-vps session attach --current
-warren agent read codex --recent 10 --include user,assistant
-warren agent read claude /path/to/session.jsonl --full
-warren agent wait SESSION_ID --timeout 30m
-warren session send SESSION_ID "Run the relevant tests" --wait --timeout 30m
-warren session read SESSION_ID --text-only
-warren session read SESSION_ID --terminal
+warren agent list
+warren agent read AGENT_ID --text-only
+warren agent send AGENT_ID "Run the relevant tests" --wait --timeout 30m
+warren agent wait AGENT_ID --timeout 30m
+warren agent attach AGENT_ID
+warren session send SESSION_ID "Run a shell command"
+warren session read SESSION_ID --timeout 8s
 ```
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
@@ -104,43 +106,33 @@ confirmation prompt. The Web and Desktop project context menus also expose
 this toggle. Their **Import Existing Worktrees…** action opens a one-time
 multi-select list; already registered worktrees remain visible but disabled.
 
-`warren agent read codex|claude` parses a provider transcript into the same
-normalized activity objects used by Warren's agent view. A transcript path may
-be supplied explicitly; when omitted, Warren finds the newest transcript for
-the current directory (or `--workspace PATH`). The command returns the newest
-20 useful activities by default and limits text fields to 2,000 characters.
-Use `--recent N` (or `--all`) to control the activity window, `--include
-TYPE,...` to select event types, `--filter TYPE,...` to omit types, and
-`--full` to retain complete text. Usage, attachment, and system-instruction
-events stay hidden unless requested through `--include`. An unbounded `--all`
-read is defensively capped at 100,000 matching activities; use `--recent` for
-a smaller, predictable result.
+`warren agent create` is the primary Codex/Claude entry point. `--provider`
+selects the transcript protocol and `--command` selects the executable or
+alias (defaulting to the provider name). `--prompt` is appended as the
+provider's initial positional prompt; `--command` may contain executable
+options but must not contain its own positional prompt or prompt option. Warren
+also rejects provider print/non-interactive mode because `agent send` relies on
+the interactive composer. Use `--no-prompt` to create an idle Agent
+explicitly. `--wait` can wait for that first turn to finish.
 
-`warren agent wait SESSION_ID` blocks until the currently running turn ends,
-or until the next turn ends when the agent is idle. It returns the normalized
-events assigned to that turn and defaults to a 30-minute timeout. `warren
-session send SESSION_ID TEXT --wait` captures the turn baseline before sending
-input, then waits for the new turn. For Codex/Claude sessions Warren waits for
-the transcript watcher before sending, writes the composer text, and submits a
-separate kitty-protocol Enter event. This avoids treating the first Enter as a
-first-run trust/resume confirmation or leaving the message in the TUI composer.
-Use `--raw` only when the target is deliberately being driven as a terminal;
-raw Agent input skips the readiness gate and submit-key translation.
+`warren agent read AGENT_ID` reads the normalized transcript, never the PTY.
+By default it returns the newest 20 useful activities and limits text fields to
+2,000 characters. Use `--recent N`, `--all`, `--include TYPE,...`, `--filter
+TYPE,...`, `--full`, or `--text-only` to control the projection. `agent send`
+waits for the transcript watcher, writes the composer text, and submits a
+separate kitty-protocol Enter event. `agent wait` blocks until the current or
+next turn finishes. `agent attach` is the explicit raw TTY operation.
 
-`session read SESSION_ID` uses the normalized Agent transcript for Codex/Claude
-and Warren-bound shell overlays, so cursor movement, spinners, and other TUI
-bytes do not enter automation output. Use `--text-only` (also `--text` or
-`--plain`) to print only user/assistant text. Use `--terminal` (or `--raw`) to
-read the original PTY stream with the existing `--timeout`/`--contains`
-behavior. Non-Agent sessions continue to use the PTY reader by default.
+`session` is the generic PTY resource. `session create` starts shells,
+custom commands, and other interactive programs; it does not create Codex or
+Claude Agents. `session send` writes terminal input and `session read` returns
+raw PTY output with `--timeout`/`--contains`. Agent transcript and turn flags
+are rejected on these commands so a TUI cannot be mistaken for conversation
+data.
 
-`session send` and `session read` serialize no Agent turn ownership: callers
-must serialize concurrent sends targeting the same session. `--wait` rejects
-an already-running Agent turn because terminal input may steer that turn or
-queue a new one depending on provider state; use `agent wait` first when
-deterministic completion ownership matters. Completed turns exit 0; failed or
-aborted turns print their structured result and exit 1. Use `--current` with
-either command when `WARREN_SESSION_ID` identifies the target Warren Session.
+Agent and Session commands use Warren IDs. `agentThreadId` remains a separate
+provider conversation ID in roster output. Use `--current` when
+`WARREN_SESSION_ID` identifies the target resource.
 
 For `workspace create`, `--branch` is required and `--path` is optional: omit
 `--path` and the daemon places the new worktree under

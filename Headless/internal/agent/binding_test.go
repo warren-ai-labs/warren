@@ -144,7 +144,9 @@ func TestBindEnvironment(t *testing.T) {
 	if !strings.Contains(joined, BindEnvSession+"=warren-1") ||
 		!strings.Contains(joined, BindEnvKind+"=codex") ||
 		!strings.Contains(joined, BindEnvFile+"="+BindPath("warren-1")) ||
-		!strings.Contains(joined, BindEnvState+"="+StatePath("warren-1")) {
+		!strings.Contains(joined, BindEnvState+"="+StatePath("warren-1")) ||
+		!strings.Contains(joined, BindEnvCodexSessionID+"=") ||
+		!strings.Contains(joined, BindEnvCodexThreadID+"=") {
 		t.Fatalf("BindEnvironment = %#v", entries)
 	}
 
@@ -152,7 +154,9 @@ func TestBindEnvironment(t *testing.T) {
 	shellJoined := strings.Join(shellEntries, "\n")
 	if !strings.Contains(shellJoined, BindEnvSession+"=warren-1") ||
 		!strings.Contains(shellJoined, BindEnvFile+"="+BindPath("warren-1")) ||
-		!strings.Contains(shellJoined, BindEnvState+"="+StatePath("warren-1")) {
+		!strings.Contains(shellJoined, BindEnvState+"="+StatePath("warren-1")) ||
+		!strings.Contains(shellJoined, BindEnvCodexSessionID+"=") ||
+		!strings.Contains(shellJoined, BindEnvCodexThreadID+"=") {
 		t.Fatalf("shell BindEnvironment = %#v", shellEntries)
 	}
 	if strings.Contains(shellJoined, BindEnvKind+"=") {
