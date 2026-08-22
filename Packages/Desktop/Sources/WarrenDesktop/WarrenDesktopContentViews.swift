@@ -209,6 +209,16 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                         .font(WarrenTypography.paneShellTitle)
                         .foregroundStyle(tokens.mutedForeground)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .help(fullDisplayTitle)
+                        .contextMenu {
+                            Button("Copy Full Title") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(fullDisplayTitle, forType: .string)
+                            }
+                        }
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, WarrenSpacing.medium)
@@ -240,12 +250,30 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     }
 
     private var displayTitle: String {
-        if let customTitle = session?.customTitle?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !customTitle.isEmpty {
+        if let customTitle = normalizedCustomTitle {
             return customTitle
         }
-        return titleTemplate.render(TerminalDisplayTitleContext(
+        return titleTemplate.renderCompact(titleContext)
+    }
+
+    private var fullDisplayTitle: String {
+        if let customTitle = normalizedCustomTitle {
+            return customTitle
+        }
+        return titleTemplate.render(titleContext)
+    }
+
+    private var normalizedCustomTitle: String? {
+        guard let customTitle = session?.customTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !customTitle.isEmpty else {
+            return nil
+        }
+        return customTitle
+    }
+
+    private var titleContext: TerminalDisplayTitleContext {
+        TerminalDisplayTitleContext(
             session: session?.title ?? tab.title,
             command: session?.runtimeProcess ?? tab.kind.displayName,
             directory: session?.workingDirectory.isEmpty == false
@@ -256,6 +284,6 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             host: hostName,
             user: NSUserName(),
             os: ProcessInfo.processInfo.operatingSystemVersionString
-        ))
+        )
     }
 }

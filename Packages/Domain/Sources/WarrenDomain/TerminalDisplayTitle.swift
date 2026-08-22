@@ -41,6 +41,8 @@ public struct TerminalDisplayTitleContext: Hashable, Sendable {
 }
 
 public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable {
+    public static let compactDirectoryMaxLength = 32
+
     public static let defaultValue = Self(rawValue: "{command} — {directoryName}")
 
     public static let placeholders: [(token: String, description: String)] = [
@@ -63,7 +65,52 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
     }
 
     public func render(_ context: TerminalDisplayTitleContext) -> String {
-        let values = [
+        return renderTemplate(values: values(for: context))
+    }
+
+    /// Render a pane title with a bounded, scannable directory path.
+    ///
+    /// The full title remains available from `render(_:)` for tooltips and
+    /// copy actions; this presentation is only for the constrained pane bar.
+    public func renderCompact(_ context: TerminalDisplayTitleContext) -> String {
+        let compactContext = TerminalDisplayTitleContext(
+            session: context.session,
+            command: context.command,
+            directory: Self.abbreviateDirectory(context.directory),
+            workspace: context.workspace,
+            branch: context.branch,
+            host: context.host,
+            user: context.user,
+            os: context.os
+        )
+        return render(compactContext)
+    }
+
+    public static func abbreviateDirectory(
+        _ directory: String,
+        maxLength: Int = compactDirectoryMaxLength
+    ) -> String {
+        guard !directory.isEmpty, maxLength > 0, directory.count > maxLength else {
+            return directory
+        }
+
+        let absolute = directory.hasPrefix("/")
+        let components = directory
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !components.isEmpty else { return directory }
+
+        let parents = components.dropLast().map { component in
+            String(component.prefix(1))
+        }
+        let last = components[components.count - 1]
+        let compact = (absolute ? "/" : "") + (parents + [last]).joined(separator: "/")
+        guard compact.count > maxLength else { return compact }
+        return middleEllipsis(compact, maxLength: maxLength)
+    }
+
+    private func values(for context: TerminalDisplayTitleContext) -> [String: String] {
+        [
             "{session}": context.session,
             "{command}": context.command,
             "{directory}": context.directory,
@@ -74,15 +121,28 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
             "{user}": context.user,
             "{os}": context.os,
         ]
+    }
+
+    private func renderTemplate(values: [String: String]) -> String {
         var rendered = rawValue
         for (token, value) in values {
             rendered = rendered.replacingOccurrences(of: token, with: value)
         }
         rendered = rendered
-            .replacingOccurrences(of: #"\s+([—|·:/-])\s*(?=([—|·:/-]|$))"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+([—|·:-]|/(?!\S))\s*(?=([—|·:-]|/(?!\S)|$))"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "—|·:/-")))
-        return rendered.isEmpty ? context.session : rendered
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "—|·:-")))
+        return rendered.isEmpty ? (values["{session}"] ?? "") : rendered
+    }
+
+    private static func middleEllipsis(_ value: String, maxLength: Int) -> String {
+        guard maxLength > 1 else { return String(value.prefix(maxLength)) }
+        let visibleLength = maxLength - 1
+        let leftLength = (visibleLength + 1) / 2
+        let rightLength = visibleLength - leftLength
+        return String(value.prefix(leftLength))
+            + "…"
+            + String(value.suffix(rightLength))
     }
 }
 
