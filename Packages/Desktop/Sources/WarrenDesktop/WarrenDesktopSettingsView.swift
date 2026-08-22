@@ -1103,8 +1103,12 @@ struct WarrenDesktopSettingsView: View {
                 ? publicAccessApprovalKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 : ""
             publicAccess = WarrenDesktopPublicAccessPrefill(
-                edgeURL: edgeURL.isEmpty ? webStatus.defaultEdgeURL?.absoluteString : edgeURL,
-                accountName: accountName.isEmpty ? webStatus.effectiveAccountName : accountName,
+                edgeURL: edgeURL.isEmpty
+                    ? (webStatus.defaultEdgeURL?.absoluteString ?? edgeURLPlaceholder)
+                    : edgeURL,
+                accountName: accountName.isEmpty
+                    ? (webStatus.effectiveAccountName ?? accountNamePlaceholder)
+                    : accountName,
                 keyKind: publicAccessKeyKind == .invite ? .invite : .approval,
                 inviteKey: inviteKey.isEmpty ? nil : inviteKey,
                 approvalKey: approvalKey.isEmpty ? nil : approvalKey
