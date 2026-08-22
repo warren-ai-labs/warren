@@ -32,6 +32,7 @@ struct WarrenDesktopSidebarRows: View {
     @State private var dragAutoCollapse: WarrenSidebarDragAutoCollapse?
     @State private var dragSourceRowID: String?
     @State private var isDragMeasurementEnabled = false
+    @State private var previousGroups: [WarrenDesktopProjectGroup] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -105,7 +106,7 @@ struct WarrenDesktopSidebarRows: View {
                 }
             )
         }
-        .onChange(of: selection) { _, newSelection in
+        .onChange(of: selection) { newSelection in
             guard case .workspace(let workspaceID)? = newSelection,
                   let workspace = groups
                     .flatMap(\.workspaces)
@@ -118,7 +119,12 @@ struct WarrenDesktopSidebarRows: View {
                 tree.expandedProjectIDs.insert(workspace.projectID)
             }
         }
-        .onChange(of: groups) { oldGroups, newGroups in
+        .onAppear {
+            previousGroups = groups
+        }
+        .onChange(of: groups) { newGroups in
+            let oldGroups = previousGroups
+            previousGroups = newGroups
             guard let projectID = selectedProjectID else { return }
             let oldCount = workspaceCount(for: projectID, in: oldGroups)
             let newCount = workspaceCount(for: projectID, in: newGroups)

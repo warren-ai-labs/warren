@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "WarrenTransport",
     platforms: [
-        .macOS(.v14),
+        .macOS(.v13),
         .iOS(.v17),
     ],
     products: [

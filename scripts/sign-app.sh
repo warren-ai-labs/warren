@@ -92,9 +92,16 @@ if [[ "${#code_paths[@]}" -eq 0 ]]; then
 fi
 
 # Sign nested code before the outer bundle so the app's resource seal includes
-# the final signatures. This covers the desktop, menu-bar helper, CLI, daemon,
-# and bundled Ghostty library without relying on codesign --deep for signing.
+# the final signatures. Frameworks must be signed before executables that link
+# them; otherwise codesign can reject a fresh Universal bundle while checking
+# an unsigned nested dylib. This covers the desktop, menu-bar helper, CLI,
+# daemon, and bundled Ghostty library without relying on codesign --deep.
 for code_path in "${code_paths[@]}"; do
+    [[ "$code_path" == */Contents/Frameworks/* ]] || continue
+    /usr/bin/codesign --force --sign "$signing_identity" "$code_path"
+done
+for code_path in "${code_paths[@]}"; do
+    [[ "$code_path" == */Contents/Frameworks/* ]] && continue
     /usr/bin/codesign --force --sign "$signing_identity" "$code_path"
 done
 /usr/bin/codesign --force --sign "$signing_identity" "$app_path"

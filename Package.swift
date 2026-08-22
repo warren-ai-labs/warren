@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "Warren",
     platforms: [
-        .macOS(.v14),
+        .macOS(.v13),
     ],
     dependencies: [
         .package(path: "Packages/Desktop"),

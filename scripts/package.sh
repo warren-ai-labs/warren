@@ -4,7 +4,8 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 version="0.8.0"
 
-bash "$repository_root/scripts/build-app.sh" release
+WARREN_BUILD_UNIVERSAL="${WARREN_BUILD_UNIVERSAL:-1}" \
+    bash "$repository_root/scripts/build-app.sh" release
 
 archive="$repository_root/Warren-$version.zip"
 rm -f "$archive"

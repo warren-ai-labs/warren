@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "GhosttyAdapter",
     platforms: [
-        .macOS(.v14),
+        .macOS(.v13),
     ],
     products: [
         // Surface rendering and deterministic AppKit focus ownership.

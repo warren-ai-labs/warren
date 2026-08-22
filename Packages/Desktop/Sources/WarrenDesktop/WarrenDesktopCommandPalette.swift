@@ -333,7 +333,7 @@ struct WarrenDesktopCommandPalette: View {
                             .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
                         }
                         .frame(maxHeight: min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight))
-                        .onChange(of: selectedIndex) { _, newIndex in
+                        .onChange(of: selectedIndex) { newIndex in
                             guard rows.indices.contains(newIndex) else { return }
                             proxy.scrollTo(rows[newIndex].id, anchor: .center)
                         }
@@ -352,7 +352,7 @@ struct WarrenDesktopCommandPalette: View {
             searchFocused = true
         }
         .onExitCommand(perform: onDismiss)
-        .onChange(of: query) { _, newValue in
+        .onChange(of: query) { newValue in
             searchTask?.cancel()
             let value = newValue
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -377,7 +377,7 @@ struct WarrenDesktopCommandPalette: View {
                 selectedIndex = 0
             }
         }
-        .onChange(of: rows.count) { _, count in
+        .onChange(of: rows.count) { count in
             if !rows.indices.contains(selectedIndex) {
                 selectedIndex = max(0, count - 1)
             }
@@ -396,22 +396,19 @@ struct WarrenDesktopCommandPalette: View {
                 .textFieldStyle(.plain)
                 .font(WarrenTypography.popoverItem)
                 .focused($searchFocused)
-                .onKeyPress(.upArrow) {
-                    moveSelection(-1)
-                    return .handled
+                .onMoveCommand { direction in
+                    switch direction {
+                    case .up:
+                        moveSelection(-1)
+                    case .down:
+                        moveSelection(1)
+                    default:
+                        break
+                    }
                 }
-                .onKeyPress(.downArrow) {
-                    moveSelection(1)
-                    return .handled
-                }
-                .onKeyPress(.return) {
-                    guard rows.indices.contains(selectedIndex) else { return .ignored }
+                .onSubmit {
+                    guard rows.indices.contains(selectedIndex) else { return }
                     choose(rows[selectedIndex])
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    onDismiss()
-                    return .handled
                 }
 
             if !query.isEmpty {
