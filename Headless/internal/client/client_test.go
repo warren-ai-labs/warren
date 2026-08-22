@@ -215,8 +215,9 @@ func TestWaitAgentTurnReportsAgentProcessExit(t *testing.T) {
 		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome"}) != nil {
 			return
 		}
-		_ = connection.WriteJSON(api.AgentActivityMessage{
-			Type: "agent.activity", Session: "session-1", Epoch: 2, Activity: api.AgentActivityExited,
+		_ = connection.WriteJSON(api.AgentStatusMessage{
+			Type: "agent.status", Session: "session-1", Epoch: 2,
+			Status: api.AgentStatus{Activity: api.AgentActivityExited},
 		})
 		<-r.Context().Done()
 	}))

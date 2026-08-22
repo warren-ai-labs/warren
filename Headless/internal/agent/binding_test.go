@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/abcdlsj/warren/Headless/internal/api"
 )
 
 func TestClaudeTranscriptPathSanitizesWorkspace(t *testing.T) {
@@ -190,12 +192,12 @@ func TestCodexBindHookScriptWritesBinding(t *testing.T) {
 	if binding == nil || binding.SessionID != "thread-9" || binding.TranscriptPath != "/work/rollout-9.jsonl" || binding.Provider != "codex" {
 		t.Fatalf("hook binding = %#v", binding)
 	}
-	state, err := ReadAgentState(statePath)
+	state, err := ReadAgentStatus(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "ready" {
-		t.Fatalf("hook state = %q, want ready", state)
+	if state.Activity != api.AgentActivityReady || state.Attention != nil {
+		t.Fatalf("hook state = %#v, want ready", state)
 	}
 }
 
@@ -224,12 +226,12 @@ func TestHookScriptInfersProviderFromHookCommand(t *testing.T) {
 	if binding == nil || binding.SessionID != "thread-9" || binding.Provider != "claude" {
 		t.Fatalf("hook binding = %#v, want claude provider", binding)
 	}
-	state, err := ReadAgentState(statePath)
+	state, err := ReadAgentStatus(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "ready" {
-		t.Fatalf("hook state = %q, want ready", state)
+	if state.Activity != api.AgentActivityReady || state.Attention != nil {
+		t.Fatalf("hook state = %#v, want ready", state)
 	}
 }
 
@@ -308,12 +310,12 @@ func TestAgentBindHookScriptMarksSessionEnd(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("end hook failed: %v: %s", err, output)
 	}
-	state, err := ReadAgentState(statePath)
+	state, err := ReadAgentStatus(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "exited" {
-		t.Fatalf("hook state = %q, want exited", state)
+	if state.Activity != api.AgentActivityExited || state.Attention != nil {
+		t.Fatalf("hook state = %#v, want exited", state)
 	}
 }
 
@@ -334,12 +336,12 @@ func TestAgentBindHookScriptMarksSessionEndWithoutSessionID(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("end hook without session id failed: %v: %s", err, output)
 	}
-	state, err := ReadAgentState(statePath)
+	state, err := ReadAgentStatus(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "exited" {
-		t.Fatalf("hook state = %q, want exited", state)
+	if state.Activity != api.AgentActivityExited || state.Attention != nil {
+		t.Fatalf("hook state = %#v, want exited", state)
 	}
 }
 

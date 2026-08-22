@@ -38,7 +38,7 @@ func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.WriteAgentState(agent.StatePath(session.ID), api.AgentActivityReady); err != nil {
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,7 +52,7 @@ func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
 	if got := entry.watcher.Path(); got != transcriptPath {
 		t.Fatalf("watcher path = %q, want %q", got, transcriptPath)
 	}
-	if got := service.agentActivity(session.ID); got != api.AgentActivityReady {
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityReady {
 		t.Fatalf("activity = %q, want ready", got)
 	}
 	current := state.Snapshot()
@@ -61,8 +61,8 @@ func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == session.ID && candidate.AgentActivity != api.AgentActivityReady {
-			t.Fatalf("roster activity = %q, want ready", candidate.AgentActivity)
+		if candidate.ID == session.ID && (candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityReady) {
+			t.Fatalf("roster status = %#v, want ready", candidate.AgentStatus)
 		}
 	}
 	entry.watcher.Close()
@@ -94,13 +94,13 @@ func TestEnsureAgentClearsShellBindingOnExit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.WriteAgentState(agent.StatePath(session.ID), api.AgentActivityReady); err != nil {
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.ensureAgent(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.WriteAgentState(agent.StatePath(session.ID), api.AgentActivityExited); err != nil {
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,8 +118,8 @@ func TestEnsureAgentClearsShellBindingOnExit(t *testing.T) {
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == active.ID && candidate.AgentActivity != "" {
-			t.Fatalf("roster activity = %q, want empty", candidate.AgentActivity)
+		if candidate.ID == active.ID && candidate.AgentStatus != nil {
+			t.Fatalf("roster status = %#v, want empty", candidate.AgentStatus)
 		}
 	}
 }
@@ -142,8 +142,8 @@ func TestPlainShellSessionHasNoAgentActivity(t *testing.T) {
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == session.ID && candidate.AgentActivity != "" {
-			t.Fatalf("plain shell activity = %q, want empty", candidate.AgentActivity)
+		if candidate.ID == session.ID && candidate.AgentStatus != nil {
+			t.Fatalf("plain shell status = %#v, want empty", candidate.AgentStatus)
 		}
 	}
 }
@@ -174,20 +174,20 @@ func TestShellOverlayResetsReadyAfterExitOnSameTranscript(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.WriteAgentState(agent.StatePath(session.ID), api.AgentActivityReady); err != nil {
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.ensureAgent(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
-	service.forceAgentActivity(session.ID, api.AgentActivityExited)
-	if err := agent.WriteAgentState(agent.StatePath(session.ID), api.AgentActivityReady); err != nil {
+	service.forceAgentStatus(session.ID, api.AgentStatus{Activity: api.AgentActivityExited})
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.ensureAgent(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
-	if got := service.agentActivity(session.ID); got != api.AgentActivityReady {
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityReady {
 		t.Fatalf("activity after same-transcript SessionStart = %q, want ready", got)
 	}
 }

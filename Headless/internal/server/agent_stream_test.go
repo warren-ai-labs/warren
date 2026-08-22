@@ -75,9 +75,9 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	readBinaryFrame(t, connection)
 	readBrowserMessage(t, connection, "synced")
 
-	initialActivity := readAgentActivity(t, connection)
-	if initialActivity != api.AgentActivityReady {
-		t.Fatalf("initial activity = %q, want ready", initialActivity)
+	initialStatus := readAgentStatus(t, connection)
+	if initialStatus.Activity != api.AgentActivityReady {
+		t.Fatalf("initial status = %#v, want ready", initialStatus)
 	}
 	initial := readAgentEvents(t, connection)
 	if len(initial) != 1 {
@@ -104,9 +104,9 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	if len(live) != 1 || live[0]["content"] != "live prompt" {
 		t.Fatalf("live agent events = %#v", live)
 	}
-	liveActivity := readAgentActivity(t, connection)
-	if liveActivity != api.AgentActivityWorking {
-		t.Fatalf("live activity = %q, want working", liveActivity)
+	liveStatus := readAgentStatus(t, connection)
+	if liveStatus.Activity != api.AgentActivityWorking {
+		t.Fatalf("live status = %#v, want working", liveStatus)
 	}
 	liveTurn := readAgentTurn(t, connection)
 	if liveTurn != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) {
@@ -114,8 +114,8 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == "session-agent" && candidate.AgentActivity != api.AgentActivityWorking {
-			t.Fatalf("roster activity = %q, want working", candidate.AgentActivity)
+		if candidate.ID == "session-agent" && (candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityWorking) {
+			t.Fatalf("roster status = %#v, want working", candidate.AgentStatus)
 		}
 	}
 	if history := service.agentHistory("session-agent"); len(history) != 2 || history[1].Turn != 1 {
@@ -423,25 +423,25 @@ func TestAgentStateFileReflectsShellReturn(t *testing.T) {
 	service.lazyInit()
 
 	statePath := agent.StatePath(session.ID)
-	if err := agent.WriteAgentState(statePath, api.AgentActivityExited); err != nil {
+	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
 		t.Fatal(err)
 	}
 	service.applyAgentState(session)
-	if got := service.agentActivity(session.ID); got != api.AgentActivityExited {
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityExited {
 		t.Fatalf("after SessionEnd state = %q, want exited", got)
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == session.ID && candidate.AgentActivity != api.AgentActivityExited {
-			t.Fatalf("roster activity = %q, want exited", candidate.AgentActivity)
+		if candidate.ID == session.ID && (candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityExited) {
+			t.Fatalf("roster status = %#v, want exited", candidate.AgentStatus)
 		}
 	}
 
-	if err := agent.WriteAgentState(statePath, api.AgentActivityReady); err != nil {
+	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 	service.applyAgentState(session)
-	if got := service.agentActivity(session.ID); got != api.AgentActivityReady {
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityReady {
 		t.Fatalf("after new SessionStart state = %q, want ready", got)
 	}
 }
@@ -454,14 +454,14 @@ func TestExitedAgentActivityIsNotResurrectedByWatcher(t *testing.T) {
 	service := &Service{Store: state, Runtime: newMemoryRuntime(t)}
 	service.lazyInit()
 
-	service.recordAgentActivity("session-agent", api.AgentActivityExited)
-	service.recordAgentActivity("session-agent", api.AgentActivityReady)
-	if got := service.agentActivity("session-agent"); got != api.AgentActivityExited {
+	service.recordAgentStatus("session-agent", api.AgentStatus{Activity: api.AgentActivityExited})
+	service.recordAgentStatus("session-agent", api.AgentStatus{Activity: api.AgentActivityReady})
+	if got := service.agentStatus("session-agent").Activity; got != api.AgentActivityExited {
 		t.Fatalf("activity after watcher-style ready update = %q, want exited", got)
 	}
 
-	service.forceAgentActivity("session-agent", api.AgentActivityReady)
-	if got := service.agentActivity("session-agent"); got != api.AgentActivityReady {
+	service.forceAgentStatus("session-agent", api.AgentStatus{Activity: api.AgentActivityReady})
+	if got := service.agentStatus("session-agent").Activity; got != api.AgentActivityReady {
 		t.Fatalf("activity after SessionStart reset = %q, want ready", got)
 	}
 }
@@ -492,10 +492,10 @@ func readAgentEvents(t *testing.T, connection interface {
 	}
 }
 
-func readAgentActivity(t *testing.T, connection interface {
+func readAgentStatus(t *testing.T, connection interface {
 	SetReadDeadline(time.Time) error
 	ReadMessage() (int, []byte, error)
-}) api.AgentActivity {
+}) api.AgentStatus {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	if err := connection.SetReadDeadline(deadline); err != nil {
@@ -505,16 +505,16 @@ func readAgentActivity(t *testing.T, connection interface {
 	for {
 		_, data, err := connection.ReadMessage()
 		if err != nil {
-			t.Fatalf("agent activity message never arrived: %v", err)
+			t.Fatalf("agent status message never arrived: %v", err)
 		}
 		var message struct {
-			Type     string            `json:"t"`
-			Activity api.AgentActivity `json:"activity"`
+			Type   string          `json:"t"`
+			Status api.AgentStatus `json:"status"`
 		}
-		if json.Unmarshal(data, &message) != nil || message.Type != "agent.activity" {
+		if json.Unmarshal(data, &message) != nil || message.Type != "agent.status" {
 			continue
 		}
-		return message.Activity
+		return message.Status
 	}
 }
 
@@ -602,7 +602,7 @@ func TestAgentHistoryPagePaginates(t *testing.T) {
 			Content:  strings.Repeat("x", 64),
 		}
 	}
-	service.recordAgentEvents("session-page", events, api.AgentActivityWorking)
+	service.recordAgentEvents("session-page", events, api.AgentStatus{Activity: api.AgentActivityWorking})
 
 	first := service.agentHistoryPage("session-page", 0, 2)
 	if len(first.Events) != 2 || first.Events[0].Sequence != 4 || first.Events[1].Sequence != 5 {
@@ -672,7 +672,7 @@ func TestAgentTailIsBounded(t *testing.T) {
 			Content:  strings.Repeat("x", 4*1024),
 		}
 	}
-	service.recordAgentEvents("session-tail", events, api.AgentActivityWorking)
+	service.recordAgentEvents("session-tail", events, api.AgentStatus{Activity: api.AgentActivityWorking})
 
 	tail := service.agentTail("session-tail", agentAttachHistoryMaxEvents, agentAttachHistoryMaxBytes)
 	if len(tail) > agentAttachHistoryMaxEvents {
@@ -790,7 +790,7 @@ func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
 	service.recordAgentTurns("session-turn", []api.AgentTurn{{ID: 3, Status: api.AgentTurnCompleted}}, false)
 	service.recordAgentEvents("session-turn", []api.AgentEvent{{
 		Sequence: 1, Turn: 3, Type: "assistant", Content: "done",
-	}}, api.AgentActivityReady)
+	}}, api.AgentStatus{Activity: api.AgentActivityReady})
 
 	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
 	defer httpServer.Close()

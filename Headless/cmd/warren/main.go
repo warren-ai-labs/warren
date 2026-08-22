@@ -2177,6 +2177,17 @@ type SessionRow struct {
 	Current           bool   `json:"current"`
 }
 
+func sessionActivity(session api.Session) string {
+	if session.AgentStatus == nil {
+		return ""
+	}
+	if session.AgentStatus.Activity == api.AgentActivityBlocked ||
+		session.AgentStatus.Activity == api.AgentActivityStalled {
+		return "attention"
+	}
+	return string(session.AgentStatus.Activity)
+}
+
 func sessionRows(state api.State, includeEnded, onlyEnded bool) []SessionRow {
 	return sessionRowsForCurrent(state, includeEnded, onlyEnded, strings.TrimSpace(os.Getenv(agent.BindEnvSession)))
 }
@@ -2453,7 +2464,7 @@ func sessionRowCells(item SessionRow) []string {
 		displayValue(item.AgentSessionID),
 		displayValue(item.TranscriptPath),
 		item.Lifecycle,
-		displayValue(string(item.AgentActivity)),
+		displayValue(sessionActivity(item.Session)),
 		formatOptionalTime(item.EndedAt),
 		displayBool(item.Pinned),
 		formatTime(item.CreatedAt),
@@ -2507,7 +2518,7 @@ func sessionPairs(value api.Session) [][2]string {
 		{"RUNTIME", value.Runtime},
 		{"RUNTIME KIND", displayValue(value.RuntimeKind)},
 		{"LIFECYCLE", value.Lifecycle},
-		{"ACTIVITY", displayValue(string(value.AgentActivity))},
+		{"ACTIVITY", displayValue(sessionActivity(value))},
 		{"AGENT SESSION", displayValue(value.AgentSessionID)},
 		{"OPERATION ID", displayValue(value.OperationID)},
 		{"TRANSCRIPT", displayValue(value.TranscriptPath)},

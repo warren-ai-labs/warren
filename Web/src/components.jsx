@@ -6,7 +6,8 @@ import { shouldDismissOnBackdrop } from "./presentation.js";
 
 const activityLabels = {
   working: "Working",
-  waitingForInput: "Needs input",
+  blocked: "Needs attention",
+  stalled: "Needs attention",
   failed: "Failed",
   ready: "Ready",
   exited: "Exited",
@@ -14,8 +15,9 @@ const activityLabels = {
 };
 
 const activityPriority = {
-  failed: 5,
-  waitingForInput: 4,
+  failed: 6,
+  blocked: 5,
+  stalled: 4,
   connecting: 3,
   working: 2,
   ready: 1,
@@ -113,8 +115,19 @@ function useBuildVariant() {
   return isBuild;
 }
 
-export function ActivityDot({ activity }) {
-  const label = activityLabels[activity];
+function statusActivity(status) {
+  return status?.activity || "";
+}
+
+function statusLabel(status) {
+  const activity = statusActivity(status);
+  if (activity === "blocked" || activity === "stalled") return "Needs attention";
+  return activityLabels[activity];
+}
+
+export function ActivityDot({ status }) {
+  const activity = statusActivity(status);
+  const label = statusLabel(status);
   if (!label) return null;
   const pulse = activity === "ready" || activity === "exited" ? "" : " pulse";
   return <span className={`activity ${activity}${pulse}`} title={label} aria-label={label} />;
@@ -124,7 +137,7 @@ function mergedBadgeTitle(tabs) {
   const count = tabs.length;
   const parts = ["Merged to default branch"];
   if (count) parts.push(`${count} active`);
-  const activity = activityLabels[highestActivity(tabs)];
+  const activity = statusLabel(highestStatus(tabs));
   if (activity) parts.push(activity);
   return parts.join(" · ");
 }
@@ -308,7 +321,7 @@ export function Sidebar({
                   >
                     {workspace.mergeState === "merged"
                       ? <MergedBadge tabs={tabsForWorkspace(workspace.id)} />
-                      : <ActivityDot activity={highestActivity(tabsForWorkspace(workspace.id))} />}
+                      : <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />}
                     {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
                     <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
                   </button>
@@ -477,7 +490,7 @@ export function TopBar({
                   else tabRefs.current.delete(session.id);
                 }}
               >
-                <ActivityDot activity={session.activity} />
+                <ActivityDot status={session.agentStatus} />
                 {session.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
                 <span className="tab-title">{terminalTabTitle(session, workspace)}</span>
               </button>
@@ -604,7 +617,7 @@ export function MobileShell({
               onClick={() => onAttachSession(session.id)}
               onContextMenu={event => onSessionContextMenu?.(event, session)}
             >
-              <ActivityDot activity={session.activity} />
+              <ActivityDot status={session.agentStatus} />
               <span className="mobile-tab-title">{terminalTabTitle(session, workspace)}</span>
             </button>
           );
@@ -1604,10 +1617,13 @@ export function Loading({ message }) {
   );
 }
 
-function highestActivity(sessions) {
+function highestStatus(sessions) {
   return sessions.reduce((highest, session) => {
-    const activity = session.activity;
-    return (activityPriority[activity] || 0) > (activityPriority[highest] || 0) ? activity : highest;
+    const activity = statusActivity(session.agentStatus);
+    const highestActivityValue = statusActivity(highest);
+    return (activityPriority[activity] || 0) > (activityPriority[highestActivityValue] || 0)
+      ? session.agentStatus
+      : highest;
   }, null);
 }
 

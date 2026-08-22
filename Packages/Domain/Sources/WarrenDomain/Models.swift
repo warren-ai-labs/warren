@@ -342,15 +342,62 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
 
 }
 
-/// Explicit activity observed from an external Agent Conversation. Plain
-/// shells have no value, and neither client connectivity nor terminal
-/// lifecycle is represented here.
+/// Lifecycle activity observed from an external Agent Conversation. Human
+/// attention is carried separately by AgentStatus.Attention.
 public enum AgentActivityState: String, Codable, CaseIterable, Hashable, Sendable {
     case working
-    case waitingForInput
+    case blocked
+    case stalled
     case failed
     case ready
     case exited
+}
+
+public enum AgentAttentionKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case input
+    case approval
+    case warning
+}
+
+/// Bounded, provider-neutral metadata explaining why a person should inspect
+/// an agent session. Transcript content and secrets never cross this boundary.
+public struct AgentAttention: Codable, Hashable, Sendable {
+    public let kind: AgentAttentionKind
+    public let reason: String
+    public let requestID: String?
+    public let since: String?
+
+    public init(
+        kind: AgentAttentionKind,
+        reason: String,
+        requestID: String? = nil,
+        since: String? = nil
+    ) {
+        self.kind = kind
+        self.reason = reason
+        self.requestID = requestID
+        self.since = since
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case reason
+        case requestID = "requestId"
+        case since
+    }
+}
+
+public struct AgentStatus: Codable, Hashable, Sendable {
+    public let activity: AgentActivityState
+    public let attention: AgentAttention?
+
+    public init(
+        activity: AgentActivityState,
+        attention: AgentAttention? = nil
+    ) {
+        self.activity = activity
+        self.attention = attention
+    }
 }
 
 /// A value-only request for starting one terminal session.

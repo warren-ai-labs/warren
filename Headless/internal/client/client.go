@@ -219,12 +219,11 @@ func (c *Client) WaitAgentTurn(
 			continue
 		}
 		var envelope struct {
-			Type     string              `json:"t"`
-			Session  string              `json:"session"`
-			Epoch    uint64              `json:"epoch"`
-			Turn     uint64              `json:"turn"`
-			Status   api.AgentTurnStatus `json:"status"`
-			Activity api.AgentActivity   `json:"activity"`
+			Type    string          `json:"t"`
+			Session string          `json:"session"`
+			Epoch   uint64          `json:"epoch"`
+			Turn    uint64          `json:"turn"`
+			Status  json.RawMessage `json:"status"`
 		}
 		if json.Unmarshal(data, &envelope) != nil || envelope.Session != sessionID {
 			continue
@@ -232,8 +231,16 @@ func (c *Client) WaitAgentTurn(
 		if envelope.Type == "exited" {
 			return api.AgentTurn{}, errors.New("agent session exited before the turn completed")
 		}
-		if envelope.Type == "agent.activity" && envelope.Activity == api.AgentActivityExited {
-			return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
+		if envelope.Type == "agent.status" {
+			var status api.AgentStatus
+			if json.Unmarshal(envelope.Status, &status) == nil && status.Activity == api.AgentActivityExited {
+				return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
+			}
+			continue
+		}
+		var turnStatus api.AgentTurnStatus
+		if json.Unmarshal(envelope.Status, &turnStatus) != nil {
+			continue
 		}
 		if envelope.Type != "agent.turn" {
 			continue
@@ -241,16 +248,16 @@ func (c *Client) WaitAgentTurn(
 		if epoch != 0 && envelope.Epoch != 0 && envelope.Epoch != epoch {
 			return api.AgentTurn{}, errors.New("agent transcript changed while waiting")
 		}
-		if target == 0 && envelope.Status == api.AgentTurnStarted && envelope.Turn > after {
+		if target == 0 && turnStatus == api.AgentTurnStarted && envelope.Turn > after {
 			target = envelope.Turn
 		}
-		if target == 0 && envelope.Turn > after && terminalAgentTurn(envelope.Status) {
+		if target == 0 && envelope.Turn > after && terminalAgentTurn(turnStatus) {
 			// Accept a terminal boundary even if a transport reconnect or a
 			// coalesced producer omitted the corresponding started notification.
 			target = envelope.Turn
 		}
-		if envelope.Turn == target && terminalAgentTurn(envelope.Status) {
-			return api.AgentTurn{ID: envelope.Turn, Status: envelope.Status}, nil
+		if envelope.Turn == target && terminalAgentTurn(turnStatus) {
+			return api.AgentTurn{ID: envelope.Turn, Status: turnStatus}, nil
 		}
 	}
 }

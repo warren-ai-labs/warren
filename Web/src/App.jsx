@@ -7,7 +7,13 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
-import { buildCatalog, moveInCatalog, rosterFromMessage, workspaceTabs } from "./catalog.js";
+import {
+  buildCatalog,
+  moveInCatalog,
+  rosterFromMessage,
+  updateSessionAgentStatus,
+  workspaceTabs,
+} from "./catalog.js";
 import { WarrenConnection, rejectPendingRequests } from "./connection.js";
 import {
   captureNavigationPosition,
@@ -540,7 +546,7 @@ export default function App() {
                 // the already-loaded conversation and loses messages.
                 { cap: before === 0 },
               ),
-              activity: current.activity || "",
+              status: current.status || null,
               historyCursor: cursor,
               historyHasMore: hasMore,
               historyLoading: false,
@@ -1175,7 +1181,7 @@ export default function App() {
             [message.session]: {
               epoch: message.epoch,
               events: mergeAgentEvents([], message.events),
-              activity: message.activity || current?.activity || "",
+              status: current?.status || null,
               historyCursor: 0,
               historyHasMore: false,
               historyLoading: false,
@@ -1190,12 +1196,13 @@ export default function App() {
             ...current,
             epoch: message.epoch || current?.epoch,
             events: mergeAgentEvents(base, message.events),
-            activity: message.activity || current?.activity || "",
+            status: current?.status || null,
           },
         };
       });
       break;
-    case "agent.activity": {
+    case "agent.status": {
+      const status = message.status || null;
       setAgentStateBySession(previous => {
         const current = previous[message.session];
         const sameEpoch = !message.epoch || current?.epoch === message.epoch;
@@ -1205,7 +1212,7 @@ export default function App() {
             ...current,
             epoch: message.epoch || current?.epoch,
             events: sameEpoch ? current?.events || [] : [],
-            activity: message.activity || current?.activity || "",
+            status,
             historyCursor: sameEpoch ? current?.historyCursor || 0 : 0,
             historyHasMore: sameEpoch ? Boolean(current?.historyHasMore) : false,
             historyLoading: sameEpoch ? Boolean(current?.historyLoading) : false,
@@ -1213,6 +1220,7 @@ export default function App() {
           },
         };
       });
+      setCatalog(previous => updateSessionAgentStatus(previous, message.session, status));
       break;
     }
     case "runtimeMetadata":

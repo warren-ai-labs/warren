@@ -118,13 +118,11 @@ failed > attention/blocked > stalled > working > ready > exited
  red        yellow          yellow     amber    green    gray
 ```
 
-The yellow label is `Needs attention`. The tooltip and accessibility label use
-the reason-specific copy:
-
-- `question`: `Needs an answer`;
-- `permission`: `Needs approval`;
-- `stalled`: `No progress detected`;
-- `unexpectedAbort`: `Agent stopped unexpectedly`.
+The yellow label, tooltip, and accessibility label are always `Needs
+attention`. The `activity` and `attention` subdivisions remain Host-owned
+protocol data for reducers, clearing rules, and diagnostics; they are not
+part of the user-facing status vocabulary. This keeps every yellow marker
+visually and semantically consistent across Web, Desktop, and CLI surfaces.
 
 Opening a Session does not clear attention. Attention is a condition, not a
 client-local notification badge. It clears only when the Host observes a
@@ -314,8 +312,8 @@ the new contract:
 - `Headless/internal/api/types.go`: add `AgentStatus`, remove
   `waitingForInput`, and define the `agent.status` wire envelope;
 - `Headless/internal/server/`: store and broadcast complete status snapshots;
-- Web and Desktop renderers: consume `agentStatus` and the reason-specific
-  tooltip, never infer status from event text.
+- Web, Desktop, and CLI renderers: consume `agentStatus` and the generic
+  attention label, never infer status from event text.
 
 Implement the reducer and protocol first, then update provider adapters and
 clients in the same release. Do not add a compatibility branch for the old

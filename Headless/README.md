@@ -240,12 +240,12 @@ transcript written by the CLI itself (Codex: `~/.codex/sessions/**/rollout-*.jso
 Claude Code: `~/.claude/projects/**/<session>.jsonl`), normalizes messages,
 reasoning, tool calls, and tool output into `agent` events, and sends them to
 attached clients as `{"t":"agent","session":...,"events":[...]}` text messages.
-Live batches are split so a single message stays around 256 KiB; the current
-activity status light is its own lightweight
-`{"t":"agent.activity","session":...,"activity":...}` message. The
-replacement activity/attention contract is defined in
-[`docs/rfc/0006-agent-activity-attention.md`](../docs/rfc/0006-agent-activity-attention.md)
-and will ship as a versioned `agent.status` message. Attach only replays a bounded tail of the conversation, so clients
+Live batches are split so a single message stays around 256 KiB; the complete
+Host-owned activity/attention status is its own lightweight
+`{"t":"agent.status","session":...,"status":{...}}` message. The
+contract is defined in
+[`docs/rfc/0006-agent-activity-attention.md`](../docs/rfc/0006-agent-activity-attention.md).
+Attach only replays a bounded tail of the conversation, so clients
 that need the full history fetch it page by page with the `agent.history`
 request (`session`, optional `before` sequence cursor and `limit`, returning
 `events`, `cursor` and `hasMore`). This keeps any single WebSocket message far

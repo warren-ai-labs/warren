@@ -34,9 +34,8 @@ const (
 	BindEnvFile = "WARREN_BIND_FILE"
 	// BindEnvKind names the agent kind (codex or claude) for the hook.
 	BindEnvKind = "WARREN_AGENT_KIND"
-	// BindEnvState points the managed hook at the file it must update when
-	// the CLI session ends, so the daemon can switch the status light from
-	// agent activity back to the surrounding shell.
+	// BindEnvState points the managed hook at the file it must update when the
+	// CLI session changes lifecycle, so the daemon can update the status overlay.
 	BindEnvState = "WARREN_STATE_FILE"
 	// CodexSessionID and CodexThreadID are launcher-provided identity hints.
 	// An interactive shell can inherit them from its parent Codex process; an
@@ -78,8 +77,8 @@ func BindPath(warrenSessionID string) string {
 	return filepath.Join(BindDir(), warrenSessionID+".json")
 }
 
-// StatePath is the per-session file the managed hook uses to report that the
-// agent CLI has exited and the shell is back.
+// StatePath is the per-session file the managed hook uses to report lifecycle
+// changes to the daemon.
 func StatePath(warrenSessionID string) string {
 	return filepath.Join(BindDir(), warrenSessionID+".state")
 }
@@ -149,34 +148,34 @@ func RemoveBinding(warrenSessionID string) {
 	_ = os.Remove(StatePath(warrenSessionID))
 }
 
-// ReadAgentState returns the state recorded by the managed hook, or "" when
-// the file is missing or malformed.
-func ReadAgentState(path string) (api.AgentActivity, error) {
+// ReadAgentStatus returns the status recorded by the managed hook, or a zero
+// status when the file is missing or malformed.
+func ReadAgentStatus(path string) (api.AgentStatus, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
+			return api.AgentStatus{}, nil
 		}
-		return "", err
+		return api.AgentStatus{}, err
 	}
 	var state struct {
-		State api.AgentActivity `json:"state"`
+		Status api.AgentStatus `json:"status"`
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
-		return "", nil
+		return api.AgentStatus{}, nil
 	}
-	return state.State, nil
+	return state.Status, nil
 }
 
-// WriteAgentState persists a state reported by a hook. The write is atomic so
-// the daemon never reads a half-written file.
-func WriteAgentState(path string, state api.AgentActivity) error {
+// WriteAgentStatus persists a status reported by a hook. The write is atomic
+// so the daemon never reads a half-written status file.
+func WriteAgentStatus(path string, status api.AgentStatus) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
 	data, err := json.Marshal(struct {
-		State api.AgentActivity `json:"state"`
-	}{State: state})
+		Status api.AgentStatus `json:"status"`
+	}{Status: status})
 	if err != nil {
 		return err
 	}
@@ -331,10 +330,10 @@ func writeHooksJSON(path string, document map[string]any) error {
 }
 
 // agentBindHookScript reads the hook event JSON from stdin. SessionStart
-// writes the transcript binding and resets the state file; SessionEnd marks
-// the state file exited so the daemon can switch the status light back to
-// the surrounding shell. The marker string appears in the command so the
-// daemon can find and update its own entry idempotently.
+// writes the transcript binding and resets the status file; SessionEnd marks
+// the status file exited so the daemon can update the surrounding shell. The
+// marker string appears in the command so the daemon can find and update its
+// own entry idempotently.
 const agentBindHookScript = `#!/bin/sh
 # warren-agent-bind-v1
 [ -n "$WARREN_BIND_FILE" ] || [ -n "$WARREN_STATE_FILE" ] || exit 0
@@ -345,7 +344,7 @@ if [ "$hook_event" = "SessionEnd" ]; then
   dir=$(dirname "$WARREN_STATE_FILE")
   mkdir -p "$dir" 2>/dev/null || exit 0
   temporary="$WARREN_STATE_FILE.tmp.$$"
-  printf '%s\n' '{"state":"exited"}' > "$temporary" 2>/dev/null || exit 0
+  printf '%s\n' '{"status":{"activity":"exited","attention":null}}' > "$temporary" 2>/dev/null || exit 0
   mv -f "$temporary" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
   printf '%s\n' '{"continue":true}'
   exit 0
@@ -370,7 +369,7 @@ if [ -n "$WARREN_STATE_FILE" ]; then
   state_dir=$(dirname "$WARREN_STATE_FILE")
   mkdir -p "$state_dir" 2>/dev/null || exit 0
   state_tmp="$WARREN_STATE_FILE.tmp.$$"
-  printf '%s\n' '{"state":"ready"}' > "$state_tmp" 2>/dev/null || exit 0
+  printf '%s\n' '{"status":{"activity":"ready","attention":null}}' > "$state_tmp" 2>/dev/null || exit 0
   mv -f "$state_tmp" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
 fi
 printf '%s\n' '{"continue":true}'
