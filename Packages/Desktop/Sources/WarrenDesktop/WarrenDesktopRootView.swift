@@ -390,7 +390,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         },
                         onOpenSettings: {
                             setChromePopover(nil)
-                            openSettings()
+                            openPublicAccessSettings()
                         },
                         onStop: {
                             onWebStop()
@@ -739,6 +739,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         openSettings(nil)
     }
 
+    private func openPublicAccessSettings() {
+        openSettings(WarrenDesktopSettingsDeepLink(section: .publicAccess))
+    }
+
     private func openSettings(_ request: WarrenDesktopSettingsDeepLink?) {
         setCommandPalettePresented(false)
         settingsDeepLinkSection = request?.section
@@ -827,7 +831,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onWebStart()
                     refreshWebDismissal()
                 },
-                onOpenSettings: openSettings,
+                onOpenSettings: openPublicAccessSettings,
                 onStop: {
                     onWebStop()
                     refreshWebDismissal()
