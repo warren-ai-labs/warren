@@ -4,6 +4,48 @@ import UniformTypeIdentifiers
 import WarrenDesignSystem
 import WarrenDomain
 
+private extension WarrenDesktopSettingsSection {
+    var iconName: String {
+        switch self {
+        case .terminalFont: "terminal"
+        case .terminalTitle: "textformat"
+        case .terminalRuntime: "cpu"
+        case .presets: "hammer"
+        case .workspaces: "arrow.triangle.branch"
+        case .externalIDEs: "chevron.left.forwardslash.chevron.right"
+        case .publicAccess: "globe"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .terminalFont: "Applied to every terminal surface."
+        case .terminalTitle: "Build a title from live Session metadata."
+        case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
+        case .presets: "Choose visible presets and customize every launch command."
+        case .workspaces: "How projects import worktrees and enter sessions."
+        case .externalIDEs: "IDEs the workspace menu can open worktrees in."
+        case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
+        }
+    }
+
+    var searchTerms: [String] {
+        switch self {
+        case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
+        case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
+        case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
+        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
+        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
+        case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
+        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
+        }
+    }
+
+    var isTerminalSection: Bool {
+        self != .publicAccess
+    }
+}
+
 /// Settings mirror Superset's route layout: a slim window-chrome row on top,
 /// a 224pt sidebar with Back/title/search/grouped navigation on the left, and
 /// a page-headed detail column (`max-w-5xl`) on the right.
@@ -46,7 +88,14 @@ struct WarrenDesktopSettingsView: View {
     @State private var publicAccessUseDefaultTunnel = true
     @State private var publicAccessMaskedKeyKind: PublicAccessKeyKind?
     @State private var publicAccessSubmittedKeyKind: PublicAccessKeyKind?
+    @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
+
+    /// A deeplink can select a page and prefill its non-secret or explicitly
+    /// shared Public Access setup values. The key is never persisted by this
+    /// view, but a link containing it must still be treated as a credential.
+    var initialSettingsSection: WarrenDesktopSettingsSection?
+    var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
 
     private enum PublicAccessKeyKind: String, CaseIterable, Identifiable {
         case approval
@@ -64,60 +113,7 @@ struct WarrenDesktopSettingsView: View {
         var accessibilityTitle: String { title }
     }
 
-    private enum SettingsSection: String, CaseIterable, Identifiable {
-        case terminalFont = "Font"
-        case terminalTitle = "Title"
-        case terminalRuntime = "Terminal runtime"
-        case presets = "Presets"
-        case workspaces = "Workspaces"
-        case externalIDEs = "External IDEs"
-        case publicAccess = "Public Access"
-
-        var id: String { rawValue }
-
-        var iconName: String {
-            switch self {
-            case .terminalFont: "terminal"
-            case .terminalTitle: "textformat"
-            case .terminalRuntime: "cpu"
-            case .presets: "hammer"
-            case .workspaces: "arrow.triangle.branch"
-            case .externalIDEs: "chevron.left.forwardslash.chevron.right"
-            case .publicAccess: "globe"
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .terminalFont: "Applied to every terminal surface."
-            case .terminalTitle: "Build a title from live Session metadata."
-            case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
-            case .presets: "Choose visible presets and customize every launch command."
-            case .workspaces: "How projects import worktrees and enter sessions."
-            case .externalIDEs: "IDEs the workspace menu can open worktrees in."
-            case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
-            }
-        }
-
-        var searchTerms: [String] {
-            switch self {
-            case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
-            case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
-            case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
-            case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
-            case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
-            case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
-            case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
-            }
-        }
-
-        var isTerminalSection: Bool {
-            switch self {
-            case .terminalFont, .terminalTitle, .terminalRuntime, .presets, .workspaces, .externalIDEs: true
-            case .publicAccess: false
-            }
-        }
-    }
+    private typealias SettingsSection = WarrenDesktopSettingsSection
 
     @State private var selectedSection: SettingsSection = .terminalFont
     @State private var searchQuery = ""
@@ -153,6 +149,13 @@ struct WarrenDesktopSettingsView: View {
         }
         .background(tokens.background)
         .onExitCommand(perform: onBack)
+        .onAppear(perform: applyDeepLinkPrefill)
+        .onChange(of: initialSettingsSection) { _, _ in
+            applyDeepLinkPrefill()
+        }
+        .onChange(of: publicAccessPrefill) { _, _ in
+            applyDeepLinkPrefill()
+        }
         .onChange(of: searchQuery) { _, _ in
             if !visibleSections.contains(selectedSection), let first = visibleSections.first {
                 selectedSection = first
@@ -801,11 +804,19 @@ struct WarrenDesktopSettingsView: View {
                 VStack(alignment: .leading, spacing: WarrenSpacing.small) {
                     Text(WarrenPublicAccessCopy.edgeURL)
                         .font(WarrenTypography.settingsBody)
-                    TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
-                        .textFieldStyle(.roundedBorder)
-                        .font(WarrenTypography.settingsControl)
-                        .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
-                        .accessibilityIdentifier("settings.public-access.edge-url")
+                    HStack(spacing: WarrenSpacing.small) {
+                        TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
+                            .textFieldStyle(.roundedBorder)
+                            .font(WarrenTypography.settingsControl)
+                            .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
+                            .accessibilityIdentifier("settings.public-access.edge-url")
+                        pasteButton(
+                            accessibilityLabel: "Paste Edge URL",
+                            accessibilityIdentifier: "settings.public-access.edge-url.paste"
+                        ) {
+                            publicAccessEdgeURL = pastedText() ?? publicAccessEdgeURL
+                        }
+                    }
 
                     if let defaultEdgeURL = webStatus.defaultEdgeURL {
                         Text(
@@ -820,11 +831,19 @@ struct WarrenDesktopSettingsView: View {
 
                     Text("Account name")
                         .font(WarrenTypography.settingsBody)
-                    TextField(accountNamePlaceholder, text: $publicAccessAccountName)
-                        .textFieldStyle(.roundedBorder)
-                        .font(WarrenTypography.settingsControl)
-                        .accessibilityLabel("gnar account name")
-                        .accessibilityIdentifier("settings.public-access.account-name")
+                    HStack(spacing: WarrenSpacing.small) {
+                        TextField(accountNamePlaceholder, text: $publicAccessAccountName)
+                            .textFieldStyle(.roundedBorder)
+                            .font(WarrenTypography.settingsControl)
+                            .accessibilityLabel("gnar account name")
+                            .accessibilityIdentifier("settings.public-access.account-name")
+                        pasteButton(
+                            accessibilityLabel: "Paste account name",
+                            accessibilityIdentifier: "settings.public-access.account-name.paste"
+                        ) {
+                            publicAccessAccountName = pastedText() ?? publicAccessAccountName
+                        }
+                    }
 
                     if let accountName = webStatus.effectiveAccountName,
                        !accountName.isEmpty {
@@ -860,6 +879,14 @@ struct WarrenDesktopSettingsView: View {
                     )
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    Text(
+                        "Setup links include the selected key so recipients can authenticate. "
+                            + "Treat a copied link like the key itself."
+                    )
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 .disabled(webStatus.publicAccessBusy)
@@ -946,25 +973,41 @@ struct WarrenDesktopSettingsView: View {
         case .approval:
             Text(WarrenPublicAccessCopy.approvalKey)
                 .font(WarrenTypography.settingsBody)
-            SecureField(
-                publicAccessMaskedKeyKind == .approval ? "••••••••" : "Enter Approval Key",
-                text: publicAccessKeyBinding(.approval)
-            )
-            .textFieldStyle(.roundedBorder)
-            .font(WarrenTypography.settingsControl)
-            .accessibilityLabel(PublicAccessKeyKind.approval.accessibilityTitle)
-            .accessibilityIdentifier("settings.public-access.approval-key")
+            HStack(spacing: WarrenSpacing.small) {
+                SecureField(
+                    publicAccessMaskedKeyKind == .approval ? "••••••••" : "Enter Approval Key",
+                    text: publicAccessKeyBinding(.approval)
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityLabel(PublicAccessKeyKind.approval.accessibilityTitle)
+                .accessibilityIdentifier("settings.public-access.approval-key")
+                pasteButton(
+                    accessibilityLabel: "Paste Approval Key",
+                    accessibilityIdentifier: "settings.public-access.approval-key.paste"
+                ) {
+                    pastePublicAccessKey(.approval)
+                }
+            }
         case .invite:
             Text(WarrenPublicAccessCopy.inviteKey)
                 .font(WarrenTypography.settingsBody)
-            SecureField(
-                publicAccessMaskedKeyKind == .invite ? "••••••••" : "Enter Invite Key",
-                text: publicAccessKeyBinding(.invite)
-            )
-            .textFieldStyle(.roundedBorder)
-            .font(WarrenTypography.settingsControl)
-            .accessibilityLabel(PublicAccessKeyKind.invite.accessibilityTitle)
-            .accessibilityIdentifier("settings.public-access.invite-key")
+            HStack(spacing: WarrenSpacing.small) {
+                SecureField(
+                    publicAccessMaskedKeyKind == .invite ? "••••••••" : "Enter Invite Key",
+                    text: publicAccessKeyBinding(.invite)
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityLabel(PublicAccessKeyKind.invite.accessibilityTitle)
+                .accessibilityIdentifier("settings.public-access.invite-key")
+                pasteButton(
+                    accessibilityLabel: "Paste Invite Key",
+                    accessibilityIdentifier: "settings.public-access.invite-key.paste"
+                ) {
+                    pastePublicAccessKey(.invite)
+                }
+            }
 
             Text("Use the invite secret from gnar, not its key name. Invite secrets must be at least 12 characters.")
                 .font(WarrenTypography.settingsSupporting)
@@ -978,6 +1021,35 @@ struct WarrenDesktopSettingsView: View {
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func pasteButton(
+        accessibilityLabel: String,
+        accessibilityIdentifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .regular))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.bordered)
+        .help(accessibilityLabel)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private func pastedText() -> String? {
+        guard let value = NSPasteboard.general.string(forType: .string) else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func pastePublicAccessKey(_ kind: PublicAccessKeyKind) {
+        guard let value = pastedText() else { return }
+        publicAccessKeyBinding(kind).wrappedValue = value
     }
 
     private func publicAccessKeyBinding(_ kind: PublicAccessKeyKind) -> Binding<String> {
@@ -1017,6 +1089,70 @@ struct WarrenDesktopSettingsView: View {
         if webStatus.publicAccessError != nil { return tokens.warning }
         if webStatus.publicAccessAuthenticated { return tokens.success }
         return tokens.mutedForeground
+    }
+
+    private func copySettingsDeepLink(for section: SettingsSection) {
+        let publicAccess: WarrenDesktopPublicAccessPrefill?
+        if section == .publicAccess {
+            let edgeURL = publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let accountName = publicAccessAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let inviteKey = publicAccessKeyKind == .invite
+                ? publicAccessInviteKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                : ""
+            let approvalKey = publicAccessKeyKind == .approval
+                ? publicAccessApprovalKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                : ""
+            publicAccess = WarrenDesktopPublicAccessPrefill(
+                edgeURL: edgeURL.isEmpty ? webStatus.defaultEdgeURL?.absoluteString : edgeURL,
+                accountName: accountName.isEmpty ? webStatus.effectiveAccountName : accountName,
+                keyKind: publicAccessKeyKind == .invite ? .invite : .approval,
+                inviteKey: inviteKey.isEmpty ? nil : inviteKey,
+                approvalKey: approvalKey.isEmpty ? nil : approvalKey
+            )
+        } else {
+            publicAccess = nil
+        }
+
+        guard let url = WarrenDesktopSettingsDeepLink(
+            section: section,
+            publicAccess: publicAccess
+        ).url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        copiedSettingsSection = section
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if copiedSettingsSection == section {
+                copiedSettingsSection = nil
+            }
+        }
+    }
+
+    private func applyDeepLinkPrefill() {
+        if let initialSettingsSection {
+            selectedSection = initialSettingsSection
+        }
+        guard let publicAccessPrefill else { return }
+
+        publicAccessUseDefaultTunnel = true
+        if let edgeURL = publicAccessPrefill.edgeURL {
+            publicAccessEdgeURL = edgeURL
+        }
+        if let accountName = publicAccessPrefill.accountName {
+            publicAccessAccountName = accountName
+        }
+        if let keyKind = publicAccessPrefill.keyKind {
+            publicAccessKeyKind = keyKind == .invite ? .invite : .approval
+        }
+        if let inviteKey = publicAccessPrefill.inviteKey {
+            publicAccessInviteKey = inviteKey
+            publicAccessMaskedKeyKind = nil
+            publicAccessSubmittedKeyKind = nil
+        }
+        if let approvalKey = publicAccessPrefill.approvalKey {
+            publicAccessApprovalKey = approvalKey
+            publicAccessMaskedKeyKind = nil
+            publicAccessSubmittedKeyKind = nil
+        }
     }
 
     private var edgeURLPlaceholder: String {
@@ -1105,11 +1241,35 @@ struct WarrenDesktopSettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                Text(title).font(WarrenTypography.settingsSectionTitle)
-                Text(section.detail)
-                    .font(WarrenTypography.settingsBody)
-                    .foregroundStyle(tokens.mutedForeground)
+            HStack(alignment: .top, spacing: WarrenSpacing.large) {
+                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                    Text(title).font(WarrenTypography.settingsSectionTitle)
+                    Text(section.detail)
+                        .font(WarrenTypography.settingsBody)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                Spacer(minLength: WarrenSpacing.standard)
+                Button {
+                    copySettingsDeepLink(for: section)
+                } label: {
+                    Label(
+                        copiedSettingsSection == section
+                            ? "Copied"
+                            : (section == .publicAccess ? "Copy setup link" : "Copy link"),
+                        systemImage: copiedSettingsSection == section
+                            ? "checkmark"
+                            : "link"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .font(WarrenTypography.settingsSupporting)
+                .help("Copy a Warren settings link")
+                .accessibilityLabel(
+                    section == .publicAccess
+                        ? "Copy Public Access setup link"
+                        : "Copy \(section.rawValue) settings link"
+                )
+                .accessibilityIdentifier("settings.section.\(section.deepLinkValue).deeplink")
             }
             .padding(.bottom, WarrenSpacing.small)
             content()

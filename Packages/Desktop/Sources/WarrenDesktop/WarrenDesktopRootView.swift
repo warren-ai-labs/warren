@@ -53,6 +53,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var sidebarTree: WarrenDesktopSidebarTreeState
     @State private var commandPalettePresented = false
     @State private var settingsPresented = false
+    @State private var settingsDeepLinkSection: WarrenDesktopSettingsSection?
+    @State private var settingsPublicAccessPrefill: WarrenDesktopPublicAccessPrefill?
     @State private var navigationBeforeSettings: WarrenDesktopNavigationState?
     @State private var chromePopover: WarrenDesktopChromePopover?
     @State private var webDismissalNonce = 0
@@ -280,6 +282,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleSidebar)) { _ in
             toggleSidebar()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openSettings)) { note in
+            guard let request = note.object as? WarrenDesktopSettingsDeepLink else { return }
+            openSettings(request)
         }
         .overlay {
             renameDialog
@@ -590,7 +596,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 autoOpenShell: autoOpenShell,
                 onSetAutoOpenShell: onSetAutoOpenShell,
                 autoStartAI: autoStartAI,
-                onSetAutoStartAI: onSetAutoStartAI
+                onSetAutoStartAI: onSetAutoStartAI,
+                initialSettingsSection: settingsDeepLinkSection,
+                publicAccessPrefill: settingsPublicAccessPrefill
             )
             .transition(.opacity)
         )
@@ -728,7 +736,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func openSettings() {
+        openSettings(nil)
+    }
+
+    private func openSettings(_ request: WarrenDesktopSettingsDeepLink?) {
         setCommandPalettePresented(false)
+        settingsDeepLinkSection = request?.section
+        settingsPublicAccessPrefill = request?.publicAccess
         navigationBeforeSettings = navigation
         // Settings overlays a still-mounted shell so its Ghostty grid
         // survives the trip; drop keyboard ownership so keystrokes go to
@@ -878,6 +892,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func closeSettings() {
         let previousNavigation = navigationBeforeSettings
         navigationBeforeSettings = nil
+        settingsDeepLinkSection = nil
+        settingsPublicAccessPrefill = nil
         setSettingsPresented(false)
         if let previousNavigation {
             dispatch(.restoreNavigation(previousNavigation))

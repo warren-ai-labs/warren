@@ -95,6 +95,28 @@ When working from a source checkout, use the same commands with
 `Support/Raycast/warren-terminal.sh` and `Assets/Brand/warren-app-icon.png` as
 the two source paths.
 
+### Settings links
+
+Warren also accepts `warren://settings` links. Each Settings section has a
+stable `section` value, for example:
+
+```text
+warren://settings?section=public-access
+```
+
+The Public Access **Copy setup link** action can include the Edge URL, account
+name, and the selected Invite Key or Approval Key so another Warren Desktop can
+open the right page with the setup fields prefilled:
+
+```text
+warren://settings?section=public-access&edgeUrl=<EDGE_URL>&accountName=<ACCOUNT>&keyKind=invite&inviteKey=<SECRET>
+```
+
+Because this link contains the bootstrap secret, treat it like a credential.
+Browser history, chat systems, and macOS LaunchServices may retain it; share it
+only with the intended developer and rotate the key in gnar when it is no
+longer needed.
+
 Warren checks GitHub Releases in the background at launch, no more than once
 every three hours. When a newer
 macOS app is available, a banner below the workspace tabs offers to download

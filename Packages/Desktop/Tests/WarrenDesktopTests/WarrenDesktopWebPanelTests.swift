@@ -75,4 +75,63 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     func testGnarProjectLinkUsesTheSelfHostedWorkerRepository() {
         XCTAssertEqual(WarrenPublicAccessCopy.gnarProjectURL, "https://github.com/abcdlsj/gnar")
     }
+
+    func testSettingsDeepLinksRoundTripEverySection() throws {
+        for section in WarrenDesktopSettingsSection.allCases {
+            let link = WarrenDesktopSettingsDeepLink(section: section)
+            let url = try XCTUnwrap(link.url)
+            XCTAssertEqual(url.scheme, WarrenDesktopSettingsDeepLink.scheme)
+            XCTAssertEqual(url.host, WarrenDesktopSettingsDeepLink.host)
+            XCTAssertNil(url.fragment)
+            XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: url), link)
+        }
+    }
+
+    func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
+        let prefill = WarrenDesktopPublicAccessPrefill(
+            edgeURL: "https://tunnel.example.com:8443/path?mode=secure",
+            accountName: "MacBook Pro / Li",
+            keyKind: .invite,
+            inviteKey: "invite + secret/with&reserved#characters",
+            approvalKey: nil
+        )
+        let link = WarrenDesktopSettingsDeepLink(
+            section: .publicAccess,
+            publicAccess: prefill
+        )
+        let url = try XCTUnwrap(link.url)
+        let absolute = url.absoluteString
+        XCTAssertNil(url.fragment)
+        XCTAssertTrue(absolute.contains("inviteKey="))
+        XCTAssertTrue(absolute.contains("%23"))
+        XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: url), link)
+    }
+
+    func testPublicAccessPathFormAndKeyKindInferenceAreSupported() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings/public-access?edgeUrl=https%3A%2F%2Ftunnel.example.com&accountName=host&approvalKey=approval-secret"))
+
+        let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
+        XCTAssertEqual(link.section, .publicAccess)
+        XCTAssertEqual(link.publicAccess?.edgeURL, "https://tunnel.example.com")
+        XCTAssertEqual(link.publicAccess?.accountName, "host")
+        XCTAssertEqual(link.publicAccess?.keyKind, .approval)
+        XCTAssertEqual(link.publicAccess?.approvalKey, "approval-secret")
+    }
+
+    func testSettingsDeepLinkRejectsForeignOrUnknownLinks() throws {
+        let foreignScheme = try XCTUnwrap(URL(string: "https://settings?section=public-access"))
+        let foreignHost = try XCTUnwrap(URL(string: "warren://other?section=public-access"))
+        let unknownSection = try XCTUnwrap(URL(string: "warren://settings?section=unknown"))
+
+        XCTAssertNil(WarrenDesktopSettingsDeepLink(url: foreignScheme))
+        XCTAssertNil(WarrenDesktopSettingsDeepLink(url: foreignHost))
+        XCTAssertNil(WarrenDesktopSettingsDeepLink(url: unknownSection))
+    }
+
+    func testSettingsDeepLinkUsesTheFirstDuplicateQueryValue() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings?section=public-access&edgeUrl=https%3A%2F%2Ffirst.example&edgeUrl=https%3A%2F%2Fsecond.example"))
+
+        let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
+        XCTAssertEqual(link.publicAccess?.edgeURL, "https://first.example")
+    }
 }

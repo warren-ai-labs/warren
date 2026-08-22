@@ -119,12 +119,19 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         // Defer delivery until the SwiftUI root has installed its observer.
         // This matters when LaunchServices starts Warren specifically for the
         // URL rather than delivering it to an already visible window.
-        let requests = urls.compactMap(WarrenTerminalOpenRequest.init(url:))
-        guard !requests.isEmpty else { return }
+        let terminalRequests = urls.compactMap(WarrenTerminalOpenRequest.init(url:))
+        let settingsRequests = urls.compactMap(WarrenDesktopSettingsDeepLink.init(url:))
+        guard !terminalRequests.isEmpty || !settingsRequests.isEmpty else { return }
         DispatchQueue.main.async {
-            for request in requests {
+            for request in terminalRequests {
                 NotificationCenter.default.post(
                     name: WarrenAppCommand.openTerminal,
+                    object: request
+                )
+            }
+            for request in settingsRequests {
+                NotificationCenter.default.post(
+                    name: WarrenDesktopCommand.openSettings,
                     object: request
                 )
             }
