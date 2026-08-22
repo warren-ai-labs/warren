@@ -2336,7 +2336,7 @@ export default function App() {
         {!isMobile && gitOpen && (
           <GitPanel
             key={selectedWorkspaceID}
-            workspaceName={selectedWorkspace?.name}
+            workspaceName={selectedWorkspace?.branch || selectedWorkspace?.name}
             panel={gitPanel}
             refreshing={gitRefreshing}
             error={gitError}

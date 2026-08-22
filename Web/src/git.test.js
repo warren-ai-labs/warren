@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeGitPanel, statusLabel, statusSymbol, relativeTime, diffSummary, parseDiff } from "./git.js";
+import {
+  fileKind,
+  normalizeGitPanel,
+  statusLabel,
+  statusSymbol,
+  relativeTime,
+  diffSummary,
+  parseDiff,
+} from "./git.js";
 
 test("normalizeGitPanel groups staged and unstaged changes", () => {
   const panel = normalizeGitPanel({
@@ -64,6 +72,15 @@ test("statusSymbol keeps git letters and doubles untracked", () => {
   assert.equal(statusSymbol("M"), "M");
   assert.equal(statusSymbol("?"), "??");
   assert.equal(statusSymbol("A"), "A");
+});
+
+test("fileKind identifies common source, config, and asset files", () => {
+  assert.equal(fileKind("src/App.jsx"), "react");
+  assert.equal(fileKind("src/theme.scss"), "css");
+  assert.equal(fileKind("public/icon.svg"), "svg");
+  assert.equal(fileKind("config/.gitignore"), "config");
+  assert.equal(fileKind("Cargo.lock"), "lock");
+  assert.equal(fileKind("README"), "file");
 });
 
 test("relativeTime formats past timestamps", () => {

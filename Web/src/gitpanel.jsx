@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { normalizeGitPanel, relativeTime, statusLabel, statusSymbol, diffSummary } from "./git.js";
+import {
+  fileKind,
+  fileKindGlyphs,
+  fileKindLabels,
+  normalizeGitPanel,
+  relativeTime,
+  statusLabel,
+  statusSymbol,
+  diffSummary,
+} from "./git.js";
 
 function DiffCounts({ added, deleted }) {
   if (!added && !deleted) return null;
@@ -15,6 +24,19 @@ function changeKey(change, commit = "") {
   return commit ? `${commit}:${change.path}` : `${change.staged ? "s" : "u"}:${change.path}`;
 }
 
+function FileKindIcon({ path }) {
+  const kind = fileKind(path);
+  return (
+    <span
+      className={`git-file-icon git-file-icon-${kind}`}
+      title={fileKindLabels[kind] || fileKindLabels.file}
+      aria-hidden="true"
+    >
+      {fileKindGlyphs[kind] || fileKindGlyphs.file}
+    </span>
+  );
+}
+
 function ChangeRow({ change, commit = "", selected, onOpenFile }) {
   return (
     <li>
@@ -27,6 +49,7 @@ function ChangeRow({ change, commit = "", selected, onOpenFile }) {
         <span className={`git-status git-status-${change.status}`} title={statusLabel(change.status)}>
           {statusSymbol(change.status)}
         </span>
+        <FileKindIcon path={change.path} />
         <span className="git-change-path">
           {change.path}
           {change.renameFrom && <span className="git-rename-from"> ← {change.renameFrom}</span>}
@@ -154,6 +177,7 @@ export function GitPanel({
   const [prBody, setPrBody] = useState("");
   const [asyncNotice, setAsyncNotice] = useState(false);
   const busy = Boolean(action);
+  const panelTitle = data?.branch || workspaceName || "Git";
   const changeCount = (data?.staged?.length || 0) + (data?.unstaged?.length || 0);
   const historyCommits = data?.mainBranch && !data.operation ? (data.unmergedCommits || []) : (data?.commits || []);
   const mainShort = data?.mainBranch?.includes("/") ? data.mainBranch.slice(data.mainBranch.indexOf("/") + 1) : data?.mainBranch || "";
@@ -248,7 +272,7 @@ export function GitPanel({
   return (
     <aside className="git-panel" aria-label="Git">
       <header className="git-panel-header">
-        <strong className="git-panel-title">{workspaceName || "Git"}</strong>
+        <strong className="git-panel-title" title={panelTitle}>{panelTitle}</strong>
         <div className="git-panel-header-actions">
           {(refreshing && data) || asyncNotice ? (
             <span className="git-spinner" title={asyncNotice ? "Refreshing in the background" : "Refreshing"} aria-label="Refreshing" />
@@ -269,8 +293,7 @@ export function GitPanel({
           </div>
         )}
         <div className="git-scroll">
-        <section className="git-section git-fixed-section">
-          <h3 className="git-section-title">Branch</h3>
+        <section className="git-section git-fixed-section git-branch-section">
           {data?.operation && (
             <div className="git-operation-warning">
               {operationLabels[data.operation] || data.operation} in progress — resolve it before pushing or pulling
@@ -298,7 +321,7 @@ export function GitPanel({
             </div>
           )}
           {data?.remote && <div className="git-remote">{data.remote}</div>}
-          <div className="git-actions">
+          <div className="git-actions" role="group" aria-label="Git actions">
             <button type="button" className="chrome-button" onClick={onRefresh} disabled={busy}>Refresh</button>
             <button type="button" className="chrome-button" onClick={onPull} disabled={busy || !data}>
               {action === "git.pull" ? "Pulling…" : "Pull"}
@@ -454,6 +477,7 @@ export function GitPanel({
 
         <GitPane
           title={<>Changes{changeCount > 0 && ` (${changeCount})`}</>}
+          className="git-pane-changes"
           open={openPanes.has("changes")}
           onToggle={() => togglePane("changes")}
         >
@@ -463,6 +487,7 @@ export function GitPanel({
 
         <GitPane
           title={<>History{data?.mainBranch && !data.merged && !data.operation && <span className="git-history-scope">not in {data.mainBranch}</span>}</>}
+          className="git-pane-history"
           open={openPanes.has("history")}
           onToggle={() => togglePane("history")}
         >
