@@ -2101,6 +2101,26 @@ func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, 
 	return s.createSession(ctx, "", group.ID, command, kind, title, runtimeKind)
 }
 
+// sessionEnvironment returns the per-session bindings together with the
+// current runtime overrides. The overrides are sent with every new session so
+// a detached Ghostline server can apply settings changed after it started;
+// existing sessions keep the environment they were created with.
+func (s *Service) sessionEnvironment(id, kind string) []string {
+	env := agent.BindEnvironment(id, kind)
+	keys := make([]string, 0, len(s.Settings.RuntimeEnv))
+	for key, value := range s.Settings.RuntimeEnv {
+		if key == "" || value == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		env = append(env, key+"="+s.Settings.RuntimeEnv[key])
+	}
+	return env
+}
+
 func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
 	if workspaceID == "" && groupID == "" {
 		return api.Session{}, errors.New("workspace or terminal group is required")
@@ -2177,7 +2197,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	// Every session gets the binding environment so a CLI started manually
 	// inside a plain shell is bound to the same Warren session by its own
 	// lifecycle hooks.
-	env := agent.BindEnvironment(id, kind)
+	env := s.sessionEnvironment(id, kind)
 	if err := adapter.Create(ctx, runtimeName, workingDirectory, command, env); err != nil {
 		return api.Session{}, err
 	}

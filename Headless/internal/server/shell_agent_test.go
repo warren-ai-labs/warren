@@ -10,6 +10,7 @@ import (
 
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
 
 func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
@@ -215,6 +216,47 @@ func TestCreateSessionInjectsShellBindEnvironment(t *testing.T) {
 	}
 	if strings.Contains(joined, agent.BindEnvKind+"=") {
 		t.Fatalf("shell env must not pin an agent kind: %#v", env)
+	}
+}
+
+func TestCreateSessionAppliesRuntimeEnvironmentOverrides(t *testing.T) {
+	state := newStateWithSession(t, "session-shell", "runtime-shell")
+	runtime := &envRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	service := &Service{
+		Store:   state,
+		Runtime: runtime,
+		Settings: settings.Settings{RuntimeEnv: map[string]string{
+			"TERM":      "xterm-256color",
+			"GIT_PAGER": "less",
+			"PAGER":     "",
+		}},
+	}
+	workspace := state.Snapshot().Workspaces[0]
+
+	session, err := service.CreateSession(context.Background(), workspace.ID, "", "shell", "", "")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	env := runtime.lastEnv()
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("invalid environment entry %q", entry)
+		}
+		values[key] = value
+	}
+	if values["TERM"] != "xterm-256color" {
+		t.Fatalf("TERM = %q, want xterm-256color: %#v", values["TERM"], env)
+	}
+	if values["GIT_PAGER"] != "less" {
+		t.Fatalf("GIT_PAGER = %q, want less: %#v", values["GIT_PAGER"], env)
+	}
+	if _, ok := values["PAGER"]; ok {
+		t.Fatalf("empty runtime override must not be sent: %#v", env)
+	}
+	if values[agent.BindEnvSession] != session.ID {
+		t.Fatalf("session binding was lost: %#v", env)
 	}
 }
 

@@ -168,6 +168,10 @@ func main() {
 	loadedSettings.ApplyRuntimeEnv()
 
 	logger := newLogger(*logFile)
+	ghostlineCleanupContext, stopGhostlineCleanup := context.WithCancel(context.Background())
+	defer stopGhostlineCleanup()
+	go maintainGhostlineArtifactCleanup(ghostlineCleanupContext, *ghostlineSocket, logger)
+
 	token, err := loadOrCreateToken(*tokenPath)
 	if err != nil {
 		fatal(err)
