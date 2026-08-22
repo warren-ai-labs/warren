@@ -1172,12 +1172,12 @@ func (p *wsPeer) enqueueAgentEvents(sessionID string, events []api.AgentEvent) e
 	})
 }
 
-func (p *wsPeer) enqueueAgentActivity(sessionID string, activity api.AgentActivity) error {
-	return p.writeJSON(api.AgentActivityMessage{
-		Type:     "agent.activity",
-		Session:  sessionID,
-		Epoch:    p.server.Service.currentAgentEpoch(),
-		Activity: activity,
+func (p *wsPeer) enqueueAgentStatus(sessionID string, status api.AgentStatus) error {
+	return p.writeJSON(api.AgentStatusMessage{
+		Type:    "agent.status",
+		Session: sessionID,
+		Epoch:   p.server.Service.currentAgentEpoch(),
+		Status:  status,
 	})
 }
 

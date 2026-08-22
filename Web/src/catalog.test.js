@@ -46,7 +46,7 @@ test("catalog keeps agent binding fields on sessions", () => {
         lifecycle: "running",
         agentSessionId: "thread-1",
         transcriptPath: "/work/rollout.jsonl",
-        activity: "working",
+        agentStatus: { activity: "working", attention: null },
       }],
     },
   }));
@@ -54,7 +54,7 @@ test("catalog keeps agent binding fields on sessions", () => {
   assert.equal(session.kind, "codex");
   assert.equal(session.agentSessionId, "thread-1");
   assert.equal(session.transcriptPath, "/work/rollout.jsonl");
-  assert.equal(session.activity, "working");
+  assert.deepEqual(session.agentStatus, { activity: "working", attention: null });
 });
 
 test("catalog keeps merge state on workspaces", () => {

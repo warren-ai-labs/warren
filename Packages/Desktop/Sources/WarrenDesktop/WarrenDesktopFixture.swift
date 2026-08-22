@@ -101,9 +101,11 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     public let pinned: Bool
     public let kind: TerminalSessionKind
     public let state: WarrenDesktopSessionState
-    public let activity: AgentActivityState?
+    public let agentStatus: AgentStatus?
     public let runtimeProcess: String
     public let workingDirectory: String
+
+    public var activity: AgentActivityState? { agentStatus?.activity }
 
     /// Single display-name rule: a user-set custom title wins, otherwise the
     /// generated default title is shown.
@@ -123,6 +125,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         kind: TerminalSessionKind = .shell,
         state: WarrenDesktopSessionState = .attached,
         activity: AgentActivityState? = nil,
+        agentStatus: AgentStatus? = nil,
         runtimeProcess: String = "",
         workingDirectory: String = ""
     ) {
@@ -139,12 +142,16 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.pinned = pinned
         self.kind = kind
         self.state = state
-        self.activity = activity
+        self.agentStatus = agentStatus ?? activity.map { AgentStatus(activity: $0) }
         self.runtimeProcess = runtimeProcess
         self.workingDirectory = workingDirectory
     }
 
     public func withActivity(_ activity: AgentActivityState?) -> Self {
+        withAgentStatus(activity.map { AgentStatus(activity: $0) })
+    }
+
+    public func withAgentStatus(_ agentStatus: AgentStatus?) -> Self {
         Self(
             id: id,
             workspaceID: workspaceID,
@@ -155,7 +162,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             pinned: pinned,
             kind: kind,
             state: state,
-            activity: activity,
+            agentStatus: agentStatus,
             runtimeProcess: runtimeProcess,
             workingDirectory: workingDirectory
         )
@@ -581,12 +588,19 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         _ activity: AgentActivityState?,
         for sessionID: TerminalSessionID
     ) -> Self {
+        withSessionAgentStatus(activity.map { AgentStatus(activity: $0) }, for: sessionID)
+    }
+
+    public func withSessionAgentStatus(
+        _ agentStatus: AgentStatus?,
+        for sessionID: TerminalSessionID
+    ) -> Self {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else {
             return self
         }
-        guard sessions[index].activity != activity else { return self }
+        guard sessions[index].agentStatus != agentStatus else { return self }
         var nextSessions = sessions
-        nextSessions[index] = nextSessions[index].withActivity(activity)
+        nextSessions[index] = nextSessions[index].withAgentStatus(agentStatus)
         return Self(
             host: host,
             groups: groups,
@@ -605,8 +619,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 private extension AgentActivityState {
     var workspacePriority: Int {
         switch self {
-        case .failed: 5
-        case .waitingForInput: 4
+        case .failed: 6
+        case .blocked: 5
+        case .stalled: 4
         case .working: 3
         case .ready: 1
         case .exited: 0

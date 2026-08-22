@@ -1874,7 +1874,7 @@ final class WarrenDesktopTests: XCTestCase {
             tabID: "waiting",
             title: "Waiting",
             kind: .claude,
-            activity: .waitingForInput
+            activity: .blocked
         )
         let projection = WarrenDesktopProjection(
             host: fixture.host,
@@ -1924,7 +1924,7 @@ final class WarrenDesktopTests: XCTestCase {
                 workspaceID: workspaceID,
                 title: "Waiting",
                 kind: .claude,
-                activity: .waitingForInput
+                activity: .blocked
             ),
         ]
         let tabs = [
@@ -1955,7 +1955,7 @@ final class WarrenDesktopTests: XCTestCase {
         )
 
         let summary = projection.workspaceActivitySummaries[workspaceID]
-        XCTAssertEqual(summary?.activity, .waitingForInput)
+        XCTAssertEqual(summary?.activity, .blocked)
         XCTAssertEqual(summary?.activeTabCount, 2)
     }
 

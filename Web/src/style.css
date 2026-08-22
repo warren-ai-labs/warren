@@ -545,7 +545,8 @@ button:disabled {
   background: var(--color-status-working);
 }
 
-.activity.waitingForInput {
+.activity.blocked,
+.activity.stalled {
   background: var(--color-status-waiting);
 }
 

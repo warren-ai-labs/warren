@@ -371,32 +371,32 @@ final class WarrenRemoteModelTests: XCTestCase {
 
     func testRosterActivityOverridesStaleLiveActivity() {
         XCTAssertEqual(
-            WarrenRemoteApplicationModel.resolvedAgentActivity(
-                rosterActivity: "ready",
-                liveActivity: .working
-            ),
+            WarrenRemoteApplicationModel.resolvedAgentStatus(
+                rosterStatus: .init(activity: "ready", attention: nil),
+                liveStatus: AgentStatus(activity: .working)
+            )?.activity,
             .ready
         )
         XCTAssertEqual(
-            WarrenRemoteApplicationModel.resolvedAgentActivity(
-                rosterActivity: "working",
-                liveActivity: .ready
-            ),
+            WarrenRemoteApplicationModel.resolvedAgentStatus(
+                rosterStatus: .init(activity: "working", attention: nil),
+                liveStatus: AgentStatus(activity: .ready)
+            )?.activity,
             .working
         )
     }
 
     func testLiveActivityFillsMissingRosterActivity() {
         XCTAssertEqual(
-            WarrenRemoteApplicationModel.resolvedAgentActivity(
-                rosterActivity: nil,
-                liveActivity: .working
-            ),
+            WarrenRemoteApplicationModel.resolvedAgentStatus(
+                rosterStatus: nil,
+                liveStatus: AgentStatus(activity: .working)
+            )?.activity,
             .working
         )
-        XCTAssertNil(WarrenRemoteApplicationModel.resolvedAgentActivity(
-            rosterActivity: nil,
-            liveActivity: nil
+        XCTAssertNil(WarrenRemoteApplicationModel.resolvedAgentStatus(
+            rosterStatus: nil,
+            liveStatus: nil
         ))
     }
 
@@ -506,7 +506,7 @@ final class WarrenRemoteModelTests: XCTestCase {
             expected: .working
         ))
         XCTAssertFalse(WarrenActivityDismissal.canDismiss(
-            candidate: .waitingForInput,
+            candidate: .blocked,
             expected: .working
         ))
     }

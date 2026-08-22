@@ -214,7 +214,7 @@ func TestWatcherTailsNewLines(t *testing.T) {
 
 	var mu sync.Mutex
 	var seen []api.AgentEvent
-	watcher := Start("session-1", "codex", path, func(events []api.AgentEvent, _ api.AgentActivity) {
+	watcher := Start("session-1", "codex", path, func(events []api.AgentEvent, _ api.AgentStatus) {
 		mu.Lock()
 		seen = append(seen, events...)
 		mu.Unlock()
@@ -273,7 +273,7 @@ func TestWatcherPreservesFastTurnBoundaries(t *testing.T) {
 	}
 	turns := make(chan observedTurns, 2)
 	initial := make(chan struct{}, 1)
-	watcher := Start("session-1", "codex", path, func([]api.AgentEvent, api.AgentActivity) {
+	watcher := Start("session-1", "codex", path, func([]api.AgentEvent, api.AgentStatus) {
 		initial <- struct{}{}
 	}, nil, func(value []api.AgentTurn, replay bool) {
 		turns <- observedTurns{turns: value, replay: replay}
@@ -513,14 +513,14 @@ func TestClaudeApiErrorBecomesErrorEvent(t *testing.T) {
 	}
 }
 
-func TestClaudeUserInterruptBecomesWaitingForInput(t *testing.T) {
+func TestClaudeUserInterruptReturnsReady(t *testing.T) {
 	parser := newParser("claude")
 	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:00Z","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`))
 	if len(events) != 1 || events[0].Type != "system" {
 		t.Fatalf("interrupt event = %#v", events)
 	}
-	if got := parser.Activity(); got != api.AgentActivityWaitingForInput {
-		t.Fatalf("activity after Claude interrupt = %q, want waitingForInput", got)
+	if got := parser.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("activity after Claude interrupt = %q, want ready", got)
 	}
 }
 
@@ -580,13 +580,13 @@ func TestCodexNon200ErrorsAllFail(t *testing.T) {
 	}
 }
 
-func TestCodexTurnAbortedAfterErrorIsWaitingForInput(t *testing.T) {
+func TestCodexTurnAbortedAfterErrorReturnsReady(t *testing.T) {
 	parser := newParser("codex")
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"event_msg","payload":{"type":"task_started"}}`))
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"task_complete","error":{"message":"unexpected status 403 Forbidden: quota exceeded","codex_error_info":"other"}}}`))
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}`))
-	if got := parser.Activity(); got != api.AgentActivityWaitingForInput {
-		t.Fatalf("activity after Esc = %q, want waitingForInput", got)
+	if got := parser.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("activity after Esc = %q, want ready", got)
 	}
 
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:03Z","type":"event_msg","payload":{"type":"task_started"}}`))

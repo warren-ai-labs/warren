@@ -173,11 +173,11 @@ type outputSession struct {
 }
 
 type agentSession struct {
-	mu       sync.Mutex
-	watcher  *agent.Watcher
-	events   []api.AgentEvent
-	activity api.AgentActivity
-	turn     api.AgentTurn
+	mu      sync.Mutex
+	watcher *agent.Watcher
+	events  []api.AgentEvent
+	status  api.AgentStatus
+	turn    api.AgentTurn
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -709,10 +709,10 @@ func (s *Service) RosterVersion(ctx context.Context) (api.State, uint64) {
 				session.Directory = metadata.Directory
 			}
 		}
-		if activity := s.agentActivity(session.ID); activity != "" {
-			session.AgentActivity = activity
+		if status := s.agentStatus(session.ID); status.Activity != "" {
+			session.AgentStatus = &status
 		} else if session.Kind == "codex" || session.Kind == "claude" {
-			session.AgentActivity = api.AgentActivityReady
+			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 	}
 	return state, revision
@@ -2826,8 +2826,8 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 			s.clearShellAgent(session)
 			return nil, nil
 		}
-		state, stateErr := agent.ReadAgentState(agent.StatePath(session.ID))
-		if stateErr == nil && state == api.AgentActivityExited {
+		state, stateErr := agent.ReadAgentStatus(agent.StatePath(session.ID))
+		if stateErr == nil && state.Activity == api.AgentActivityExited {
 			s.clearShellAgent(session)
 			return nil, nil
 		}
@@ -2855,12 +2855,12 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	s.lazyInit()
 	s.agentsMu.Lock()
 	existing := s.agents[sessionID]
-	state, _ := agent.ReadAgentState(agent.StatePath(sessionID))
+	state, _ := agent.ReadAgentStatus(agent.StatePath(sessionID))
 	if existing != nil && existing.watcher != nil && existing.watcher.Path() == transcriptPath {
-		if seedReady && state != api.AgentActivityExited {
+		if seedReady && state.Activity != api.AgentActivityExited {
 			existing.mu.Lock()
-			if existing.activity == api.AgentActivityExited {
-				existing.activity = api.AgentActivityReady
+			if existing.status.Activity == api.AgentActivityExited {
+				existing.status = api.AgentStatus{Activity: api.AgentActivityReady}
 			}
 			existing.mu.Unlock()
 		}
@@ -2874,12 +2874,12 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.watcher = nil
 		existing.mu.Lock()
 		existing.events = nil
-		existing.activity = ""
+		existing.status = api.AgentStatus{}
 		existing.turn = api.AgentTurn{}
 		existing.mu.Unlock()
 	} else if existing != nil {
 		existing.mu.Lock()
-		existing.activity = ""
+		existing.status = api.AgentStatus{}
 		existing.mu.Unlock()
 	}
 	if existing == nil {
@@ -2888,14 +2888,14 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	}
 	if seedReady {
 		existing.mu.Lock()
-		if existing.activity == "" || existing.activity == api.AgentActivityExited {
-			existing.activity = api.AgentActivityReady
+		if existing.status.Activity == "" || existing.status.Activity == api.AgentActivityExited {
+			existing.status = api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 		existing.mu.Unlock()
 	}
-	if state == api.AgentActivityExited {
+	if state.Activity == api.AgentActivityExited {
 		existing.mu.Lock()
-		existing.activity = api.AgentActivityExited
+		existing.status = state
 		existing.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
@@ -2910,11 +2910,11 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		sessionID,
 		provider,
 		transcriptPath,
-		func(events []api.AgentEvent, activity api.AgentActivity) {
-			s.recordAgentEvents(sessionID, events, activity)
+		func(events []api.AgentEvent, status api.AgentStatus) {
+			s.recordAgentEvents(sessionID, events, status)
 		},
-		func(activity api.AgentActivity) {
-			s.recordAgentActivity(sessionID, activity)
+		func(status api.AgentStatus) {
+			s.recordAgentStatus(sessionID, status)
 		},
 		func(turns []api.AgentTurn, replay bool) {
 			s.recordAgentTurns(sessionID, turns, !replay || s.hasAgentPeers(sessionID))
@@ -3026,35 +3026,35 @@ func (s *Service) persistAgentMeta(sessionID, agentSessionID, transcriptPath str
 
 // recordAgentEvents stores a bounded event history and forwards the batch to
 // every peer attached to the session.
-func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, activity api.AgentActivity) {
+func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
 	if len(events) == 0 {
 		return
 	}
 	s.lazyInit()
 	s.agentsMu.Lock()
-	effectiveActivity := activity
+	effectiveStatus := status
 	if entry := s.agents[sessionID]; entry != nil {
 		entry.mu.Lock()
 		entry.events = append(entry.events, events...)
 		if len(entry.events) > 2000 {
 			entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
 		}
-		if entry.activity == api.AgentActivityExited && activity != api.AgentActivityExited {
-			effectiveActivity = entry.activity
+		if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
+			effectiveStatus = entry.status
 		} else {
-			entry.activity = activity
-			effectiveActivity = entry.activity
+			entry.status = status
+			effectiveStatus = entry.status
 		}
 		entry.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
-	s.broadcastAgentIncrements(sessionID, events, effectiveActivity)
+	s.broadcastAgentIncrements(sessionID, events, effectiveStatus)
 }
 
-// recordAgentActivity forwards a state change that arrived without new
-// transcript events, such as a tool call that has been waiting too long.
-func (s *Service) recordAgentActivity(sessionID string, activity api.AgentActivity) {
-	s.setAgentActivity(sessionID, activity, false)
+// recordAgentStatus forwards a status change that arrived without new
+// transcript events, such as a liveness warning.
+func (s *Service) recordAgentStatus(sessionID string, status api.AgentStatus) {
+	s.setAgentStatus(sessionID, status, false)
 }
 
 // recordAgentTurns stores the latest turn cursor and optionally broadcasts
@@ -3082,13 +3082,13 @@ func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broa
 	}
 }
 
-// forceAgentActivity records a state transition that must override an exited
+// forceAgentStatus records a state transition that must override an exited
 // marker, such as a new SessionStart resetting the shell overlay to ready.
-func (s *Service) forceAgentActivity(sessionID string, activity api.AgentActivity) {
-	s.setAgentActivity(sessionID, activity, true)
+func (s *Service) forceAgentStatus(sessionID string, status api.AgentStatus) {
+	s.setAgentStatus(sessionID, status, true)
 }
 
-func (s *Service) setAgentActivity(sessionID string, activity api.AgentActivity, force bool) {
+func (s *Service) setAgentStatus(sessionID string, status api.AgentStatus, force bool) {
 	s.lazyInit()
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
@@ -3097,15 +3097,15 @@ func (s *Service) setAgentActivity(sessionID string, activity api.AgentActivity,
 		s.agents[sessionID] = entry
 	}
 	entry.mu.Lock()
-	if !force && entry.activity == api.AgentActivityExited && activity != api.AgentActivityExited {
+	if !force && entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
 		return
 	}
-	entry.activity = activity
+	entry.status = status
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
-	s.broadcastAgentActivity(sessionID, activity)
+	s.broadcastAgentStatus(sessionID, status)
 }
 
 func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
@@ -3236,17 +3236,17 @@ func splitAgentEvents(events []api.AgentEvent, maxBytes int) [][]api.AgentEvent 
 	return batches
 }
 
-func (s *Service) agentActivity(sessionID string) api.AgentActivity {
+func (s *Service) agentStatus(sessionID string) api.AgentStatus {
 	s.lazyInit()
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	s.agentsMu.Unlock()
 	if entry == nil {
-		return ""
+		return api.AgentStatus{}
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	return entry.activity
+	return entry.status
 }
 
 func (s *Service) agentTurn(sessionID string) api.AgentTurn {
@@ -3309,19 +3309,19 @@ func (s *Service) applyAgentState(session api.Session) {
 	if session.Kind != "codex" && session.Kind != "claude" {
 		return
 	}
-	state, err := agent.ReadAgentState(agent.StatePath(session.ID))
-	if err != nil || state == "" {
+	state, err := agent.ReadAgentStatus(agent.StatePath(session.ID))
+	if err != nil || state.Activity == "" {
 		return
 	}
-	current := s.agentActivity(session.ID)
-	switch state {
+	current := s.agentStatus(session.ID)
+	switch state.Activity {
 	case api.AgentActivityExited:
-		if current != state {
-			s.recordAgentActivity(session.ID, state)
+		if current.Activity != state.Activity {
+			s.recordAgentStatus(session.ID, state)
 		}
 	case api.AgentActivityReady:
-		if current == api.AgentActivityExited {
-			s.forceAgentActivity(session.ID, state)
+		if current.Activity == api.AgentActivityExited {
+			s.forceAgentStatus(session.ID, state)
 		}
 	}
 }
@@ -3339,16 +3339,16 @@ func (s *Service) stopAgent(sessionID string) {
 
 // broadcastAgentIncrements pushes a live batch of agent events to attached
 // peers, splitting the batch so no single WebSocket message exceeds
-// agentMessageMaxBytes, then broadcasts the accompanying activity state as
+// agentMessageMaxBytes, then broadcasts the accompanying complete status as
 // its own lightweight message.
-func (s *Service) broadcastAgentIncrements(sessionID string, events []api.AgentEvent, activity api.AgentActivity) {
+func (s *Service) broadcastAgentIncrements(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
 	if len(events) > 0 {
 		for _, batch := range splitAgentEvents(events, agentMessageMaxBytes) {
 			s.broadcastAgentBatch(sessionID, batch)
 		}
 	}
-	if activity != "" {
-		s.broadcastAgentActivity(sessionID, activity)
+	if status.Activity != "" {
+		s.broadcastAgentStatus(sessionID, status)
 	}
 }
 
@@ -3372,12 +3372,12 @@ func (s *Service) broadcastAgentReset(sessionID string) {
 	}, sessionID)
 }
 
-func (s *Service) broadcastAgentActivity(sessionID string, activity api.AgentActivity) {
-	if activity == "" {
+func (s *Service) broadcastAgentStatus(sessionID string, status api.AgentStatus) {
+	if status.Activity == "" {
 		return
 	}
 	s.broadcastAgent(func(peer *wsPeer) error {
-		return peer.enqueueAgentActivity(sessionID, activity)
+		return peer.enqueueAgentStatus(sessionID, status)
 	}, sessionID)
 }
 
@@ -3813,8 +3813,8 @@ func (s *Service) attachOutputLocked(ctx context.Context, peer *wsPeer, session 
 	// its own lightweight message. Sending every retained event here would
 	// create one oversized WebSocket message for transcripts with thousands
 	// of events (and would burden clients that only render the status light).
-	if activity := s.agentActivity(session.ID); activity != "" {
-		if err := peer.enqueueAgentActivity(session.ID, activity); err != nil {
+	if status := s.agentStatus(session.ID); status.Activity != "" {
+		if err := peer.enqueueAgentStatus(session.ID, status); err != nil {
 			return err
 		}
 	}

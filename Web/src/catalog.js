@@ -19,7 +19,7 @@ export function rosterFromMessage(message = {}) {
           directory: session.directory || "",
           agentSessionId: session.agentSessionId || "",
           transcriptPath: session.transcriptPath || "",
-          activity: session.activity || "",
+          agentStatus: session.agentStatus || null,
           pinned: session.pinned || false,
         })),
     };
@@ -30,6 +30,24 @@ export function rosterFromMessage(message = {}) {
     workspaces: message.workspaces || [],
     tabs: message.tabs || [],
   };
+}
+
+/**
+ * Applies a live agent status without waiting for the next roster snapshot.
+ * The catalog keeps the raw tab list and all derived indexes coherent so
+ * every navigation surface observes the same status immediately.
+ */
+export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
+  if (!catalog.sessions.has(sessionID)) return catalog;
+  const tabs = catalog.tabs.map(tab => (
+    tab.session === sessionID ? { ...tab, agentStatus } : tab
+  ));
+  return buildCatalog({
+    host: catalog.host,
+    projects: catalog.projects,
+    workspaces: catalog.workspaces,
+    tabs,
+  });
 }
 
 export function buildCatalog(roster = rosterFromMessage()) {

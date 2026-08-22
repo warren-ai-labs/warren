@@ -275,43 +275,43 @@ func defaultClaudeProjectsRoot() string {
 // lines. A truncated file restarts from byte zero without re-emitting the
 // already-served prefix, which is acceptable for a best-effort side channel.
 type Watcher struct {
-	sessionID  string
-	provider   string
-	path       string
-	interval   time.Duration
-	onEvents   func([]api.AgentEvent, api.AgentActivity)
-	onActivity func(api.AgentActivity)
-	onTurns    func([]api.AgentTurn, bool)
-	parser     *parser
+	sessionID string
+	provider  string
+	path      string
+	interval  time.Duration
+	onEvents  func([]api.AgentEvent, api.AgentStatus)
+	onStatus  func(api.AgentStatus)
+	onTurns   func([]api.AgentTurn, bool)
+	parser    *parser
 
-	mu           sync.Mutex
-	events       []api.AgentEvent
-	lastActivity api.AgentActivity
-	stop         chan struct{}
-	done         chan struct{}
-	ready        chan struct{}
-	once         sync.Once
+	mu         sync.Mutex
+	events     []api.AgentEvent
+	lastStatus api.AgentStatus
+	stop       chan struct{}
+	done       chan struct{}
+	ready      chan struct{}
+	once       sync.Once
 }
 
 // Start begins tailing path immediately in a background goroutine.
 func Start(
 	sessionID, provider, path string,
-	onEvents func([]api.AgentEvent, api.AgentActivity),
-	onActivity func(api.AgentActivity),
+	onEvents func([]api.AgentEvent, api.AgentStatus),
+	onStatus func(api.AgentStatus),
 	onTurns func([]api.AgentTurn, bool),
 ) *Watcher {
 	watcher := &Watcher{
-		sessionID:  sessionID,
-		provider:   provider,
-		path:       path,
-		interval:   watchInterval,
-		onEvents:   onEvents,
-		onActivity: onActivity,
-		onTurns:    onTurns,
-		parser:     newParser(provider),
-		stop:       make(chan struct{}),
-		done:       make(chan struct{}),
-		ready:      make(chan struct{}),
+		sessionID: sessionID,
+		provider:  provider,
+		path:      path,
+		interval:  watchInterval,
+		onEvents:  onEvents,
+		onStatus:  onStatus,
+		onTurns:   onTurns,
+		parser:    newParser(provider),
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
+		ready:     make(chan struct{}),
 	}
 	go watcher.loop()
 	return watcher
@@ -331,7 +331,7 @@ func (w *Watcher) Path() string {
 }
 
 // WaitReady waits until the initial transcript replay has established the
-// current activity and turn cursor.
+// current status and turn cursor.
 func (w *Watcher) WaitReady(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -355,7 +355,7 @@ func (w *Watcher) loop() {
 	events, next, err := readNew(w.path, offset, w.parser)
 	if err == nil {
 		offset = next
-		w.lastActivity = w.parser.Activity()
+		w.lastStatus = w.parser.Status()
 		if len(events) > 0 {
 			for index := range events {
 				sequence++
@@ -363,7 +363,7 @@ func (w *Watcher) loop() {
 			}
 			w.append(events)
 			if w.onEvents != nil {
-				w.onEvents(events, w.lastActivity)
+				w.onEvents(events, w.lastStatus)
 			}
 		}
 		// Historical replay establishes the current turn cursor without
@@ -385,16 +385,16 @@ func (w *Watcher) loop() {
 				continue
 			}
 			offset = next
-			activity := w.parser.Activity()
+			status := w.parser.Status()
 			if len(events) > 0 {
 				for index := range events {
 					sequence++
 					events[index].Sequence = sequence
 				}
 				w.append(events)
-				w.lastActivity = activity
+				w.lastStatus = status
 				if w.onEvents != nil {
-					w.onEvents(events, activity)
+					w.onEvents(events, status)
 				}
 			}
 			// Events are delivered first so a waiter can retrieve the complete
@@ -403,10 +403,10 @@ func (w *Watcher) loop() {
 				w.onTurns(turns, false)
 			}
 			w.parser.Tick(time.Now())
-			if activity := w.parser.Activity(); activity != w.lastActivity {
-				w.lastActivity = activity
-				if w.onActivity != nil {
-					w.onActivity(activity)
+			if status := w.parser.Status(); !status.Equal(w.lastStatus) {
+				w.lastStatus = status
+				if w.onStatus != nil {
+					w.onStatus(status)
 				}
 			}
 		}
@@ -533,7 +533,12 @@ func (p *parser) parse(line []byte) []api.AgentEvent {
 	return events
 }
 
-// Activity is the presentation state after every line parsed so far.
+// Status is the presentation state after every line parsed so far.
+func (p *parser) Status() api.AgentStatus {
+	return p.tracker.Status()
+}
+
+// Activity returns the lifecycle portion of Status.
 func (p *parser) Activity() api.AgentActivity {
 	return p.tracker.Activity()
 }
@@ -544,7 +549,7 @@ func (p *parser) DrainTurns() []api.AgentTurn {
 }
 
 // Tick lets the tracker notice work that stalled without new transcript
-// lines, such as a tool call waiting on user approval.
+// lines. A stall is a warning, never an inferred approval request.
 func (p *parser) Tick(now time.Time) {
 	p.tracker.Tick(now)
 }

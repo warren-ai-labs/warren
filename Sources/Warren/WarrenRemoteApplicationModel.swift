@@ -113,7 +113,25 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let directory: String?
         let lifecycle: String
         let pinned: Bool?
-        let activity: String?
+        let agentStatus: AgentStatus?
+    }
+    struct AgentStatus: Decodable, Sendable, Equatable {
+        let activity: String
+        let attention: Attention?
+
+        struct Attention: Decodable, Sendable, Equatable {
+            let kind: String
+            let reason: String
+            let requestID: String?
+            let since: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case kind
+                case reason
+                case requestID = "requestId"
+                case since
+            }
+        }
     }
 
     let host: Host
@@ -199,7 +217,7 @@ struct WarrenResizeRequestBuffer: Sendable {
 
 private enum RemoteWireEvent: Sendable {
     case roster
-    case agent(sessionID: TerminalSessionID, activity: AgentActivityState)
+    case agent(sessionID: TerminalSessionID, status: AgentStatus)
     case output(Data)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
     case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool)
@@ -583,18 +601,14 @@ private actor WarrenRemoteWire {
                   let roster = try? JSONDecoder().decode(RemoteRoster.self, from: encoded) {
             guard latestRosterSignal.offer(roster) else { return true }
             return await eventBuffer.send(.roster)
-        } else if type == "agent.activity",
+        } else if type == "agent.status",
                   let sessionString = object["session"] as? String,
                   let sessionID = TerminalSessionID(uuidString: sessionString),
-                  let activityString = object["activity"] as? String,
-                  let activity = AgentActivityState(rawValue: activityString) {
-            return await eventBuffer.send(.agent(sessionID: sessionID, activity: activity))
-        } else if type == "agent", // Legacy daemon: events and activity in one message.
-                  let sessionString = object["session"] as? String,
-                  let sessionID = TerminalSessionID(uuidString: sessionString),
-                  let activityString = object["activity"] as? String,
-                  let activity = AgentActivityState(rawValue: activityString) {
-            return await eventBuffer.send(.agent(sessionID: sessionID, activity: activity))
+                  let rawStatus = object["status"],
+                  let encodedStatus = try? JSONSerialization.data(withJSONObject: rawStatus),
+                  let remoteStatus = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: encodedStatus),
+                  let status = Self.agentStatus(from: remoteStatus) {
+            return await eventBuffer.send(.agent(sessionID: sessionID, status: status))
         } else if type == "maintenance" {
             return await eventBuffer.send(.maintenance(message: object["message"] as? String))
         } else if type == "attached" || type == "synced" {
@@ -625,6 +639,20 @@ private actor WarrenRemoteWire {
     private nonisolated static func json(_ value: [String: Any]) -> String {
         let data = try! JSONSerialization.data(withJSONObject: value)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private nonisolated static func agentStatus(from value: RemoteRoster.AgentStatus) -> AgentStatus? {
+        guard let activity = AgentActivityState(rawValue: value.activity) else { return nil }
+        let attention = value.attention.flatMap { raw -> AgentAttention? in
+            guard let kind = AgentAttentionKind(rawValue: raw.kind) else { return nil }
+            return AgentAttention(
+                kind: kind,
+                reason: raw.reason,
+                requestID: raw.requestID,
+                since: raw.since
+            )
+        }
+        return AgentStatus(activity: activity, attention: attention)
     }
 }
 
@@ -776,7 +804,7 @@ final class WarrenRemoteApplicationModel {
     @ObservationIgnored private var maintenanceResetTask: Task<Void, Never>?
     @ObservationIgnored private var connectionIssueTask: Task<Void, Never>?
     @ObservationIgnored private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
-    @ObservationIgnored private var agentActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
+    @ObservationIgnored private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
     @ObservationIgnored private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
     @ObservationIgnored private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
     @ObservationIgnored private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
@@ -860,7 +888,7 @@ final class WarrenRemoteApplicationModel {
         wire = nil
         currentRoster = nil
         appliedLiveTabSessionIDs.removeAll()
-        agentActivityBySessionID.removeAll()
+        agentStatusBySessionID.removeAll()
         tabOrderByWorkspaceID.removeAll()
         tabOrderByTerminalGroupID.removeAll()
         dismissedActivityBySessionID.removeAll()
@@ -2631,8 +2659,9 @@ final class WarrenRemoteApplicationModel {
             currentRoster = roster
             apply(roster)
             ensureDeletionReconciliation(using: wire)
-        case .agent(let sessionID, let activity):
-            agentActivityBySessionID[sessionID] = activity
+        case .agent(let sessionID, let status):
+            agentStatusBySessionID[sessionID] = status
+            let activity = status.activity
             let presentation = WarrenActivityDismissal.presentedActivity(
                 candidate: activity,
                 dismissed: dismissedActivityBySessionID[sessionID]
@@ -2644,8 +2673,9 @@ final class WarrenRemoteApplicationModel {
             // next roster tick. The roster remains authoritative when it is
             // applied, so a stale event cache cannot overwrite a newer
             // server snapshot later.
+            let presentedStatus = presentation.activity == nil ? nil : status
             publishProjectionIfChanged(
-                projection.withSessionActivity(presentation.activity, for: sessionID)
+                projection.withSessionAgentStatus(presentedStatus, for: sessionID)
             )
         case .maintenance(let message):
             maintenanceMessage = message?.isEmpty == false ? message : "Warren is updating"
@@ -2801,10 +2831,11 @@ final class WarrenRemoteApplicationModel {
             return (value, id, workspaceID, terminalGroupID)
         }
         let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
-            let candidateActivity = Self.resolvedAgentActivity(
-                rosterActivity: value.activity,
-                liveActivity: agentActivityBySessionID[id]
+            let candidateStatus = Self.resolvedAgentStatus(
+                rosterStatus: value.agentStatus,
+                liveStatus: agentStatusBySessionID[id]
             )
+            let candidateActivity = candidateStatus?.activity
             let presentation = WarrenActivityDismissal.presentedActivity(
                 candidate: candidateActivity,
                 dismissed: dismissedActivityBySessionID[id]
@@ -2822,7 +2853,7 @@ final class WarrenRemoteApplicationModel {
                 pinned: value.pinned ?? false,
                 kind: TerminalSessionKind(rawValue: value.kind) ?? .custom,
                 state: value.lifecycle == "running" ? .attached : .exited,
-                activity: presentation.activity,
+                agentStatus: presentation.activity == nil ? nil : candidateStatus,
                 runtimeProcess: value.process ?? value.command ?? "",
                 workingDirectory: value.directory
                     ?? workspaceID.flatMap { workspacePaths[$0] }
@@ -2834,13 +2865,13 @@ final class WarrenRemoteApplicationModel {
         dismissedActivityBySessionID = dismissedActivityBySessionID.filter {
             liveSessionIDs.contains($0.key)
         }
-        let activeActivitySessionIDs = Set(
+        let activeStatusSessionIDs = Set(
             remoteSessions.compactMap { value, id, _, _ in
-                (value.activity ?? "").isEmpty ? nil : id
+                value.agentStatus == nil ? nil : id
             }
         )
-        agentActivityBySessionID = agentActivityBySessionID.filter {
-            liveSessionIDs.contains($0.key) && activeActivitySessionIDs.contains($0.key)
+        agentStatusBySessionID = agentStatusBySessionID.filter {
+            liveSessionIDs.contains($0.key) && activeStatusSessionIDs.contains($0.key)
         }
         // Ended sessions stay in the projection for history, but they are
         // not openable tabs: attaching to them would fail and leave the user
@@ -3280,11 +3311,24 @@ final class WarrenRemoteApplicationModel {
 
     /// The daemon roster is the durable snapshot. A live event is only a
     /// fallback for sessions whose snapshot has not exposed activity yet.
-    nonisolated static func resolvedAgentActivity(
-        rosterActivity: String?,
-        liveActivity: AgentActivityState?
-    ) -> AgentActivityState? {
-        AgentActivityState(rawValue: rosterActivity ?? "") ?? liveActivity
+    nonisolated static func resolvedAgentStatus(
+        rosterStatus: RemoteRoster.AgentStatus?,
+        liveStatus: AgentStatus?
+    ) -> AgentStatus? {
+        if let rosterStatus,
+           let activity = AgentActivityState(rawValue: rosterStatus.activity) {
+            let attention = rosterStatus.attention.flatMap { value -> AgentAttention? in
+                guard let kind = AgentAttentionKind(rawValue: value.kind) else { return nil }
+                return AgentAttention(
+                    kind: kind,
+                    reason: value.reason,
+                    requestID: value.requestID,
+                    since: value.since
+                )
+            }
+            return AgentStatus(activity: activity, attention: attention)
+        }
+        return liveStatus
     }
 
     private func publishNavigationIfChanged(_ nextNavigation: WarrenDesktopNavigationState) {

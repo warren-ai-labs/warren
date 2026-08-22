@@ -35,8 +35,8 @@ func TestActivityTrackerLifecycle(t *testing.T) {
 	}
 
 	tracker.TurnAborted()
-	if got := tracker.Activity(); got != api.AgentActivityWaitingForInput {
-		t.Fatalf("after turn abort = %q, want waiting for input", got)
+	if got := tracker.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("after turn abort = %q, want ready", got)
 	}
 }
 
@@ -69,19 +69,42 @@ func TestActivityTrackerNoticesStalledTool(t *testing.T) {
 
 	tracker.Observe(api.AgentEvent{Type: "user"})
 	tracker.Observe(api.AgentEvent{Type: "tool_call", Timestamp: started})
-	tracker.Tick(started.Add(4 * time.Second))
+	tracker.Tick(started.Add(29 * time.Second))
 	if got := tracker.Activity(); got != api.AgentActivityWorking {
 		t.Fatalf("before timeout = %q, want working", got)
 	}
 
-	tracker.Tick(started.Add(6 * time.Second))
-	if got := tracker.Activity(); got != api.AgentActivityWaitingForInput {
-		t.Fatalf("after timeout = %q, want waiting for input", got)
+	tracker.Tick(started.Add(31 * time.Second))
+	if got := tracker.Activity(); got != api.AgentActivityStalled {
+		t.Fatalf("after stall = %q, want stalled", got)
+	}
+	status := tracker.Status()
+	if status.Attention == nil || status.Attention.Kind != api.AgentAttentionWarning || status.Attention.Reason != "stalled" {
+		t.Fatalf("stalled status = %#v, want warning/stalled", status)
 	}
 
 	tracker.Observe(api.AgentEvent{Type: "tool_output", ToolStatus: "success"})
 	if got := tracker.Activity(); got != api.AgentActivityWorking {
 		t.Fatalf("after tool result = %q, want working", got)
+	}
+}
+
+func TestActivityTrackerSeparatesExplicitAttention(t *testing.T) {
+	tracker := NewActivityTracker()
+	tracker.TurnStarted()
+	tracker.MarkAttention(api.AgentAttentionApproval, "permission", "call-1", time.Unix(10, 0))
+
+	status := tracker.Status()
+	if status.Activity != api.AgentActivityBlocked || status.Attention == nil {
+		t.Fatalf("approval status = %#v, want blocked with attention", status)
+	}
+	if status.Attention.Kind != api.AgentAttentionApproval || status.Attention.RequestID != "call-1" {
+		t.Fatalf("approval attention = %#v", status.Attention)
+	}
+
+	tracker.TurnStarted()
+	if status := tracker.Status(); status.Attention != nil || status.Activity != api.AgentActivityWorking {
+		t.Fatalf("new turn status = %#v, want working without attention", status)
 	}
 }
 
@@ -129,8 +152,8 @@ func TestParserDrivesCodexActivity(t *testing.T) {
 	}
 
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted"}}`))
-	if got := parser.Activity(); got != api.AgentActivityWaitingForInput {
-		t.Fatalf("after turn_aborted = %q, want waiting for input", got)
+	if got := parser.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("after turn_aborted = %q, want ready", got)
 	}
 }
 

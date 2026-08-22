@@ -124,12 +124,12 @@ type Session struct {
 	AgentSessionID string `json:"agentSessionId,omitempty"`
 	// TranscriptPath is the JSONL transcript projected by the agent watcher.
 	TranscriptPath string `json:"transcriptPath,omitempty"`
-	// AgentActivity is the live activity of an agent session. It is
-	// presentation state overlaid on roster snapshots only and is never
+	// AgentStatus is the live activity and human-attention projection of an
+	// agent session. It is overlaid on roster snapshots only and is never
 	// persisted with the session record.
-	AgentActivity AgentActivity `json:"activity,omitempty"`
-	CreatedAt     time.Time     `json:"createdAt"`
-	EndedAt       *time.Time    `json:"endedAt,omitempty"`
+	AgentStatus *AgentStatus `json:"agentStatus,omitempty"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	EndedAt     *time.Time   `json:"endedAt,omitempty"`
 	// OperationID is returned by mutating session APIs for audit and safe
 	// undo. It is intentionally not persisted in the session record.
 	OperationID string `json:"operationId,omitempty"`
@@ -145,17 +145,62 @@ func (session Session) ScopeKind() string {
 	return SessionScopeWorkspace
 }
 
-// AgentActivity is the live state of an agent conversation as projected from
-// its transcript. Clients render it as a status light beside the session.
+// AgentActivity is the lifecycle state of an agent conversation. Human
+// attention is represented separately by AgentStatus.Attention.
 type AgentActivity string
 
 const (
-	AgentActivityReady           AgentActivity = "ready"
-	AgentActivityWorking         AgentActivity = "working"
-	AgentActivityWaitingForInput AgentActivity = "waitingForInput"
-	AgentActivityFailed          AgentActivity = "failed"
-	AgentActivityExited          AgentActivity = "exited"
+	AgentActivityReady   AgentActivity = "ready"
+	AgentActivityWorking AgentActivity = "working"
+	AgentActivityBlocked AgentActivity = "blocked"
+	AgentActivityStalled AgentActivity = "stalled"
+	AgentActivityFailed  AgentActivity = "failed"
+	AgentActivityExited  AgentActivity = "exited"
 )
+
+// AgentAttentionKind identifies why a person should inspect an agent
+// session. A warning is intentionally less certain than an input or approval
+// request; it describes an abnormal condition such as a stalled turn.
+type AgentAttentionKind string
+
+const (
+	AgentAttentionInput    AgentAttentionKind = "input"
+	AgentAttentionApproval AgentAttentionKind = "approval"
+	AgentAttentionWarning  AgentAttentionKind = "warning"
+)
+
+// AgentAttention is bounded, provider-neutral metadata. It must never carry
+// transcript content, prompt text, command arguments, or secrets.
+type AgentAttention struct {
+	Kind      AgentAttentionKind `json:"kind"`
+	Reason    string             `json:"reason"`
+	RequestID string             `json:"requestId,omitempty"`
+	Since     time.Time          `json:"since"`
+}
+
+// AgentStatus is the complete live projection sent to clients. Attention is
+// nil when the session has no outstanding human-facing condition.
+type AgentStatus struct {
+	Activity  AgentActivity   `json:"activity"`
+	Attention *AgentAttention `json:"attention"`
+}
+
+// Equal compares the complete status value, including attention metadata.
+// Attention is a pointer so callers can mutate their own copy without
+// changing the tracker; pointer identity must therefore never participate in
+// status-change detection.
+func (s AgentStatus) Equal(other AgentStatus) bool {
+	if s.Activity != other.Activity {
+		return false
+	}
+	if s.Attention == nil || other.Attention == nil {
+		return s.Attention == nil && other.Attention == nil
+	}
+	return s.Attention.Kind == other.Attention.Kind &&
+		s.Attention.Reason == other.Attention.Reason &&
+		s.Attention.RequestID == other.Attention.RequestID &&
+		s.Attention.Since.Equal(other.Attention.Since)
+}
 
 // AgentEvent is one normalized message or tool transition from a Codex or
 // Claude transcript. It is a projection of the TUI process's own JSONL log;
@@ -226,14 +271,14 @@ type AgentMessage struct {
 	Events []AgentEvent `json:"events"`
 }
 
-// AgentActivityMessage is the lightweight live activity update for one
-// session. It is deliberately a small standalone message so clients that
-// only render the status light never have to receive full event batches.
-type AgentActivityMessage struct {
-	Type     string        `json:"t"`
-	Session  string        `json:"session"`
-	Epoch    uint64        `json:"epoch,omitempty"`
-	Activity AgentActivity `json:"activity"`
+// AgentStatusMessage is the lightweight live status update for one session.
+// It is deliberately a small standalone message so clients that only render
+// the status light never have to receive full event batches.
+type AgentStatusMessage struct {
+	Type    string      `json:"t"`
+	Session string      `json:"session"`
+	Epoch   uint64      `json:"epoch,omitempty"`
+	Status  AgentStatus `json:"status"`
 }
 
 // AgentTurnMessage carries explicit turn boundaries for blocking clients.
