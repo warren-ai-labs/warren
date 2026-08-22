@@ -19,8 +19,9 @@ const shellProcessNames = new Set([
   "pwsh", "powershell", "cmd", "nu", "elvish", "xonsh", "oil", "osh",
 ]);
 const kindLabels = {
-  claude: "Claude Code",
-  codex: "Codex",
+  claude: "claude",
+  codex: "codex",
+  trae: "trae",
   custom: "Custom",
 };
 
@@ -58,18 +59,28 @@ export function sessionDisplayTitle(session = {}) {
 
 /**
  * Tab title matching Superset's GroupStrip: interactive shells read as their
- * directory, while a real process is shown as "command — directory".
+ * directory, while a meaningful purpose is shown as "purpose · directory".
  */
 export function terminalTabTitle(session = {}, workspace = {}) {
   const customTitle = String(session.customTitle || "").trim();
   if (customTitle) return customTitle;
   const dirName = directoryName(session.directory || workspace.path || "");
+  const command = tabPurpose(session);
+  if (!dirName) return command || sessionDisplayTitle(session) || "Shell";
+  return command ? `${command} · ${dirName}` : dirName;
+}
+
+function tabPurpose(session = {}) {
+  const kind = String(session.kind || "").trim().toLowerCase();
   const process = String(session.process || "").trim();
-  const command = process && !shellProcessNames.has(process)
-    ? process
-    : (session.kind && session.kind !== "shell" ? kindLabels[session.kind] || session.kind : "");
-  if (!dirName) return sessionDisplayTitle(session) || command || "Shell";
-  return command ? `${command} — ${dirName}` : dirName;
+
+  // Managed agents keep their stable launch kind even when the foreground
+  // process is a shell or another implementation detail.
+  if (kind === "claude" || kind === "codex" || kind === "trae") {
+    return kindLabels[kind];
+  }
+  if (process && !shellProcessNames.has(process)) return process;
+  return kind && kind !== "shell" ? kindLabels[kind] || kind : "";
 }
 
 function directoryName(path) {

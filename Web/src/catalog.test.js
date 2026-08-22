@@ -83,7 +83,7 @@ test("roster carries live process and directory over launch command", () => {
   assert.equal(session.directory, "/work/live");
   assert.equal(
     terminalTabTitle(session, { path: "/work/start" }),
-    "codex — live",
+    "codex · live",
   );
 });
 
@@ -102,7 +102,26 @@ test("roster falls back to launch command when process is absent", () => {
     },
   })), "workspace")[0];
   assert.equal(session.process, "codex");
-  assert.equal(terminalTabTitle(session, { path: "/work/start" }), "codex — start");
+  assert.equal(terminalTabTitle(session, { path: "/work/start" }), "codex · start");
+});
+
+test("managed agent tab keeps its purpose when the foreground process is a shell", () => {
+  for (const kind of ["claude", "codex", "trae"]) {
+    assert.equal(
+      terminalTabTitle(
+        { title: kind, kind, process: "zsh", directory: "/work/warren" },
+        {},
+      ),
+      `${kind} · warren`,
+    );
+  }
+  assert.equal(
+    terminalTabTitle(
+      { title: "Codex", kind: "codex", process: "node", directory: "/work/warren" },
+      {},
+    ),
+    "codex · warren",
+  );
 });
 
 test("custom session titles win over derived tab titles", () => {
@@ -210,7 +229,7 @@ test("terminal tab title shows running process alongside directory", () => {
       { title: "Codex", process: "codex", directory: "/Users/me/Workspace/superset" },
       {},
     ),
-    "codex — superset",
+    "codex · superset",
   );
 });
 
@@ -219,7 +238,7 @@ test("terminal tab title falls back without a directory", () => {
 });
 
 test("terminal tab title falls back to agent kind without a directory", () => {
-  assert.equal(terminalTabTitle({ title: "Codex", kind: "codex", process: "" }, {}), "Codex");
+  assert.equal(terminalTabTitle({ title: "Codex", kind: "codex", process: "" }, {}), "codex");
 });
 
 test("session display title prefers custom title", () => {

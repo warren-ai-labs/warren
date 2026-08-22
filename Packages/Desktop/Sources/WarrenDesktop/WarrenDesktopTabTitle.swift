@@ -3,9 +3,8 @@ import WarrenClientCore
 import WarrenDomain
 
 /// Tab title derivation matching Superset's GroupStrip: an interactive shell
-/// reads as its directory so multiple workspaces are recognizable at a glance,
-/// while a real running process (codex, claude, dev servers, ...) is shown
-/// alongside the directory.
+/// reads as its directory so multiple workspaces are recognizable at a glance.
+/// When a stable purpose is available, it is shown before the directory.
 enum WarrenDesktopTabTitle {
     private static let shellProcessNames: Set<String> = [
         "zsh", "bash", "sh", "dash", "fish", "ksh", "csh", "tcsh",
@@ -25,6 +24,9 @@ enum WarrenDesktopTabTitle {
         let directory = directoryName(tab: tab, session: session, workspace: workspace)
         let command = resolvedCommand(tab: tab, session: session)
         if directory.isEmpty {
+            if !command.isEmpty {
+                return command
+            }
             let title = session?.title.trimmingCharacters(in: .whitespacesAndNewlines)
             if let title, !title.isEmpty {
                 return title
@@ -35,7 +37,7 @@ enum WarrenDesktopTabTitle {
             return command.isEmpty ? "Shell" : command
         }
         if command.isEmpty { return directory }
-        return "\(command) — \(directory)"
+        return "\(command) · \(directory)"
     }
 
     static func directoryName(
@@ -54,14 +56,38 @@ enum WarrenDesktopTabTitle {
         tab: ClientTab,
         session: WarrenDesktopSession?
     ) -> String {
+        let kind = session?.kind ?? tab.kind
         let process = session?.runtimeProcess
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if let managedPurpose = managedPurpose(for: kind) {
+            return managedPurpose
+        }
         if !process.isEmpty, !shellProcessNames.contains(process) {
             return process
         }
         if session == nil || process.isEmpty {
-            return tab.kind == .shell ? "" : tab.kind.displayName
+            return purposeLabel(for: kind)
         }
         return ""
+    }
+
+    private static func managedPurpose(for kind: TerminalSessionKind) -> String? {
+        switch kind {
+        case .claude: "claude"
+        case .codex: "codex"
+        case .trae: "trae"
+        case .shell, .custom: nil
+        }
+    }
+
+    private static func purposeLabel(for kind: TerminalSessionKind) -> String {
+        switch kind {
+        case .shell: ""
+        case .claude: "claude"
+        case .codex: "codex"
+        case .trae: "trae"
+        case .custom: kind.displayName
+        }
     }
 }

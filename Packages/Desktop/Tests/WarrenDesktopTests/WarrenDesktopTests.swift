@@ -1406,7 +1406,35 @@ final class WarrenDesktopTests: XCTestCase {
                 session: session,
                 workspace: nil
             ),
-            "codex — superset"
+            "codex · superset"
+        )
+    }
+
+    func testTabTitleKeepsManagedAgentPurposeWhenForegroundProcessIsShell() {
+        let workspaceID = WorkspaceID()
+        let sessionID = TerminalSessionID()
+        let tab = ClientTab(
+            id: "tab-codex-shell",
+            title: "Codex",
+            sessionID: sessionID,
+            kind: .codex
+        )
+        let session = WarrenDesktopSession(
+            id: sessionID,
+            workspaceID: workspaceID,
+            title: "Codex",
+            kind: .codex,
+            runtimeProcess: "zsh",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopTabTitle.displayTitle(
+                tab: tab,
+                session: session,
+                workspace: nil
+            ),
+            "codex · warren"
         )
     }
 
@@ -1437,7 +1465,7 @@ final class WarrenDesktopTests: XCTestCase {
                 session: codexSession,
                 workspace: nil
             ),
-            "Codex"
+            "codex"
         )
     }
 
