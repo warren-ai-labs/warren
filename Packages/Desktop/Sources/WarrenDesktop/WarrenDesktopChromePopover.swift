@@ -9,6 +9,7 @@ enum WarrenDesktopChromePopover: Equatable {
     case endpoint
     case externalIDE
     case notices
+    case overflow
 }
 
 /// Shared surface for every top-right chrome popover: same radius, border,
@@ -17,17 +18,23 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
     let title: String
     let width: CGFloat
     let onDismiss: () -> Void
+    let titleFont: Font
+    let role: WarrenPresentationRole
     let content: Content
 
     init(
         title: String,
         width: CGFloat,
         onDismiss: @escaping () -> Void,
+        titleFont: Font = WarrenTypography.popoverTitle,
+        role: WarrenPresentationRole = .popover,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.width = width
         self.onDismiss = onDismiss
+        self.titleFont = titleFont
+        self.role = role
         self.content = content()
     }
 
@@ -38,7 +45,7 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WarrenSpacing.compact) {
                 Text(title)
-                    .font(WarrenTypography.popoverTitle)
+                    .font(titleFont)
                     .foregroundStyle(tokens.foreground)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -61,7 +68,7 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
             content
         }
         .frame(width: width, alignment: .leading)
-        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.base)
+        .warrenPresentationSurface(role: role, cornerRadius: WarrenRadius.base)
         .onExitCommand(perform: onDismiss)
     }
 }

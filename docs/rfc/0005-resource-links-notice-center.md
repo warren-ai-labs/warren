@@ -58,6 +58,13 @@ silently opening a different resource.
   list/detail views in an overlay anchored to the top chrome.
 - AppKit field editors and Web inputs share the Unix editing chords while the
   terminal helper textarea remains untouched.
+- Workspace chrome now keeps one-level actions in a stronger `More` menu. The
+  menu uses regular labels with light metadata, direct actions only, and a
+  dedicated menu elevation so it reads as an intentional action surface.
+- Top-bar controls are data-driven: callers may promote selected controls to
+  the direct chrome, with a hard maximum of five visible buttons. The overflow
+  affordance reserves one slot whenever hidden controls remain; notifications
+  are the default direct control.
 
 ## Acceptance criteria
 
@@ -72,6 +79,10 @@ silently opening a different resource.
 - No right-side diagnostic control or layout slot remains visible.
 - Command/Control-A selects all, Control-A/Control-E move to line start/end,
   and the surrounding Unix editing chords work in every non-terminal input.
+- Workspace actions beyond the direct-control set are reachable from one
+  first-level `More` menu without nested submenus or terminal resizing.
+- Direct workspace controls never exceed five visible buttons, including the
+  overflow affordance when it is present.
 
 ## Risk notes
 
