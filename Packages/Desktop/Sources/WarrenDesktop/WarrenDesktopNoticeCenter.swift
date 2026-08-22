@@ -25,10 +25,10 @@ struct WarrenDesktopNoticeButton: View {
                     .accessibilityHidden(true)
                 if unreadCount > 0 {
                     Text(unreadCount > 9 ? "9+" : String(unreadCount))
-                        .font(.system(size: 9, weight: .regular, design: .rounded))
-                        .foregroundStyle(tokens.destructive)
+                        .font(.system(size: 5, weight: .regular, design: .rounded))
+                        .foregroundStyle(tokens.highlight.opacity(0.82))
                         .fixedSize()
-                        .offset(x: 4, y: -5)
+                        .offset(x: 2, y: -2)
                         .accessibilityHidden(true)
                 }
             }
