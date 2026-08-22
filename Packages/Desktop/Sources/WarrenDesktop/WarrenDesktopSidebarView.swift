@@ -63,7 +63,7 @@ struct WarrenDesktopSidebar: View {
                     )
                     .padding(.vertical, WarrenSpacing.compact)
                 }
-                .onChange(of: selection) { _, newSelection in
+                .onChange(of: selection) { newSelection in
                     guard case let .workspace(workspaceID)? = newSelection else { return }
                     withAnimation(WarrenMotion.animation(
                         .stateChange,

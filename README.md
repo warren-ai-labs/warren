@@ -43,7 +43,7 @@ you want a structured conversation around the same session.
 
 ## Current scope
 
-Warren is an early, open-source phase-one project. The desktop client targets macOS 14+, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
+Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 and Intel Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
@@ -66,7 +66,7 @@ The current code is licensed under [Apache-2.0](LICENSE). This permits commercia
 
 Prerequisites:
 
-- macOS 14+
+- macOS 13+
 - Swift 6 toolchain (Xcode)
 - Go 1.25
 - tmux
@@ -77,6 +77,19 @@ Build and run the macOS app:
 ```sh
 mise install
 mise run dev
+```
+
+`mise run dev` builds for the current Mac architecture. Release packaging
+(`mise run package`) produces one Universal app containing arm64 and x86_64
+executables. Intel and Universal builds need either a Ghostty checkout (set
+`WARREN_GHOSTTY_DIR`) or a prebuilt x86_64 `libghostty-vt.dylib` (set
+`WARREN_GHOSTTY_VT_X86_64`); the Ghostline module only bundles its arm64
+library.
+
+To exercise a Universal debug build locally, run:
+
+```sh
+WARREN_BUILD_UNIVERSAL=1 bash scripts/build-app.sh debug
 ```
 
 The app bundle includes the `warren` CLI. On its first launch Warren installs

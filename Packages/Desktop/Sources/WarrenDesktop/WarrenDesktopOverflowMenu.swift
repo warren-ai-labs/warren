@@ -66,7 +66,7 @@ struct WarrenDesktopOverflowPopover: View {
                 listView(tokens: tokens)
             }
         }
-        .onChange(of: controls) { _, current in
+        .onChange(of: controls) { current in
             if let selectedControl,
                !current.contains(selectedControl) {
                 self.selectedControl = nil

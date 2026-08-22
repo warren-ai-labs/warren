@@ -151,13 +151,13 @@ struct WarrenDesktopSettingsView: View {
         .background(tokens.background)
         .onExitCommand(perform: onBack)
         .onAppear(perform: applyDeepLinkPrefill)
-        .onChange(of: initialSettingsSection) { _, _ in
+        .onChange(of: initialSettingsSection) { _ in
             applyDeepLinkPrefill()
         }
-        .onChange(of: publicAccessPrefill) { _, _ in
+        .onChange(of: publicAccessPrefill) { _ in
             applyDeepLinkPrefill()
         }
-        .onChange(of: searchQuery) { _, _ in
+        .onChange(of: searchQuery) { _ in
             if !visibleSections.contains(selectedSection), let first = visibleSections.first {
                 selectedSection = first
             }
@@ -790,7 +790,7 @@ struct WarrenDesktopSettingsView: View {
             .toggleStyle(.switch)
             .disabled(webStatus.publicAccessBusy)
             .accessibilityIdentifier("settings.public-access.use-default-tunnel")
-            .onChange(of: publicAccessUseDefaultTunnel) { _, enabled in
+            .onChange(of: publicAccessUseDefaultTunnel) { enabled in
                 guard !enabled else { return }
                 publicAccessInviteKey = ""
                 publicAccessApprovalKey = ""
@@ -963,15 +963,15 @@ struct WarrenDesktopSettingsView: View {
             }
         }
         .onAppear(perform: seedPublicAccessFields)
-        .onChange(of: webStatus.configuredEdgeURL) { _, _ in
+        .onChange(of: webStatus.configuredEdgeURL) { _ in
             seedPublicAccessFields()
             clearPublicAccessFieldsIfReset()
         }
-        .onChange(of: webStatus.configuredAccountName) { _, _ in
+        .onChange(of: webStatus.configuredAccountName) { _ in
             seedPublicAccessFields()
             clearPublicAccessFieldsIfReset()
         }
-        .onChange(of: webStatus.publicAccessAuthenticated) { _, authenticated in
+        .onChange(of: webStatus.publicAccessAuthenticated) { authenticated in
             if !authenticated {
                 publicAccessMaskedKeyKind = nil
                 publicAccessSubmittedKeyKind = nil
@@ -984,12 +984,12 @@ struct WarrenDesktopSettingsView: View {
             publicAccessMaskedKeyKind = submittedKeyKind
             publicAccessSubmittedKeyKind = nil
         }
-        .onChange(of: webStatus.tunnelRunning) { _, running in
+        .onChange(of: webStatus.tunnelRunning) { running in
             if running {
                 publicAccessUseDefaultTunnel = true
             }
         }
-        .onChange(of: webStatus.publicAccessEnabled) { _, _ in
+        .onChange(of: webStatus.publicAccessEnabled) { _ in
             clearPublicAccessFieldsIfReset()
         }
     }

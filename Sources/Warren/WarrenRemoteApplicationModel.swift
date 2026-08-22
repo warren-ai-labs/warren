@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
+import Combine
 import GhosttyAdapter
-import Observation
 import WarrenClientCore
 import WarrenDesktop
 import WarrenDomain
@@ -742,76 +742,75 @@ private enum WarrenRemoteDiagnostics {
 }
 
 @MainActor
-@Observable
-final class WarrenRemoteApplicationModel {
+final class WarrenRemoteApplicationModel: ObservableObject {
     private static let deletionReconciliationTimeout: Duration = .seconds(30)
     /// A daemon restart briefly drops the WebSocket before its listener is
     /// ready again. Keep that expected gap out of the notice center;
     /// persistent failures still become visible after the grace period.
     private static let transientConnectionIssueDelay: Duration = .seconds(5)
 
-    private(set) var projection = WarrenDesktopProjection
+    @Published private(set) var projection = WarrenDesktopProjection
         .empty(host: WarrenDomain.Host(name: "Server"))
         .withConnectionState(.connecting)
-    private(set) var navigation: WarrenDesktopNavigationState {
+    @Published private(set) var navigation: WarrenDesktopNavigationState {
         didSet { WarrenDesktopNavigationPersistence.save(navigation) }
     }
     /// Client-local diagnostics and system messages shown by the desktop
     /// notice center. Keep this bounded so repeated failures cannot grow the
     /// model without limit.
-    private(set) var notices: [WarrenDesktopNotice] = []
-    private(set) var webStatus = WarrenDesktopWebStatus()
+    @Published private(set) var notices: [WarrenDesktopNotice] = []
+    @Published private(set) var webStatus = WarrenDesktopWebStatus()
     /// Default engine for new sessions, owned by the headless daemon.
-    private(set) var defaultRuntime: String?
+    @Published private(set) var defaultRuntime: String?
     /// Whether opening an empty workspace creates a default Shell session.
-    private(set) var autoOpenShell = false
+    @Published private(set) var autoOpenShell = false
     /// Whether entering an empty workspace starts the first AI preset.
-    private(set) var autoStartAI = false
-    @ObservationIgnored private var settingsLoaded = false
+    @Published private(set) var autoStartAI = false
+    private var settingsLoaded = false
     /// Set while the daemon has announced an operator-initiated maintenance
     /// window (for example an app install that restarts the daemon). Clients
     /// show an update state instead of treating the disconnect as a failure.
-    private(set) var maintenanceMessage: String?
-    private(set) var creatingSessionWorkspaceIDs: Set<WorkspaceID> = []
-    private(set) var creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = []
-    private(set) var deletingProjectIDs: Set<ProjectID> = []
-    private(set) var deletingWorkspaceIDs: Set<WorkspaceID> = []
-    private(set) var attachingSessionID: TerminalSessionID?
+    @Published private(set) var maintenanceMessage: String?
+    @Published private(set) var creatingSessionWorkspaceIDs: Set<WorkspaceID> = []
+    @Published private(set) var creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = []
+    @Published private(set) var deletingProjectIDs: Set<ProjectID> = []
+    @Published private(set) var deletingWorkspaceIDs: Set<WorkspaceID> = []
+    @Published private(set) var attachingSessionID: TerminalSessionID?
 
-    @ObservationIgnored private var wire: WarrenRemoteWire?
-    @ObservationIgnored private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
-    @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var selectedSessionID: TerminalSessionID?
-    @ObservationIgnored private var attachedSessionID: TerminalSessionID?
-    @ObservationIgnored private var focusedSessionID: TerminalSessionID?
-    @ObservationIgnored private var pendingFocusSessionID: TerminalSessionID?
-    @ObservationIgnored private var pendingFocusSize: TerminalSize?
-    @ObservationIgnored private var pendingFocusResizeSize: TerminalSize?
-    @ObservationIgnored private var focusClaimInFlight = false
-    @ObservationIgnored private var focusClaimGeneration = 0
-    @ObservationIgnored private var pendingInput = Data()
-    @ObservationIgnored private var initialRefreshPending = false
-    @ObservationIgnored private var currentRoster: RemoteRoster?
-    @ObservationIgnored private var rosterApplicationGeneration: UInt64 = 0
-    @ObservationIgnored private var resizeTask: Task<Void, Never>?
-    @ObservationIgnored private var resizeBuffer = WarrenResizeRequestBuffer()
-    @ObservationIgnored private var focusTask: Task<Void, Never>?
-    @ObservationIgnored private var deletionReconciliationTask: Task<Void, Never>?
-    @ObservationIgnored private var deletionReconciliationWire: WarrenRemoteWire?
-    @ObservationIgnored private var attachGeneration: UInt64 = 0
-    @ObservationIgnored private var terminalFont = TerminalFontPreference()
-    @ObservationIgnored private var pendingTerminalOpenRequest: WarrenTerminalOpenRequest?
-    @ObservationIgnored private var maintenanceResetTask: Task<Void, Never>?
-    @ObservationIgnored private var connectionIssueTask: Task<Void, Never>?
-    @ObservationIgnored private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
-    @ObservationIgnored private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
-    @ObservationIgnored private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
-    @ObservationIgnored private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
-    @ObservationIgnored private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
-    @ObservationIgnored private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
-    @ObservationIgnored private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
-    @ObservationIgnored let surfaceManager: TerminalSurfaceManager
-    @ObservationIgnored private(set) var projectionPublicationCount: UInt64 = 0
+    private var wire: WarrenRemoteWire?
+    private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
+    private var eventTask: Task<Void, Never>?
+    private var selectedSessionID: TerminalSessionID?
+    private var attachedSessionID: TerminalSessionID?
+    private var focusedSessionID: TerminalSessionID?
+    private var pendingFocusSessionID: TerminalSessionID?
+    private var pendingFocusSize: TerminalSize?
+    private var pendingFocusResizeSize: TerminalSize?
+    private var focusClaimInFlight = false
+    private var focusClaimGeneration = 0
+    private var pendingInput = Data()
+    private var initialRefreshPending = false
+    private var currentRoster: RemoteRoster?
+    private var rosterApplicationGeneration: UInt64 = 0
+    private var resizeTask: Task<Void, Never>?
+    private var resizeBuffer = WarrenResizeRequestBuffer()
+    private var focusTask: Task<Void, Never>?
+    private var deletionReconciliationTask: Task<Void, Never>?
+    private var deletionReconciliationWire: WarrenRemoteWire?
+    private var attachGeneration: UInt64 = 0
+    private var terminalFont = TerminalFontPreference()
+    private var pendingTerminalOpenRequest: WarrenTerminalOpenRequest?
+    private var maintenanceResetTask: Task<Void, Never>?
+    private var connectionIssueTask: Task<Void, Never>?
+    private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
+    private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
+    private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
+    private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
+    private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
+    private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
+    private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
+    let surfaceManager: TerminalSurfaceManager
+    private(set) var projectionPublicationCount: UInt64 = 0
 
     init(surfaceManager: TerminalSurfaceManager = TerminalSurfaceManager()) {
         self.surfaceManager = surfaceManager

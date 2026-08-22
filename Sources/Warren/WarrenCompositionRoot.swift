@@ -7,8 +7,20 @@ import GhosttyAdapter
 import WarrenStateStore
 import WarrenDesignSystem
 
+private struct WarrenProjectFileDialogLabels: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14, *) {
+            content
+                .fileDialogMessage("Choose a local folder as the project.")
+                .fileDialogConfirmationLabel("Add Project")
+        } else {
+            content
+        }
+    }
+}
+
 struct WarrenCompositionRoot: View {
-    @State private var remoteModel: WarrenRemoteApplicationModel
+    @StateObject private var remoteModel: WarrenRemoteApplicationModel
     @State private var surfaceManager: TerminalSurfaceManager
     @State private var isProjectImporterPresented = false
     @State private var supersetImportPreview: SupersetImportPreview?
@@ -44,7 +56,7 @@ struct WarrenCompositionRoot: View {
     init() {
         let surfaceManager = TerminalSurfaceManager()
         _surfaceManager = State(initialValue: surfaceManager)
-        _remoteModel = State(initialValue: WarrenRemoteApplicationModel(
+        _remoteModel = StateObject(wrappedValue: WarrenRemoteApplicationModel(
             surfaceManager: surfaceManager
         ))
         // Endpoint configuration is user input, not frame state. Seed the
@@ -155,8 +167,7 @@ struct WarrenCompositionRoot: View {
             allowsMultipleSelection: false,
             onCompletion: importProject
         )
-        .fileDialogMessage("Choose a local folder as the project.")
-        .fileDialogConfirmationLabel("Add Project")
+        .modifier(WarrenProjectFileDialogLabels())
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
             remoteModel.copyLocalWebURL()
         }
@@ -178,8 +189,8 @@ struct WarrenCompositionRoot: View {
                 kind: message.kind
             )
         }
-        .onChange(of: terminalFontFamily) { _, _ in updateTerminalFont() }
-        .onChange(of: terminalFontSize) { _, _ in updateTerminalFont() }
+        .onChange(of: terminalFontFamily) { _ in updateTerminalFont() }
+        .onChange(of: terminalFontSize) { _ in updateTerminalFont() }
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.startCloudflare)) { _ in
             remoteModel.startCloudflareWebAccess()
         }
@@ -232,7 +243,7 @@ struct WarrenCompositionRoot: View {
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
         }
-        .onChange(of: selectedEndpointID) { _, _ in connectSelectedEndpoint() }
+        .onChange(of: selectedEndpointID) { _ in connectSelectedEndpoint() }
     }
 
     @ViewBuilder
@@ -874,7 +885,7 @@ private struct WarrenTerminalSurfaceView: View {
                 .help(maintenanceMessage)
             }
         }
-        .onChange(of: searchPresented) { _, presented in
+        .onChange(of: searchPresented) { presented in
             if presented {
                 searchQuery = activeSurface?.readSelection() ?? ""
                 searchFieldFocused = true
@@ -884,7 +895,7 @@ private struct WarrenTerminalSurfaceView: View {
                 activeSurface?.endSearch()
             }
         }
-        .onChange(of: context.tab.sessionID) { _, _ in
+        .onChange(of: context.tab.sessionID) { _ in
             TerminalDiagnostics.log("terminal_tab_switch", [
                 "tab": context.tab.sessionID.map(\.description) ?? "nil",
                 "surfaces": String(surfaceManager.retainedSurfaceCount),
@@ -893,7 +904,7 @@ private struct WarrenTerminalSurfaceView: View {
             searchQuery = ""
             searchPresented = false
         }
-        .onChange(of: context.scopeID) { _, _ in
+        .onChange(of: context.scopeID) { _ in
             TerminalDiagnostics.log("workspace_switch", [
                 "workspace": context.workspace?.id.description ?? "nil",
                 "terminalGroup": context.terminalGroup?.id.description ?? "nil",
@@ -1073,7 +1084,7 @@ private struct WarrenTerminalSearchBar: View {
             surface?.search(for: query)
             focusSearchField()
         }
-        .onChange(of: query) { _, newValue in
+        .onChange(of: query) { newValue in
             surface?.search(for: newValue)
         }
     }

@@ -40,7 +40,7 @@ struct WarrenWorkspaceCreatorView: View {
                 labelFont: WarrenTypography.dialogFieldLabel,
                 inputFont: WarrenTypography.dialogInput
             )
-            .onChange(of: branch) { _, value in
+            .onChange(of: branch) { value in
                 if displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     displayName = value
                 }

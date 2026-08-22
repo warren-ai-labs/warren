@@ -254,13 +254,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         )
         .denSurface()
         .warrenUnixTextEditing()
-        .onChange(of: sidebarState) { _, newState in
+        .onChange(of: sidebarState) { newState in
             if persistenceEnabled { Self.persist(newState) }
         }
-        .onChange(of: sidebarTree) { _, newState in
+        .onChange(of: sidebarTree) { newState in
             if persistenceEnabled { Self.persist(newState, scope: selectedEndpointID) }
         }
-        .onChange(of: selectedEndpointID) { _, newEndpointID in
+        .onChange(of: selectedEndpointID) { newEndpointID in
             sidebarTree = persistenceEnabled
                 ? Self.restoredSidebarTree(scope: newEndpointID)
                 : WarrenDesktopSidebarTreeState()
@@ -336,7 +336,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .overlay {
             chromePopoverLayer
         }
-        .onChange(of: chromePopover) { _, popover in
+        .onChange(of: chromePopover) { popover in
             guard case .web? = popover else { return }
             refreshWebDismissal()
         }
@@ -453,7 +453,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 WarrenMotion.animation(.overlay, reduceMotion: reduceMotion),
                 value: chromePopover
             )
-            .onChange(of: webStatus.tunnelRunning) { _, isRunning in
+            .onChange(of: webStatus.tunnelRunning) { isRunning in
                 // Keep the panel open while Public Access is enabled so the public endpoint
                 // stays visible for copying; it falls back to auto-dismiss
                 // after stop.

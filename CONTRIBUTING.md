@@ -11,7 +11,7 @@ Thank you for helping improve Warren. Please read this guide before opening a pu
 
 ## Development setup
 
-Warren currently targets macOS 14 or later for the desktop client. The repository also contains the Go headless daemon, CLI, Relay Service, and Web/PWA client.
+Warren currently targets macOS 13 or later for the desktop client on arm64 and Intel Macs. The repository also contains the Go headless daemon, CLI, Relay Service, and Web/PWA client.
 
 Install the repository tools with `mise`, then use the relevant checks:
 

@@ -109,7 +109,7 @@ struct WarrenDesktopNoticePopover: View {
                 onDismiss: onDismiss
             )
         }
-        .onChange(of: notices) { _, current in
+        .onChange(of: notices) { current in
             if let selectedID, !current.contains(where: { $0.id == selectedID }) {
                 self.selectedID = nil
             }
@@ -283,7 +283,7 @@ struct WarrenDesktopNoticeInlineContent: View {
             onDismissNotice: onDismissNotice,
             onDismiss: onDismiss
         )
-        .onChange(of: notices) { _, current in
+        .onChange(of: notices) { current in
             if let selectedID, !current.contains(where: { $0.id == selectedID }) {
                 self.selectedID = nil
             }
