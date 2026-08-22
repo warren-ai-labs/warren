@@ -430,7 +430,7 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
 
     var systemImage: String {
         switch self {
-        case .externalIDE: "arrow.up.forward.app"
+        case .externalIDE: "chevron.left.forwardslash.chevron.right"
         case .endpoint: "server.rack"
         case .web: "globe"
         case .notifications: "bell"
@@ -477,7 +477,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        HStack(spacing: WarrenSpacing.compact) {
+        HStack(spacing: WarrenSpacing.xxs) {
             ForEach(controlLayout.direct, id: \.self) {
                 trailingControl($0, tokens: tokens)
             }
@@ -489,6 +489,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
             }
         }
         .padding(.horizontal, WarrenSpacing.xs)
+        .fixedSize(horizontal: true, vertical: false)
         .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace actions")
@@ -589,12 +590,13 @@ private struct WarrenDesktopEndpointControl: View {
                 )
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, WarrenSpacing.small)
+            .padding(.horizontal, WarrenSpacing.xs)
             .frame(minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
         .frame(minHeight: 28)
         .contentShape(.rect)
+        .fixedSize(horizontal: true, vertical: false)
         .focused($isFocused)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Execution server: \(selectedEndpoint?.label ?? "Server")")

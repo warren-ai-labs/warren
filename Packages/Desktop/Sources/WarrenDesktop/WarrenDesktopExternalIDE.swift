@@ -175,15 +175,16 @@ struct WarrenDesktopExternalIDEMenu: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: onPresent) {
-            Image(systemName: "curlybraces")
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
                 .accessibilityHidden(true)
-                .padding(.horizontal, WarrenSpacing.small)
+                .padding(.horizontal, WarrenSpacing.xs)
                 .frame(minHeight: 28)
         }
         .buttonStyle(.plain)
         .frame(minHeight: 28)
         .contentShape(.rect)
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Open workspace in IDE")
         .accessibilityHint("Open the current worktree in an external IDE")

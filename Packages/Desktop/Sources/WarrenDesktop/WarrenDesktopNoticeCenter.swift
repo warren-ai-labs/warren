@@ -32,12 +32,13 @@ struct WarrenDesktopNoticeButton: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, WarrenSpacing.small)
+            .padding(.horizontal, WarrenSpacing.xs)
             .frame(minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
         .frame(minHeight: 28)
         .contentShape(.rect)
+        .fixedSize(horizontal: true, vertical: false)
         .focused($isFocused)
         .foregroundStyle(bellColor)
         .accessibilityLabel("Notifications")
