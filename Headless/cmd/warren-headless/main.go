@@ -279,6 +279,10 @@ func main() {
 	webBaseURL := "http://127.0.0.1:" + listenerPort(listener)
 	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
 	tunnelManager.SetGnarConfigDir(*gnarConfigDir)
+	// Only the bundled worker's default store belongs to Warren. An explicit
+	// gnar path/config directory may be a system installation and must survive
+	// Public Access reset.
+	tunnelManager.SetGnarConfigDirOwned(!gnarPathExplicit && !gnarConfigDirExplicit)
 	tunnelManager.SetGnarDefaultEdge(gnarDefaultEdge)
 	tunnelManager.SetGnarEdge(gnarEdgeValue)
 	// Restore the tunnels the user left running before the previous daemon

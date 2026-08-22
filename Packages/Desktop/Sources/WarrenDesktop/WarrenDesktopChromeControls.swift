@@ -7,6 +7,9 @@ struct WarrenDesktopChromeButton: View {
     let hint: String
     let action: () -> Void
     var tint: Color? = nil
+    // Kept source-compatible with older callers while every action now uses
+    // the same fixed slot. Equal slots keep icon baselines and gaps stable
+    // across SF Symbols with different intrinsic widths.
     var edgeSpaced: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
@@ -17,11 +20,10 @@ struct WarrenDesktopChromeButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
-                .padding(.horizontal, edgeSpaced ? WarrenSpacing.xs : 0)
-                .frame(minWidth: edgeSpaced ? 0 : 28, minHeight: 28)
+                .frame(width: 28, height: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(minHeight: 28)
+        .frame(width: 28, height: 28)
         .contentShape(.rect)
         .fixedSize(horizontal: true, vertical: false)
         .focused($isFocused)

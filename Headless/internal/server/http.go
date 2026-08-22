@@ -172,6 +172,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/public-access/enable", s.handlePublicAccessEnable)
 	mux.HandleFunc("POST /v1/public-access/test", s.handlePublicAccessTest)
 	mux.HandleFunc("POST /v1/public-access/disable", s.handlePublicAccessDisable)
+	mux.HandleFunc("POST /v1/public-access/reset", s.handlePublicAccessReset)
 	mux.HandleFunc("POST /v1/public-access/restart", s.handlePublicAccessRestart)
 	mux.HandleFunc("GET /", s.handleWebAsset)
 	mux.HandleFunc("GET /service-worker.js", s.handleWebAsset)
@@ -606,10 +607,11 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when testing gnar"))
 		return
 	}
+	sameAuthenticated := s.Tunnels.GnarAuthenticatedFor(prospectiveEdge, account)
 	wasRunning := false
 	if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok {
 		wasRunning = current.Running && current.URL != ""
-		if current.Running {
+		if current.Running && !sameAuthenticated {
 			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
 				s.writePublicAccessError(writer, http.StatusBadGateway, err)
 				return
@@ -680,6 +682,41 @@ func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, reque
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
 		return
 	}
+	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+}
+
+// handlePublicAccessReset clears only Warren's local Public Access setup. It
+// does not call gnar release/revoke, so a remote Edge reservation remains
+// owned by the Edge operator and can be cleaned up independently.
+func (s *HTTPServer) handlePublicAccessReset(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.Tunnels == nil {
+		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
+	// Persist the non-secret reset first. If the settings file is unavailable,
+	// leave gnar's local token untouched so a retry cannot silently require a
+	// new enrollment.
+	if err := s.Service.UpdatePublicAccessConfig("", ""); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, false); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.Tunnels.ResetGnarLocalSetup(); err != nil {
+		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+		return
+	}
+	// Restore the release/launcher default in the manager after clearing the
+	// persisted override. The account default remains derived from the host.
+	s.Tunnels.SetGnarEdgeOverride("")
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 

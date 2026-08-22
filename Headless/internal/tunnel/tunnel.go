@@ -72,7 +72,11 @@ type Manager struct {
 	states      map[string]*state
 	// gnarAuthenticated is an in-memory presentation hint. The durable token
 	// remains owned by gnar; Warren never reads or persists that credential.
-	gnarAuthenticated bool
+	gnarAuthenticated        bool
+	gnarAuthenticatedEdge    string
+	gnarAuthenticatedAccount string
+	// Explicit/system gnar stores are never removed by Public Access reset.
+	gnarConfigDirOwned bool
 	// lastErrors keeps an actionable failure visible even when a process could
 	// not be created (for example a missing gnar binary). It is memory-only.
 	lastErrors map[string]string
@@ -170,8 +174,11 @@ func (m *Manager) Status() map[string]Status {
 func (m *Manager) SetGnarEdge(edge string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.gnarEdge = strings.TrimSpace(edge)
-	m.gnarAuthenticated = false
+	edge = strings.TrimSpace(edge)
+	if edge != m.gnarEdge {
+		m.clearGnarAuthenticationLocked()
+	}
+	m.gnarEdge = edge
 }
 
 // SetGnarConfigDir selects the credential directory for gnar child processes.
@@ -183,10 +190,19 @@ func (m *Manager) SetGnarConfigDir(directory string) {
 	defer m.mu.Unlock()
 	directory = strings.TrimSpace(directory)
 	if directory != m.gnarConfigDir {
-		m.gnarAuthenticated = false
+		m.clearGnarAuthenticationLocked()
 		delete(m.lastErrors, KindGnar)
 	}
 	m.gnarConfigDir = directory
+}
+
+// SetGnarConfigDirOwned records whether the directory belongs to Warren's
+// bundled worker. A reset may remove only an owned store; system gnar
+// credentials remain untouched for compatibility and user control.
+func (m *Manager) SetGnarConfigDirOwned(owned bool) {
+	m.mu.Lock()
+	m.gnarConfigDirOwned = owned
+	m.mu.Unlock()
 }
 
 // GnarConfigDir returns the configured child-process credential directory.
@@ -201,7 +217,11 @@ func (m *Manager) GnarConfigDir() string {
 func (m *Manager) SetGnarDefaultEdge(edge string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.gnarDefaultEdge = strings.TrimSpace(edge)
+	edge = strings.TrimSpace(edge)
+	if m.gnarEdge == "" && edge != m.gnarDefaultEdge {
+		m.clearGnarAuthenticationLocked()
+	}
+	m.gnarDefaultEdge = edge
 }
 
 // SetGnarEdgeOverride applies a user setting while preserving the fallback
@@ -211,13 +231,15 @@ func (m *Manager) SetGnarEdgeOverride(edge string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	edge = strings.TrimSpace(edge)
+	previous := m.gnarEdge
 	if edge == "" {
 		m.gnarEdge = m.gnarDefaultEdge
-		m.gnarAuthenticated = false
-		return
+	} else {
+		m.gnarEdge = edge
 	}
-	m.gnarEdge = edge
-	m.gnarAuthenticated = false
+	if m.gnarEdge != previous {
+		m.clearGnarAuthenticationLocked()
+	}
 }
 
 // GnarEdge returns the effective Edge URL selected for future gnar starts.
@@ -250,26 +272,105 @@ func (m *Manager) GnarAuthenticated() bool {
 	return m.gnarAuthenticated
 }
 
+// SetGnarAuthenticationContext associates the presentation hint with the
+// non-secret Edge/account identity currently being configured. A changed
+// identity invalidates the hint, but never touches gnar's token store.
+func (m *Manager) SetGnarAuthenticationContext(edge, account string) {
+	edge = strings.TrimSpace(edge)
+	account = strings.TrimSpace(account)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.gnarAuthenticated {
+		return
+	}
+	if (m.gnarAuthenticatedEdge != "" && m.gnarAuthenticatedEdge != edge) ||
+		(m.gnarAuthenticatedAccount != "" && m.gnarAuthenticatedAccount != account) {
+		m.clearGnarAuthenticationLocked()
+		return
+	}
+	if m.gnarAuthenticatedEdge == "" {
+		m.gnarAuthenticatedEdge = edge
+	}
+	if m.gnarAuthenticatedAccount == "" {
+		m.gnarAuthenticatedAccount = account
+	}
+}
+
+// GnarAuthenticatedFor reports whether the current non-secret identity has
+// already completed authentication in this daemon lifetime. It makes
+// repeated Save & Test calls idempotent without retaining a bootstrap key.
+func (m *Manager) GnarAuthenticatedFor(edge, account string) bool {
+	edge = strings.TrimSpace(edge)
+	account = strings.TrimSpace(account)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gnarAuthenticated &&
+		(m.gnarAuthenticatedEdge == "" || m.gnarAuthenticatedEdge == edge) &&
+		(m.gnarAuthenticatedAccount == "" || m.gnarAuthenticatedAccount == account)
+}
+
 func (m *Manager) setGnarAuthenticated(value bool) {
 	m.mu.Lock()
-	m.gnarAuthenticated = value
-	if value {
-		delete(m.lastErrors, KindGnar)
-		// A failed start is retained briefly so its actionable error can be
-		// reported. Once gnar login succeeds, that stopped state is stale and
-		// must not shadow the newly authenticated configuration in Public Access
-		// responses.
-		if st := m.states[KindGnar]; st != nil && st.stopped {
-			delete(m.states, KindGnar)
-		}
+	defer m.mu.Unlock()
+	if !value {
+		m.clearGnarAuthenticationLocked()
+		return
+	}
+	m.gnarAuthenticated = true
+	delete(m.lastErrors, KindGnar)
+	// A failed start is retained briefly so its actionable error can be
+	// reported. Once gnar login succeeds, that stopped state is stale and
+	// must not shadow the newly authenticated configuration in Public Access
+	// responses.
+	if st := m.states[KindGnar]; st != nil && st.stopped {
+		delete(m.states, KindGnar)
+	}
+}
+
+func (m *Manager) markGnarAuthenticated(edge, account string) {
+	m.mu.Lock()
+	m.gnarAuthenticated = true
+	m.gnarAuthenticatedEdge = strings.TrimSpace(edge)
+	m.gnarAuthenticatedAccount = strings.TrimSpace(account)
+	delete(m.lastErrors, KindGnar)
+	if st := m.states[KindGnar]; st != nil && st.stopped {
+		delete(m.states, KindGnar)
 	}
 	m.mu.Unlock()
+}
+
+func (m *Manager) clearGnarAuthenticationLocked() {
+	m.gnarAuthenticated = false
+	m.gnarAuthenticatedEdge = ""
+	m.gnarAuthenticatedAccount = ""
 }
 
 // InvalidateGnarAuthentication clears the presentation hint after a
 // non-secret Edge/account change. It does not touch gnar's credential store.
 func (m *Manager) InvalidateGnarAuthentication() {
 	m.setGnarAuthenticated(false)
+}
+
+// ResetGnarLocalSetup stops the local worker, clears Warren's in-memory
+// presentation state, and removes only Warren-owned bundled credentials. It
+// intentionally does not call a remote release/revoke operation: the Edge
+// remains responsible for any reserved endpoint lifecycle.
+func (m *Manager) ResetGnarLocalSetup() error {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	if err := m.stop(KindGnar); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	directory := m.gnarConfigDir
+	owned := m.gnarConfigDirOwned
+	m.clearGnarAuthenticationLocked()
+	delete(m.lastErrors, KindGnar)
+	m.mu.Unlock()
+	if !owned || strings.TrimSpace(directory) == "" {
+		return nil
+	}
+	return removeOwnedGnarConfigDir(directory)
 }
 
 func (m *Manager) loginGnar(edge, account string, keyKind LoginKeyKind, key []byte) error {
@@ -339,10 +440,18 @@ func (m *Manager) startPublicAccessWithKey(edge, account string, keyKind LoginKe
 		}
 		m.SetGnarEdge(edge)
 	}
-	if len(key) > 0 {
-		if edge == "" {
-			edge = m.GnarEdge()
-		}
+	if edge == "" {
+		edge = m.GnarEdge()
+	}
+	normalizedAccount, accountErr := normalizeGnarAccount(account)
+	if accountErr != nil {
+		m.recordError(KindGnar, accountErr.Error())
+		return Status{Error: accountErr.Error()}, accountErr
+	}
+	m.SetGnarAuthenticationContext(edge, normalizedAccount)
+	alreadyAuthenticated := m.GnarAuthenticatedFor(edge, normalizedAccount)
+	hasBootstrapKey := len(key) > 0
+	if hasBootstrapKey {
 		if edge == "" {
 			err := errors.New("an Edge URL is required before enrolling gnar")
 			m.recordError(KindGnar, err.Error())
@@ -352,18 +461,15 @@ func (m *Manager) startPublicAccessWithKey(edge, account string, keyKind LoginKe
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
-		account, err := normalizeGnarAccount(account)
-		if err != nil {
-			m.recordError(KindGnar, err.Error())
-			return Status{Error: err.Error()}, err
-		}
 		if err := validateBootstrapKey(keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
-		if err := m.loginGnar(edge, account, keyKind, key); err != nil {
-			m.recordError(KindGnar, err.Error())
-			return Status{Error: err.Error()}, err
+		if !alreadyAuthenticated {
+			if err := m.loginGnar(edge, normalizedAccount, keyKind, key); err != nil {
+				m.recordError(KindGnar, err.Error())
+				return Status{Error: err.Error()}, err
+			}
 		}
 		// The key is bootstrap-only. Clear it before the long-lived tunnel
 		// process is started; the deferred clear covers every early return.
@@ -371,20 +477,20 @@ func (m *Manager) startPublicAccessWithKey(edge, account string, keyKind LoginKe
 	}
 	status, err := m.start(KindGnar)
 	if err != nil {
-		if len(key) == 0 {
+		if !hasBootstrapKey {
 			err = actionableGnarStartError(err)
 			status.Error = err.Error()
 		}
 		return status, err
 	}
 	if status.Running && status.URL != "" {
-		m.setGnarAuthenticated(true)
+		m.markGnarAuthenticated(edge, normalizedAccount)
 		return status, nil
 	}
 	if status.Error == "" {
 		status.Error = "gnar did not report a public endpoint before the startup timeout"
 	}
-	if len(key) == 0 {
+	if !hasBootstrapKey {
 		status.Error = actionableGnarStartError(errors.New(status.Error)).Error()
 	}
 	m.recordError(KindGnar, status.Error)
@@ -402,9 +508,6 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 }
 
 func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
-	// A failed re-test must not leave the UI claiming that an older connection
-	// still authenticates the newly submitted configuration.
-	m.InvalidateGnarAuthentication()
 	if len(key) > 0 && keyKind != LoginKeyApproval && keyKind != LoginKeyInvite {
 		err := errors.New("unsupported gnar bootstrap key type")
 		m.recordError(KindGnar, err.Error())
@@ -414,14 +517,6 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 	hasBootstrapKey := len(key) > 0
 	if hasBootstrapKey {
 		defer clearBytes(key)
-	}
-	// Start is idempotent by design. A connection test must not accidentally
-	// reuse a live process that was started with a different Edge or account.
-	if current, ok := m.Status()[KindGnar]; ok && current.Running {
-		if err := m.stop(KindGnar); err != nil {
-			m.recordError(KindGnar, err.Error())
-			return Status{Error: err.Error()}, err
-		}
 	}
 	edge = strings.TrimSpace(edge)
 	if edge != "" {
@@ -448,6 +543,32 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
+	m.SetGnarAuthenticationContext(edge, account)
+	alreadyAuthenticated := m.GnarAuthenticatedFor(edge, account)
+	// Once this identity has authenticated, Save & Test is a no-op for the
+	// bootstrap path. Do not repeat gnar login or churn a live tunnel merely
+	// because the user pressed the button again.
+	if alreadyAuthenticated {
+		if current, ok := m.Status()[KindGnar]; ok && current.Running {
+			if len(key) > 0 {
+				clearBytes(key)
+			}
+			return current, nil
+		}
+		if len(key) > 0 {
+			clearBytes(key)
+		}
+		return Status{}, nil
+	}
+	// A connection test must not reuse a live process that was started with a
+	// different Edge or account. This stop occurs only after identity matching,
+	// so repeated Save & Test does not churn an already-authenticated endpoint.
+	if current, ok := m.Status()[KindGnar]; ok && current.Running {
+		if err := m.stop(KindGnar); err != nil {
+			m.recordError(KindGnar, err.Error())
+			return Status{Error: err.Error()}, err
+		}
+	}
 	if hasBootstrapKey {
 		if err := validateBootstrapKey(keyKind, key); err != nil {
 			m.recordError(KindGnar, err.Error())
@@ -463,7 +584,7 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 	// not make Save & Test depend on the normal tunnel's readiness window: the
 	// top Web control starts the live endpoint after the user sees success.
 	if hasBootstrapKey {
-		m.setGnarAuthenticated(true)
+		m.markGnarAuthenticated(edge, account)
 		return Status{}, nil
 	}
 	status, err := m.start(KindGnar)
@@ -487,7 +608,7 @@ func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
-	m.setGnarAuthenticated(true)
+	m.markGnarAuthenticated(edge, account)
 	status.Running = false
 	status.URL = ""
 	status.Error = ""
@@ -1340,4 +1461,20 @@ func clearBytes(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+func removeOwnedGnarConfigDir(directory string) error {
+	clean, err := filepath.Abs(filepath.Clean(strings.TrimSpace(directory)))
+	if err != nil {
+		return fmt.Errorf("resolve gnar credential directory: %w", err)
+	}
+	home, _ := os.UserHomeDir()
+	if clean == string(filepath.Separator) || clean == "." || (home != "" && clean == filepath.Clean(home)) ||
+		filepath.Base(clean) != "gnar" {
+		return errors.New("refusing to remove an unsafe gnar credential directory")
+	}
+	if err := os.RemoveAll(clean); err != nil {
+		return fmt.Errorf("remove local gnar credential directory: %w", err)
+	}
+	return nil
 }

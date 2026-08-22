@@ -347,6 +347,94 @@ sleep 30
 	}
 }
 
+func TestRepeatedPublicAccessTestDoesNotRepeatLogin(t *testing.T) {
+	loginCountPath := filepath.Join(t.TempDir(), "login-count")
+	t.Setenv("GNAR_LOGIN_COUNT", loginCountPath)
+	binary := writeScript(t, `#!/bin/sh
+if [ "$1" = "login" ]; then
+  count=0
+  if [ -f "$GNAR_LOGIN_COUNT" ]; then count=$(cat "$GNAR_LOGIN_COUNT"); fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$GNAR_LOGIN_COUNT"
+  cat >/dev/null
+  printf '%s\n' '{"type":"login_ok"}'
+  exit 0
+fi
+printf '%s\n' '{"type":"tunnel_ready","public_url":"https://edge.example.com/repeat"}'
+sleep 30
+`)
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", binary)
+
+	if _, err := manager.TestPublicAccess(
+		"https://edge.example.com",
+		"warren",
+		LoginKeyApproval,
+		[]byte("approval-secret"),
+	); err != nil {
+		t.Fatalf("first Public Access test: %v", err)
+	}
+	if _, err := manager.TestPublicAccess(
+		"https://edge.example.com",
+		"warren",
+		LoginKeyApproval,
+		[]byte("approval-secret"),
+	); err != nil {
+		t.Fatalf("repeated Public Access test: %v", err)
+	}
+	count, err := os.ReadFile(loginCountPath)
+	if err != nil {
+		t.Fatalf("read login count: %v", err)
+	}
+	if string(count) != "1" {
+		t.Fatalf("repeated test invoked gnar login %q times", count)
+	}
+}
+
+func TestResetGnarLocalSetupRemovesOnlyOwnedCredentialStore(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "warren", "gnar")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credential := filepath.Join(directory, "account.json")
+	if err := os.WriteFile(credential, []byte("gnar-owned-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", "/missing/gnar")
+	manager.SetGnarConfigDir(directory)
+	manager.SetGnarConfigDirOwned(true)
+	manager.markGnarAuthenticated("https://edge.example.com", "warren")
+
+	if err := manager.ResetGnarLocalSetup(); err != nil {
+		t.Fatalf("reset local setup: %v", err)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("owned credential directory still exists: %v", err)
+	}
+	if manager.GnarAuthenticated() {
+		t.Fatal("reset left the in-memory authentication hint set")
+	}
+}
+
+func TestResetGnarLocalSetupLeavesExplicitCredentialStore(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "system-gnar")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credential := filepath.Join(directory, "account.json")
+	if err := os.WriteFile(credential, []byte("system-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(slog.Default(), "http://127.0.0.1:8789", "", "", "/missing/gnar")
+	manager.SetGnarConfigDir(directory)
+
+	if err := manager.ResetGnarLocalSetup(); err != nil {
+		t.Fatalf("reset explicit setup: %v", err)
+	}
+	if _, err := os.Stat(credential); err != nil {
+		t.Fatalf("explicit credential store was removed: %v", err)
+	}
+}
+
 func TestStartPublicAccessInviteKeyUsesKeyStdinAndKeepsAccountPrivate(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "invite-key")
 	loginArgsFile := filepath.Join(t.TempDir(), "login-args")

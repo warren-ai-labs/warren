@@ -74,6 +74,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
     func testGnarProjectLinkUsesTheSelfHostedWorkerRepository() {
         XCTAssertEqual(WarrenPublicAccessCopy.gnarProjectURL, "https://github.com/abcdlsj/gnar")
+        XCTAssertEqual(WarrenPublicAccessCopy.resetLocalSetup, "Reset local setup")
     }
 
     func testSettingsDeepLinksRoundTripEverySection() throws {

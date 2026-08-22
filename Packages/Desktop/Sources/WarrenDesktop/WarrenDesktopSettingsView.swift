@@ -55,6 +55,7 @@ struct WarrenDesktopSettingsView: View {
     let webStatus: WarrenDesktopWebStatus
     let onWebTest: ((String, String, String, String) -> Void)?
     let onWebStop: (() -> Void)?
+    let onWebReset: (() -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -919,6 +920,22 @@ struct WarrenDesktopSettingsView: View {
                     )
                     .accessibilityIdentifier("settings.public-access.save-test")
                 }
+
+                if hasPublicAccessSetup {
+                    HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
+                        Button(WarrenPublicAccessCopy.resetLocalSetup) {
+                            onWebReset?()
+                        }
+                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                        .disabled(webStatus.publicAccessBusy || onWebReset == nil)
+                        .accessibilityIdentifier("settings.public-access.reset")
+
+                        Text("Clears Warren's local Edge/account setup and bundled gnar credentials. It does not release the remote tunnel.")
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else {
                 Text("Turn on Use default tunnel (gnar) to enter the Edge URL and enrollment key.")
                     .font(WarrenTypography.settingsSupporting)
@@ -948,12 +965,19 @@ struct WarrenDesktopSettingsView: View {
         .onAppear(perform: seedPublicAccessFields)
         .onChange(of: webStatus.configuredEdgeURL) { _, _ in
             seedPublicAccessFields()
+            clearPublicAccessFieldsIfReset()
         }
         .onChange(of: webStatus.configuredAccountName) { _, _ in
             seedPublicAccessFields()
+            clearPublicAccessFieldsIfReset()
         }
         .onChange(of: webStatus.publicAccessAuthenticated) { _, authenticated in
-            guard authenticated else { return }
+            if !authenticated {
+                publicAccessMaskedKeyKind = nil
+                publicAccessSubmittedKeyKind = nil
+                clearPublicAccessFieldsIfReset()
+                return
+            }
             guard let submittedKeyKind = publicAccessSubmittedKeyKind else { return }
             publicAccessInviteKey = ""
             publicAccessApprovalKey = ""
@@ -965,6 +989,9 @@ struct WarrenDesktopSettingsView: View {
                 publicAccessUseDefaultTunnel = true
             }
         }
+        .onChange(of: webStatus.publicAccessEnabled) { _, _ in
+            clearPublicAccessFieldsIfReset()
+        }
     }
 
     @ViewBuilder
@@ -974,14 +1001,7 @@ struct WarrenDesktopSettingsView: View {
             Text(WarrenPublicAccessCopy.approvalKey)
                 .font(WarrenTypography.settingsBody)
             HStack(spacing: WarrenSpacing.small) {
-                SecureField(
-                    publicAccessMaskedKeyKind == .approval ? "••••••••" : "Enter Approval Key",
-                    text: publicAccessKeyBinding(.approval)
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(WarrenTypography.settingsControl)
-                .accessibilityLabel(PublicAccessKeyKind.approval.accessibilityTitle)
-                .accessibilityIdentifier("settings.public-access.approval-key")
+                publicAccessKeyInput(.approval)
                 pasteButton(
                     accessibilityLabel: "Paste Approval Key",
                     accessibilityIdentifier: "settings.public-access.approval-key.paste"
@@ -993,14 +1013,7 @@ struct WarrenDesktopSettingsView: View {
             Text(WarrenPublicAccessCopy.inviteKey)
                 .font(WarrenTypography.settingsBody)
             HStack(spacing: WarrenSpacing.small) {
-                SecureField(
-                    publicAccessMaskedKeyKind == .invite ? "••••••••" : "Enter Invite Key",
-                    text: publicAccessKeyBinding(.invite)
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(WarrenTypography.settingsControl)
-                .accessibilityLabel(PublicAccessKeyKind.invite.accessibilityTitle)
-                .accessibilityIdentifier("settings.public-access.invite-key")
+                publicAccessKeyInput(.invite)
                 pasteButton(
                     accessibilityLabel: "Paste Invite Key",
                     accessibilityIdentifier: "settings.public-access.invite-key.paste"
@@ -1020,6 +1033,29 @@ struct WarrenDesktopSettingsView: View {
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func publicAccessKeyInput(_ kind: PublicAccessKeyKind) -> some View {
+        if publicAccessMaskedKeyKind == kind {
+            // Keep an accepted key visibly present without retaining the
+            // secret. The paste action remains available to replace it.
+            TextField("", text: .constant("••••••••"))
+                .textFieldStyle(.roundedBorder)
+                .font(WarrenTypography.settingsControl)
+                .disabled(true)
+                .accessibilityLabel("\(kind.accessibilityTitle), configured")
+                .accessibilityIdentifier("settings.public-access.\(kind.rawValue)-key")
+        } else {
+            SecureField(
+                kind == .approval ? "Enter Approval Key" : "Enter Invite Key",
+                text: publicAccessKeyBinding(kind)
+            )
+            .textFieldStyle(.roundedBorder)
+            .font(WarrenTypography.settingsControl)
+            .accessibilityLabel(kind.accessibilityTitle)
+            .accessibilityIdentifier("settings.public-access.\(kind.rawValue)-key")
         }
     }
 
@@ -1074,6 +1110,13 @@ struct WarrenDesktopSettingsView: View {
     private var publicAccessActionTitle: String {
         if webStatus.publicAccessBusy { return "Testing…" }
         return "Save & Test"
+    }
+
+    private var hasPublicAccessSetup: Bool {
+        webStatus.publicAccessAuthenticated
+            || webStatus.publicAccessEnabled
+            || webStatus.configuredEdgeURL != nil
+            || webStatus.configuredAccountName != nil
     }
 
     private var publicAccessStatusLabel: String {
@@ -1187,6 +1230,21 @@ struct WarrenDesktopSettingsView: View {
             // when Settings is reopened without echoing which secret was used.
             publicAccessMaskedKeyKind = .invite
         }
+    }
+
+    private func clearPublicAccessFieldsIfReset() {
+        guard !webStatus.publicAccessEnabled,
+              !webStatus.publicAccessAuthenticated,
+              webStatus.configuredEdgeURL == nil,
+              webStatus.configuredAccountName == nil else {
+            return
+        }
+        publicAccessEdgeURL = ""
+        publicAccessAccountName = ""
+        publicAccessInviteKey = ""
+        publicAccessApprovalKey = ""
+        publicAccessMaskedKeyKind = nil
+        publicAccessSubmittedKeyKind = nil
     }
 
     private var runtimeSelection: Binding<String> {

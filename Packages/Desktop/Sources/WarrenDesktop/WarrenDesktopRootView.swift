@@ -39,6 +39,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebStart: () -> Void
     private let onWebTest: ((String, String, String, String) -> Void)?
     private let onWebStop: () -> Void
+    private let onWebReset: (() -> Void)?
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
@@ -112,6 +113,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebStart: @escaping () -> Void = {},
         onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
+        onWebReset: (() -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
@@ -148,6 +150,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebStart = onWebStart
         self.onWebTest = onWebTest
         self.onWebStop = onWebStop
+        self.onWebReset = onWebReset
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
@@ -591,6 +594,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 webStatus: webStatus,
                 onWebTest: onWebTest,
                 onWebStop: onWebStop,
+                onWebReset: onWebReset,
                 defaultRuntime: defaultRuntime,
                 onSetRuntime: onSetRuntime,
                 autoOpenShell: autoOpenShell,

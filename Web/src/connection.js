@@ -12,6 +12,13 @@ export function rejectPendingRequests(pending, detail = "Connection lost") {
   for (const handler of handlers) handler?.onError?.(detail);
 }
 
+// Headless WebSocket errors use the response envelope's `error` field. Keep
+// the older `message` spelling as a compatibility fallback for daemon builds
+// that emitted human-readable errors before the envelope was standardized.
+export function connectionErrorDetail(message, fallback = "Error") {
+  return message?.error || message?.message || fallback;
+}
+
 export class WarrenConnection {
   constructor({
     url,

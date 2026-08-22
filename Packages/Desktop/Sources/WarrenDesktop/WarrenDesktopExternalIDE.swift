@@ -178,11 +178,10 @@ struct WarrenDesktopExternalIDEMenu: View {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
                 .accessibilityHidden(true)
-                .padding(.horizontal, WarrenSpacing.xs)
-                .frame(minHeight: 28)
+                .frame(width: 28, height: 28)
         }
         .buttonStyle(.plain)
-        .frame(minHeight: 28)
+        .frame(width: 28, height: 28)
         .contentShape(.rect)
         .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(tokens.mutedForeground)

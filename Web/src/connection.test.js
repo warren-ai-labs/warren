@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WarrenConnection, reconnectDelay, rejectPendingRequests } from "./connection.js";
+import {
+  WarrenConnection,
+  connectionErrorDetail,
+  reconnectDelay,
+  rejectPendingRequests,
+} from "./connection.js";
 
 class FakeSocket {
   static instances = [];
@@ -137,4 +142,11 @@ test("rejectPendingRequests clears and fails every in-flight request", () => {
   rejectPendingRequests(pending, "offline");
   assert.equal(pending.size, 0);
   assert.deepEqual(errors, ["a:offline", "b:offline"]);
+});
+
+test("connection errors prefer the envelope error field", () => {
+  assert.equal(connectionErrorDetail({ error: "unauthorized" }), "unauthorized");
+  assert.equal(connectionErrorDetail({ error: "server failed", message: "old" }), "server failed");
+  assert.equal(connectionErrorDetail({ message: "legacy" }), "legacy");
+  assert.equal(connectionErrorDetail({}), "Error");
 });

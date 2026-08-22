@@ -1512,10 +1512,28 @@ final class WarrenRemoteApplicationModel {
         }
     }
 
+    /// Clears only Warren's local Public Access setup. The remote Edge is not
+    /// released; its operator can clean up any reservation independently.
+    func resetPublicAccess() {
+        webStatus.publicAccessBusy = true
+        webStatus.publicAccessError = nil
+        Task {
+            defer { webStatus.publicAccessBusy = false }
+            do {
+                try await publicAccessRequest(.reset)
+                webStatus.publicAccessError = nil
+            } catch {
+                webStatus.publicAccessError = error.localizedDescription
+                present(error)
+            }
+        }
+    }
+
     private enum PublicAccessAction: String {
         case enable
         case test
         case disable
+        case reset
         case restart
     }
 

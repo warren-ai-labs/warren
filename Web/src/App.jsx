@@ -14,7 +14,11 @@ import {
   updateSessionAgentStatus,
   workspaceTabs,
 } from "./catalog.js";
-import { WarrenConnection, rejectPendingRequests } from "./connection.js";
+import {
+  WarrenConnection,
+  connectionErrorDetail,
+  rejectPendingRequests,
+} from "./connection.js";
 import {
   captureNavigationPosition,
   createNavigationMemory,
@@ -1272,9 +1276,15 @@ export default function App() {
       }
       break;
     case "error":
-      setConnectionStatus({ message: message.message || "Error", online: false });
-      setEmptyOverride({ loading: false, message: message.message || "Session error" });
-      if (message.message === "unauthorized") connectionRef.current?.stop();
+      {
+        const detail = connectionErrorDetail(message);
+        setConnectionStatus({ message: detail, online: false });
+        setEmptyOverride({ loading: false, message: detail });
+        // An authorization failure is terminal for this URL/token. Retrying
+        // the same fragment forever only produces an Authenticating/
+        // Reconnecting loop and hides the actionable failure from the user.
+        if (detail === "unauthorized") connectionRef.current?.stop();
+      }
       break;
     case "maintenance":
       scheduleMaintenanceTimeout();

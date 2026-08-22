@@ -763,6 +763,67 @@ func TestPublicAccessStatusSeparatesReleaseDefaultFromUserOverride(t *testing.T)
 	}
 }
 
+func TestPublicAccessResetClearsLocalSetupWithoutRemoteRelease(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	credentialDir := filepath.Join(t.TempDir(), "warren", "gnar")
+	if err := os.MkdirAll(credentialDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentialDir, "account.json"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		Settings: settings.Settings{
+			GnarEdge:      "https://custom.example.com",
+			GnarAccount:   "abcdlsj",
+			TunnelEnabled: map[string]bool{tunnel.KindGnar: true},
+		},
+		SettingsPath: settingsPath,
+	}
+	handler := NewHTTPServer(service, "daemon-secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9873", "", "", "/missing/gnar")
+	handler.Tunnels.SetGnarDefaultEdge("https://release.example.com")
+	handler.Tunnels.SetGnarEdge("https://custom.example.com")
+	handler.Tunnels.SetGnarConfigDir(credentialDir)
+	handler.Tunnels.SetGnarConfigDirOwned(true)
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/public-access/reset", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer daemon-secret")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("reset public access: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("reset status = %d", response.StatusCode)
+	}
+	var status api.PublicAccessStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Enabled || status.Authenticated || status.Running || status.ConfiguredEdgeURL != "" || status.ConfiguredAccountName != "" {
+		t.Fatalf("reset status = %#v", status)
+	}
+	if status.EdgeURL != "https://release.example.com" {
+		t.Fatalf("reset effective Edge = %q", status.EdgeURL)
+	}
+	if _, err := os.Stat(credentialDir); !os.IsNotExist(err) {
+		t.Fatalf("local credential store remains after reset: %v", err)
+	}
+	loaded, err := settings.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.GnarEdge != "" || loaded.GnarAccount != "" || loaded.TunnelEnabled[tunnel.KindGnar] {
+		t.Fatalf("reset persisted settings = %#v", loaded)
+	}
+}
+
 func TestPublicAccessApprovalKeyWinsAndDefaultAccountIsNotPersisted(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "gnar-key")
 	loginArgsPath := filepath.Join(t.TempDir(), "gnar-login-args")

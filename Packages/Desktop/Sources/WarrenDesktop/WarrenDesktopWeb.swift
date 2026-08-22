@@ -15,6 +15,7 @@ public enum WarrenPublicAccessCopy {
     /// key name. New UI uses `approvalKey` explicitly.
     public static let enrollmentKey = "Enrollment Key (one time)"
     public static let publicEndpoint = "Public Endpoint"
+    public static let resetLocalSetup = "Reset local setup"
     public static let gnarProjectURL = "https://github.com/abcdlsj/gnar"
 }
 
@@ -341,9 +342,7 @@ public struct WarrenDesktopWebPanel: View {
             Text(WarrenPublicAccessCopy.title)
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
-            Text(
-                "Set up Public Access in Settings, then start it here."
-            )
+            Text("Configure Public Access in Settings.")
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)

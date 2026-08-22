@@ -95,6 +95,7 @@ struct WarrenCompositionRoot: View {
                 )
             },
             onWebStop: { remoteModel.stopWeb() },
+            onWebReset: { remoteModel.resetPublicAccess() },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,

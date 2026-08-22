@@ -22,11 +22,10 @@ struct WarrenDesktopNoticeButton: View {
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
                 .foregroundStyle(bellColor)
                 .accessibilityHidden(true)
-                .padding(.horizontal, WarrenSpacing.xs)
-                .frame(minHeight: 28)
+                .frame(width: 28, height: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(minHeight: 28)
+        .frame(width: 28, height: 28)
         .contentShape(.rect)
         .fixedSize(horizontal: true, vertical: false)
         .focused($isFocused)
