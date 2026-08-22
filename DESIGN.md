@@ -110,7 +110,7 @@ Terminal Session
 | PTY output recovery position | Host Output Store | Yes |
 | Windows, Workspace / Terminal Group Views, Tabs | Client Layout Store | Yes, device-local |
 | Attachments, Leases, Viewport Owners | Host in-memory state | No |
-| Agent activity (working, waiting, ready, failed) | Host in-memory state | No |
+| Agent status (activity plus human attention) | Host in-memory state | No |
 | Surfaces, focus, measured size | Renderer Coordinator | No |
 | Import completion state | Import Receipt Store | Yes |
 
@@ -400,8 +400,9 @@ Behavior requirements:
 - Typography, density, spacing, hierarchy, and hover/selected states use the Superset macOS Desktop as the phase-one visual baseline; the terminal itself uses monospace fonts and Ghostty theme capabilities.
 - Every interactive element must have a stable Accessibility Identifier, Role, Label, Value, and an executable Action.
 - In the custom frameless window, only an explicit empty chrome leaf node at the top may call AppKit `performDrag`; Tabs, buttons, and the terminal must not inherit window dragging.
-- A Workspace aggregates explicit activity across all Host Sessions, prioritized `failed > waitingForInput > connecting > working > ready > exited`; it must not look at only the current Tab.
-- Superset-style status dots: failed red breathing, waitingForInput yellow breathing, working amber breathing, ready green static, exited gray static.
+- Agent activity and human attention follow [RFC 0006](docs/rfc/0006-agent-activity-attention.md); the RFC is the authority for the status model, provider event mapping, and wire contract.
+- A Workspace aggregates explicit Session status across all Host Sessions, prioritized `failed > attention/blocked > stalled > working > ready > exited`; it must not look at only the current Tab.
+- Superset-style status dots: failed red breathing, attention/stalled yellow breathing, working amber breathing, ready green static, exited gray static.
 - Agent activity is reported by Claude/Codex Hooks managed by Warren. Hooks read only the event type and `WARREN_SESSION_ID`; they never read or upload conversation content. Config merging must preserve user entries and update idempotently. Every Warren session inherits the binding environment, so a CLI started manually inside a plain Shell tab is promoted to an agent overlay while it runs and demoted back to shell after `SessionEnd`.
 - Structured Web projections are fed by the agent CLI's own local JSONL transcript, tailed by the Host and normalized into `agent` events. The transcript never leaves the Host and never replaces the PTY stream: if a transcript is missing or its format changes, the session remains a plain terminal.
 - Transcripts are bound to Warren sessions by the CLI's own conversation ID, never guessed from cwd alone: Claude is started with `--session-id` (deterministic transcript path), Codex reports `session_id`/`transcript_path` through the Warren-managed `SessionStart` hook into `~/.warren/agent-bind/`. The cwd+mtime finder is only a fallback.
