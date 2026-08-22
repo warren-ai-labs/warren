@@ -425,6 +425,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     WarrenDesktopOverflowPopover(
                         controls: trailingControlLayout.overflow,
                         detail: overflowControlDetail,
+                        supportsSecondary: overflowControlSupportsSecondary,
+                        secondaryContent: overflowSecondaryContent,
                         onSelect: selectOverflowControl,
                         onDismiss: { setChromePopover(nil) }
                     )
@@ -746,6 +748,81 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         case .notifications:
             let unreadCount = notices.filter(\.isUnread).count
             return unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications"
+        case .settings:
+            return nil
+        }
+    }
+
+    private func overflowControlSupportsSecondary(
+        _ control: WarrenDesktopWorkspaceTabTrailingControl
+    ) -> Bool {
+        switch control {
+        case .externalIDE:
+            return !(externalIDEOptions?.isEmpty ?? true)
+        case .endpoint, .web, .notifications:
+            return true
+        case .settings:
+            return false
+        }
+    }
+
+    private func overflowSecondaryContent(
+        _ control: WarrenDesktopWorkspaceTabTrailingControl,
+        onBack: @escaping () -> Void
+    ) -> AnyView? {
+        switch control {
+        case .externalIDE:
+            guard let options = externalIDEOptions, !options.isEmpty else { return nil }
+            return AnyView(
+                WarrenDesktopExternalIDEPopoverContent(
+                    options: options,
+                    onOpen: { option in
+                        openInExternalIDE(option)
+                        onBack()
+                    },
+                    onDismiss: onBack
+                )
+            )
+        case .endpoint:
+            return AnyView(
+                WarrenDesktopEndpointPopoverContent(
+                    connectionState: projection.connectionState,
+                    endpoints: endpointOptions,
+                    selectedID: selectedEndpointID,
+                    onSelect: { endpointID in
+                        onSelectEndpoint(endpointID)
+                        onBack()
+                    },
+                    onDismiss: onBack
+                )
+            )
+        case .web:
+            let panel = WarrenDesktopWebPanel(
+                status: webStatus,
+                canControl: webStatus.canControl,
+                onStart: {
+                    onWebStart()
+                    refreshWebDismissal()
+                },
+                onOpenSettings: openSettings,
+                onStop: {
+                    onWebStop()
+                    refreshWebDismissal()
+                },
+                onOpenURL: onWebOpenURL,
+                onCopyURL: onWebCopyURL,
+                onDismiss: onBack
+            )
+            return AnyView(panel.inlineContent)
+        case .notifications:
+            return AnyView(
+                WarrenDesktopNoticeInlineContent(
+                    notices: notices,
+                    onRead: onNoticeRead,
+                    onDismissNotice: onNoticeDismiss,
+                    onDismiss: onBack
+                )
+            )
         case .settings:
             return nil
         }

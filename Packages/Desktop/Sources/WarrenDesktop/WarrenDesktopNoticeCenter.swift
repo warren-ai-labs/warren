@@ -11,19 +11,21 @@ struct WarrenDesktopNoticeButton: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let bellColor = isPresented
+            ? tokens.foreground
+            : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground)
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: unreadCount > 0 ? "bell.fill" : "bell")
-                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
+                Image(systemName: "bell")
+                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
+                    .foregroundStyle(bellColor)
                     .accessibilityHidden(true)
                 if unreadCount > 0 {
                     Text(unreadCount > 9 ? "9+" : String(unreadCount))
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(tokens.chromeSurface)
-                        .padding(.horizontal, 3)
-                        .frame(minWidth: 13, minHeight: 13)
-                        .background(tokens.destructive, in: Capsule())
-                        .offset(x: 5, y: -5)
+                        .font(.system(size: 9, weight: .regular, design: .rounded))
+                        .foregroundStyle(tokens.destructive)
+                        .fixedSize()
+                        .offset(x: 4, y: -5)
                         .accessibilityHidden(true)
                 }
             }
@@ -32,7 +34,7 @@ struct WarrenDesktopNoticeButton: View {
         .frame(width: 28, height: 28)
         .contentShape(.rect)
         .focused($isFocused)
-        .foregroundStyle(isPresented || unreadCount > 0 ? tokens.foreground : tokens.mutedForeground)
+        .foregroundStyle(bellColor)
         .accessibilityLabel("Notifications")
         .accessibilityValue(unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
         .accessibilityHint("Show system messages and errors")
@@ -45,7 +47,6 @@ struct WarrenDesktopNoticePopover: View {
     let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
     let onDismiss: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedID: WarrenDesktopNotice.ID?
 
     private var selectedNotice: WarrenDesktopNotice? {
@@ -59,16 +60,44 @@ struct WarrenDesktopNoticePopover: View {
             width: 360,
             onDismiss: onDismiss
         ) {
-            if let selectedNotice {
-                detailView(selectedNotice)
-            } else {
-                listView
-            }
+            WarrenDesktopNoticeContent(
+                notices: notices,
+                selectedID: $selectedID,
+                onRead: onRead,
+                onDismissNotice: onDismissNotice,
+                onDismiss: onDismiss
+            )
         }
         .onChange(of: notices) { _, current in
             if let selectedID, !current.contains(where: { $0.id == selectedID }) {
                 self.selectedID = nil
             }
+        }
+    }
+}
+
+/// Content shared by the standalone notice popover and More's inline detail
+/// view. The outer surface owns the title, border and close affordance.
+struct WarrenDesktopNoticeContent: View {
+    let notices: [WarrenDesktopNotice]
+    @Binding var selectedID: WarrenDesktopNotice.ID?
+    let onRead: (WarrenDesktopNotice.ID) -> Void
+    let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    let onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var selectedNotice: WarrenDesktopNotice? {
+        guard let selectedID else { return nil }
+        return notices.first { $0.id == selectedID }
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if let selectedNotice {
+            detailView(selectedNotice)
+        } else {
+            listView
         }
     }
 
@@ -192,6 +221,32 @@ struct WarrenDesktopNoticePopover: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// More needs an independent selection state because the parent overflow menu
+/// does not otherwise own notice-detail navigation.
+struct WarrenDesktopNoticeInlineContent: View {
+    let notices: [WarrenDesktopNotice]
+    let onRead: (WarrenDesktopNotice.ID) -> Void
+    let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    let onDismiss: () -> Void
+
+    @State private var selectedID: WarrenDesktopNotice.ID?
+
+    var body: some View {
+        WarrenDesktopNoticeContent(
+            notices: notices,
+            selectedID: $selectedID,
+            onRead: onRead,
+            onDismissNotice: onDismissNotice,
+            onDismiss: onDismiss
+        )
+        .onChange(of: notices) { _, current in
+            if let selectedID, !current.contains(where: { $0.id == selectedID }) {
+                self.selectedID = nil
+            }
+        }
     }
 }
 

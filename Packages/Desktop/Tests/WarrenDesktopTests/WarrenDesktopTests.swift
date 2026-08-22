@@ -101,14 +101,14 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
-    func testWorkspaceTabTrailingLayoutDefaultsToNoticeAndOverflow() {
+    func testWorkspaceTabTrailingLayoutKeepsSignalChromeAndOverflow() {
         let layout = WarrenDesktopWorkspaceTabTrailingControl.layout(
             externallyVisibleControls: WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
             availableControls: WarrenDesktopWorkspaceTabTrailingControl.allCases
         )
 
-        XCTAssertEqual(layout.direct, [.notifications])
-        XCTAssertEqual(layout.overflow, [.externalIDE, .endpoint, .web, .settings])
+        XCTAssertEqual(layout.direct, [.externalIDE, .web, .notifications])
+        XCTAssertEqual(layout.overflow, [.endpoint, .settings])
     }
 
     func testWorkspaceTabTrailingExternalControlsAreDeduplicatedAndCapped() {

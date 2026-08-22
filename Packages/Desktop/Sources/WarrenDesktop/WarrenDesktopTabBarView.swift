@@ -378,7 +378,14 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
     case settings
 
     public static let maximumExternalButtonCount = 5
-    public static let defaultExternalControls: [Self] = [.notifications]
+    /// Keep the original high-signal chrome visible; execution-server
+    /// switching and Settings remain in More so the direct controls stay
+    /// visually quiet while preserving the five-button ceiling.
+    public static let defaultExternalControls: [Self] = [
+        .externalIDE,
+        .web,
+        .notifications,
+    ]
 
     public static func normalizedExternalControls(_ controls: [Self]) -> [Self] {
         var seen = Set<Self>()
@@ -389,8 +396,8 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         )
     }
 
-    /// Produces the direct top-bar controls and the one-level overflow list.
-    /// The overflow button itself reserves one of the five visible slots.
+    /// Produces direct top-bar controls and the one-level overflow list. The
+    /// overflow button itself reserves one of the five visible slots.
     public static func layout(
         externallyVisibleControls: [Self],
         availableControls: [Self]

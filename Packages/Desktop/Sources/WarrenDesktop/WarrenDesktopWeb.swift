@@ -212,27 +212,43 @@ public struct WarrenDesktopWebPanel: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let addresses = WarrenDesktopWebAddressPresentation.addresses(for: status)
         VStack(alignment: .leading, spacing: 0) {
-            header(tokens: tokens)
+            header(tokens: tokens, showsDismiss: true, showsTitle: true)
             WarrenDesktopChromeDivider()
-            if addresses.isEmpty {
-                unavailableContent(tokens: tokens)
-            } else {
-                content(addresses: addresses, tokens: tokens)
-            }
+            panelContent(addresses: addresses, tokens: tokens)
         }
         .frame(width: WarrenLayoutMetrics.webPopoverWidth, alignment: .leading)
         .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.base)
     }
 
-    private func header(tokens: WarrenColorTokens) -> some View {
+    /// Content used by More's inline detail view. The outer More surface owns
+    /// the close affordance and elevation, so this variant deliberately
+    /// omits the Web panel's second border and duplicate close button.
+    @ViewBuilder
+    var inlineContent: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let addresses = WarrenDesktopWebAddressPresentation.addresses(for: status)
+        VStack(alignment: .leading, spacing: 0) {
+            header(tokens: tokens, showsDismiss: false, showsTitle: false)
+            WarrenDesktopChromeDivider()
+            panelContent(addresses: addresses, tokens: tokens)
+        }
+    }
+
+    private func header(
+        tokens: WarrenColorTokens,
+        showsDismiss: Bool,
+        showsTitle: Bool
+    ) -> some View {
         HStack(spacing: WarrenSpacing.small) {
-            Image(systemName: "globe")
-                .font(WarrenTypography.navigationGroup)
-                .foregroundStyle(tokens.foreground)
-                .accessibilityHidden(true)
-            Text("Web")
-                .font(WarrenTypography.popoverTitle)
-                .foregroundStyle(tokens.foreground)
+            if showsTitle {
+                Image(systemName: "globe")
+                    .font(WarrenTypography.navigationGroup)
+                    .foregroundStyle(tokens.foreground)
+                    .accessibilityHidden(true)
+                Text("Web")
+                    .font(WarrenTypography.popoverTitle)
+                    .foregroundStyle(tokens.foreground)
+            }
             Spacer()
             WarrenStatusIndicator(
                 color: status.isRunning ? tokens.success : tokens.mutedForeground,
@@ -242,15 +258,29 @@ public struct WarrenDesktopWebPanel: View {
             Text(status.isRunning ? "Running" : "Stopped")
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
-            WarrenDesktopWebIconButton(
-                systemImage: "xmark",
-                accessibilityLabel: "Close Web panel",
-                accessibilityHint: "Dismiss the Web panel",
-                action: onDismiss
-            )
+            if showsDismiss {
+                WarrenDesktopWebIconButton(
+                    systemImage: "xmark",
+                    accessibilityLabel: "Close Web panel",
+                    accessibilityHint: "Dismiss the Web panel",
+                    action: onDismiss
+                )
+            }
         }
         .padding(.horizontal, WarrenSpacing.medium)
         .padding(.vertical, WarrenSpacing.compact)
+    }
+
+    @ViewBuilder
+    private func panelContent(
+        addresses: [WarrenDesktopWebAddress],
+        tokens: WarrenColorTokens
+    ) -> some View {
+        if addresses.isEmpty {
+            unavailableContent(tokens: tokens)
+        } else {
+            content(addresses: addresses, tokens: tokens)
+        }
     }
 
     private func content(

@@ -22,6 +22,8 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
     let role: WarrenPresentationRole
     let content: Content
 
+    @Environment(\.colorScheme) private var colorScheme
+
     init(
         title: String,
         width: CGFloat,
@@ -37,8 +39,6 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
         self.role = role
         self.content = content()
     }
-
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -80,66 +80,87 @@ struct WarrenDesktopEndpointPopover: View {
     let onSelect: (String) -> Void
     let onDismiss: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let presentation = WarrenDesktopConnectionPresentation(connectionState)
         WarrenDesktopChromePopoverSurface(
             title: "Execution Server",
             width: 260,
             onDismiss: onDismiss
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    WarrenStatusIndicator(
-                        color: statusColor(presentation.tone, tokens: tokens),
-                        isActive: presentation.isActive,
-                        size: 8,
-                        accessibilityLabel: presentation.label
-                    )
-                    Text(presentation.label)
-                        .font(WarrenTypography.popoverMeta)
-                        .foregroundStyle(tokens.mutedForeground)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, WarrenSpacing.standard)
-                .padding(.vertical, WarrenSpacing.compact)
+            WarrenDesktopEndpointPopoverContent(
+                connectionState: connectionState,
+                endpoints: endpoints,
+                selectedID: selectedID,
+                onSelect: onSelect,
+                onDismiss: onDismiss
+            )
+        }
+    }
+}
 
-                ForEach(endpoints) { endpoint in
-                    Button {
-                        onSelect(endpoint.id)
-                        onDismiss()
-                    } label: {
-                        HStack(spacing: WarrenSpacing.compact) {
-                            Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
-                                .font(WarrenTypography.popoverMeta)
-                                .foregroundStyle(
-                                    endpoint.id == selectedID
-                                        ? tokens.highlight
-                                        : tokens.mutedForeground
-                                )
-                                .frame(width: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(endpoint.label)
-                                    .font(WarrenTypography.popoverItem)
-                                    .foregroundStyle(tokens.foreground)
-                                if let detail = endpoint.detail {
-                                    Text(detail)
-                                        .font(WarrenTypography.popoverMeta)
-                                        .foregroundStyle(tokens.mutedForeground)
-                                }
+/// The list portion is shared by the direct endpoint popover and the inline
+/// More detail view. Keeping the list separate avoids stacking a full panel
+/// inside another panel when a hidden action is opened from More.
+struct WarrenDesktopEndpointPopoverContent: View {
+    let connectionState: WarrenDesktopConnectionState
+    let endpoints: [WarrenDesktopEndpointOption]
+    let selectedID: String
+    let onSelect: (String) -> Void
+    let onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let presentation = WarrenDesktopConnectionPresentation(connectionState)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: WarrenSpacing.compact) {
+                WarrenStatusIndicator(
+                    color: statusColor(presentation.tone, tokens: tokens),
+                    isActive: presentation.isActive,
+                    size: 8,
+                    accessibilityLabel: presentation.label
+                )
+                Text(presentation.label)
+                    .font(WarrenTypography.popoverMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, WarrenSpacing.standard)
+            .padding(.vertical, WarrenSpacing.compact)
+
+            ForEach(endpoints) { endpoint in
+                Button {
+                    onSelect(endpoint.id)
+                    onDismiss()
+                } label: {
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
+                            .font(WarrenTypography.popoverMeta)
+                            .foregroundStyle(
+                                endpoint.id == selectedID
+                                    ? tokens.highlight
+                                    : tokens.mutedForeground
+                            )
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(endpoint.label)
+                                .font(WarrenTypography.popoverItem)
+                                .foregroundStyle(tokens.foreground)
+                            if let detail = endpoint.detail {
+                                Text(detail)
+                                    .font(WarrenTypography.popoverMeta)
+                                    .foregroundStyle(tokens.mutedForeground)
                             }
-                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                        .contentShape(.rect)
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(endpoint.label)
-                    .accessibilityValue(endpoint.id == selectedID ? "Selected" : "")
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(endpoint.label)
+                .accessibilityValue(endpoint.id == selectedID ? "Selected" : "")
             }
         }
     }
@@ -162,40 +183,54 @@ struct WarrenDesktopExternalIDEPopover: View {
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
     let onDismiss: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
         WarrenDesktopChromePopoverSurface(
             title: "Open in IDE",
             width: 260,
             onDismiss: onDismiss
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(WarrenDesktopExternalIDEMenuPresentation.items(from: options)) { item in
-                    Button {
-                        onOpen(item.option)
-                        onDismiss()
-                    } label: {
-                        HStack(spacing: WarrenSpacing.compact) {
-                            iconView(item.icon, tokens: tokens)
-                            Text(item.title)
-                                .font(WarrenTypography.popoverItem)
-                                .foregroundStyle(tokens.foreground)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                        .contentShape(.rect)
-                        .opacity(item.isEnabled ? 1 : 0.42)
+            WarrenDesktopExternalIDEPopoverContent(
+                options: options,
+                onOpen: onOpen,
+                onDismiss: onDismiss
+            )
+        }
+    }
+}
+
+struct WarrenDesktopExternalIDEPopoverContent: View {
+    let options: [WarrenDesktopExternalIDEOption]
+    let onOpen: (WarrenDesktopExternalIDEOption) -> Void
+    let onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(WarrenDesktopExternalIDEMenuPresentation.items(from: options)) { item in
+                Button {
+                    onOpen(item.option)
+                    onDismiss()
+                } label: {
+                    HStack(spacing: WarrenSpacing.compact) {
+                        iconView(item.icon, tokens: tokens)
+                        Text(item.title)
+                            .font(WarrenTypography.popoverItem)
+                            .foregroundStyle(tokens.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!item.isEnabled)
-                    .accessibilityLabel(item.title)
-                    .accessibilityHint(item.isEnabled ? "" : "Unavailable")
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+                    .contentShape(.rect)
+                    .opacity(item.isEnabled ? 1 : 0.42)
                 }
+                .buttonStyle(.plain)
+                .disabled(!item.isEnabled)
+                .accessibilityLabel(item.title)
+                .accessibilityHint(item.isEnabled ? "" : "Unavailable")
             }
         }
     }

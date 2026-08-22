@@ -63,8 +63,9 @@ silently opening a different resource.
   dedicated menu elevation so it reads as an intentional action surface.
 - Top-bar controls are data-driven: callers may promote selected controls to
   the direct chrome, with a hard maximum of five visible buttons. The overflow
-  affordance reserves one slot whenever hidden controls remain; notifications
-  are the default direct control.
+  affordance reserves one slot whenever hidden controls remain; the original
+  IDE, Web, and notification controls remain direct by default while endpoint
+  switching and Settings are available from More.
 
 ## Acceptance criteria
 
@@ -79,8 +80,10 @@ silently opening a different resource.
 - No right-side diagnostic control or layout slot remains visible.
 - Command/Control-A selects all, Control-A/Control-E move to line start/end,
   and the surrounding Unix editing chords work in every non-terminal input.
-- Workspace actions beyond the direct-control set are reachable from one
-  first-level `More` menu without nested submenus or terminal resizing.
+- Workspace actions beyond the direct-control set are reachable from the
+  compact `More` menu; selecting a multi-step action replaces its list with an
+  inline detail view and a back affordance, without dismissing the surface or
+  resizing the terminal.
 - Direct workspace controls never exceed five visible buttons, including the
   overflow affordance when it is present.
 
