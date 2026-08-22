@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/abcdlsj/warren/Headless/internal/api"
 )
 
 func TestReadTranscriptReturnsRecentUsefulActivities(t *testing.T) {
@@ -34,6 +36,23 @@ func TestReadTranscriptReturnsRecentUsefulActivities(t *testing.T) {
 	}
 	if events[0].Sequence != 1 || events[1].Sequence != 2 {
 		t.Fatalf("sequences = %d,%d, want 1,2", events[0].Sequence, events[1].Sequence)
+	}
+}
+
+func TestProjectEventsMatchesTranscriptReadProjection(t *testing.T) {
+	events, err := ProjectEvents([]api.AgentEvent{
+		{Sequence: 1, Type: "usage", Usage: &api.AgentUsage{TotalTokens: 3}},
+		{Sequence: 2, Type: "user", Content: "old"},
+		{Sequence: 3, Type: "assistant", Content: strings.Repeat("x", 20)},
+	}, ReadOptions{Recent: 2, ContentLimit: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Type != "user" || events[1].Type != "assistant" {
+		t.Fatalf("projected events = %#v, want recent user/assistant", events)
+	}
+	if events[1].Content != "xxxxxxxx…" || events[0].Sequence != 1 || events[1].Sequence != 2 {
+		t.Fatalf("projected content/sequence = %#v, want clipped contiguous events", events)
 	}
 }
 

@@ -170,6 +170,24 @@ func (c *Client) SubscribeAgent(ctx context.Context, sessionID string) (api.Agen
 	return value, err
 }
 
+// AgentHistory returns one bounded page of normalized transcript events. A
+// zero before cursor starts at the newest page; callers can pass the returned
+// cursor to walk towards older events.
+func (c *Client) AgentHistory(
+	ctx context.Context,
+	sessionID string,
+	before uint64,
+	limit int,
+) (api.AgentHistoryResult, error) {
+	var value api.AgentHistoryResult
+	err := c.Request(ctx, "agent.history", map[string]any{
+		"session": sessionID,
+		"before":  before,
+		"limit":   limit,
+	}, &value)
+	return value, err
+}
+
 func (c *Client) AgentTurnEvents(ctx context.Context, sessionID string, turn uint64) ([]api.AgentEvent, error) {
 	var value []api.AgentEvent
 	err := c.Request(ctx, "agent.turn.events", map[string]any{"session": sessionID, "turn": turn}, &value)

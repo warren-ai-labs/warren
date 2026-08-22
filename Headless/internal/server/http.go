@@ -1287,6 +1287,16 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.server.Service.waitAgentReady(ctx, sessionID); err != nil {
 			return err
 		}
+		// ensureAgent may discover and persist the CLI binding while this
+		// request is running. Return the refreshed session so callers can
+		// distinguish a ready Agent from a shell that merely has an agent kind.
+		if refreshed, ok := p.server.Service.Session(sessionID); ok {
+			session = refreshed
+		}
+		if (session.Kind == "codex" || session.Kind == "claude" || session.AgentSessionID != "") &&
+			session.AgentSessionID == "" && len(p.server.Service.agentHistory(sessionID)) == 0 {
+			return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
+		}
 		lock := p.server.Service.broadcastLock(sessionID)
 		if err := lock.LockContext(ctx); err != nil {
 			return err

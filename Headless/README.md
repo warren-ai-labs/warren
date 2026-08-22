@@ -78,6 +78,8 @@ warren agent read codex --recent 10 --include user,assistant
 warren agent read claude /path/to/session.jsonl --full
 warren agent wait SESSION_ID --timeout 30m
 warren session send SESSION_ID "Run the relevant tests" --wait --timeout 30m
+warren session read SESSION_ID --text-only
+warren session read SESSION_ID --terminal
 ```
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
@@ -118,14 +120,27 @@ a smaller, predictable result.
 or until the next turn ends when the agent is idle. It returns the normalized
 events assigned to that turn and defaults to a 30-minute timeout. `warren
 session send SESSION_ID TEXT --wait` captures the turn baseline before sending
-input, then waits for the new turn. It rejects an already-running agent because
-terminal input may steer that turn or queue a new one depending on provider
-state; use `agent wait` first when deterministic completion ownership matters.
-Callers must also serialize concurrent `session send` operations targeting the
-same session; Warren does not claim exclusive ownership of an agent turn.
-Completed turns exit 0; failed or aborted turns print their structured result
-and exit 1. Use `--current` with either command when `WARREN_SESSION_ID`
-identifies the target Warren Session.
+input, then waits for the new turn. For Codex/Claude sessions Warren waits for
+the transcript watcher before sending, writes the composer text, and submits a
+separate kitty-protocol Enter event. This avoids treating the first Enter as a
+first-run trust/resume confirmation or leaving the message in the TUI composer.
+Use `--raw` only when the target is deliberately being driven as a terminal;
+raw Agent input skips the readiness gate and submit-key translation.
+
+`session read SESSION_ID` uses the normalized Agent transcript for Codex/Claude
+and Warren-bound shell overlays, so cursor movement, spinners, and other TUI
+bytes do not enter automation output. Use `--text-only` (also `--text` or
+`--plain`) to print only user/assistant text. Use `--terminal` (or `--raw`) to
+read the original PTY stream with the existing `--timeout`/`--contains`
+behavior. Non-Agent sessions continue to use the PTY reader by default.
+
+`session send` and `session read` serialize no Agent turn ownership: callers
+must serialize concurrent sends targeting the same session. `--wait` rejects
+an already-running Agent turn because terminal input may steer that turn or
+queue a new one depending on provider state; use `agent wait` first when
+deterministic completion ownership matters. Completed turns exit 0; failed or
+aborted turns print their structured result and exit 1. Use `--current` with
+either command when `WARREN_SESSION_ID` identifies the target Warren Session.
 
 For `workspace create`, `--branch` is required and `--path` is optional: omit
 `--path` and the daemon places the new worktree under
