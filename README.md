@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a local-first workspace for **AI coding sessions**, organized around **Workspaces** with durable terminal sessions at its core. Run Codex or Claude Code on a Host — your Mac or a remote VPS — then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
+Warren is a local-first workspace for **durable AI workflows**, organized around **Workspaces** with durable terminal sessions at its core. Run an agent-driven workflow such as Codex or Claude Code on a Host — your Mac or a remote VPS — then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
