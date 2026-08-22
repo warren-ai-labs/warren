@@ -54,8 +54,10 @@ public enum WarrenPresentationMetrics {
         switch role {
         case .inline, .status:
             .init(opacity: 0, radius: 0, y: 0)
-        case .popover, .menu:
+        case .popover:
             .init(opacity: 0.45, radius: 20, y: 12)
+        case .menu:
+            .init(opacity: 0.58, radius: 24, y: 14)
         case .modal, .commandSurface:
             .init(opacity: 0.5, radius: 35, y: 24)
         case .sheet:

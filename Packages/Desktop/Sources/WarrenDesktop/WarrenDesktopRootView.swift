@@ -28,6 +28,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let onNoticeAdd: (String, String, String?, WarrenDesktopNotice.Kind) -> Void
     public let onNoticeRead: (WarrenDesktopNotice.ID) -> Void
     public let onNoticeDismiss: (WarrenDesktopNotice.ID) -> Void
+    public let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
 
     private let endpointOptions: [WarrenDesktopEndpointOption]
     private let selectedEndpointID: String
@@ -98,6 +99,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onNoticeAdd: @escaping (String, String, String?, WarrenDesktopNotice.Kind) -> Void = { _, _, _, _ in },
         onNoticeRead: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
         onNoticeDismiss: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
+        externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
         endpointOptions: [WarrenDesktopEndpointOption] = [
             .init(id: "local", label: "Local", isLocal: true),
         ],
@@ -131,6 +133,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onNoticeAdd = onNoticeAdd
         self.onNoticeRead = onNoticeRead
         self.onNoticeDismiss = onNoticeDismiss
+        self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.normalizedExternalControls(
+            externallyVisibleControls
+        )
         self.endpointOptions = endpointOptions
         self.selectedEndpointID = selectedEndpointID
         self.onSelectEndpoint = onSelectEndpoint
@@ -401,6 +406,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         chromePopover == .web
     }
 
+    private var availableTrailingControls: [WarrenDesktopWorkspaceTabTrailingControl] {
+        WarrenDesktopWorkspaceTabTrailingControl.available(
+            externalIDEOptions: externalIDEOptions
+        )
+    }
+
+    private var trailingControlLayout: (direct: [WarrenDesktopWorkspaceTabTrailingControl], overflow: [WarrenDesktopWorkspaceTabTrailingControl]) {
+        WarrenDesktopWorkspaceTabTrailingControl.layout(
+            externallyVisibleControls: externallyVisibleControls,
+            availableControls: availableTrailingControls
+        )
+    }
+
     private var externalIDEOptions: [WarrenDesktopExternalIDEOption]? {
         makePresentation().workspace.map { workspace in
             externalIDEService.options(
@@ -469,6 +487,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         onDismissNotice: onNoticeDismiss,
                         onDismiss: { setChromePopover(nil) }
                     )
+                case .overflow:
+                    WarrenDesktopOverflowPopover(
+                        controls: trailingControlLayout.overflow,
+                        detail: overflowControlDetail,
+                        onSelect: selectOverflowControl,
+                        onDismiss: { setChromePopover(nil) }
+                    )
                 }
             }
             .padding(.top, WarrenLayoutMetrics.tabBarHeight + WarrenSpacing.small)
@@ -523,6 +548,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             webStatus: webStatus,
             externalIDEOptions: externalIDEOptions,
             notices: notices,
+            externallyVisibleControls: externallyVisibleControls,
+            isOverflowPresented: chromePopover == .overflow,
             isNoticePresented: chromePopover == .notices,
             onToggleSidebar: toggleSidebar,
             onSettings: openSettings,
@@ -698,6 +725,46 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
         setChromePopover(nil)
         setSettingsPresented(true)
+    }
+
+    private func overflowControlDetail(
+        _ control: WarrenDesktopWorkspaceTabTrailingControl
+    ) -> String? {
+        switch control {
+        case .externalIDE:
+            return externalIDEOptions?.first?.name
+        case .endpoint:
+            return endpointOptions.first { $0.id == selectedEndpointID }?.label
+        case .web:
+            if webStatus.tunnelRunning {
+                return "Public Access on"
+            }
+            return webStatus.isRunning ? "Web running" : "Web stopped"
+        case .notifications:
+            let unreadCount = notices.filter(\.isUnread).count
+            return unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications"
+        case .settings:
+            return nil
+        }
+    }
+
+    private func selectOverflowControl(
+        _ control: WarrenDesktopWorkspaceTabTrailingControl
+    ) {
+        switch control {
+        case .externalIDE:
+            guard externalIDEOptions != nil else { return }
+            setChromePopover(.externalIDE)
+        case .endpoint:
+            setChromePopover(.endpoint)
+        case .web:
+            setChromePopover(.web)
+        case .notifications:
+            setChromePopover(.notices)
+        case .settings:
+            setChromePopover(nil)
+            openSettings()
+        }
     }
 
     private func closeSettings() {

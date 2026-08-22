@@ -21,6 +21,8 @@ struct WarrenDesktopTabBar: View {
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let notices: [WarrenDesktopNotice]
+    let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
+    let isOverflowPresented: Bool
     let isNoticePresented: Bool
     let onToggleSidebar: () -> Void
     let onSettings: () -> Void
@@ -58,6 +60,8 @@ struct WarrenDesktopTabBar: View {
         webStatus: WarrenDesktopWebStatus,
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
         notices: [WarrenDesktopNotice] = [],
+        externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
+        isOverflowPresented: Bool = false,
         isNoticePresented: Bool = false,
         onToggleSidebar: @escaping () -> Void,
         onSettings: @escaping () -> Void,
@@ -92,6 +96,8 @@ struct WarrenDesktopTabBar: View {
         self.webStatus = webStatus
         self.externalIDEOptions = externalIDEOptions
         self.notices = notices
+        self.externallyVisibleControls = externallyVisibleControls
+        self.isOverflowPresented = isOverflowPresented
         self.isNoticePresented = isNoticePresented
         self.onToggleSidebar = onToggleSidebar
         self.onSettings = onSettings
@@ -219,6 +225,8 @@ struct WarrenDesktopTabBar: View {
                         webStatus: webStatus,
                         externalIDEOptions: externalIDEOptions,
                         notices: notices,
+                        externallyVisibleControls: externallyVisibleControls,
+                        isOverflowPresented: isOverflowPresented,
                         isNoticePresented: isNoticePresented,
                         onSettings: onSettings,
                         onChromePopover: onChromePopover,
@@ -362,12 +370,80 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
 
 /// The trailing controls are ordered from workspace actions to global preferences.
 /// Add new controls here so their placement remains explicit and reviewable.
-enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable {
+public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Sendable {
     case externalIDE
     case endpoint
     case web
     case notifications
     case settings
+
+    public static let maximumExternalButtonCount = 5
+    public static let defaultExternalControls: [Self] = [.notifications]
+
+    public static func normalizedExternalControls(_ controls: [Self]) -> [Self] {
+        var seen = Set<Self>()
+        return Array(
+            controls
+                .filter { seen.insert($0).inserted }
+                .prefix(maximumExternalButtonCount)
+        )
+    }
+
+    /// Produces the direct top-bar controls and the one-level overflow list.
+    /// The overflow button itself reserves one of the five visible slots.
+    public static func layout(
+        externallyVisibleControls: [Self],
+        availableControls: [Self]
+    ) -> (direct: [Self], overflow: [Self]) {
+        let available = allCases.filter { availableControls.contains($0) }
+        let requested = normalizedExternalControls(externallyVisibleControls)
+            .filter { available.contains($0) }
+        let hidden = available.filter { !requested.contains($0) }
+        let directLimit = hidden.isEmpty
+            ? maximumExternalButtonCount
+            : max(maximumExternalButtonCount - 1, 0)
+        let direct = Array(requested.prefix(directLimit))
+        let overflow = available.filter { !direct.contains($0) }
+        return (direct, overflow)
+    }
+
+    var title: String {
+        switch self {
+        case .externalIDE: "Open in IDE"
+        case .endpoint: "Execution Server"
+        case .web: "Public Access"
+        case .notifications: "Notifications"
+        case .settings: "Settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .externalIDE: "arrow.up.forward.app"
+        case .endpoint: "server.rack"
+        case .web: "globe"
+        case .notifications: "bell"
+        case .settings: "gearshape"
+        }
+    }
+
+    var accessibilityHint: String {
+        switch self {
+        case .externalIDE: "Choose an application for the current workspace"
+        case .endpoint: "Switch the execution server"
+        case .web: "Manage Public Access"
+        case .notifications: "Show system messages and errors"
+        case .settings: "Open Warren settings"
+        }
+    }
+
+    static func available(
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?
+    ) -> [Self] {
+        allCases.filter { control in
+            control != .externalIDE || !(externalIDEOptions?.isEmpty ?? true)
+        }
+    }
 }
 
 private struct WarrenDesktopWorkspaceTabTrailing: View {
@@ -377,6 +453,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let notices: [WarrenDesktopNotice]
+    let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
+    let isOverflowPresented: Bool
     let isNoticePresented: Bool
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
@@ -388,14 +466,29 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         HStack(spacing: WarrenSpacing.xs) {
-            ForEach(WarrenDesktopWorkspaceTabTrailingControl.allCases, id: \.self) {
+            ForEach(controlLayout.direct, id: \.self) {
                 trailingControl($0, tokens: tokens)
+            }
+            if !controlLayout.overflow.isEmpty {
+                WarrenDesktopOverflowButton(
+                    isPresented: isOverflowPresented,
+                    action: { onChromePopover(.overflow) }
+                )
             }
         }
         .padding(.horizontal, WarrenSpacing.xs)
         .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace actions")
+    }
+
+    private var controlLayout: (direct: [WarrenDesktopWorkspaceTabTrailingControl], overflow: [WarrenDesktopWorkspaceTabTrailingControl]) {
+        WarrenDesktopWorkspaceTabTrailingControl.layout(
+            externallyVisibleControls: externallyVisibleControls,
+            availableControls: WarrenDesktopWorkspaceTabTrailingControl.available(
+                externalIDEOptions: externalIDEOptions
+            )
+        )
     }
 
     @ViewBuilder
