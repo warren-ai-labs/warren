@@ -8,19 +8,27 @@ Warren is a local-first workspace for **durable AI workflows**, organized around
 
 ## Screenshots
 
-<img src="docs/warren-desktop.png" width="800" height="500" alt="Warren desktop">
+<img src="docs/warren-desktop.png" width="800" alt="Warren desktop">
 
 ### Web
 
-| Terminal | Chat |
+| Terminal | Agent |
 | --- | --- |
-| <img src="docs/warren-web-terminal.png" width="440" height="241" alt="Warren web terminal"> | <img src="docs/warren-web-agent.png" width="440" height="241" alt="Warren web chat"> |
+| <img src="docs/warren-web-terminal.png" width="440" alt="Warren web terminal"> | <img src="docs/warren-web-agent.png" width="440" alt="Warren web agent"> |
 
 ### Mobile
 
-| Terminal | Chat |
+| Terminal | Agent |
 | --- | --- |
-| <img src="docs/warren-mobile-terminal.png" width="320" height="547" alt="Warren mobile terminal"> | <img src="docs/warren-mobile-agent.png" width="320" height="547" alt="Warren mobile chat"> |
+| <img src="docs/warren-mobile-terminal.png" width="320" alt="Warren mobile terminal"> | <img src="docs/warren-mobile-agent.png" width="320" alt="Warren mobile agent"> |
+
+## Why Warren
+
+AI workflows are rarely finished in one sitting or on one screen. Warren keeps the
+Project, Workspace, Session, and Runtime together on a durable Host, so a workflow
+can move from a Mac to the Web or a phone without losing its terminal state or agent
+conversation. Use the terminal view when you need raw control and the Agent view when
+you want a structured conversation around the same session.
 
 ## Highlights
 
