@@ -88,8 +88,24 @@ go test -race ./Headless/...
 3. Build the release archive from the tagged release commit:
 
    ```sh
-   WARREN_GNAR_DEFAULT_EDGE="https://edge.example.com" bash scripts/package.sh
+   WARREN_BUILD_UNIVERSAL=1 \
+   WARREN_GHOSTTY_DIR=../ghostty \
+   WARREN_GNAR_DEFAULT_EDGE="https://edge.example.com" \
+   bash scripts/package.sh
    ```
+
+   `scripts/package.sh` is a release-only entry point: it invokes
+   `scripts/build-app.sh release` and stamps `build-variant.txt` as `release`.
+   `mise run build` and `mise run dev` intentionally produce debug artifacts
+   and stamp the marker as `build`; they are not release commands.
+
+   The package task defaults to a Universal macOS archive. On macOS, the
+   Universal and Intel slices require an x86_64 `libghostty-vt.dylib`. The
+   build resolves a sibling `../ghostty` checkout automatically, or accepts a
+   prebuilt library through `WARREN_GHOSTTY_VT_X86_64`. If neither is
+   available, the release build stops with an explicit missing-library error;
+   it does not produce a partial archive. Building from a Ghostty checkout
+   also requires `zig`.
 
    `WARREN_GNAR_DEFAULT_EDGE` is injected into the headless binaries at
    release build time. It is a public, credential-free URL; do not put an
@@ -107,6 +123,7 @@ go test -race ./Headless/...
    migrated.
 
    Confirm that `Warren.app/Contents/Info.plist` contains the release version,
+   `Warren.app/Contents/Resources/build-variant.txt` contains `release`,
    `Warren.app/Contents/MacOS/warren-headless --version` prints the release
    tag, and `Warren-<version>.zip` exists. Do not commit `Warren.app`, zip
    archives, or generated build output.

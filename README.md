@@ -84,7 +84,11 @@ mise run dev
 executables. Intel and Universal builds need either a Ghostty checkout (set
 `WARREN_GHOSTTY_DIR`) or a prebuilt x86_64 `libghostty-vt.dylib` (set
 `WARREN_GHOSTTY_VT_X86_64`); the Ghostline module only bundles its arm64
-library.
+library. From a checkout with Ghostty as a sibling directory, package with:
+
+```sh
+WARREN_BUILD_UNIVERSAL=1 WARREN_GHOSTTY_DIR=../ghostty mise run package
+```
 
 To exercise a Universal debug build locally, run:
 

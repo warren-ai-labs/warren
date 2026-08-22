@@ -92,6 +92,8 @@ resolve_x86_64_library() {
     fi
 
     if [[ -z "$library" ]]; then
+        # Resolve the optional Ghostty checkout relative to this repository so
+        # release instructions remain portable across machines.
         if [[ -z "$ghostty_directory" && -f "$repository_root/../ghostty/build.zig" ]]; then
             ghostty_directory="$repository_root/../ghostty"
         fi

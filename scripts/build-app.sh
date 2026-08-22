@@ -199,6 +199,8 @@ else
     strip_and_add_rpath "$headless_binary"
 fi
 
+# The desktop and Web clients use this marker to distinguish debug previews
+# from release installs. Keep it aligned with the selected configuration.
 build_variant="build"
 if [[ "$configuration" == release ]]; then
     build_variant="release"
