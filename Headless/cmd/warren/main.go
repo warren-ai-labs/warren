@@ -383,6 +383,11 @@ func resourceCommand(args []string) error {
 	if resource == "session" && action == "list" && boolValue(params, "all") && boolValue(params, "ended") {
 		return newUsageError("--all and --ended are mutually exclusive", actionUsageText(commandName, action))
 	}
+	if action == "list" {
+		if _, err := listLimit(params); err != nil {
+			return newUsageError(err.Error(), actionUsageText(commandName, action))
+		}
+	}
 	if resource == "session" && action == "send" && (boolValue(params, "wait") || stringValue(params, "timeout") != "") {
 		return newUsageError("session send does not support Agent turn options; use agent send", actionUsageText(commandName, action))
 	}
@@ -432,15 +437,19 @@ func resourceCommand(args []string) error {
 		if err != nil {
 			return err
 		}
+		limit, _ := listLimit(params)
 		switch resource {
 		case "project":
-			return printValue(projectRows(state))
+			return printValue(limitListRows(projectRows(state), limit))
 		case "workspace":
-			return printValue(workspaceRows(state))
+			return printValue(limitListRows(workspaceRows(state), limit))
 		case "terminal-group":
-			return printValue(state.TerminalGroups)
+			return printValue(limitListRows(state.TerminalGroups, limit))
 		case "session":
-			return printValue(sessionRowsForCurrent(state, boolValue(params, "all"), boolValue(params, "ended"), strings.TrimSpace(os.Getenv(agent.BindEnvSession))))
+			return printValue(limitListRows(
+				sessionRowsForCurrent(state, boolValue(params, "all"), boolValue(params, "ended"), strings.TrimSpace(os.Getenv(agent.BindEnvSession))),
+				limit,
+			))
 		}
 	}
 	method := ""
@@ -875,6 +884,10 @@ func agentListCommand(args []string) error {
 	if boolValue(params, "all") && boolValue(params, "ended") {
 		return newUsageError("--all and --ended are mutually exclusive", agentListUsageText())
 	}
+	limit, err := listLimit(params)
+	if err != nil {
+		return newUsageError(err.Error(), agentListUsageText())
+	}
 	ctx, c, err := connect()
 	if err != nil {
 		return err
@@ -891,7 +904,7 @@ func agentListCommand(args []string) error {
 			filtered = append(filtered, row)
 		}
 	}
-	return printValue(filtered)
+	return printValue(limitListRows(filtered, limit))
 }
 
 func agentCurrentCommand(args []string) error {
@@ -1124,7 +1137,17 @@ const (
 )
 
 func isAgentSession(session api.Session) bool {
-	return session.Kind == "codex" || session.Kind == "claude" || session.AgentSessionID != ""
+	switch strings.ToLower(strings.TrimSpace(session.Kind)) {
+	case "codex", "claude":
+		return true
+	case "shell", "custom":
+		// A shell overlay is Agent-capable only after Warren's Codex/Claude
+		// hook has supplied a binding. Other presets, including Trae, remain
+		// ordinary PTY sessions until they receive an explicit integration.
+		return session.AgentSessionID != ""
+	default:
+		return false
+	}
 }
 
 func waitForAgentSubscription(
@@ -2109,6 +2132,35 @@ func durationValue(value map[string]any, key string, fallback time.Duration) tim
 	return fallback
 }
 
+const defaultListLimit = 10
+
+// listLimit keeps roster-heavy commands bounded for agent callers. A caller
+// that needs to search the complete roster must opt into --all and can then
+// pipe the result through rg without placing every row in the context window.
+func listLimit(params map[string]any) (int, error) {
+	if boolValue(params, "all") {
+		if _, specified := params["limit"]; specified {
+			return 0, errors.New("--all cannot be combined with --limit")
+		}
+		return 0, nil
+	}
+	if value, specified := params["limit"]; specified {
+		parsed, err := strconv.Atoi(fmt.Sprint(value))
+		if err != nil || parsed <= 0 {
+			return 0, errors.New("--limit must be a positive integer")
+		}
+		return parsed, nil
+	}
+	return defaultListLimit, nil
+}
+
+func limitListRows[T any](rows []T, limit int) []T {
+	if limit <= 0 || len(rows) <= limit {
+		return rows
+	}
+	return rows[:limit]
+}
+
 // SessionRow joins a session with its workspace and project so the CLI can
 // display context the roster already carries. The embedded Session keeps the
 // JSON payload backward compatible while adding the resolved names/paths.
@@ -2648,6 +2700,10 @@ Global flags:
 
 Run 'warren <command> --help' for command-specific help.
 
+Roster list commands return at most 10 rows by default to keep agent context small.
+Use --all for a complete list, preferably piped to rg when searching, for
+example: warren session list --all | rg 'codex|workspace-id'.
+
 Examples:
   warren agent create WORKSPACE_ID --provider codex --prompt "Run the tests"
   warren agent create WORKSPACE_ID --provider codex --command codex-alias --prompt "Fix the bug"
@@ -2681,7 +2737,7 @@ Examples:
 func agentUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID] --provider codex|claude [--command CMD] [--prompt TEXT | --no-prompt]
-  warren agent list [--all | --ended]
+  warren agent list [--all | --ended] [--limit N]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
   warren agent read AGENT_ID [--current] [--recent N | --all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
@@ -2714,7 +2770,10 @@ prompt; pass that through --prompt instead.
 
 func agentListUsageText() string {
 	return `Usage:
-  warren agent list [--all | --ended]
+  warren agent list [--all | --ended] [--limit N]
+
+Lists are limited to 10 Agents by default. Use --all for the complete list;
+when looking for one Agent, prefer 'warren agent list --all | rg PATTERN'.
 `
 }
 
@@ -2795,7 +2854,7 @@ func resourceUsageText(commandName string) string {
 	switch canonicalResource(commandName) {
 	case "project":
 		return `Usage:
-  warren project list
+  warren project list [--all] [--limit N]
   warren project add PATH [--name NAME] [--auto-import-worktrees]
   warren project remove PROJECT_ID [--force]
   warren project rename PROJECT_ID --name NAME
@@ -2804,7 +2863,7 @@ func resourceUsageText(commandName string) string {
 `
 	case "workspace":
 		return fmt.Sprintf(`Usage:
-  warren %s list
+  warren %s list [--all] [--limit N]
   warren %s create PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
   warren %s remove WORKSPACE_ID [--force] [--keep-worktree]
   warren %s rename WORKSPACE_ID --name NAME
@@ -2813,7 +2872,7 @@ func resourceUsageText(commandName string) string {
 %s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
 	case "terminal-group":
 		return fmt.Sprintf(`Usage:
-  warren %s list
+  warren %s list [--all] [--limit N]
   warren %s create [--name NAME] [--home PATH]
   warren %s remove GROUP_ID [--force]
   warren %s rename GROUP_ID --name NAME
@@ -2822,7 +2881,7 @@ func resourceUsageText(commandName string) string {
 %s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
 	case "session":
 		return `Usage:
-  warren session list [--all | --ended]
+  warren session list [--all | --ended] [--limit N]
   warren session current
   warren session create [WORKSPACE_ID] [--group GROUP_ID] [--kind KIND] [--command CMD] [--title TITLE]
   warren session remove SESSION_ID [--force] [--current] [--dry-run]
@@ -2836,7 +2895,8 @@ func resourceUsageText(commandName string) string {
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
 
-Session is a generic PTY resource. Use agent create for Codex or Claude.
+Session is a generic PTY resource. Use agent create for Codex or Claude;
+Trae is only a shell preset and has no Agent transcript/activity semantics.
 `
 	}
 	return ""
@@ -2847,9 +2907,11 @@ func actionUsageText(commandName, action string) string {
 	switch canonicalResource(commandName) + "." + action {
 	case "project.list", "workspace.list", "session.list":
 		if canonicalResource(commandName) == "session" {
-			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended]\n", name, action)
+			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
 		}
-		return fmt.Sprintf("Usage:\n  warren %s %s\n", name, action)
+		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
+	case "terminal-group.list":
+		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
 	case "project.add":
 		return fmt.Sprintf("Usage:\n  warren %s add PATH [--name NAME] [--auto-import-worktrees]\n", name)
 	case "project.remove", "project.delete":

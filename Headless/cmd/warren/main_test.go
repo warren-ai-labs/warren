@@ -248,6 +248,40 @@ func TestSessionRowsMarkCurrentAndExposeDistinctAgentFields(t *testing.T) {
 	}
 }
 
+func TestListLimitDefaultsToBoundedOutput(t *testing.T) {
+	if got, err := listLimit(parseFlags(nil)); err != nil || got != defaultListLimit {
+		t.Fatalf("default list limit = %d, %v; want %d", got, err, defaultListLimit)
+	}
+	if got, err := listLimit(parseFlags([]string{"--all"})); err != nil || got != 0 {
+		t.Fatalf("all list limit = %d, %v; want unlimited", got, err)
+	}
+	if got, err := listLimit(parseFlags([]string{"--limit", "3"})); err != nil || got != 3 {
+		t.Fatalf("explicit list limit = %d, %v; want 3", got, err)
+	}
+	if _, err := listLimit(parseFlags([]string{"--limit", "0"})); err == nil {
+		t.Fatal("zero list limit unexpectedly accepted")
+	}
+	if _, err := listLimit(parseFlags([]string{"--all", "--limit", "3"})); err == nil {
+		t.Fatal("--all and --limit unexpectedly accepted together")
+	}
+	rows := limitListRows([]string{"one", "two", "three"}, 2)
+	if !reflect.DeepEqual(rows, []string{"one", "two"}) {
+		t.Fatalf("limited rows = %#v, want first two rows", rows)
+	}
+}
+
+func TestAgentSessionSemanticsExcludeTraePreset(t *testing.T) {
+	if isAgentSession(api.Session{Kind: "trae", AgentSessionID: "thread-trae"}) {
+		t.Fatal("Trae preset with a stale binding was treated as an Agent")
+	}
+	if !isAgentSession(api.Session{Kind: "shell", AgentSessionID: "thread-shell"}) {
+		t.Fatal("bound shell overlay was not treated as an Agent")
+	}
+	if isAgentSession(api.Session{Kind: "custom", AgentSessionID: ""}) {
+		t.Fatal("unbound custom session was treated as an Agent")
+	}
+}
+
 func TestSessionMoveCurrentRequiresBindingBeforeEndpoint(t *testing.T) {
 	t.Setenv(agent.BindEnvSession, "")
 	err := run([]string{"session", "move", "--current", "--workspace", "workspace-1"})

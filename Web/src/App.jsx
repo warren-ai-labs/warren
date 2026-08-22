@@ -32,6 +32,7 @@ import {
   releaseWorkspaceSession,
   reserveWorkspaceSession,
   sessionPresets,
+  isAgentSession as isSupportedAgentSession,
   shouldAttachCreatedSession,
   visibleSessionPresets,
 } from "./session.js";
@@ -1022,7 +1023,7 @@ export default function App() {
         && nextTabs.some(tab => tab.id === rememberedSessionID);
       const preferred = (!state.activeSession || activeTabWasRemoved) && !hasRememberedSession
         ? nextTabs.find(tab =>
-          tab.kind === "codex" || tab.kind === "claude" || tab.agentSessionId,
+          isSupportedAgentSession(tab),
         )
         : null;
       const sessionID = preferred?.id || nextSessionID;
@@ -2132,15 +2133,11 @@ export default function App() {
     }
     return "";
   }, [selectedAgentEvents]);
-  const isAgentSession = Boolean(
-    selectedSession
-      && (selectedSession.kind === "codex" || selectedSession.kind === "claude"
-        || selectedSession.agentSessionId),
-  );
-  // A codex/claude session is only safe to message once its CLI has actually
-  // started: before the binding/transcript exists the TUI may still be on a
-  // first-run trust or resume prompt, where typed text is dropped and Enter
-  // is treated as a confirmation key instead of a submit.
+  const isAgentSession = isSupportedAgentSession(selectedSession);
+  // An integrated Codex/Claude session is only safe to message once its CLI
+  // has actually started. Before the binding/transcript exists, the TUI may
+  // still be on a first-run trust or resume prompt, where typed text is dropped
+  // and Enter is treated as a confirmation key instead of a submit.
   const agentViewReady = Boolean(
     selectedSession?.agentSessionId || selectedAgentEvents.length > 0,
   );

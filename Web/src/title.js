@@ -115,9 +115,9 @@ function tabPurpose(session = {}) {
   const kind = String(session.kind || "").trim().toLowerCase();
   const process = String(session.process || "").trim();
 
-  // Managed agents keep their stable launch kind even when the foreground
-  // process is a shell or another implementation detail.
-  if (kind === "claude" || kind === "codex" || kind === "trae") {
+  // Integrated Codex/Claude sessions keep their stable launch kind even when
+  // the foreground process is a shell or another implementation detail.
+  if (kind === "claude" || kind === "codex") {
     return kindLabels[kind];
   }
   if (process && !shellProcessNames.has(process)) return process;

@@ -90,11 +90,23 @@ the canonical name. `warren help`, `warren --help`, and
 `warren <command> --help` print help and exit 0. Missing or invalid arguments
 print the relevant usage and exit 2; server errors use exit code 1.
 
+Roster-heavy `list` commands return at most 10 rows by default so an Agent
+does not receive an entire long-lived roster in one context window. Use
+`--all` when the complete result is required, and prefer searching that
+explicit full output with `rg`, for example:
+
+```sh
+warren session list --all | rg 'codex|workspace-id'
+warren workspace list --all | rg 'release/'
+```
+
 Commands default to aligned, human-readable tables. Pass `--json` for stable,
 machine-readable JSON output. `workspace create` reports `created` and
 `gitWorktree` in its result, so scripts know whether a Git worktree was really
 created and where it landed. `session list` shows running sessions by default;
-pass `--all` to include ended sessions, or `--ended` to list only ended ones.
+the default output is limited to 10 rows. Pass `--all` for the complete list
+(including ended sessions), or `--ended` to list only ended ones. Use
+`--limit N` for a smaller bounded result.
 Each session row exposes the Warren Session ID separately from the
 agent/thread ID and transcript path. JSON rows also include `current: true`
 when the row's Warren Session ID exactly matches `WARREN_SESSION_ID`; no cwd,
@@ -128,7 +140,8 @@ custom commands, and other interactive programs; it does not create Codex or
 Claude Agents. `session send` writes terminal input and `session read` returns
 raw PTY output with `--timeout`/`--contains`. Agent transcript and turn flags
 are rejected on these commands so a TUI cannot be mistaken for conversation
-data.
+data. The `trae` preset likewise only launches a shell command; it is not an
+Agent provider and has no transcript, activity, or Agent CLI semantics.
 
 Agent and Session commands use Warren IDs. `agentThreadId` remains a separate
 provider conversation ID in roster output. Use `--current` when

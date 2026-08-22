@@ -10,6 +10,7 @@ import {
   orderedSessionPresets,
   releaseWorkspaceSession,
   reserveWorkspaceSession,
+  isAgentSession,
   shouldAttachCreatedSession,
   visibleSessionPresets,
 } from "./session.js";
@@ -92,7 +93,7 @@ test("Trae is hidden by default and visibility only accepts known presets", () =
   );
 });
 
-test("Trae participates in automatic AI order when it is visible", () => {
+test("Trae remains a shell preset when it is visible", () => {
   assert.equal(
     automaticSessionKind({
       tabs: [],
@@ -101,8 +102,17 @@ test("Trae participates in automatic AI order when it is visible", () => {
       autoStartAI: true,
       presets: visibleSessionPresets(orderedSessionPresets(["trae", "shell"]), []),
     }),
-    "trae",
+    "claude",
   );
+});
+
+test("only Codex and Claude, plus bound shell overlays, are Agents", () => {
+  assert.equal(isAgentSession({ kind: "codex" }), true);
+  assert.equal(isAgentSession({ kind: "claude" }), true);
+  assert.equal(isAgentSession({ kind: "shell", agentSessionId: "thread-shell" }), true);
+  assert.equal(isAgentSession({ kind: "custom", agentSessionId: "thread-custom" }), true);
+  assert.equal(isAgentSession({ kind: "trae", agentSessionId: "stale" }), false);
+  assert.equal(isAgentSession({ kind: "shell" }), false);
 });
 
 test("workspace reservation prevents duplicate requests and can be released", () => {

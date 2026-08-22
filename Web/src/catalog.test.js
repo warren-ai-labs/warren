@@ -111,8 +111,8 @@ test("roster falls back to launch command when process is absent", () => {
   assert.equal(terminalTabTitle(session, { path: "/work/start" }), "codex · start");
 });
 
-test("managed agent tab keeps its purpose when the foreground process is a shell", () => {
-  for (const kind of ["claude", "codex", "trae"]) {
+test("integrated agent tab keeps its purpose when the foreground process is a shell", () => {
+  for (const kind of ["claude", "codex"]) {
     assert.equal(
       terminalTabTitle(
         { title: kind, kind, process: "zsh", directory: "/work/warren" },
@@ -127,6 +127,16 @@ test("managed agent tab keeps its purpose when the foreground process is a shell
       {},
     ),
     "codex · warren",
+  );
+});
+
+test("Trae preset remains a terminal purpose without Agent semantics", () => {
+  assert.equal(
+    terminalTabTitle(
+      { title: "Trae", kind: "trae", process: "zsh", directory: "/work/warren" },
+      {},
+    ),
+    "trae · warren",
   );
 });
 

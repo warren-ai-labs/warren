@@ -9,7 +9,9 @@ export const sessionPresets = [
   { kind: "shell", label: "Shell", title: "Shell", isAgent: false },
   { kind: "claude", label: "Claude", title: "Claude Code", isAgent: true },
   { kind: "codex", label: "Codex", title: "Codex", isAgent: true },
-  { kind: "trae", label: "Trae", title: "Trae Agent", isAgent: true },
+  // Trae is currently only a launch preset for an interactive shell. It does
+  // not have Warren transcript/activity/send integration yet.
+  { kind: "trae", label: "Trae", title: "Trae", isAgent: false },
 ];
 
 export const defaultSessionPresetOrder = sessionPresets.map(preset => preset.kind);
@@ -90,6 +92,16 @@ export function moveSessionPreset(order, kind, offset, presets = sessionPresets)
 
 export function firstAIPreset(presets = sessionPresets) {
   return presets.find(preset => preset.isAgent) || null;
+}
+
+// A shell can host a Codex/Claude overlay discovered through Warren's hook,
+// but arbitrary presets (including Trae) are not Agents until they provide a
+// dedicated integration.
+export function isAgentSession(session = {}) {
+  const kind = String(session.kind || "").trim().toLowerCase();
+  return kind === "codex"
+    || kind === "claude"
+    || ((kind === "shell" || kind === "custom") && Boolean(session.agentSessionId));
 }
 
 export function automaticSessionKind({ tabs, pending, explicit, autoStartAI = false, presets = sessionPresets }) {
