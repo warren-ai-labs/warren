@@ -6,6 +6,37 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.8.0] - 2026-08-22
+
+> Major release: Warren can share a Host through a self-hosted gnar Edge,
+> while agent workflows, resource links, and clearer desktop notices make
+> macOS, Web, and CLI easier to control. Public Access enrollment keys stay in
+> memory and go directly to gnar; review the setup-link and key flow before
+> sharing one.
+
+### Added
+
+- Add Public Access through a self-hosted gnar Edge, with Settings-based Save & Test, Invite Key and Approval Key enrollment, start/stop/restart lifecycle controls, restart recovery, and credential-free endpoint reporting.
+- Add agent-first CLI commands for creating, listing, reading, sending, waiting for, attaching to, and targeting Codex and Claude Agents; keep normalized transcripts separate from raw PTY sessions and support bounded turn waits.
+- Add provider-neutral Agent activity and human-attention status across the Host, Web, Desktop, and CLI, including explicit input, approval, warning, stalled, failed, ready, and exited states with Workspace and Terminal Group aggregation.
+- Add scoped resource links for Project, Workspace, and Session targets through `warren://terminal` and Web hash state, plus `warren://settings` links that can prefill Public Access setup.
+- Add a bounded desktop notice center for system messages, diagnostics, and update failures, with unread and mute controls, and add a compact Workspace More menu for secondary actions.
+- Add shared Unix text-editing shortcuts to Web and native AppKit text fields without intercepting terminal input.
+
+### Changed
+
+- Bundle a release-selected gnar worker with an isolated `~/.warren/gnar` credential store, inject a public release default Edge at build time, and keep explicit or system gnar paths available.
+- Make Agent and roster projections explicit and bounded, promote Agent commands to the primary CLI interface, and keep terminal, Agent, and transcript operations semantically separate.
+- Replace the diagnostic sidebar with stable top-chrome notices and responsive overflow actions while preserving terminal dimensions; clarify pane directory and terminal-tab labels across Desktop and Web.
+- Roll Ghostline runtime upgrades by release tag and require a stable code-signing identity for distributable macOS builds.
+
+### Fixed
+
+- Harden Public Access enrollment and lifecycle compatibility, route gnar v1.7 Invite and Approval Keys correctly, avoid persisting bootstrap secrets, and append the Web authentication fragment only for an explicit browser open.
+- Recover Public Access setup defaults, Web-panel navigation, and endpoint links without blank clients or stale setup state.
+- Preserve Warren terminal colors across appearance changes and restore the Codex composer background.
+- Harden compact chrome spacing, Web input fallback, session labels, and notice controls across reconnect, mobile, and narrow desktop states.
+
 ## [0.7.0] - 2026-08-20
 
 > Important release: the Web workspace now includes a complete Git panel,

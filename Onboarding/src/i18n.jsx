@@ -90,6 +90,42 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.8.0",
+        dateISO: "2026-08-22",
+        date: "August 22, 2026",
+        title: "Warren opens a secure path to every Host.",
+        summary:
+          "A major release with self-hosted Public Access, agent-first workflows, scoped resource links, and clearer desktop notifications with cross-client navigation.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add Public Access through a self-hosted gnar Edge with Save & Test, Invite Key and Approval Key enrollment, lifecycle controls, restart recovery, and credential-free endpoint reporting.",
+              "Add agent-first CLI commands for Codex and Claude Agents, normalized transcript reads, bounded turn waits, and explicit targeting.",
+              "Add provider-neutral Agent activity and human-attention status across Host, Web, Desktop, and CLI with Workspace and Terminal Group aggregation.",
+              "Add scoped warren://terminal and Web links for Project, Workspace, and Session targets, plus warren://settings links for Public Access setup.",
+              "Add a bounded desktop notice center with unread and mute controls, a compact Workspace More menu, and shared Unix editing shortcuts for non-terminal inputs.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Bundle release-selected gnar with an isolated credential store, inject a public default Edge at build time, and keep explicit or system gnar paths available.",
+              "Keep Agent, roster, terminal, and transcript projections explicit and bounded while preserving terminal dimensions through responsive chrome and notices.",
+              "Roll Ghostline upgrades by release tag and require stable code signing for distributable macOS builds.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Harden Public Access enrollment, gnar v1.7 key routing, lifecycle recovery, secret handling, setup defaults, and explicit browser authentication links.",
+              "Preserve Warren terminal colors across appearance changes and restore the Codex composer background.",
+              "Harden compact chrome, Web input fallback, session labels, and notice controls across reconnect, mobile, and narrow desktop states.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.7.0",
         dateISO: "2026-08-20",
         date: "August 20, 2026",
@@ -545,6 +581,42 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.8.0",
+        dateISO: "2026-08-22",
+        date: "2026 年 8 月 22 日",
+        title: "Warren 为每个 Host 打开安全的访问路径。",
+        summary:
+          "重大版本：新增自托管 Public Access、Agent 优先工作流、范围明确的资源链接，以及覆盖 macOS、Web 和 CLI 的通知与导航体验。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "通过自托管 gnar Edge 新增 Public Access，支持在设置中 Save & Test、使用 Invite Key 或 Approval Key 完成注册、控制生命周期、重启恢复，并报告不含凭据的公共 Endpoint。",
+              "新增面向 Agent 的 CLI 命令，支持 Codex 和 Claude Agent 的创建、列表、读取、发送、等待、附加和明确定位；支持规范化 Transcript 读取与有界 turn 等待。",
+              "新增跨 Host、Web、Desktop 和 CLI 的统一 Agent 活动与人工关注状态，并汇总到 Workspace 和 Terminal Group。",
+              "新增范围明确的 warren://terminal 与 Web 链接，可定位 Project、Workspace 和 Session；新增可预填 Public Access 的 warren://settings 链接。",
+              "新增有界桌面通知中心、未读与静音控制、紧凑 Workspace More 菜单，以及适用于非终端输入框的 Unix 编辑快捷键。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "发布版可内置 gnar，并使用隔离的凭据目录；构建时注入公开的默认 Edge，同时保留显式或系统 gnar 路径。",
+              "让 Agent、roster、Terminal 和 Transcript 投影保持明确且有界，并在响应式 Chrome 与通知出现时保持终端尺寸稳定。",
+              "按发布 tag 滚动升级 Ghostline，并要求可分发的 macOS 构建使用稳定代码签名。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "强化 Public Access 注册、gnar v1.7 密钥路由、生命周期恢复、密钥处理、设置默认值和显式浏览器认证链接。",
+              "修复 Warren 终端在外观变化时的颜色保持问题，并恢复 Codex composer 背景。",
+              "强化紧凑 Chrome、Web 输入回退、Session 标签和通知控制在重连、移动端与窄桌面状态下的表现。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.7.0",
         dateISO: "2026-08-20",

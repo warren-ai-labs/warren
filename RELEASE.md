@@ -117,9 +117,17 @@ go test -race ./Headless/...
    `.local/force-push-once.sh` helper when it is available. Run its dry run
    first; prefer `--force-with-lease`, use `--allow-direct-push` only for this
    exceptional case, and verify that branch protection is restored afterward.
-6. Publish a GitHub release with `Warren-<version>.zip` attached and the
+6. Deploy the onboarding Worker from the same tagged release commit:
+
+   ```sh
+   npm --prefix Onboarding run deploy
+   ```
+
+   Confirm the Worker serves the new release notes and that its offline
+   English and Simplified Chinese fallbacks match `CHANGELOG.md`.
+7. Publish a GitHub release with `Warren-<version>.zip` attached and the
    corresponding `CHANGELOG.md` notes.
-7. Verify the tag, release asset, download URL, and onboarding release
+8. Verify the tag, release asset, download URL, and onboarding release
    response after publishing.
 
 ## Rollback
