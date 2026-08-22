@@ -21,10 +21,37 @@ const messages = {
     "hero.status": "Open source · phase one",
     "hero.platform": "macOS · Web · CLI",
     "ticker.items": ["Run", "Detach", "Reconnect", "Resume", "Workspaces", "Agent views"],
-    "product.kicker": "Today",
-    "product.title": "One workspace for terminal, agents, and workflows.",
-    "product.caption": "Projects and workspaces on the left; terminal tabs, sessions, workflow context, and agent views in the middle.",
-    "product.alt": "Warren desktop with project sidebar, terminal tabs and an agent view",
+    "product.kicker": "Across every screen",
+    "product.title": "One workspace, every screen.",
+    "product.lede":
+      "Start on the desktop, pick up in a browser, or check in from your phone. The same host keeps every workflow ready.",
+    "product.devices": [
+      {
+        label: "macOS desktop",
+        alt: "Warren macOS desktop with projects, terminal tabs, and an agent view",
+        caption: "The complete workspace for focused work.",
+      },
+      {
+        label: "Web · agent view",
+        alt: "Warren web client showing an agent conversation",
+        caption: "Pick up the same workflow from a browser.",
+      },
+      {
+        label: "Web · terminal",
+        alt: "Warren web client showing a terminal session",
+        caption: "Keep terminal access when you leave the desktop.",
+      },
+      {
+        label: "Mobile · agent view",
+        alt: "Warren mobile client showing an agent conversation",
+        caption: "Check progress and respond from your phone.",
+      },
+      {
+        label: "Mobile · terminal",
+        alt: "Warren mobile client showing a terminal session",
+        caption: "Reconnect to the host wherever you are.",
+      },
+    ],
     "terminal.kicker": "Interactive demo",
     "terminal.title": "The desktop's terminal engine, try it here",
     "terminal.lede":
@@ -514,10 +541,37 @@ const messages = {
     "hero.status": "Phase one · 开源",
     "hero.platform": "macOS · Web · CLI",
     "ticker.items": ["断开", "重连", "恢复", "工作区", "会话", "Agent 视图"],
-    "product.kicker": "现在",
-    "product.title": "这是现在的桌面端。",
-    "product.caption": "左边是 Project 和 Workspace，中间是终端 Tab、会话和 Agent 视图。",
-    "product.alt": "Warren 桌面端截图：项目侧栏、终端 Tab 和 Agent 视图",
+    "product.kicker": "每一块屏幕",
+    "product.title": "一个 Workspace，随时随地接着做。",
+    "product.lede":
+      "从桌面端开始，在浏览器里接着做，也能用手机查看进度。所有客户端共享同一个 Host。",
+    "product.devices": [
+      {
+        label: "macOS 桌面端",
+        alt: "Warren macOS 桌面端：项目、终端 Tab 和 Agent 视图",
+        caption: "完整的工作区，适合专注工作。",
+      },
+      {
+        label: "Web · Agent 视图",
+        alt: "Warren Web 客户端中的 Agent 对话",
+        caption: "打开浏览器，接着同一个工作流。",
+      },
+      {
+        label: "Web · 终端",
+        alt: "Warren Web 客户端中的终端会话",
+        caption: "离开桌面端，也能继续使用终端。",
+      },
+      {
+        label: "移动端 · Agent 视图",
+        alt: "Warren 移动端中的 Agent 对话",
+        caption: "用手机查看进度、继续回复。",
+      },
+      {
+        label: "移动端 · 终端",
+        alt: "Warren 移动端中的终端会话",
+        caption: "无论在哪里，都能重新连回 Host。",
+      },
+    ],
     "terminal.kicker": "可交互演示",
     "terminal.title": "桌面端同一个终端引擎，这里就能试",
     "terminal.lede":

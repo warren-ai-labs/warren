@@ -47,7 +47,7 @@ function Nav({ current = "home" }) {
   const { t } = useI18n();
   const isChangelog = current === "changelog";
   const homeHref = isChangelog ? "/" : "#top";
-  const terminalHref = isChangelog ? "/#terminal" : "#terminal";
+  const terminalHref = isChangelog ? "/#demo" : "#demo";
   const whyHref = isChangelog ? "/#why" : "#why";
   return (
     <header className="nav">
@@ -136,7 +136,7 @@ function Hero() {
           </svg>
           {downloadLabel}
         </button>
-        <a className="btn ghost" href="#terminal">
+        <a className="btn ghost" href="#demo">
           {t("hero.ctaTerminal")}
         </a>
         <a
@@ -176,20 +176,46 @@ function Ticker() {
   );
 }
 
+const productShots = [
+  { src: "/screenshot-desktop.png", className: "product-card-desktop" },
+  { src: "/screenshot-web-agent.png", className: "product-card-web" },
+  { src: "/screenshot-web-terminal.png", className: "product-card-web" },
+  { src: "/screenshot-mobile-agent.png", className: "product-card-mobile" },
+  { src: "/screenshot-mobile-terminal.png", className: "product-card-mobile" },
+];
+
 function ProductShot() {
   const { t } = useI18n();
+  const devices = t("product.devices");
   return (
-    <section className="section product">
+    <section id="devices" className="section product">
       <Reveal className="section-head">
         <p className="kicker">{t("product.kicker")}</p>
         <h2>{t("product.title")}</h2>
+        <p className="section-lede">{t("product.lede")}</p>
       </Reveal>
-      <Reveal delay={100}>
-        <figure className="product-frame">
-          <img src="/screenshot-desktop.png" alt={t("product.alt")} loading="lazy" />
-          <figcaption>{t("product.caption")}</figcaption>
-        </figure>
-      </Reveal>
+      <div className="product-gallery">
+        {productShots.map((shot, index) => {
+          const copy = devices[index] ?? devices[0];
+          return (
+            <Reveal
+              className={`product-card ${shot.className}`}
+              delay={100 + index * 60}
+              key={shot.src}
+            >
+              <figure className="product-frame">
+                <div className="product-media">
+                  <img src={shot.src} alt={copy.alt} loading="lazy" />
+                </div>
+                <figcaption>
+                  <strong>{copy.label}</strong>
+                  <span>{copy.caption}</span>
+                </figcaption>
+              </figure>
+            </Reveal>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -397,6 +423,14 @@ function ChangelogPage() {
 }
 
 function HomePage() {
+  useEffect(() => {
+    // The old #terminal link pointed straight at the WASM demo on page load.
+    // Keep that legacy URL at the top; the new #demo link remains opt-in.
+    if (window.location.hash !== "#terminal") return;
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+
   return (
     <div className="site">
       <div className="grain" aria-hidden="true" />

@@ -288,7 +288,7 @@ export default function TerminalDemo() {
   }, []);
 
   return (
-    <section id="terminal" className="section terminal">
+    <section id="demo" className="section terminal">
       <div className="section-head">
         <p className="kicker">{t("terminal.kicker")}</p>
         <h2>{t("terminal.title")}</h2>
