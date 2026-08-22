@@ -81,7 +81,11 @@ import {
 } from "./components.jsx";
 import { GitPanel } from "./gitpanel.jsx";
 import { loadGitPanelUI, saveGitPanelUI, gitPanelUIFileView } from "./gitui.js";
-import { uiStateToHash, uiStateFromHash } from "./urlstate.js";
+import {
+  navigationLocationKey,
+  replaceNavigationQuery,
+  uiStateFromQuery,
+} from "./urlstate.js";
 import { enableTerminalTouchScroll } from "./touch.js";
 
 const storageKeys = {
@@ -1656,79 +1660,83 @@ export default function App() {
     }
   }, [gitOpen, persistCurrentGitUI, restoreGitUIForWorkspace, selectedWorkspaceID]);
 
-  const hashInitializedRef = useRef(false);
-  const hashApplyKeyRef = useRef(null);
-  const hashApplyFailedRef = useRef(false);
+  const navigationInitializedRef = useRef(false);
+  const navigationApplyKeyRef = useRef(null);
+  const navigationApplyFailedRef = useRef(false);
   useEffect(() => {
-    if (!hashInitializedRef.current) {
-      hashInitializedRef.current = true;
+    if (!navigationInitializedRef.current) {
+      navigationInitializedRef.current = true;
       return;
     }
-    const hashState = uiStateFromHash(window.location.hash);
-    const hasPendingResourceTarget = hashState.projectID || hashState.workspaceID || hashState.sessionID;
-    if (hasPendingResourceTarget && hashApplyKeyRef.current !== window.location.hash) return;
-    if (hashApplyFailedRef.current && hashApplyKeyRef.current === window.location.hash) return;
+    const navigationState = uiStateFromQuery(window.location.search);
+    const navigationKey = navigationLocationKey(window.location.search);
+    const hasPendingResourceTarget = navigationState.projectID || navigationState.workspaceID || navigationState.sessionID;
+    if (hasPendingResourceTarget && navigationApplyKeyRef.current !== navigationKey) return;
+    if (navigationApplyFailedRef.current && navigationApplyKeyRef.current === navigationKey) return;
     if (!selectedWorkspaceID) return;
-    const hash = uiStateToHash({
+    const targetState = {
       projectID: selectedWorkspace?.project || null,
       workspaceID: selectedWorkspaceID,
       sessionID: activeSession,
       fileView: gitOpen && fileViewRef.current ? gitPanelUIFileView(fileViewRef.current) : null,
       viewTab: fileDiffViewRef.current.viewTab,
       diffStyle: fileDiffViewRef.current.diffStyle,
-    });
-    const target = hash || "#";
-    if (window.location.hash !== target) {
-      window.history.pushState(null, "", target);
-      // This hash was produced by the current UI, so catalog updates must
-      // not treat it as a new external navigation target.
-      hashApplyKeyRef.current = target;
-      hashApplyFailedRef.current = false;
+    };
+    const targetSearch = replaceNavigationQuery(window.location.search, targetState);
+    if (window.location.search !== targetSearch) {
+      window.history.pushState(
+        null,
+        "",
+        `${window.location.pathname}${targetSearch}${window.location.hash}`,
+      );
+      navigationApplyKeyRef.current = targetSearch;
+      navigationApplyFailedRef.current = false;
     }
   }, [activeSession, fileDiffStyle, fileDiffViewTab, fileView, gitOpen, selectedWorkspace?.project, selectedWorkspaceID]);
 
-  const applyHashStateRef = useRef(null);
-  applyHashStateRef.current = () => {
-    const currentHash = window.location.hash;
-    if (hashApplyKeyRef.current === currentHash) return;
-    const hashState = uiStateFromHash(currentHash);
-    const hasResourceTarget = hashState.projectID || hashState.workspaceID || hashState.sessionID;
+  const applyNavigationStateRef = useRef(null);
+  applyNavigationStateRef.current = () => {
+    const currentSearch = window.location.search;
+    const currentKey = navigationLocationKey(currentSearch);
+    if (navigationApplyKeyRef.current === currentKey) return;
+    const navigationState = uiStateFromQuery(currentSearch);
+    const hasResourceTarget = navigationState.projectID || navigationState.workspaceID || navigationState.sessionID;
     if (hasResourceTarget && !connectionStatus.online) return;
-    const target = resolveNavigationTarget(catalog, hashState);
+    const target = resolveNavigationTarget(catalog, navigationState);
     if (target.error) {
       setEmptyOverride({ loading: false, message: target.error });
-      hashApplyKeyRef.current = currentHash;
-      hashApplyFailedRef.current = true;
+      navigationApplyKeyRef.current = currentKey;
+      navigationApplyFailedRef.current = true;
       return;
     }
-    hashApplyKeyRef.current = currentHash;
-    hashApplyFailedRef.current = false;
+    navigationApplyKeyRef.current = currentKey;
+    navigationApplyFailedRef.current = false;
     if (!target.workspaceID) {
       setCurrentFileView(null);
-      setFileDiffView(hashState);
+      setFileDiffView(navigationState);
       return;
     }
     chooseWorkspace(target.workspaceID, target.sessionID || null, false);
-    if (hashState.fileView) {
+    if (navigationState.fileView) {
       setGitOpenState(true);
-      openFileView(hashState.fileView, hashState.fileView.commit || "", target.workspaceID);
+      openFileView(navigationState.fileView, navigationState.fileView.commit || "", target.workspaceID);
     } else {
       setCurrentFileView(null);
     }
-    setFileDiffView(hashState);
+    setFileDiffView(navigationState);
   };
 
   useEffect(() => {
-    const listener = () => applyHashStateRef.current?.();
-    window.addEventListener("hashchange", listener);
+    const listener = () => applyNavigationStateRef.current?.();
+    window.addEventListener("popstate", listener);
     listener();
     return () => {
-      window.removeEventListener("hashchange", listener);
+      window.removeEventListener("popstate", listener);
     };
   }, []);
 
   useEffect(() => {
-    applyHashStateRef.current?.();
+    applyNavigationStateRef.current?.();
   }, [catalog, connectionStatus.online]);
 
   useEffect(() => {

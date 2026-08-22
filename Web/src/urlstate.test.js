@@ -1,80 +1,76 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { uiStateToHash, uiStateFromHash } from "./urlstate.js";
+import {
+  hasNavigationQuery,
+  navigationLocationKey,
+  replaceNavigationQuery,
+  uiStateFromQuery,
+  uiStateToQuery,
+} from "./urlstate.js";
 
-test("uiStateToHash serializes the full positioning state", () => {
-  const hash = uiStateToHash({
-    projectID: "project-a",
-    workspaceID: "ws-a",
-    sessionID: "sess-1",
-    fileView: { path: "src/a.js", staged: true, commit: null },
-    viewTab: "diff",
-    diffStyle: "split",
-  });
+const navigationState = {
+  projectID: "project-a",
+  workspaceID: "ws-a",
+  sessionID: "sess-1",
+  fileView: { path: "src/a.js", staged: true, commit: null },
+  viewTab: "diff",
+  diffStyle: "split",
+};
+
+test("uiStateToQuery keeps navigation in one readable key/value parameter", () => {
   assert.equal(
-    hash,
-    "#p=project-a&w=ws-a&s=sess-1&f=src%2Fa.js&t=1&v=diff&d=split",
+    uiStateToQuery(navigationState),
+    "?navigation=project=project-a;workspace=ws-a;session=sess-1;file=src%2Fa.js;staged=true;view=diff;diff=split",
   );
 });
 
-test("uiStateToHash emits commit instead of staged when present", () => {
-  const hash = uiStateToHash({
-    workspaceID: "ws-a",
-    fileView: { path: "a.go", staged: false, commit: "abc123" },
-  });
-  assert.ok(hash.includes("&g=abc123"));
-  assert.ok(!hash.includes("&t="));
+test("uiStateFromQuery restores structured navigation", () => {
+  const query = "?navigation=project=project-a;workspace=ws-a;session=sess-1;file=src%2Fa.js;staged=true;view=diff;diff=split";
+  assert.deepEqual(uiStateFromQuery(query), navigationState);
+  assert.equal(navigationLocationKey(query), query);
 });
 
-test("uiStateToHash returns empty string for an empty state", () => {
-  assert.equal(uiStateToHash({}), "");
-  assert.equal(uiStateToHash(null), "");
+test("structured navigation encodes delimiters, plus signs, and unicode in values", () => {
+  const state = {
+    workspaceID: "团队;workspace=1+2",
+    fileView: { path: "src/a b#中&文;=+ .go", staged: false, commit: null },
+  };
+  assert.deepEqual(uiStateFromQuery(uiStateToQuery(state)), state);
 });
 
-test("uiStateToHash encodes special characters in paths", () => {
-  const hash = uiStateToHash({
+test("uiStateFromQuery accepts a URL-encoded structured value", () => {
+  const encoded = encodeURIComponent("workspace=ws-a;view=diff;diff=unified");
+  assert.deepEqual(uiStateFromQuery(`?navigation=${encoded}`), {
     workspaceID: "ws-a",
-    fileView: { path: "src/a b#中&文.go", staged: false, commit: null },
-  });
-  const state = uiStateFromHash(hash);
-  assert.equal(state.fileView.path, "src/a b#中&文.go");
-});
-
-test("uiStateFromHash restores the full state", () => {
-  const state = uiStateFromHash("#w=ws-a&s=sess-1&f=src%2Fa.js&t=1&v=diff&d=split");
-  assert.deepEqual(state, {
-    workspaceID: "ws-a",
-    sessionID: "sess-1",
-    fileView: { path: "src/a.js", staged: true, commit: null },
     viewTab: "diff",
-    diffStyle: "split",
-  });
-});
-
-test("uiStateFromHash accepts a name selector at every resource level", () => {
-  assert.deepEqual(
-    uiStateFromHash("#p=Warren&w=feature&s=Claude%20Code"),
-    { projectID: "Warren", workspaceID: "feature", sessionID: "Claude Code" },
-  );
-});
-
-test("uiStateFromHash drops invalid enums and unknown keys", () => {
-  const state = uiStateFromHash("#w=ws-a&f=x.txt&v=sideways&d=unified&bogus=1");
-  assert.deepEqual(state, {
-    workspaceID: "ws-a",
-    fileView: { path: "x.txt", staged: false, commit: null },
     diffStyle: "unified",
   });
 });
 
-test("uiStateFromHash tolerates empty or corrupt hashes", () => {
-  assert.deepEqual(uiStateFromHash(""), {});
-  assert.deepEqual(uiStateFromHash("#"), {});
-  assert.deepEqual(uiStateFromHash("#w=%zz"), {});
-  assert.deepEqual(uiStateFromHash(null), {});
+test("uiStateFromQuery ignores short and fragment navigation formats", () => {
+  assert.deepEqual(uiStateFromQuery("?w=ws-a&s=sess-1&f=src%2Fa.js&t=1"), {});
+  assert.deepEqual(uiStateFromQuery("#w=ws-a&s=sess-1"), {});
 });
 
-test("uiStateFromHash treats a bare workspace hash as navigation only", () => {
-  const state = uiStateFromHash("#w=ws-b");
-  assert.deepEqual(state, { workspaceID: "ws-b" });
+test("replaceNavigationQuery preserves other query values", () => {
+  const query = "?host=127.0.0.1%3A8789&navigation=workspace=old";
+  const next = replaceNavigationQuery(query, { workspaceID: "ws-new" });
+  assert.equal(next, "?host=127.0.0.1%3A8789&navigation=workspace=ws-new");
+  assert.equal(hasNavigationQuery(next), true);
+  const publicURL = new URL(`https://example.test/${next}#t=secret`);
+  assert.equal(publicURL.search, next);
+  assert.equal(publicURL.hash, "#t=secret");
+});
+
+test("replaceNavigationQuery removes navigation when state is empty", () => {
+  assert.equal(
+    replaceNavigationQuery("?host=127.0.0.1%3A8789&navigation=workspace=old", {}),
+    "?host=127.0.0.1%3A8789",
+  );
+});
+
+test("auth fragments are outside the navigation parser", () => {
+  const url = new URL("https://example.test/?navigation=workspace=ws-a#t=web-secret");
+  assert.deepEqual(uiStateFromQuery(url.search), { workspaceID: "ws-a" });
+  assert.equal(url.hash, "#t=web-secret");
 });

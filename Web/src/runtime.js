@@ -2,10 +2,16 @@ const parameterMeta = document.querySelector('meta[name="warren-injected-params"
 const relayHostMeta = document.querySelector('meta[name="warren-relay-host-id"]');
 
 const injectedParams = parameterMeta?.content || "__WARREN_INJECTED_PARAMS__";
-const rawParams = injectedParams.startsWith("__WARREN_")
-  ? (location.search || location.hash)
-  : injectedParams;
-const params = new URLSearchParams(rawParams.replace(/^[?#]/, ""));
+const hasInjectedParams = !injectedParams.startsWith("__WARREN_");
+const params = new URLSearchParams(
+  (hasInjectedParams ? injectedParams : location.search).replace(/^[?#]/, ""),
+);
+// Warren navigation lives in the query string, while the Web auth token
+// intentionally remains in the fragment. Do not let navigation state hide or
+// replace the token when both are present in a public URL.
+const authFragment = location.hash.startsWith("#t=")
+  ? new URLSearchParams(location.hash.slice(1))
+  : null;
 const relayHostID = relayHostMeta?.content || "__WARREN_RELAY_HOST_ID__";
 const usesControlPlane = !relayHostID.startsWith("__WARREN_");
 // The daemon can serve the UI from a path prefix (for example gnar's
@@ -17,7 +23,7 @@ const appBase = location.pathname.endsWith("/")
 const tokenStorageKey = usesControlPlane
   ? `warren.accessToken.${relayHostID}`
   : "warren.accessToken";
-const suppliedToken = params.get("t") || "";
+const suppliedToken = authFragment?.get("t") || "";
 
 if (suppliedToken) localStorage.setItem(tokenStorageKey, suppliedToken);
 
