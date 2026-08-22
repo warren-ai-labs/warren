@@ -85,6 +85,10 @@ Not so good:
   from the old one before the old process exits, so children keep running.
   If adoption is impossible, the daemon keeps the old server rather than
   ending sessions.
+- On startup, Warren forces a rolling upgrade when the RPC protocol is
+  incompatible, and also rolls a protocol-compatible server when its
+  Ghostline release tag differs from the embedded tag. Development builds
+  without a tag do not trigger the tag check.
 
 ## tmux
 

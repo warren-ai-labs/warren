@@ -2,6 +2,8 @@ github.com/abcdlsj/ghostline v0.6.1 h1:XKZX+EbcOLhEp9wVxcqj3YsoPzwAwFedtvoI9wL94
 github.com/abcdlsj/ghostline v0.6.1/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
 github.com/abcdlsj/ghostline v0.6.2 h1:ybF4PB/eItwXxYK/OoqN5aIYP9ILkxPAV0DoXJbHM/8=
 github.com/abcdlsj/ghostline v0.6.2/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
+github.com/abcdlsj/ghostline v0.6.3 h1:LxQ79wWSzjry263DTC5TQ/HkdzMl9ZVgDllHoEJ4D90=
+github.com/abcdlsj/ghostline v0.6.3/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=

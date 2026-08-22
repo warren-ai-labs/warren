@@ -6,7 +6,35 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/abcdlsj/ghostline"
 )
+
+func TestGhostlineVersionNeedsUpgrade(t *testing.T) {
+	tests := []struct {
+		name       string
+		server     ghostline.VersionInfo
+		expected   string
+		queryError error
+		want       bool
+		trigger    string
+	}{
+		{name: "matching protocol and tag", server: ghostline.VersionInfo{ProtocolVersion: ghostline.ProtocolVersion, TagVersion: "v0.6.3"}, expected: "v0.6.3", want: false},
+		{name: "tag mismatch rolls compatible server", server: ghostline.VersionInfo{ProtocolVersion: ghostline.ProtocolVersion, TagVersion: "v0.6.2"}, expected: "v0.6.3", want: true, trigger: "tag_mismatch"},
+		{name: "missing tag is treated as old implementation", server: ghostline.VersionInfo{ProtocolVersion: ghostline.ProtocolVersion}, expected: "v0.6.3", want: true, trigger: "tag_mismatch"},
+		{name: "unknown expected tag does not force upgrade", server: ghostline.VersionInfo{ProtocolVersion: ghostline.ProtocolVersion, TagVersion: "v0.6.1"}, want: false},
+		{name: "protocol mismatch is forced", server: ghostline.VersionInfo{ProtocolVersion: "0.5.0", TagVersion: "v0.6.3"}, expected: "v0.6.3", want: true, trigger: "protocol_mismatch"},
+		{name: "version query failure is forced", queryError: errors.New("unknown method"), expected: "v0.6.3", want: true, trigger: "version_query_failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, trigger := ghostlineVersionNeedsUpgrade(tt.server, tt.expected, tt.queryError)
+			if got != tt.want || trigger != tt.trigger {
+				t.Fatalf("ghostlineVersionNeedsUpgrade() = (%t, %q), want (%t, %q)", got, trigger, tt.want, tt.trigger)
+			}
+		})
+	}
+}
 
 func TestGhostlineAdoptionFatalOnlyBeforeCommit(t *testing.T) {
 	adoptErr := errors.New("old server closed before retirement response")
