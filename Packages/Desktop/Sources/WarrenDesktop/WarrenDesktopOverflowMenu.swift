@@ -14,7 +14,8 @@ struct WarrenDesktopOverflowButton: View {
             label: "More workspace actions",
             hint: "Show additional workspace actions",
             action: action,
-            tint: isPresented ? tokens.foreground : nil
+            tint: isPresented ? tokens.foreground : nil,
+            edgeSpaced: true
         )
     }
 }
@@ -43,16 +44,11 @@ struct WarrenDesktopOverflowPopover: View {
                let content = secondaryContent(selectedControl, returnToMenu) {
                 VStack(alignment: .leading, spacing: 0) {
                     Button(action: returnToMenu) {
-                        HStack(spacing: WarrenSpacing.xs) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 11, weight: .medium))
-                                .accessibilityHidden(true)
-                            Text("Back to More")
-                                .font(WarrenTypography.popoverMeta)
-                        }
-                        .foregroundStyle(tokens.mutedForeground)
-                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                        .contentShape(.rect)
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .medium))
+                            .frame(width: 22, height: 22)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .contentShape(.rect)
                     }
                     .buttonStyle(WarrenInteractiveRowStyle(cornerRadius: WarrenRadius.small))
                     .padding(.horizontal, WarrenSpacing.xs)

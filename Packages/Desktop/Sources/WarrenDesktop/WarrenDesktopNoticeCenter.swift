@@ -4,6 +4,7 @@ import WarrenDesignSystem
 struct WarrenDesktopNoticeButton: View {
     let unreadCount: Int
     let isPresented: Bool
+    let isMuted: Bool
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -11,12 +12,14 @@ struct WarrenDesktopNoticeButton: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let bellColor = isPresented
-            ? tokens.foreground
-            : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground)
+        let bellColor = isMuted
+            ? tokens.mutedForeground
+            : (isPresented
+                ? tokens.foreground
+                : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground))
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: "bell")
+                Image(systemName: isMuted ? "bell.slash" : "bell")
                     .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
                     .foregroundStyle(bellColor)
                     .accessibilityHidden(true)
@@ -29,14 +32,20 @@ struct WarrenDesktopNoticeButton: View {
                         .accessibilityHidden(true)
                 }
             }
+            .padding(.horizontal, WarrenSpacing.small)
+            .frame(minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 28, height: 28)
+        .frame(minHeight: 28)
         .contentShape(.rect)
         .focused($isFocused)
         .foregroundStyle(bellColor)
         .accessibilityLabel("Notifications")
-        .accessibilityValue(unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
+        .accessibilityValue(
+            isMuted
+                ? "Muted"
+                : (unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
+        )
         .accessibilityHint("Show system messages and errors")
     }
 }
@@ -45,6 +54,8 @@ struct WarrenDesktopNoticePopover: View {
     let notices: [WarrenDesktopNotice]
     let onRead: (WarrenDesktopNotice.ID) -> Void
     let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    @Binding var isMuted: Bool
+    let onMarkAllRead: () -> Void
     let onDismiss: () -> Void
 
     @State private var selectedID: WarrenDesktopNotice.ID?
@@ -65,6 +76,8 @@ struct WarrenDesktopNoticePopover: View {
                 selectedID: $selectedID,
                 onRead: onRead,
                 onDismissNotice: onDismissNotice,
+                isMuted: $isMuted,
+                onMarkAllRead: onMarkAllRead,
                 onDismiss: onDismiss
             )
         }
@@ -83,6 +96,8 @@ struct WarrenDesktopNoticeContent: View {
     @Binding var selectedID: WarrenDesktopNotice.ID?
     let onRead: (WarrenDesktopNotice.ID) -> Void
     let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    @Binding var isMuted: Bool
+    let onMarkAllRead: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -97,8 +112,46 @@ struct WarrenDesktopNoticeContent: View {
         if let selectedNotice {
             detailView(selectedNotice)
         } else {
-            listView
+            VStack(alignment: .leading, spacing: 0) {
+                actionBar
+                listView
+            }
         }
+    }
+
+    private var actionBar: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let unreadCount = notices.filter(\.isUnread).count
+        return HStack(spacing: WarrenSpacing.compact) {
+            Spacer(minLength: 0)
+            Button(action: onMarkAllRead) {
+                Image(systemName: "envelope.open")
+                    .font(.system(size: 13, weight: .regular))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(
+                unreadCount > 0
+                    ? tokens.mutedForeground
+                    : tokens.mutedForeground.opacity(0.45)
+            )
+            .disabled(unreadCount == 0)
+            .accessibilityLabel("Mark all notifications as read")
+            .accessibilityHint("Mark every unread notification as read")
+
+            Toggle(
+                isOn: $isMuted
+            ) {
+                Label("Mute", systemImage: "bell.slash")
+                    .font(WarrenTypography.popoverMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .accessibilityLabel("Mute notifications")
+        }
+        .padding(.horizontal, WarrenSpacing.standard)
+        .padding(.vertical, WarrenSpacing.xs)
     }
 
     private var listView: some View {
@@ -230,6 +283,8 @@ struct WarrenDesktopNoticeInlineContent: View {
     let notices: [WarrenDesktopNotice]
     let onRead: (WarrenDesktopNotice.ID) -> Void
     let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    @Binding var isMuted: Bool
+    let onMarkAllRead: () -> Void
     let onDismiss: () -> Void
 
     @State private var selectedID: WarrenDesktopNotice.ID?
@@ -240,6 +295,8 @@ struct WarrenDesktopNoticeInlineContent: View {
             selectedID: $selectedID,
             onRead: onRead,
             onDismissNotice: onDismissNotice,
+            isMuted: $isMuted,
+            onMarkAllRead: onMarkAllRead,
             onDismiss: onDismiss
         )
         .onChange(of: notices) { _, current in

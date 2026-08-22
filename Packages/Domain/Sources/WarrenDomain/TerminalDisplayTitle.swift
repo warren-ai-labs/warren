@@ -156,6 +156,7 @@ public enum WarrenPreferenceKey {
     public static let presetCommandTrae = "terminal.presetCommand.trae"
     public static let sessionPresetOrder = "terminal.presetOrder"
     public static let hiddenSessionPresets = "terminal.hiddenPresets"
+    public static let noticeMuted = "notifications.muted"
     /// Legacy storage key retained so existing desktop preferences keep their
     /// value while the feature is presented as Public Access.
     public static let publicAccessEnabled = "web.gnarSharingEnabled"

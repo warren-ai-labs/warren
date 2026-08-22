@@ -7,6 +7,7 @@ struct WarrenDesktopChromeButton: View {
     let hint: String
     let action: () -> Void
     var tint: Color? = nil
+    var edgeSpaced: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isFocused: Bool
@@ -16,9 +17,11 @@ struct WarrenDesktopChromeButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                 .accessibilityHidden(true)
+                .padding(.horizontal, edgeSpaced ? WarrenSpacing.small : 0)
+                .frame(minWidth: edgeSpaced ? 0 : 28, minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 28, height: 28)
+        .frame(minHeight: 28)
         .contentShape(.rect)
         .focused($isFocused)
         .foregroundStyle(tint ?? tokens.mutedForeground)

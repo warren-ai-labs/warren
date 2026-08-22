@@ -70,6 +70,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
     private var terminalFontSize = TerminalFontPreference.defaultSize
+    @AppStorage(WarrenPreferenceKey.noticeMuted)
+    private var notificationsMuted = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -419,6 +421,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         notices: notices,
                         onRead: onNoticeRead,
                         onDismissNotice: onNoticeDismiss,
+                        isMuted: $notificationsMuted,
+                        onMarkAllRead: markAllNoticesRead,
                         onDismiss: { setChromePopover(nil) }
                     )
                 case .overflow:
@@ -484,6 +488,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             webStatus: webStatus,
             externalIDEOptions: externalIDEOptions,
             notices: notices,
+            notificationsMuted: notificationsMuted,
             externallyVisibleControls: externallyVisibleControls,
             isOverflowPresented: chromePopover == .overflow,
             isNoticePresented: chromePopover == .notices,
@@ -746,6 +751,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
             return webStatus.isRunning ? "Web running" : "Web stopped"
         case .notifications:
+            if notificationsMuted {
+                return "Muted"
+            }
             let unreadCount = notices.filter(\.isUnread).count
             return unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications"
         case .settings:
@@ -820,12 +828,20 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     notices: notices,
                     onRead: onNoticeRead,
                     onDismissNotice: onNoticeDismiss,
+                    isMuted: $notificationsMuted,
+                    onMarkAllRead: markAllNoticesRead,
                     onDismiss: onBack
                 )
             )
         case .settings:
             return nil
         }
+    }
+
+    private func markAllNoticesRead() {
+        notices
+            .filter(\.isUnread)
+            .forEach { onNoticeRead($0.id) }
     }
 
     private func selectOverflowControl(

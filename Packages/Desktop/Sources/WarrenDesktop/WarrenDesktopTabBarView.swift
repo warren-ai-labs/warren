@@ -21,6 +21,7 @@ struct WarrenDesktopTabBar: View {
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let notices: [WarrenDesktopNotice]
+    let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
     let isOverflowPresented: Bool
     let isNoticePresented: Bool
@@ -60,6 +61,7 @@ struct WarrenDesktopTabBar: View {
         webStatus: WarrenDesktopWebStatus,
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
         notices: [WarrenDesktopNotice] = [],
+        notificationsMuted: Bool = false,
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
         isOverflowPresented: Bool = false,
         isNoticePresented: Bool = false,
@@ -96,6 +98,7 @@ struct WarrenDesktopTabBar: View {
         self.webStatus = webStatus
         self.externalIDEOptions = externalIDEOptions
         self.notices = notices
+        self.notificationsMuted = notificationsMuted
         self.externallyVisibleControls = externallyVisibleControls
         self.isOverflowPresented = isOverflowPresented
         self.isNoticePresented = isNoticePresented
@@ -225,6 +228,7 @@ struct WarrenDesktopTabBar: View {
                         webStatus: webStatus,
                         externalIDEOptions: externalIDEOptions,
                         notices: notices,
+                        notificationsMuted: notificationsMuted,
                         externallyVisibleControls: externallyVisibleControls,
                         isOverflowPresented: isOverflowPresented,
                         isNoticePresented: isNoticePresented,
@@ -460,6 +464,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let notices: [WarrenDesktopNotice]
+    let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
     let isOverflowPresented: Bool
     let isNoticePresented: Bool
@@ -472,7 +477,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        HStack(spacing: WarrenSpacing.xs) {
+        HStack(spacing: WarrenSpacing.compact) {
             ForEach(controlLayout.direct, id: \.self) {
                 trailingControl($0, tokens: tokens)
             }
@@ -530,12 +535,14 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 action: { onChromePopover(.web) },
                 tint: webStatus.tunnelRunning
                     ? tokens.info
-                    : (webStatus.isRunning ? tokens.success : nil)
+                    : (webStatus.isRunning ? tokens.success : nil),
+                edgeSpaced: true
             )
         case .notifications:
             WarrenDesktopNoticeButton(
-                unreadCount: notices.filter(\.isUnread).count,
+                unreadCount: notificationsMuted ? 0 : notices.filter(\.isUnread).count,
                 isPresented: isNoticePresented,
+                isMuted: notificationsMuted,
                 action: { onChromePopover(.notices) }
             )
         case .settings:
@@ -543,7 +550,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 systemImage: "gearshape",
                 label: "Settings",
                 hint: "Open Warren settings",
-                action: onSettings
+                action: onSettings,
+                edgeSpaced: true
             )
         }
     }
@@ -581,9 +589,11 @@ private struct WarrenDesktopEndpointControl: View {
                 )
                     .accessibilityHidden(true)
             }
+            .padding(.horizontal, WarrenSpacing.small)
+            .frame(minHeight: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 28, height: 28)
+        .frame(minHeight: 28)
         .contentShape(.rect)
         .focused($isFocused)
         .foregroundStyle(tokens.mutedForeground)

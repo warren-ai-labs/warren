@@ -66,6 +66,10 @@ silently opening a different resource.
   affordance reserves one slot whenever hidden controls remain; the original
   IDE, Web, and notification controls remain direct by default while endpoint
   switching and Settings are available from More.
+- The notification bell uses a quiet accent and a plain numeric unread marker;
+  muting changes only the external marker to `bell.slash` and never suppresses
+  notice creation or the notice-center history. The center provides compact
+  mark-all-read and mute controls.
 
 ## Acceptance criteria
 
@@ -77,6 +81,8 @@ silently opening a different resource.
   similarly named resource.
 - Clicking the bell and opening notice details leaves terminal dimensions
   unchanged.
+- Muting removes the external unread marker without removing notices; clicking
+  the muted bell still opens the notice center.
 - No right-side diagnostic control or layout slot remains visible.
 - Command/Control-A selects all, Control-A/Control-E move to line start/end,
   and the surrounding Unix editing chords work in every non-terminal input.
@@ -100,7 +106,7 @@ silently opening a different resource.
 ## Verification results
 
 - `swift test --package-path Packages/Desktop -Xswiftc -warnings-as-errors`
-  — 95 tests passed.
+  — 98 tests passed.
 - `swift test -Xswiftc -warnings-as-errors` — 45 tests passed.
 - `npm --prefix Web run check` — 129 Node tests passed and the Vite build
   completed successfully.
