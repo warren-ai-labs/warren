@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -62,8 +63,13 @@ type Manager struct {
 	pollInterval    time.Duration
 	pollAttempts    int
 
-	mu     sync.Mutex
-	states map[string]*state
+	mu sync.Mutex
+	// operationMu serializes lifecycle operations across Public Access and the
+	// lower-level compatibility routes. The process state lock alone cannot
+	// prevent an enable and a stop from interleaving between child creation and
+	// readiness observation.
+	operationMu sync.Mutex
+	states      map[string]*state
 	// gnarAuthenticated is an in-memory presentation hint. The durable token
 	// remains owned by gnar; Warren never reads or persists that credential.
 	gnarAuthenticated bool
@@ -108,6 +114,12 @@ func NewManager(
 }
 
 func (m *Manager) Start(kind string) (Status, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.start(kind)
+}
+
+func (m *Manager) start(kind string) (Status, error) {
 	switch kind {
 	case KindCloudflared:
 		return m.startCloudflared()
@@ -121,6 +133,12 @@ func (m *Manager) Start(kind string) (Status, error) {
 }
 
 func (m *Manager) Stop(kind string) error {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.stop(kind)
+}
+
+func (m *Manager) stop(kind string) error {
 	switch kind {
 	case KindCloudflared:
 		return m.stopCloudflared()
@@ -237,6 +255,13 @@ func (m *Manager) setGnarAuthenticated(value bool) {
 	m.gnarAuthenticated = value
 	if value {
 		delete(m.lastErrors, KindGnar)
+		// A failed start is retained briefly so its actionable error can be
+		// reported. Once gnar login succeeds, that stopped state is stale and
+		// must not shadow the newly authenticated configuration in Public Access
+		// responses.
+		if st := m.states[KindGnar]; st != nil && st.stopped {
+			delete(m.states, KindGnar)
+		}
 	}
 	m.mu.Unlock()
 }
@@ -292,6 +317,12 @@ func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) 
 // clear their request buffer immediately after this method returns. gnar
 // remains responsible for its long-lived token and credential store.
 func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.startPublicAccessWithKey(edge, account, keyKind, key)
+}
+
+func (m *Manager) startPublicAccessWithKey(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
 	if len(key) > 0 && keyKind != LoginKeyApproval && keyKind != LoginKeyInvite {
 		err := errors.New("unsupported gnar bootstrap key type")
 		m.recordError(KindGnar, err.Error())
@@ -334,7 +365,7 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 		// process is started; the deferred clear covers every early return.
 		clearBytes(key)
 	}
-	status, err := m.Start(KindGnar)
+	status, err := m.start(KindGnar)
 	if err != nil {
 		if len(key) == 0 {
 			err = actionableGnarStartError(err)
@@ -361,6 +392,12 @@ func (m *Manager) StartPublicAccessWithKey(edge, account string, keyKind LoginKe
 // only started and stopped when no key is supplied, which verifies an already
 // persisted gnar token without leaving a Public Endpoint live.
 func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.testPublicAccess(edge, account, keyKind, key)
+}
+
+func (m *Manager) testPublicAccess(edge, account string, keyKind LoginKeyKind, key []byte) (Status, error) {
 	// A failed re-test must not leave the UI claiming that an older connection
 	// still authenticates the newly submitted configuration.
 	m.InvalidateGnarAuthentication()
@@ -377,7 +414,7 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 	// Start is idempotent by design. A connection test must not accidentally
 	// reuse a live process that was started with a different Edge or account.
 	if current, ok := m.Status()[KindGnar]; ok && current.Running {
-		if err := m.Stop(KindGnar); err != nil {
+		if err := m.stop(KindGnar); err != nil {
 			m.recordError(KindGnar, err.Error())
 			return Status{Error: err.Error()}, err
 		}
@@ -421,7 +458,7 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		m.setGnarAuthenticated(true)
 		return Status{}, nil
 	}
-	status, err := m.Start(KindGnar)
+	status, err := m.start(KindGnar)
 	if err != nil {
 		err = actionableGnarStartError(err)
 		status.Error = err.Error()
@@ -435,10 +472,10 @@ func (m *Manager) TestPublicAccess(edge, account string, keyKind LoginKeyKind, k
 		}
 		message = actionableGnarStartError(errors.New(message)).Error()
 		m.recordError(KindGnar, message)
-		_ = m.Stop(KindGnar)
+		_ = m.stop(KindGnar)
 		return Status{Error: message}, errors.New(message)
 	}
-	if err := m.Stop(KindGnar); err != nil {
+	if err := m.stop(KindGnar); err != nil {
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
@@ -466,8 +503,10 @@ func actionableGnarStartError(err error) error {
 // StopAll tears down every running reachability adapter. The daemon calls it
 // on shutdown so a public tunnel never outlives its owner process.
 func (m *Manager) StopAll() {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	for _, kind := range []string{KindCloudflared, KindTailscale, KindGnar} {
-		_ = m.Stop(kind)
+		_ = m.stop(kind)
 	}
 }
 
@@ -505,23 +544,29 @@ func (m *Manager) startCloudflared() (Status, error) {
 	m.states[KindCloudflared] = st
 	m.mu.Unlock()
 
-	go m.scanCloudflared(st, io.MultiReader(stdout, stderr))
+	go m.scanCloudflared(st, mergeProcessOutput(stdout, stderr))
 	go m.wait(st)
 	return m.Status()[KindCloudflared], nil
 }
 
 func (m *Manager) scanCloudflared(st *state, reader io.Reader) {
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	ready := false
 	for scanner.Scan() {
-		if found := parseCloudflaredURL(scanner.Text()); found != "" {
-			m.mu.Lock()
-			if st == m.states[st.kind] {
-				st.url = found
+		if !ready {
+			if found := parseCloudflaredURL(scanner.Text()); found != "" {
+				m.mu.Lock()
+				if st == m.states[st.kind] {
+					st.url = found
+				}
+				m.mu.Unlock()
+				m.logger.Info("tunnel ready", "kind", st.kind, "url", found)
+				ready = true
 			}
-			m.mu.Unlock()
-			m.logger.Info("tunnel ready", "kind", st.kind, "url", found)
-			return
 		}
 	}
 }
@@ -694,7 +739,8 @@ func (m *Manager) startGnar() (Status, error) {
 		m.recordError(KindGnar, err.Error())
 		return Status{Error: err.Error()}, err
 	}
-	reapStaleGnar(m.target)
+	nameArgs := gnarNameArgs()
+	reapStaleGnar(m.target, gnarProcessName())
 	edge := m.gnarEdge
 	if edge == "" {
 		edge = m.gnarDefaultEdge
@@ -710,7 +756,7 @@ func (m *Manager) startGnar() (Status, error) {
 	if edge != "" {
 		args = append(args, "--edge", edge)
 	}
-	args = append(args, gnarNameArgs()...)
+	args = append(args, nameArgs...)
 	command := exec.Command(path, args...)
 	command.Env = gnarEnvironmentFor(m.gnarConfigDir)
 	stdout, err := command.StdoutPipe()
@@ -740,7 +786,7 @@ func (m *Manager) startGnar() (Status, error) {
 	m.states[KindGnar] = st
 	m.mu.Unlock()
 
-	go m.scanGnar(st, io.MultiReader(stdout, stderr))
+	go m.scanGnar(st, mergeProcessOutput(stdout, stderr))
 	go m.wait(st)
 	// Start is synchronous for the caller: wait for the first tunnel_ready or
 	// error event so the client can show the public endpoint immediately. A
@@ -795,6 +841,9 @@ func (m *Manager) startGnar() (Status, error) {
 
 func (m *Manager) scanGnar(st *state, reader io.Reader) {
 	defer close(st.scanDone)
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -893,9 +942,17 @@ func gnarCandidates() []string {
 }
 
 func gnarNameArgs() []string {
+	name := gnarProcessName()
+	if name == "" {
+		return nil
+	}
+	return []string{"--name", name}
+}
+
+func gnarProcessName() string {
 	hostname, err := os.Hostname()
 	if err != nil {
-		return nil
+		return ""
 	}
 	var name strings.Builder
 	for _, character := range strings.ToLower(hostname) {
@@ -907,23 +964,24 @@ func gnarNameArgs() []string {
 	}
 	normalized := strings.Trim(name.String(), "-")
 	if normalized == "" {
-		return nil
+		return ""
 	}
 	if len(normalized) > 32 {
 		normalized = strings.TrimRight(normalized[:32], "-")
 	}
-	return []string{"--name", "warren-" + normalized}
+	return "warren-" + normalized
 }
 
 // reapStaleGnar kills gnar processes left behind by a previous daemon that
 // was not stopped cleanly. Without this, a restarted daemon would start a
 // second client for the same reserved name and both processes would fight
 // over one public endpoint.
-func reapStaleGnar(target string) {
+func reapStaleGnar(target, name string) {
 	data, err := exec.Command("ps", "-axo", "pid=,command=").Output()
 	if err != nil {
 		return
 	}
+	var stalePIDs []int
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -934,9 +992,15 @@ func reapStaleGnar(target string) {
 			continue
 		}
 		command := fields[1]
-		if !strings.Contains(command, "gnar") ||
-			!strings.Contains(command, target) ||
-			!strings.Contains(command, "--name warren-") {
+		arguments := strings.Fields(command)
+		if !strings.Contains(command, "gnar") || !isGnarProcess(arguments) {
+			continue
+		}
+		if name != "" {
+			if !hasArgumentValue(arguments, "--name", name) {
+				continue
+			}
+		} else if target == "" || !strings.Contains(command, target) {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
@@ -944,9 +1008,93 @@ func reapStaleGnar(target string) {
 			continue
 		}
 		if process, err := os.FindProcess(pid); err == nil {
-			_ = process.Kill()
+			if err := process.Kill(); err == nil {
+				stalePIDs = append(stalePIDs, pid)
+			}
 		}
 	}
+	for _, pid := range stalePIDs {
+		terminateStaleProcess(pid)
+	}
+}
+
+func isGnarProcess(arguments []string) bool {
+	for _, argument := range arguments {
+		if strings.HasSuffix(argument, "/gnar") || argument == "gnar" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgumentValue(arguments []string, flag, value string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == flag && arguments[index+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func terminateStaleProcess(pid int) {
+	for attempt := 0; attempt < 3; attempt++ {
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			return
+		}
+		_ = process.Kill()
+		if waitForProcessExit(pid, 500*time.Millisecond) {
+			return
+		}
+	}
+}
+
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return false
+}
+
+// mergeProcessOutput drains stdout and stderr concurrently while preserving
+// line boundaries for the JSON event scanner. A serial io.MultiReader can
+// leave stderr unread forever when gnar keeps stdout open, eventually filling
+// the stderr pipe and blocking the child.
+func mergeProcessOutput(readers ...io.Reader) io.ReadCloser {
+	reader, writer := io.Pipe()
+	var writers sync.WaitGroup
+	var writeMu sync.Mutex
+	writers.Add(len(readers))
+	for _, source := range readers {
+		go func(source io.Reader) {
+			defer writers.Done()
+			scanner := bufio.NewScanner(source)
+			scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+			for scanner.Scan() {
+				line := append([]byte(nil), scanner.Bytes()...)
+				line = append(line, '\n')
+				writeMu.Lock()
+				_, err := writer.Write(line)
+				writeMu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}(source)
+	}
+	go func() {
+		writers.Wait()
+		_ = writer.Close()
+	}()
+	return reader
 }
 
 func findExecutable(candidates []string) string {

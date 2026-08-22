@@ -281,7 +281,7 @@ public struct WarrenDesktopWebPanel: View {
                 isBusy: status.publicAccessBusy,
                 hasError: status.publicAccessError != nil,
                 onStart: {
-                    if status.publicAccessAuthenticated || status.publicAccessEnabled {
+                    if status.publicAccessAuthenticated {
                         onStart()
                     } else if let onOpenSettings {
                         onOpenSettings()
@@ -289,8 +289,6 @@ public struct WarrenDesktopWebPanel: View {
                         // Preserve the old signed-in gnar path for clients
                         // that have not yet adopted the Settings callback.
                         onEnable("", "", "")
-                    } else {
-                        onStart()
                     }
                 },
                 onStop: onStop

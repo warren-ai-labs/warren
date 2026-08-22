@@ -1123,7 +1123,7 @@ func sshCommand(args []string) error {
 	localPort := stringValueDefault(flags, "local-port", "8789")
 	remotePort := stringValueDefault(flags, "remote-port", "8789")
 	name := stringValueDefault(flags, "name", strings.NewReplacer("@", "-", ":", "-").Replace(target))
-	remoteStart := "command -v warren-headless >/dev/null || { echo 'warren-headless is not installed' >&2; exit 127; }; mkdir -p ~/.warren; test -s ~/.warren/token || (umask 077; openssl rand -base64 32 | tr -d '\\n' > ~/.warren/token); (curl -fsS http://127.0.0.1:" + remotePort + "/healthz >/dev/null 2>&1 || nohup warren-headless --listen 127.0.0.1:" + remotePort + " > ~/.warren/headless.log 2>&1 &); cat ~/.warren/token"
+	remoteStart := "command -v warren-headless >/dev/null || { echo 'warren-headless is not installed' >&2; exit 127; }; mkdir -p ~/.warren; test -s ~/.warren/token || (umask 077; openssl rand -hex 32 > ~/.warren/token); (curl -fsS http://127.0.0.1:" + remotePort + "/healthz >/dev/null 2>&1 || nohup warren-headless --listen 127.0.0.1:" + remotePort + " > ~/.warren/headless.log 2>&1 &); cat ~/.warren/token"
 	output, err := exec.Command("ssh", target, remoteStart).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("start remote headless: %s: %w", strings.TrimSpace(string(output)), err)

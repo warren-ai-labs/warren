@@ -41,6 +41,37 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPublicAccessBrowserOpenPercentEncodesBase64AuthFragment() throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
+        let opened = WarrenRemoteApplicationModel.publicAccessBrowserURL(
+            endpoint,
+            currentEndpoint: endpoint,
+            daemonToken: "a+/="
+        )
+
+        XCTAssertEqual(opened.absoluteString, "https://tunnel.example/t/host/#t=a%2B%2F%3D")
+        XCTAssertEqual(
+            URLComponents(url: opened, resolvingAgainstBaseURL: false)?.fragment,
+            "t=a+/="
+        )
+    }
+
+    @MainActor
+    func testAuthenticatedWebURLEncodesLegacyTokenWithoutAPlaintextFragment() throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
+        let opened = WarrenRemoteApplicationModel.authenticatedWebURL(
+            endpoint,
+            daemonToken: "a+/="
+        )
+
+        XCTAssertEqual(opened.absoluteString, "https://tunnel.example/t/host/#t=a%2B%2F%3D")
+        XCTAssertEqual(
+            URLComponents(url: opened, resolvingAgainstBaseURL: false)?.fragment,
+            "t=a+/="
+        )
+    }
+
+    @MainActor
     func testConnectIsIdempotentForTheSameEndpoint() {
         let model = WarrenRemoteApplicationModel()
         let endpoint = WarrenRemoteEndpointConfiguration(
