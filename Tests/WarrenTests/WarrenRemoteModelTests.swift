@@ -72,6 +72,26 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNoticeHistoryIsBoundedAndSupportsReadDismiss() {
+        let model = WarrenRemoteApplicationModel()
+
+        for index in 0..<51 {
+            model.addNotice(
+                title: "Notice \(index)",
+                message: "Message \(index)"
+            )
+        }
+
+        XCTAssertEqual(model.notices.count, 50)
+        XCTAssertEqual(model.notices.first?.title, "Notice 50")
+        let firstID = model.notices[0].id
+        model.markNoticeRead(firstID)
+        XCTAssertFalse(model.notices[0].isUnread)
+        model.dismissNotice(firstID)
+        XCTAssertFalse(model.notices.contains(where: { $0.id == firstID }))
+    }
+
+    @MainActor
     func testConnectIsIdempotentForTheSameEndpoint() {
         let model = WarrenRemoteApplicationModel()
         let endpoint = WarrenRemoteEndpointConfiguration(

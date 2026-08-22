@@ -4,6 +4,7 @@ import { uiStateToHash, uiStateFromHash } from "./urlstate.js";
 
 test("uiStateToHash serializes the full positioning state", () => {
   const hash = uiStateToHash({
+    projectID: "project-a",
     workspaceID: "ws-a",
     sessionID: "sess-1",
     fileView: { path: "src/a.js", staged: true, commit: null },
@@ -12,7 +13,7 @@ test("uiStateToHash serializes the full positioning state", () => {
   });
   assert.equal(
     hash,
-    "#w=ws-a&s=sess-1&f=src%2Fa.js&t=1&v=diff&d=split",
+    "#p=project-a&w=ws-a&s=sess-1&f=src%2Fa.js&t=1&v=diff&d=split",
   );
 });
 
@@ -48,6 +49,13 @@ test("uiStateFromHash restores the full state", () => {
     viewTab: "diff",
     diffStyle: "split",
   });
+});
+
+test("uiStateFromHash accepts a name selector at every resource level", () => {
+  assert.deepEqual(
+    uiStateFromHash("#p=Warren&w=feature&s=Claude%20Code"),
+    { projectID: "Warren", workspaceID: "feature", sessionID: "Claude Code" },
+  );
 });
 
 test("uiStateFromHash drops invalid enums and unknown keys", () => {

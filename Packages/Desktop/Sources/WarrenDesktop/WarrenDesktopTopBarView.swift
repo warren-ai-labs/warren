@@ -6,10 +6,7 @@ import WarrenDesignSystem
 struct WarrenDesktopTopBar: View {
     let hostName: String
     let isSidebarCollapsed: Bool
-    let hasInspector: Bool
-    let isInspectorVisible: Bool
     let onToggleSidebar: () -> Void
-    let onToggleInspector: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -37,13 +34,6 @@ struct WarrenDesktopTopBar: View {
             WarrenDesktopWindowDragRegion()
                 .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
-
-            if hasInspector {
-                WarrenDesktopInspectorButton(
-                    isVisible: isInspectorVisible,
-                    action: onToggleInspector
-                )
-            }
 
             Color.clear
                 .frame(width: WarrenSpacing.standard)

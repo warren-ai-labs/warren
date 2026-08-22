@@ -155,6 +155,7 @@ enum WarrenUpdateNotification {
     static let installing = Notification.Name("Warren.installingUpdate")
     static let failed = Notification.Name("Warren.updateFailed")
     static let keyRelease = "release"
+    static let keyError = "error"
 }
 
 /// Fetches Warren releases through the release service and stages a verified

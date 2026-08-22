@@ -20,10 +20,9 @@ struct WarrenDesktopTabBar: View {
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
-    let hasInspector: Bool
-    let isInspectorVisible: Bool
+    let notices: [WarrenDesktopNotice]
+    let isNoticePresented: Bool
     let onToggleSidebar: () -> Void
-    let onToggleInspector: () -> Void
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
@@ -44,6 +43,76 @@ struct WarrenDesktopTabBar: View {
     let onDismissActivity: (TerminalSessionID, AgentActivityState) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        tabs: [ClientTab],
+        tabTitles: [String: String],
+        tabActivities: [TerminalSessionID: AgentActivityState],
+        pinnedSessionIDs: Set<TerminalSessionID>,
+        selectedTabID: String?,
+        chromeMode: WarrenDesktopChromeMode,
+        isSidebarCollapsed: Bool,
+        connectionState: WarrenDesktopConnectionState,
+        endpointOptions: [WarrenDesktopEndpointOption],
+        selectedEndpointID: String,
+        webStatus: WarrenDesktopWebStatus,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        notices: [WarrenDesktopNotice] = [],
+        isNoticePresented: Bool = false,
+        onToggleSidebar: @escaping () -> Void,
+        onSettings: @escaping () -> Void,
+        onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
+        onOpenInExternalIDE: @escaping (WarrenDesktopExternalIDEOption) -> Void,
+        onSelectEndpoint: @escaping (String) -> Void,
+        onSelectTab: @escaping (String) -> Void,
+        onMoveTab: @escaping (String, String?) -> Void,
+        sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
+        sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination],
+        onMoveSession: @escaping (TerminalSessionID, WarrenDesktopSessionMoveDestination) -> Void,
+        canAddTab: Bool,
+        isAddingTab: Bool,
+        onAddTab: @escaping () -> Void,
+        onCloseTab: @escaping (String) -> Void,
+        onCloseOtherTabs: @escaping (String) -> Void,
+        onCloseAllTabs: @escaping () -> Void,
+        onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
+        onToggleSessionPin: @escaping (TerminalSessionID, Bool) -> Void,
+        onDismissActivity: @escaping (TerminalSessionID, AgentActivityState) -> Void
+    ) {
+        self.tabs = tabs
+        self.tabTitles = tabTitles
+        self.tabActivities = tabActivities
+        self.pinnedSessionIDs = pinnedSessionIDs
+        self.selectedTabID = selectedTabID
+        self.chromeMode = chromeMode
+        self.isSidebarCollapsed = isSidebarCollapsed
+        self.connectionState = connectionState
+        self.endpointOptions = endpointOptions
+        self.selectedEndpointID = selectedEndpointID
+        self.webStatus = webStatus
+        self.externalIDEOptions = externalIDEOptions
+        self.notices = notices
+        self.isNoticePresented = isNoticePresented
+        self.onToggleSidebar = onToggleSidebar
+        self.onSettings = onSettings
+        self.onChromePopover = onChromePopover
+        self.onOpenInExternalIDE = onOpenInExternalIDE
+        self.onSelectEndpoint = onSelectEndpoint
+        self.onSelectTab = onSelectTab
+        self.onMoveTab = onMoveTab
+        self.sessionMoveTargets = sessionMoveTargets
+        self.sessionMoveDestinations = sessionMoveDestinations
+        self.onMoveSession = onMoveSession
+        self.canAddTab = canAddTab
+        self.isAddingTab = isAddingTab
+        self.onAddTab = onAddTab
+        self.onCloseTab = onCloseTab
+        self.onCloseOtherTabs = onCloseOtherTabs
+        self.onCloseAllTabs = onCloseAllTabs
+        self.onRequestRename = onRequestRename
+        self.onToggleSessionPin = onToggleSessionPin
+        self.onDismissActivity = onDismissActivity
+    }
 
     static func tabTrackWidth(tabCount: Int) -> CGFloat {
         CGFloat(tabCount) * WarrenLayoutMetrics.tabWidth
@@ -149,13 +218,12 @@ struct WarrenDesktopTabBar: View {
                         selectedEndpointID: selectedEndpointID,
                         webStatus: webStatus,
                         externalIDEOptions: externalIDEOptions,
-                        hasInspector: hasInspector,
-                        isInspectorVisible: isInspectorVisible,
+                        notices: notices,
+                        isNoticePresented: isNoticePresented,
                         onSettings: onSettings,
                         onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
-                        onSelectEndpoint: onSelectEndpoint,
-                        onToggleInspector: onToggleInspector
+                        onSelectEndpoint: onSelectEndpoint
                     )
                 }
             }
@@ -298,7 +366,7 @@ enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable {
     case externalIDE
     case endpoint
     case web
-    case inspector
+    case notifications
     case settings
 }
 
@@ -308,13 +376,12 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
-    let hasInspector: Bool
-    let isInspectorVisible: Bool
+    let notices: [WarrenDesktopNotice]
+    let isNoticePresented: Bool
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onSelectEndpoint: (String) -> Void
-    let onToggleInspector: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -365,13 +432,12 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     ? tokens.info
                     : (webStatus.isRunning ? tokens.success : nil)
             )
-        case .inspector:
-            if hasInspector {
-                WarrenDesktopInspectorButton(
-                    isVisible: isInspectorVisible,
-                    action: onToggleInspector
-                )
-            }
+        case .notifications:
+            WarrenDesktopNoticeButton(
+                unreadCount: notices.filter(\.isUnread).count,
+                isPresented: isNoticePresented,
+                action: { onChromePopover(.notices) }
+            )
         case .settings:
             WarrenDesktopChromeButton(
                 systemImage: "gearshape",

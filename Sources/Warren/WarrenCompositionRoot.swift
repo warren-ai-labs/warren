@@ -17,7 +17,6 @@ struct WarrenCompositionRoot: View {
     @State private var worktreeImportProjectID: ProjectID?
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
-    @State private var appMessage: WarrenAppMessage?
     @State private var terminalSearchPresented = false
     @State private var updateStatus: WarrenDesktopUpdateStatus = .none
     @StateObject private var presentation = WarrenPresentationCoordinator()
@@ -72,6 +71,17 @@ struct WarrenCompositionRoot: View {
             creatingSessionTerminalGroupIDs: remoteModel.creatingSessionTerminalGroupIDs,
             deletingProjectIDs: remoteModel.deletingProjectIDs,
             deletingWorkspaceIDs: remoteModel.deletingWorkspaceIDs,
+            notices: remoteModel.notices,
+            onNoticeAdd: { title, message, detail, kind in
+                remoteModel.addNotice(
+                    title: title,
+                    message: message,
+                    detail: detail,
+                    kind: kind
+                )
+            },
+            onNoticeRead: { remoteModel.markNoticeRead($0) },
+            onNoticeDismiss: { remoteModel.dismissNotice($0) },
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: selectEndpoint,
@@ -161,7 +171,11 @@ struct WarrenCompositionRoot: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenAppPresentation.message)) { note in
             guard let message = note.object as? WarrenAppMessage else { return }
-            appMessage = message
+            remoteModel.addNotice(
+                title: message.title,
+                message: message.message,
+                kind: message.kind
+            )
         }
         .onChange(of: terminalFontFamily) { _, _ in updateTerminalFont() }
         .onChange(of: terminalFontSize) { _, _ in updateTerminalFont() }
@@ -198,10 +212,17 @@ struct WarrenCompositionRoot: View {
                 updateStatus = .none
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: WarrenUpdateNotification.failed)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: WarrenUpdateNotification.failed)) { note in
             withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
                 updateStatus = .failed
             }
+            let error = note.userInfo?[WarrenUpdateNotification.keyError] as? String
+            remoteModel.addNotice(
+                title: "Update failed",
+                message: error ?? "Warren could not prepare the update.",
+                detail: error,
+                kind: .error
+            )
         }
         .task {
             presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
@@ -215,17 +236,7 @@ struct WarrenCompositionRoot: View {
 
     @ViewBuilder
     private var appPresentationLayer: some View {
-        if let appMessage {
-            WarrenMessageDialog(
-                title: appMessage.title,
-                message: appMessage.message,
-                actionLabel: appMessage.actionLabel,
-                onDismiss: { self.appMessage = nil }
-            )
-            .zIndex(WarrenPresentationLayer.modal)
-            .onAppear { presentation.present(.modal) }
-            .onDisappear { presentation.dismissTop() }
-        } else if let preview = supersetImportPreview {
+        if let preview = supersetImportPreview {
             WarrenSheetSurface {
                 WarrenSupersetImportView(
                     preview: preview,

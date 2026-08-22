@@ -53,10 +53,7 @@ private func makeTabBar(
         selectedEndpointID: "local",
         webStatus: WarrenDesktopWebStatus(),
         externalIDEOptions: nil,
-        hasInspector: false,
-        isInspectorVisible: false,
         onToggleSidebar: {},
-        onToggleInspector: {},
         onSettings: {},
         onChromePopover: { _ in },
         onOpenInExternalIDE: { _ in },
@@ -100,8 +97,32 @@ final class WarrenDesktopTests: XCTestCase {
     func testWorkspaceTabTrailingControlsHaveStableOrder() {
         XCTAssertEqual(
             WarrenDesktopWorkspaceTabTrailingControl.allCases,
-            [.externalIDE, .endpoint, .web, .inspector, .settings]
+            [.externalIDE, .endpoint, .web, .notifications, .settings]
         )
+    }
+
+    func testNoticePreservesDetailAndUnreadState() {
+        let notice = WarrenDesktopNotice(
+            kind: .error,
+            title: "Unable to open IDE",
+            message: "Launch denied",
+            detail: "NSError(domain: WarrenDesktopTests, code: 1)"
+        )
+
+        XCTAssertEqual(notice.kind, .error)
+        XCTAssertEqual(notice.detail, "NSError(domain: WarrenDesktopTests, code: 1)")
+        XCTAssertTrue(notice.isUnread)
+
+        var readNotice = notice
+        readNotice.isUnread = false
+        XCTAssertFalse(readNotice.isUnread)
+    }
+
+    func testNoticeDefaultsDetailToMessage() {
+        let notice = WarrenDesktopNotice(title: "Connected", message: "Daemon is ready")
+
+        XCTAssertEqual(notice.detail, notice.message)
+        XCTAssertEqual(notice.kind, .info)
     }
 
     func testRootWorkspaceIsNotClassifiedAsWorktreeForDeletion() {
@@ -381,19 +402,6 @@ final class WarrenDesktopTests: XCTestCase {
 
         XCTAssertEqual(items.map(\.title), ["Visual Studio Code"])
         XCTAssertEqual(items.map(\.isEnabled), [true])
-    }
-
-    func testExternalIDEFailureUsesIDENameAndLaunchErrorDescription() {
-        let error = NSError(
-            domain: "WarrenDesktopTests",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Launch denied"]
-        )
-
-        let failure = WarrenDesktopExternalIDEFailure(ideName: "GoLand", error: error)
-
-        XCTAssertEqual(failure.title, "Unable to Open GoLand")
-        XCTAssertEqual(failure.message, "Launch denied")
     }
 
     func testRootLayoutMountsAtSupersetDesktopSizeWithoutPixelCapture() {
@@ -903,7 +911,6 @@ final class WarrenDesktopTests: XCTestCase {
 
         XCTAssertTrue(projection.groups.isEmpty)
         XCTAssertTrue(projection.tabs.isEmpty)
-        XCTAssertNil(projection.inspector)
         XCTAssertTrue(projection.isConnected)
         XCTAssertNil(projection.workspace(id: fixture.groups[0].workspaces[0].id))
     }
@@ -1074,7 +1081,6 @@ final class WarrenDesktopTests: XCTestCase {
             selectedTabID: "tab-main"
         )))
         actions(.closeTab("tab-main"))
-        actions(.toggleInspector)
         actions(.toggleSidebar)
         actions(.dismissActivity(sessionID, .working))
 
@@ -1096,7 +1102,6 @@ final class WarrenDesktopTests: XCTestCase {
                     selectedTabID: "tab-main"
                 )),
                 .closeTab("tab-main"),
-                .toggleInspector,
                 .toggleSidebar,
                 .dismissActivity(sessionID, .working),
             ]
@@ -1402,7 +1407,35 @@ final class WarrenDesktopTests: XCTestCase {
                 session: session,
                 workspace: nil
             ),
-            "codex — superset"
+            "codex · superset"
+        )
+    }
+
+    func testTabTitleKeepsManagedAgentPurposeWhenForegroundProcessIsShell() {
+        let workspaceID = WorkspaceID()
+        let sessionID = TerminalSessionID()
+        let tab = ClientTab(
+            id: "tab-codex-shell",
+            title: "Codex",
+            sessionID: sessionID,
+            kind: .codex
+        )
+        let session = WarrenDesktopSession(
+            id: sessionID,
+            workspaceID: workspaceID,
+            title: "Codex",
+            kind: .codex,
+            runtimeProcess: "zsh",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopTabTitle.displayTitle(
+                tab: tab,
+                session: session,
+                workspace: nil
+            ),
+            "codex · warren"
         )
     }
 
@@ -1433,7 +1466,7 @@ final class WarrenDesktopTests: XCTestCase {
                 session: codexSession,
                 workspace: nil
             ),
-            "Codex"
+            "codex"
         )
     }
 

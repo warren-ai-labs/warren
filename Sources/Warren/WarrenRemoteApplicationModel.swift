@@ -718,8 +718,8 @@ private enum WarrenRemoteDiagnostics {
 final class WarrenRemoteApplicationModel {
     private static let deletionReconciliationTimeout: Duration = .seconds(30)
     /// A daemon restart briefly drops the WebSocket before its listener is
-    /// ready again. Keep that expected gap out of the Inspector; persistent
-    /// failures still become visible after the grace period.
+    /// ready again. Keep that expected gap out of the notice center;
+    /// persistent failures still become visible after the grace period.
     private static let transientConnectionIssueDelay: Duration = .seconds(5)
 
     private(set) var projection = WarrenDesktopProjection
@@ -728,7 +728,10 @@ final class WarrenRemoteApplicationModel {
     private(set) var navigation: WarrenDesktopNavigationState {
         didSet { WarrenDesktopNavigationPersistence.save(navigation) }
     }
-    @ObservationIgnored private(set) var issue: Error?
+    /// Client-local diagnostics and system messages shown by the desktop
+    /// notice center. Keep this bounded so repeated failures cannot grow the
+    /// model without limit.
+    private(set) var notices: [WarrenDesktopNotice] = []
     private(set) var webStatus = WarrenDesktopWebStatus()
     /// Default engine for new sessions, owned by the headless daemon.
     private(set) var defaultRuntime: String?
@@ -1178,9 +1181,9 @@ final class WarrenRemoteApplicationModel {
         }
     }
 
-    /// Selects a terminal group and creates a fresh shell for external launchers.
-    /// The request is retained until the local/remote roster is ready so a
-    /// Raycast invocation can arrive during Warren's first connection attempt.
+    /// Resolves a launcher link and opens its requested resource. The request
+    /// is retained until the local/remote roster is ready so a Raycast
+    /// invocation can arrive during Warren's first connection attempt.
     func openTerminal(_ request: WarrenTerminalOpenRequest) {
         pendingTerminalOpenRequest = request
         fulfillPendingTerminalOpenRequest()
@@ -1190,12 +1193,19 @@ final class WarrenRemoteApplicationModel {
         guard let request = pendingTerminalOpenRequest,
               wire != nil else { return }
 
+        if request.hasResourceTarget {
+            fulfillResourceOpenRequest(request)
+            return
+        }
+
         let group: WarrenDomain.TerminalGroup?
         if let requestedGroup = request.group {
-            group = projection.terminalGroups.first { candidate in
-                candidate.id.description == requestedGroup
-                    || candidate.name.caseInsensitiveCompare(requestedGroup) == .orderedSame
-            }
+            group = resolveSelector(
+                requestedGroup,
+                in: projection.terminalGroups,
+                name: { $0.name },
+                id: { $0.id.description }
+            )
         } else {
             group = projection.terminalGroups.first
         }
@@ -1216,6 +1226,137 @@ final class WarrenRemoteApplicationModel {
             )
         )
         createSession(terminalGroupID: group.id, request: .shell)
+    }
+
+    private func fulfillResourceOpenRequest(_ request: WarrenTerminalOpenRequest) {
+        let project: Project?
+        if let selector = request.project {
+            guard let resolved = resolveSelector(
+                selector,
+                in: projection.groups.map(\.project),
+                name: { $0.name },
+                id: { $0.id.description }
+            ) else {
+                failResourceOpenRequest(resource: "project", selector: selector)
+                return
+            }
+            project = resolved
+        } else {
+            project = nil
+        }
+
+        let explicitlySelectedWorkspace: Workspace?
+        if let selector = request.workspace {
+            let candidates = projection.groups
+                .filter { project == nil || $0.project.id == project?.id }
+                .flatMap(\.workspaces)
+            guard let resolved = resolveSelector(
+                selector,
+                in: candidates,
+                name: { $0.name },
+                id: { $0.id.description }
+            ) else {
+                failResourceOpenRequest(resource: "workspace", selector: selector)
+                return
+            }
+            explicitlySelectedWorkspace = resolved
+        } else {
+            explicitlySelectedWorkspace = nil
+        }
+
+        if let project, let workspace = explicitlySelectedWorkspace, workspace.projectID != project.id {
+            failResourceOpenRequest(resource: "workspace", selector: request.workspace ?? workspace.name)
+            return
+        }
+
+        if let selector = request.session {
+            let candidates = projection.sessions.filter { session in
+                if let workspace = explicitlySelectedWorkspace {
+                    return session.workspaceID == workspace.id && session.tabID != nil
+                }
+                if let project {
+                    return session.workspaceID.flatMap(projection.workspace(id:))?.projectID == project.id
+                        && session.tabID != nil
+                }
+                return session.tabID != nil
+            }
+            guard let session = resolveSelector(
+                selector,
+                in: candidates,
+                name: { $0.displayTitle },
+                id: { $0.id.description }
+            ) else {
+                failResourceOpenRequest(resource: "session", selector: selector)
+                return
+            }
+            pendingTerminalOpenRequest = nil
+            publishNavigationIfChanged(
+                WarrenDesktopNavigationReducer.reduce(
+                    navigation,
+                    action: .openSession(session.id),
+                    in: projection
+                )
+            )
+            Task { await attachSelectedSession() }
+            return
+        }
+
+        let workspace = explicitlySelectedWorkspace
+            ?? project.flatMap { projection.firstWorkspace(in: $0.id) }
+        guard let workspace else {
+            // A project can exist without a workspace. Selecting it is still
+            // useful, but there is no terminal to create until one is added.
+            if let project {
+                pendingTerminalOpenRequest = nil
+                publishNavigationIfChanged(
+                    WarrenDesktopNavigationReducer.reduce(
+                        navigation,
+                        action: .selectProject(project.id),
+                        in: projection
+                    )
+                )
+                return
+            }
+            failResourceOpenRequest(resource: "workspace", selector: request.workspace ?? "")
+            return
+        }
+
+        pendingTerminalOpenRequest = nil
+        publishNavigationIfChanged(
+            WarrenDesktopNavigationReducer.reduce(
+                navigation,
+                action: .selectWorkspace(workspace.id),
+                in: projection
+            )
+        )
+        if projection.tabs(in: workspace.id).isEmpty {
+            createSession(workspaceID: workspace.id, request: .shell)
+        } else {
+            Task { await attachSelectedSession() }
+        }
+    }
+
+    private func failResourceOpenRequest(resource: String, selector: String) {
+        pendingTerminalOpenRequest = nil
+        let target = selector.isEmpty ? resource : "\(resource) ‘\(selector)’"
+        present(NSError(domain: "WarrenRemote", code: 31, userInfo: [
+            NSLocalizedDescriptionKey: "The Warren link target \(target) does not exist or is ambiguous.",
+        ]))
+    }
+
+    private func resolveSelector<Value>(
+        _ selector: String,
+        in values: [Value],
+        name: (Value) -> String,
+        id: (Value) -> String
+    ) -> Value? {
+        let normalized = selector.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = values.filter { value in
+            id(value).caseInsensitiveCompare(normalized) == .orderedSame
+                || name(value).caseInsensitiveCompare(normalized) == .orderedSame
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     private func finishCreatingSession(in workspaceID: WorkspaceID) {
@@ -1836,7 +1977,6 @@ final class WarrenRemoteApplicationModel {
         guard Self.shouldApplyRoster(roster, after: currentRoster) else {
             clearMaintenance()
             cancelTransientConnectionIssue()
-            issue = nil
             return
         }
         currentRoster = roster
@@ -1981,7 +2121,7 @@ final class WarrenRemoteApplicationModel {
             moveSession(id, to: destination)
         case .importSuperset, .requestNewWorkspace, .requestProjectWorktreeImport,
              .setProjectAutoImportGitWorktrees, .requestNewSession,
-             .toggleInspector, .toggleSidebar:
+             .toggleSidebar:
             break
         }
     }
@@ -2139,6 +2279,36 @@ final class WarrenRemoteApplicationModel {
 
     func report(_ error: Error) { present(error) }
 
+    func addNotice(
+        title: String,
+        message: String,
+        detail: String? = nil,
+        kind: WarrenDesktopNotice.Kind = .info
+    ) {
+        notices.insert(
+            WarrenDesktopNotice(
+                kind: kind,
+                title: title,
+                message: message,
+                detail: detail
+            ),
+            at: 0
+        )
+        if notices.count > 50 {
+            notices.removeLast(notices.count - 50)
+        }
+    }
+
+    func markNoticeRead(_ id: WarrenDesktopNotice.ID) {
+        guard let index = notices.firstIndex(where: { $0.id == id }) else { return }
+        guard notices[index].isUnread else { return }
+        notices[index].isUnread = false
+    }
+
+    func dismissNotice(_ id: WarrenDesktopNotice.ID) {
+        notices.removeAll { $0.id == id }
+    }
+
     nonisolated static func diagnosticText(
         error: Error,
         endpoint: String? = nil,
@@ -2250,7 +2420,7 @@ final class WarrenRemoteApplicationModel {
                 // The tab may already have been closed by a previous action or
                 // another client before its roster update arrived. A stale
                 // close is a successful no-op, matching the local model's
-                // closeTabIfPresent behavior; it must not open the Inspector.
+                // closeTabIfPresent behavior; it must not create a notice.
                 Task { await self.refreshRosterIfConnected() }
             } else {
                 self.present(error)
@@ -2299,8 +2469,8 @@ final class WarrenRemoteApplicationModel {
     /// SwiftUI can demote the terminal view while the delete request is still
     /// in flight, which makes the host call `blur` for the same session. If the
     /// daemon has already removed the session by then, that stale focus request
-    /// fails with "no attached session" and would flash in the Inspector as a
-    /// daemon error during normal tab churn. Clearing attachment state first
+    /// fails with "no attached session" and would create a notice during
+    /// normal tab churn. Clearing attachment state first
     /// keeps the blur, attach, resize, and focus paths inert for the closed
     /// session; the roster still owns the durable cleanup.
     private func detachSessionBeingClosed(_ id: TerminalSessionID) {
@@ -2456,7 +2626,6 @@ final class WarrenRemoteApplicationModel {
             clearMaintenance()
             guard Self.shouldApplyRoster(roster, after: currentRoster) else {
                 ensureDeletionReconciliation(using: wire)
-                issue = nil
                 return
             }
             currentRoster = roster
@@ -2726,7 +2895,6 @@ final class WarrenRemoteApplicationModel {
             appliedLiveTabSessionIDs = liveTabSessionIDs
         }
         cancelTransientConnectionIssue()
-        issue = nil
         let previousTabID = navigation.selectedTabID
         let nextNavigation = WarrenDesktopNavigationReducer.reconcile(navigation, with: projection)
         if nextNavigation != navigation {
@@ -2880,9 +3048,9 @@ final class WarrenRemoteApplicationModel {
                 focusedSessionID = nil
                 removeMountedSurface(sessionID: sessionID)
                 // Only a failure for the currently selected session belongs in
-                // the Inspector. A stale attach can be cancelled by a rapid
-                // close of the very tab it was connecting; reporting that
-                // would flash a daemon error during normal tab churn.
+                // the notice center. A stale attach can be cancelled by a
+                // rapid close of the very tab it was connecting; reporting
+                // that would create noise during normal tab churn.
                 present(error)
             }
         }
@@ -3061,17 +3229,19 @@ final class WarrenRemoteApplicationModel {
     }
 
     private func presentDiagnostic(_ error: Error) {
-        issue = error
-        publishProjectionIfChanged(projection.withIssue(
-            error,
-            detail: Self.diagnosticText(
-                error: error,
-                endpoint: endpointConfiguration?.url,
-                selectedSessionID: selectedSessionID,
-                attachedSessionID: attachedSessionID,
-                focusedSessionID: focusedSessionID
-            )
-        ))
+        let detail = Self.diagnosticText(
+            error: error,
+            endpoint: endpointConfiguration?.url,
+            selectedSessionID: selectedSessionID,
+            attachedSessionID: attachedSessionID,
+            focusedSessionID: focusedSessionID
+        )
+        addNotice(
+            title: "Warren error",
+            message: error.localizedDescription,
+            detail: detail,
+            kind: .error
+        )
     }
 
     private func scheduleTransientConnectionIssue(_ error: Error) {
@@ -3171,7 +3341,6 @@ private extension WarrenDesktopProjection {
             tabs: reorderedTabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
-            inspector: inspector,
             connectionState: connectionState,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
@@ -3187,7 +3356,6 @@ private extension WarrenDesktopProjection {
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
-            inspector: inspector,
             connectionState: state,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
@@ -3195,23 +3363,4 @@ private extension WarrenDesktopProjection {
         )
     }
 
-    func withIssue(_ error: Error, detail: String? = nil) -> Self {
-        Self(
-            host: host,
-            groups: groups,
-            sessions: sessions,
-            tabs: tabs,
-            sessionWorkspaceIDs: sessionWorkspaceIDs,
-            tabWorkspaceIDs: tabWorkspaceIDs,
-            inspector: WarrenDesktopInspectorContent(
-                id: "remote-error",
-                title: "Daemon error",
-                detail: detail ?? String(describing: error)
-            ),
-            connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
-        )
-    }
 }

@@ -27,29 +27,6 @@ struct WarrenDesktopChromeButton: View {
     }
 }
 
-struct WarrenDesktopInspectorButton: View {
-    let isVisible: Bool
-    let action: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @FocusState private var isFocused: Bool
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        Button(action: action) {
-            Image(systemName: "sidebar.right")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                .accessibilityHidden(true)
-        }
-        .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 32, height: 32)
-        .contentShape(.rect)
-        .focused($isFocused)
-        .foregroundStyle(isVisible ? tokens.foreground : tokens.mutedForeground)
-        .accessibilityLabel(isVisible ? "Hide inspector" : "Show inspector")
-        .accessibilityHint("Toggle the workspace info sidebar")
-    }
-}
-
 struct WarrenDesktopOfflineBadge: View {
     @Environment(\.colorScheme) private var colorScheme
 

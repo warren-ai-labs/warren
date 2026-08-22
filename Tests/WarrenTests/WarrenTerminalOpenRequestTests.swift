@@ -8,6 +8,9 @@ final class WarrenTerminalOpenRequestTests: XCTestCase {
         )
 
         XCTAssertEqual(request.group, "Inbox")
+        XCTAssertNil(request.project)
+        XCTAssertNil(request.workspace)
+        XCTAssertNil(request.session)
     }
 
     func testDecodesTerminalGroupName() throws {
@@ -16,6 +19,41 @@ final class WarrenTerminalOpenRequestTests: XCTestCase {
         )
 
         XCTAssertEqual(request.group, "Daily Shell")
+    }
+
+    func testParsesProjectWorkspaceAndSessionSelectors() throws {
+        let request = try XCTUnwrap(
+            WarrenTerminalOpenRequest(url: URL(
+                string: "warren://terminal?project=Warren&workspace=feature&session=Claude%20Code"
+            )!)
+        )
+
+        XCTAssertEqual(request.project, "Warren")
+        XCTAssertEqual(request.workspace, "feature")
+        XCTAssertEqual(request.session, "Claude Code")
+        XCTAssertTrue(request.hasResourceTarget)
+    }
+
+    func testParsesResourceHostPathSelector() throws {
+        let request = try XCTUnwrap(
+            WarrenTerminalOpenRequest(url: URL(string: "warren://workspace/feature")!)
+        )
+
+        XCTAssertEqual(request.workspace, "feature")
+        XCTAssertNil(request.project)
+        XCTAssertNil(request.session)
+    }
+
+    func testParsesResourcePathFromTerminalHost() throws {
+        let request = try XCTUnwrap(
+            WarrenTerminalOpenRequest(url: URL(
+                string: "warren://terminal/project/Warren/workspace/feature/session/Claude"
+            )!)
+        )
+
+        XCTAssertEqual(request.project, "Warren")
+        XCTAssertEqual(request.workspace, "feature")
+        XCTAssertEqual(request.session, "Claude")
     }
 
     func testMissingGroupUsesDefaultTerminalGroup() throws {
@@ -29,5 +67,6 @@ final class WarrenTerminalOpenRequestTests: XCTestCase {
     func testRejectsUnknownURL() {
         XCTAssertNil(WarrenTerminalOpenRequest(url: URL(string: "https://example.com")!))
         XCTAssertNil(WarrenTerminalOpenRequest(url: URL(string: "warren://project")!))
+        XCTAssertNil(WarrenTerminalOpenRequest(url: URL(string: "warren://unknown/thing")!))
     }
 }
