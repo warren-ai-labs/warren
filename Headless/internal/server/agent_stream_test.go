@@ -830,7 +830,7 @@ func TestAgentSubscribeDoesNotAttachTerminalOutput(t *testing.T) {
 	projectID := store.NewID()
 	workspaceID := store.NewID()
 	session := api.Session{
-		ID: "session-subscribe", WorkspaceID: workspaceID, Kind: "codex",
+		ID: "session-subscribe", WorkspaceID: workspaceID, Kind: "codex", AgentSessionID: "thread-subscribe",
 		Runtime: "runtime-subscribe", Lifecycle: "running", CreatedAt: time.Now().UTC(),
 	}
 	if err := state.Update(func(value *api.State) error {

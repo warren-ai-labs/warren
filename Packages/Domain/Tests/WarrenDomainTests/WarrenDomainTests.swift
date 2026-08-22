@@ -162,6 +162,35 @@ final class WarrenDomainTests: XCTestCase {
         )
     }
 
+    func testTerminalDisplayTitleCompactsLongDirectoriesForPaneHeaders() {
+        let directory = "/Users/lisongjian/Workspace/gh/abcdlsj/warren"
+        let context = TerminalDisplayTitleContext(
+            command: "zsh",
+            directory: directory
+        )
+
+        XCTAssertEqual(
+            TerminalDisplayTitleTemplate.abbreviateDirectory(directory),
+            "/U/l/W/g/a/warren"
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleTemplate(rawValue: "{command} — {directory}")
+                .renderCompact(context),
+            "zsh — /U/l/W/g/a/warren"
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleTemplate(rawValue: "{command} — {directory}")
+                .render(context),
+            "zsh — " + directory
+        )
+
+        let veryLongDirectory = "/" + (0..<40).map { "segment-\($0)" }.joined(separator: "/")
+        XCTAssertLessThanOrEqual(
+            TerminalDisplayTitleTemplate.abbreviateDirectory(veryLongDirectory).count,
+            TerminalDisplayTitleTemplate.compactDirectoryMaxLength
+        )
+    }
+
     func testTerminalDisplayTitleCleansMissingValuesAndFallsBackToSession() {
         let context = TerminalDisplayTitleContext(session: "Shell")
 

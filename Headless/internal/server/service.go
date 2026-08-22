@@ -3298,7 +3298,7 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 	}
 	s.agentsMu.Unlock()
 	if watcher == nil {
-		return nil
+		return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
 	}
 	return watcher.WaitReady(ctx)
 }

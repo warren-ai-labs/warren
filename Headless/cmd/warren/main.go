@@ -525,22 +525,34 @@ func resourceCommand(args []string) error {
 			return err
 		}
 		var snapshot api.AgentSnapshotResult
-		if boolValue(params, "wait") {
-			if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
-				return fmt.Errorf("session is not bound to an agent: %s", session.ID)
+		agentInput := isAgentSession(session) && !boolValue(params, "raw")
+		if agentInput {
+			// A newly-created Agent may still be on its first-run trust/resume
+			// prompt. Do not mistake that prompt's Enter key for a submitted
+			// message; wait until the transcript watcher is live first.
+			subscription, readyErr := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
+			if readyErr != nil {
+				return readyErr
 			}
-			snapshot, err = c.AgentSnapshot(ctx, id)
-			if err != nil {
-				return err
+			snapshot = subscription.Snapshot
+			if boolValue(params, "wait") {
+				if err := validateAgentSendWait(snapshot); err != nil {
+					return err
+				}
 			}
+		} else if boolValue(params, "wait") && isAgentSession(session) {
+			subscription, readyErr := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
+			if readyErr != nil {
+				return readyErr
+			}
+			snapshot = subscription.Snapshot
 			if err := validateAgentSendWait(snapshot); err != nil {
 				return err
 			}
+		} else if boolValue(params, "wait") {
+			return fmt.Errorf("session is not bound to an agent: %s", session.ID)
 		}
-		if !strings.HasSuffix(text, "\n") && !boolValue(params, "raw") {
-			text += "\r"
-		}
-		if err := c.Input(ctx, []byte(text)); err != nil {
+		if err := sendSessionText(ctx, c, session, text, boolValue(params, "raw")); err != nil {
 			return err
 		}
 		if boolValue(params, "wait") {
@@ -605,9 +617,25 @@ func resourceCommand(args []string) error {
 
 func sessionRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	id := positional(params, 0, "session id")
-	if _, err := c.Attach(ctx, id); err != nil {
+	session, err := c.Attach(ctx, id)
+	if err != nil {
 		return err
 	}
+	// Agent sessions have a structured transcript side channel. Reading that
+	// projection by default avoids leaking cursor movement, spinners, and other
+	// TUI chrome into automation. `--terminal`/`--raw` keeps the old PTY view;
+	// attach is always an explicit live terminal operation.
+	if !follow && isAgentSession(session) && !sessionReadTerminal(params) {
+		return sessionAgentRead(ctx, c, session, params)
+	}
+	return sessionTerminalRead(ctx, c, params, follow)
+}
+
+func sessionReadTerminal(params map[string]any) bool {
+	return boolValue(params, "terminal") || boolValue(params, "raw")
+}
+
+func sessionTerminalRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	timeout := durationValue(params, "timeout", 8*time.Second)
 	needle := stringValue(params, "contains")
 	if follow {
@@ -631,6 +659,118 @@ func sessionRead(ctx context.Context, c *client.Client, params map[string]any, f
 		return fmt.Errorf("expected text not found before timeout: %s", needle)
 	}
 	return err
+}
+
+func sessionAgentRead(ctx context.Context, c *client.Client, session api.Session, params map[string]any) error {
+	if _, err := c.SubscribeAgent(ctx, session.ID); err != nil {
+		return err
+	}
+	options, err := agentReadOptions(params)
+	if err != nil {
+		return err
+	}
+	events, err := readAgentHistory(ctx, c, session.ID, options)
+	if err != nil {
+		return err
+	}
+	events, err = agent.ProjectEvents(events, options)
+	if err != nil {
+		return err
+	}
+	if sessionReadTextOnly(params) {
+		return printAgentText(events)
+	}
+	return printValue(events)
+}
+
+func agentReadOptions(params map[string]any) (agent.ReadOptions, error) {
+	recent := agent.DefaultReadRecent
+	recentFlag := firstFlagValue(params, "recent", "limit", "count")
+	if boolValue(params, "all") && recentFlag != "" {
+		return agent.ReadOptions{}, newUsageError("--all cannot be combined with --recent, --limit, or --count", agentReadUsageText())
+	}
+	if boolValue(params, "all") {
+		recent = 0
+	}
+	if recentFlag != "" {
+		parsed, err := strconv.Atoi(recentFlag)
+		if err != nil || parsed < 0 {
+			return agent.ReadOptions{}, newUsageError("--recent must be a non-negative integer", agentReadUsageText())
+		}
+		recent = parsed
+	}
+	contentLimit := agent.DefaultReadContentLimit
+	if value := firstFlagValue(params, "chars", "max-chars", "head"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return agent.ReadOptions{}, newUsageError("--chars must be a non-negative integer", agentReadUsageText())
+		}
+		contentLimit = parsed
+	}
+	full := boolValue(params, "full") || boolValue(params, "full-content") || boolValue(params, "no-truncate")
+	contentFlag := firstFlagValue(params, "chars", "max-chars", "head") != ""
+	if full && contentFlag {
+		return agent.ReadOptions{}, newUsageError("--full cannot be combined with --chars, --max-chars, or --head", agentReadUsageText())
+	}
+	return agent.ReadOptions{
+		Recent:       recent,
+		ContentLimit: contentLimit,
+		Full:         full,
+		IncludeTypes: splitTypeFlag(stringValue(params, "include")),
+		ExcludeTypes: append(splitTypeFlag(stringValue(params, "filter")), splitTypeFlag(stringValue(params, "exclude"))...),
+	}, nil
+}
+
+func readAgentHistory(ctx context.Context, c *client.Client, sessionID string, options agent.ReadOptions) ([]api.AgentEvent, error) {
+	pageSize := 500
+	var before uint64
+	var pages []api.AgentEvent
+	for {
+		page, err := c.AgentHistory(ctx, sessionID, before, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Events) > 0 {
+			pages = append(page.Events, pages...)
+		}
+		if options.Recent > 0 {
+			projected, projectErr := agent.ProjectEvents(pages, options)
+			if projectErr != nil {
+				return nil, projectErr
+			}
+			if len(projected) >= options.Recent || !page.HasMore || page.Cursor == 0 {
+				break
+			}
+		} else if !page.HasMore || page.Cursor == 0 {
+			break
+		}
+		before = page.Cursor
+	}
+	return pages, nil
+}
+
+func sessionReadTextOnly(params map[string]any) bool {
+	return boolValue(params, "text") || boolValue(params, "text-only") || boolValue(params, "plain")
+}
+
+func printAgentText(events []api.AgentEvent) error {
+	lines := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Type != "user" && event.Type != "assistant" {
+			continue
+		}
+		if event.Content == "" {
+			continue
+		}
+		lines = append(lines, event.Content)
+	}
+	if outputJSON {
+		return printValue(lines)
+	}
+	for _, line := range lines {
+		fmt.Fprintln(os.Stdout, line)
+	}
+	return nil
 }
 
 func agentCommand(args []string) error {
@@ -751,7 +891,103 @@ func agentCommand(args []string) error {
 	return printValue(events)
 }
 
-const defaultAgentWaitTimeout = 30 * time.Minute
+const (
+	defaultAgentWaitTimeout = 30 * time.Minute
+	// Agent TUIs treat a literal carriage return as composer text. The web
+	// client sends the message and a kitty-protocol Enter event separately so
+	// the TUI submits it as a key press instead of leaving it in the input box.
+	agentSubmitDelay = 80 * time.Millisecond
+	agentSubmitEvent = "\x1b[13u"
+	// Creating a terminal returns before the CLI has necessarily completed its
+	// first-run setup and written a transcript binding. Give normal startup a
+	// bounded window, while still failing clearly when setup is required.
+	agentStartupTimeout = 10 * time.Second
+)
+
+func isAgentSession(session api.Session) bool {
+	return session.Kind == "codex" || session.Kind == "claude" || session.AgentSessionID != ""
+}
+
+func waitForAgentSubscription(
+	parent context.Context,
+	c *client.Client,
+	sessionID string,
+	timeout time.Duration,
+) (api.AgentSubscriptionResult, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	var lastErr error
+	for {
+		subscription, err := c.SubscribeAgent(ctx, sessionID)
+		if err == nil {
+			return subscription, nil
+		}
+		lastErr = err
+		if !retryAgentSubscription(err) {
+			return api.AgentSubscriptionResult{}, err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) && lastErr != nil {
+				return api.AgentSubscriptionResult{}, fmt.Errorf(
+					"agent is not ready after %s; finish first-time setup in Terminal and retry: %w",
+					timeout,
+					lastErr,
+				)
+			}
+			return api.AgentSubscriptionResult{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func retryAgentSubscription(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "still starting") ||
+		strings.Contains(message, "not bound to an agent")
+}
+
+func sendSessionText(ctx context.Context, c *client.Client, session api.Session, text string, raw bool) error {
+	return sendSessionTextWithInput(ctx, c.Input, session, text, raw)
+}
+
+func sendSessionTextWithInput(
+	ctx context.Context,
+	input func(context.Context, []byte) error,
+	session api.Session,
+	text string,
+	raw bool,
+) error {
+	if isAgentSession(session) && !raw {
+		// Preserve deliberate line breaks as composer returns, then submit with
+		// the same kitty Enter event used by the web Agent view. A CR in the
+		// message itself is text; it is not the submit action.
+		text = strings.ReplaceAll(text, "\n", "\r")
+		if err := input(ctx, []byte(text)); err != nil {
+			return err
+		}
+		if err := waitForInputDelay(ctx, agentSubmitDelay); err != nil {
+			return err
+		}
+		return input(ctx, []byte(agentSubmitEvent))
+	}
+	if !strings.HasSuffix(text, "\n") && !raw {
+		text += "\r"
+	}
+	return input(ctx, []byte(text))
+}
+
+func waitForInputDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 func agentWaitCommand(args []string) error {
 	help, err := validateAgentWaitArgs(args)
@@ -790,7 +1026,7 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	subscription, err := c.SubscribeAgent(ctx, positions[0])
+	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
 	if err != nil {
 		return err
 	}
@@ -1203,6 +1439,10 @@ var bareBooleanFlags = map[string]bool{
 	"yes":                   true,
 	"no-truncate":           true,
 	"raw":                   true,
+	"terminal":              true,
+	"text":                  true,
+	"text-only":             true,
+	"plain":                 true,
 	"wait":                  true,
 	"use":                   true,
 }
@@ -1932,8 +2172,8 @@ func resourceUsageText(commandName string) string {
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
-  warren session send SESSION_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
-  warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
+  warren session send SESSION_ID [TEXT...] [--current] [--raw] [--wait] [--timeout DURATION]
+  warren session read SESSION_ID [--recent N|--all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--terminal|--raw] [--current]
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
 `
@@ -1990,9 +2230,9 @@ func actionUsageText(commandName, action string) string {
 	case "session.move":
 		return fmt.Sprintf("Usage:\n  warren %s move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]\n  warren %s move --current --workspace WORKSPACE_ID [--dry-run]\n  warren %s move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]\n", name, name, name)
 	case "session.send":
-		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--wait] [--timeout DURATION]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--raw] [--wait] [--timeout DURATION]\n", name)
 	case "session.read":
-		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--recent N|--all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--terminal|--raw] [--current]\n", name)
 	case "session.attach":
 		return fmt.Sprintf("Usage:\n  warren %s attach SESSION_ID [--current]\n", name)
 	case "session.current":

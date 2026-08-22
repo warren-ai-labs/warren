@@ -6,7 +6,13 @@ import {
   resolveRestoredWorkspace,
   restoreNavigationPosition,
 } from "./navigation.js";
-import { renderTerminalTitle, sessionDisplayTitle, terminalTabTitle } from "./title.js";
+import {
+  abbreviateDirectory,
+  renderCompactTerminalTitle,
+  renderTerminalTitle,
+  sessionDisplayTitle,
+  terminalTabTitle,
+} from "./title.js";
 import { escapeHTML } from "./view.js";
 
 test("catalog indexes workspaces and open tabs", () => {
@@ -211,6 +217,29 @@ test("terminal title removes empty separators", () => {
     renderTerminalTitle("{command} — {directoryName}", { process: "codex", directory: "/work/warren" }),
     "codex — warren",
   );
+});
+
+test("compact pane titles abbreviate parent directories and preserve full titles", () => {
+  const directory = "/Users/lisongjian/Workspace/gh/abcdlsj/warren";
+  assert.equal(abbreviateDirectory(directory), "/U/l/W/g/a/warren");
+  assert.equal(
+    renderCompactTerminalTitle(
+      "{command} — {directory}",
+      { process: "zsh", directory },
+    ),
+    "zsh — /U/l/W/g/a/warren",
+  );
+  assert.equal(
+    renderTerminalTitle("{command} — {directory}", { process: "zsh", directory }),
+    `zsh — ${directory}`,
+  );
+});
+
+test("compact directory titles stay within the hard limit", () => {
+  const directory = `/${Array.from({ length: 40 }, (_, index) => `segment-${index}`).join("/")}`;
+  const compact = abbreviateDirectory(directory);
+  assert.ok(compact.length <= 32);
+  assert.match(compact, /^\/.+….+$/);
 });
 
 test("terminal tab title uses directory name for interactive shells", () => {

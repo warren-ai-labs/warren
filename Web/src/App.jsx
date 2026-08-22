@@ -35,7 +35,13 @@ import {
   shouldAttachCreatedSession,
   visibleSessionPresets,
 } from "./session.js";
-import { defaultTitleTemplate, renderTerminalTitle, sessionDisplayTitle, titlePlaceholders } from "./title.js";
+import {
+  defaultTitleTemplate,
+  renderCompactTerminalTitle,
+  renderTerminalTitle,
+  sessionDisplayTitle,
+  titlePlaceholders,
+} from "./title.js";
 import {
   attachTerminalMessage,
   fitTerminalToHost,
@@ -264,6 +270,9 @@ export default function App() {
   const selectedSession = activeSession ? catalog.sessions.get(activeSession) || null : null;
   const paneTitle = selectedSession
     ? renderTerminalTitle(titleTemplate, selectedSession, selectedWorkspace, catalog.host)
+    : "";
+  const paneDisplayTitle = selectedSession
+    ? renderCompactTerminalTitle(titleTemplate, selectedSession, selectedWorkspace, catalog.host)
     : "";
   const titlePreview = renderTerminalTitle(
     titleTemplate,
@@ -2211,7 +2220,17 @@ export default function App() {
               />
               <PresetBar presets={visiblePresets} onCreateSession={createSession} />
               <div className="pane-title">
-                <span>{paneTitle}</span>
+                <span
+                  title={paneTitle}
+                  aria-label={paneTitle}
+                  onCopy={event => {
+                    if (!paneTitle || !event.clipboardData) return;
+                    event.preventDefault();
+                    event.clipboardData.setData("text/plain", paneTitle);
+                  }}
+                >
+                  {paneDisplayTitle}
+                </span>
                 {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
                   <span className="pane-agent-meta">
                     {agentModel && <span className="pane-agent-model">{agentModel}</span>}

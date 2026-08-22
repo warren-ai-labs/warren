@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -56,6 +57,51 @@ func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	}
 	if row.Session.ID != "session-1" || row.Title != "Codex" {
 		t.Errorf("embedded session lost: %+v", row.Session)
+	}
+}
+
+func TestSendSessionTextSubmitsAgentComposerWithKittyEnter(t *testing.T) {
+	var frames [][]byte
+	input := func(_ context.Context, data []byte) error {
+		frames = append(frames, append([]byte(nil), data...))
+		return nil
+	}
+	started := time.Now()
+	err := sendSessionTextWithInput(context.Background(), input, api.Session{Kind: "codex"}, "first\nsecond", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < agentSubmitDelay {
+		t.Fatalf("agent submit delay = %s, want at least %s", elapsed, agentSubmitDelay)
+	}
+	if got := string(frames[0]); got != "first\rsecond" {
+		t.Fatalf("agent message frame = %q, want CR-normalized text", got)
+	}
+	if got := string(frames[1]); got != agentSubmitEvent {
+		t.Fatalf("agent submit frame = %q, want kitty Enter", got)
+	}
+}
+
+func TestSendSessionTextKeepsRawAgentInput(t *testing.T) {
+	var frames [][]byte
+	input := func(_ context.Context, data []byte) error {
+		frames = append(frames, append([]byte(nil), data...))
+		return nil
+	}
+	if err := sendSessionTextWithInput(context.Background(), input, api.Session{Kind: "claude"}, "draft", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 1 || string(frames[0]) != "draft" {
+		t.Fatalf("raw agent frames = %#v, want one unchanged frame", frames)
+	}
+}
+
+func TestSessionReadAgentModeDefaultsToTranscript(t *testing.T) {
+	if sessionReadTerminal(parseFlags(nil)) {
+		t.Fatal("default session read unexpectedly selects terminal output")
+	}
+	if !sessionReadTerminal(parseFlags([]string{"--terminal"})) || !sessionReadTerminal(parseFlags([]string{"--raw"})) {
+		t.Fatal("terminal/raw session read flags did not select terminal output")
 	}
 }
 

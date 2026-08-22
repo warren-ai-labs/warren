@@ -63,8 +63,8 @@ is on a configured remote endpoint.
 
 ```sh
 warren session list --all --json
-warren session read SESSION_ID --timeout 8s
-warren session read SESSION_ID --contains 'A_KNOWN_MARKER' --timeout 8s
+warren session read SESSION_ID --terminal --timeout 8s
+warren session read SESSION_ID --terminal --contains 'A_KNOWN_MARKER' --timeout 8s
 ```
 
 The marker should be text that the terminal definitely emitted (a prompt,
@@ -207,7 +207,7 @@ GUI, not the headless service. Sessions are owned by the Host and should remain
 available through either the CLI or the local Web UI:
 
 ```sh
-warren session read SESSION_ID --timeout 8s
+warren session read SESSION_ID --terminal --timeout 8s
 ```
 
 The Web UI is normally available at `http://127.0.0.1:8789` when the local

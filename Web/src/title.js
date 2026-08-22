@@ -12,8 +12,11 @@ export const titlePlaceholders = {
   os: "Operating system",
 };
 
+export const compactDirectoryMaxLength = 32;
+
 const placeholderPattern = new RegExp(`\\{(${Object.keys(titlePlaceholders).join("|")})\\}`, "g");
-const separators = "—|·:/-";
+const separators = "—|·:-";
+const separatorPattern = `[${separators}]|/(?!\\S)`;
 const shellProcessNames = new Set([
   "zsh", "bash", "sh", "dash", "fish", "ksh", "csh", "tcsh",
   "pwsh", "powershell", "cmd", "nu", "elvish", "xonsh", "oil", "osh",
@@ -27,7 +30,19 @@ const kindLabels = {
 
 export function renderTerminalTitle(template, session = {}, workspace = {}, host = {}) {
   const directory = session.directory || workspace.path || "";
-  const values = {
+  return renderTitleTemplate(template, titleValues(session, workspace, host, directory));
+}
+
+export function renderCompactTerminalTitle(template, session = {}, workspace = {}, host = {}) {
+  const directory = session.directory || workspace.path || "";
+  return renderTitleTemplate(
+    template,
+    titleValues(session, workspace, host, abbreviateDirectory(directory)),
+  );
+}
+
+function titleValues(session, workspace, host, directory) {
+  return {
     session: sessionDisplayTitle(session) || "Session",
     command: session.process || session.kind || "shell",
     directory,
@@ -38,14 +53,40 @@ export function renderTerminalTitle(template, session = {}, workspace = {}, host
     user: host.user || "",
     os: host.os || "",
   };
+}
 
+function renderTitleTemplate(template, values) {
   const title = template
     .replace(placeholderPattern, (_, key) => values[key] || "")
-    .replace(new RegExp(`\\s+([${separators}])\\s*(?=([${separators}]|$))`, "g"), "")
+    .replace(new RegExp(`\\s+(${separatorPattern})\\s*(?=(${separatorPattern}|$))`, "g"), "")
     .replace(/\s{2,}/g, " ")
     .replace(new RegExp(`^[\\s${separators}]+|[\\s${separators}]+$`, "g"), "");
 
   return title || values.session;
+}
+
+export function abbreviateDirectory(path, maxLength = compactDirectoryMaxLength) {
+  const value = String(path || "");
+  if (!value || maxLength <= 0 || value.length <= maxLength) return value;
+
+  const absolute = value.startsWith("/");
+  const segments = value.split("/").filter(Boolean);
+  if (segments.length === 0) return value;
+
+  const parents = segments.slice(0, -1).map(segment => Array.from(segment)[0] || "");
+  const last = segments[segments.length - 1];
+  const compact = `${absolute ? "/" : ""}${[...parents, last].join("/")}`;
+  if (compact.length <= maxLength) return compact;
+  return fitMiddle(compact, maxLength);
+}
+
+function fitMiddle(value, maxLength) {
+  if (maxLength <= 1) return Array.from(value).slice(0, maxLength).join("");
+  const visibleLength = maxLength - 1;
+  const leftLength = Math.ceil(visibleLength / 2);
+  const rightLength = visibleLength - leftLength;
+  const characters = Array.from(value);
+  return `${characters.slice(0, leftLength).join("")}…${characters.slice(-rightLength).join("")}`;
 }
 
 /**

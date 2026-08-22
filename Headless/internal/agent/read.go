@@ -34,6 +34,46 @@ type ReadOptions struct {
 	ExcludeTypes []string
 }
 
+// ProjectEvents applies the same filtering and content limits as
+// ReadTranscript to events already retained by a live Host watcher. This is
+// used by remote session readers, where the transcript file lives on the Host
+// rather than on the CLI machine.
+func ProjectEvents(events []api.AgentEvent, options ReadOptions) ([]api.AgentEvent, error) {
+	if options.Recent < 0 {
+		return nil, errors.New("recent activity count cannot be negative")
+	}
+	if options.Recent > MaxReadActivities {
+		return nil, fmt.Errorf("recent activity count cannot exceed %d", MaxReadActivities)
+	}
+	if options.ContentLimit < 0 {
+		return nil, errors.New("content limit cannot be negative")
+	}
+
+	include := normalizedTypes(options.IncludeTypes)
+	exclude := normalizedTypes(options.ExcludeTypes)
+	contentLimit := options.ContentLimit
+	if options.Full {
+		contentLimit = 0
+	} else if contentLimit == 0 {
+		contentLimit = DefaultReadContentLimit
+	}
+	result := make([]api.AgentEvent, 0, min(len(events), max(1, options.Recent)))
+	for _, event := range events {
+		if !includeReadEvent(event, include, exclude) {
+			continue
+		}
+		event = limitReadEvent(event, contentLimit)
+		if options.Recent <= 0 && len(result) >= MaxReadActivities {
+			return nil, fmt.Errorf("transcript has more than %d matching activities; use --recent to bound the result", MaxReadActivities)
+		}
+		result = appendRecent(result, event, options.Recent)
+	}
+	for index := range result {
+		result[index].Sequence = uint64(index + 1)
+	}
+	return result, nil
+}
+
 // ReadTranscript parses one Codex or Claude JSONL transcript into the same
 // normalized events used by Warren's live agent view. The file is consumed
 // line by line, so the reader never loads the whole transcript into memory.
