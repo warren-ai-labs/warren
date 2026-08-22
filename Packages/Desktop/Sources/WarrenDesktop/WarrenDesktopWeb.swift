@@ -405,6 +405,7 @@ private struct WarrenDesktopWebAddressRow: View {
             if let onOpen {
                 WarrenDesktopWebIconButton(
                     systemImage: "arrow.up.right.square",
+                    glyphSize: 14,
                     accessibilityLabel: "Open \(address.kind.accessibilityTitle) address",
                     accessibilityHint: "Open this address in the default browser",
                     action: onOpen
@@ -520,6 +521,7 @@ private struct WarrenDesktopWebCommandButton: View {
 
 private struct WarrenDesktopWebIconButton: View {
     let systemImage: String
+    var glyphSize: CGFloat = 11
     let accessibilityLabel: String
     let accessibilityHint: String
     let action: () -> Void
@@ -531,7 +533,7 @@ private struct WarrenDesktopWebIconButton: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: glyphSize, weight: .medium))
                 .frame(
                     width: WarrenLayoutMetrics.sidebarActionButtonSize,
                     height: WarrenLayoutMetrics.sidebarActionButtonSize

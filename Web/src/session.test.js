@@ -107,6 +107,7 @@ test("Trae remains a shell preset when it is visible", () => {
 });
 
 test("only Codex and Claude, plus bound shell overlays, are Agents", () => {
+  assert.equal(isAgentSession(null), false);
   assert.equal(isAgentSession({ kind: "codex" }), true);
   assert.equal(isAgentSession({ kind: "claude" }), true);
   assert.equal(isAgentSession({ kind: "shell", agentSessionId: "thread-shell" }), true);

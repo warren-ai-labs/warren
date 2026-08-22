@@ -98,7 +98,7 @@ export function firstAIPreset(presets = sessionPresets) {
 // but arbitrary presets (including Trae) are not Agents until they provide a
 // dedicated integration.
 export function isAgentSession(session = {}) {
-  const kind = String(session.kind || "").trim().toLowerCase();
+  const kind = String(session?.kind || "").trim().toLowerCase();
   return kind === "codex"
     || kind === "claude"
     || ((kind === "shell" || kind === "custom") && Boolean(session.agentSessionId));
