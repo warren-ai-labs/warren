@@ -248,6 +248,8 @@ export default function TerminalDemo() {
       try {
         await init();
         if (cancelled || !host) return;
+        const restorePagePosition =
+          window.location.hash === "" || window.location.hash === "#terminal";
         term = new Terminal({
           fontSize: 13,
           fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
@@ -260,6 +262,16 @@ export default function TerminalDemo() {
         term.loadAddon(fit);
         term.open(host);
         fit.fit();
+        if (restorePagePosition) {
+          const restore = () => {
+            // ghostty-web focuses its contenteditable host from open(), which
+            // makes the browser scroll to the demo on a fresh page load.
+            term?.blur();
+            window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+          };
+          restore();
+          window.setTimeout(restore, 0);
+        }
         termRef.current = term;
         fitRef.current = fit;
         term.onData((data) => handleInput(term, data));
