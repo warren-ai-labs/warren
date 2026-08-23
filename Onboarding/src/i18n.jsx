@@ -118,6 +118,28 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.8.2",
+        dateISO: "2026-08-23",
+        date: "August 23, 2026",
+        title: "Warren ships the latest gnar worker.",
+        summary:
+          "A maintenance release that embeds gnar v1.7.2 and keeps the onboarding page at the top until the terminal demo is explicitly requested.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Update the bundled gnar worker to v1.7.2 so Public Access ships the matching worker release.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Prevent ghostty-web's initial focus from scrolling onboarding to the WASM terminal; the #demo link remains an explicit opt-in.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.8.1",
         dateISO: "2026-08-22",
         date: "August 22, 2026",
@@ -668,6 +690,28 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.8.2",
+        dateISO: "2026-08-23",
+        date: "2026 年 8 月 23 日",
+        title: "Warren 内置最新 gnar Worker。",
+        summary:
+          "维护版本：内置 gnar v1.7.2，并保持 onboarding 首屏停留在顶部，只有明确请求时才进入终端演示。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "内置 gnar Worker 升级到 v1.7.2，让 Public Access 使用匹配的 Worker 版本。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "避免 ghostty-web 初始化时的 focus 将 onboarding 自动滚动到 WASM Terminal；只有明确点击 #demo 才会进入演示。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.8.1",
         dateISO: "2026-08-22",

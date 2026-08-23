@@ -6,6 +6,20 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.8.2] - 2026-08-23
+
+> Patch release: Warren now embeds gnar v1.7.2 and keeps the onboarding
+> experience at the top of the page until the terminal demo is explicitly
+> requested.
+
+### Changed
+
+- Update the bundled gnar worker to v1.7.2 so Public Access ships the matching worker release.
+
+### Fixed
+
+- Prevent ghostty-web's initial focus from scrolling onboarding to the WASM terminal; the `#demo` link remains an explicit opt-in.
+
 ## [0.8.1] - 2026-08-22
 
 > Patch release: Warren now runs on macOS 13 and later on arm64 Apple Silicon,
