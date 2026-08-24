@@ -444,7 +444,7 @@ public struct WarrenTextInputDialog: View {
 
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        WarrenModalBackdrop {
+        WarrenModalSurface {
             VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
                 Text(title)
                     .font(WarrenTypography.dialogTitle)

@@ -75,6 +75,8 @@ func (runtime *recordingRuntime) snapshotOrder() ([]string, []recordedResize) {
 }
 
 func (runtime *listingRuntime) List(context.Context) (map[string]bool, error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	runtime.lists++
 	result := make(map[string]bool, len(runtime.sessions))
 	for name := range runtime.sessions {
@@ -83,9 +85,18 @@ func (runtime *listingRuntime) List(context.Context) (map[string]bool, error) {
 	return result, nil
 }
 
-func (runtime *listingRuntime) Exists(ctx context.Context, name string) bool {
+func (runtime *listingRuntime) Exists(_ context.Context, name string) bool {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	runtime.exists++
-	return runtime.memoryRuntime.Exists(ctx, name)
+	_, ok := runtime.sessions[name]
+	return ok
+}
+
+func (runtime *listingRuntime) probeCounts() (int, int) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.lists, runtime.exists
 }
 
 func (runtime *cancellationSensitiveRuntime) List(ctx context.Context) (map[string]bool, error) {
@@ -1256,7 +1267,7 @@ func TestSameOriginAllowsLANAndForwardedHTTPS(t *testing.T) {
 	}
 }
 
-func TestRosterUsesOneRuntimeListing(t *testing.T) {
+func TestRosterProjectionDoesNotProbeOrMutateRuntimeLifecycle(t *testing.T) {
 	state, _ := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	runtime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{"running": {}}}}
 	service := &Service{Store: state, Runtime: runtime}
@@ -1267,16 +1278,27 @@ func TestRosterUsesOneRuntimeListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	for range 5 {
+		roster := service.Roster(context.Background())
+		if roster.Sessions[0].Lifecycle != "running" || roster.Sessions[1].Lifecycle != "running" {
+			t.Fatalf("roster projection changed durable lifecycle: %#v", roster.Sessions)
+		}
+	}
+	if lists, exists := runtime.probeCounts(); lists != 0 || exists != 0 {
+		t.Fatalf("roster runtime probes: lists=%d exists=%d", lists, exists)
+	}
+
+	service.reconcile(context.Background())
 	roster := service.Roster(context.Background())
-	if runtime.lists != 1 || runtime.exists != 0 {
-		t.Fatalf("runtime probes: lists=%d exists=%d", runtime.lists, runtime.exists)
+	if lists, exists := runtime.probeCounts(); lists != 1 || exists != 0 {
+		t.Fatalf("lifecycle runtime probes: lists=%d exists=%d", lists, exists)
 	}
 	if roster.Sessions[0].Lifecycle != "running" || roster.Sessions[1].Lifecycle != "ended" {
-		t.Fatalf("unexpected lifecycle reconciliation: %#v", roster.Sessions)
+		t.Fatalf("lifecycle reconciliation was not projected: %#v", roster.Sessions)
 	}
 }
 
-func TestRosterDoesNotEndSessionWhenObserverContextIsCanceled(t *testing.T) {
+func TestRosterProjectionIgnoresObserverCancellation(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -1298,5 +1320,41 @@ func TestRosterDoesNotEndSessionWhenObserverContextIsCanceled(t *testing.T) {
 	roster := (&Service{Store: state, Runtime: runtime}).Roster(ctx)
 	if roster.Sessions[0].Lifecycle != "running" {
 		t.Fatalf("canceled observer context ended a live session: %#v", roster.Sessions[0])
+	}
+}
+
+func TestRosterProjectionDoesNotProbeEndedLegacySessions(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ghostlineRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
+	tmuxRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
+	service := &Service{
+		Store:          state,
+		Runtime:        ghostlineRuntime,
+		Runtimes:       map[string]Runtime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime},
+		DefaultRuntime: "ghostline",
+	}
+	endedAt := time.Now().UTC()
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: "legacy-ended", Runtime: "warren_legacy", Lifecycle: "ended", EndedAt: &endedAt,
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 10 {
+		roster := service.Roster(context.Background())
+		if roster.Sessions[0].RuntimeKind != "" || roster.Sessions[0].Lifecycle != "ended" {
+			t.Fatalf("legacy session projection changed: %#v", roster.Sessions[0])
+		}
+	}
+	for kind, runtime := range map[string]*listingRuntime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime} {
+		if lists, exists := runtime.probeCounts(); lists != 0 || exists != 0 {
+			t.Fatalf("%s probes for ended legacy session: lists=%d exists=%d", kind, lists, exists)
+		}
 	}
 }

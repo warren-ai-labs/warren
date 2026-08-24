@@ -35,6 +35,7 @@ const (
 	broadcastLockWait       = 100 * time.Millisecond
 	metadataRefreshInterval = 750 * time.Millisecond
 	metadataProbeTimeout    = 2 * time.Second
+	slowRosterThreshold     = 50 * time.Millisecond
 	cursorPersistEvery      = 256 * 1024
 	orphanReapInterval      = 30 * time.Second
 	// agentMessageMaxBytes bounds one pushed agent batch so a large
@@ -88,8 +89,9 @@ type Service struct {
 	panelCache     *panelCache
 	panelLoad      *panelLoad
 	panelCacheOnce sync.Once
-	// Logger receives lifecycle warnings. A nil logger falls back to slog's
-	// process-wide default so tests and embedders do not need to configure one.
+	// Logger receives lifecycle warnings and performance diagnostics. A nil
+	// logger falls back to slog's process-wide default for warnings; optional
+	// informational diagnostics stay disabled for tests and embedders.
 	Logger *slog.Logger
 	// ColorQuery supplies terminal foreground and background colors for
 	// capability queries answered while no client is attached.
@@ -630,52 +632,14 @@ func (s *Service) Roster(ctx context.Context) api.State {
 	return state
 }
 
-func (s *Service) RosterVersion(ctx context.Context) (api.State, uint64) {
+func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
+	startedAt := time.Now()
 	s.migrateLegacyWorktreeOwnership()
+	// Roster projection is observer-facing and may run independently for every
+	// connected client. Keep runtime probes and Session lifecycle mutations in
+	// the single lifecycle loop so additional observers cannot multiply process
+	// launches, runtime RPCs, or Session writes.
 	state, revision := s.Store.SnapshotVersion()
-	changed := false
-	now := time.Now().UTC()
-	// A roster request can be cancelled when a WebSocket disconnects. That
-	// cancellation says nothing about the tmux process: using the cancelled
-	// request context for the probe makes List fail and Exists return false,
-	// which incorrectly ends a session that was just created or is still alive.
-	// Keep the probe independent of the observer lifecycle, but bounded so a
-	// broken runtime cannot hold roster reconciliation forever.
-	probeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-	defer cancel()
-	running := s.runningSessions(probeContext)
-	for i := range state.Sessions {
-		adopted, _ := s.adoptRuntimeKind(probeContext, state.Sessions[i])
-		if adopted.RuntimeKind != "" && state.Sessions[i].RuntimeKind == "" {
-			state.Sessions[i].RuntimeKind = adopted.RuntimeKind
-		}
-		if state.Sessions[i].Lifecycle == "running" && !running(adopted) {
-			state.Sessions[i].Lifecycle = "ended"
-			state.Sessions[i].EndedAt = &now
-			changed = true
-		}
-	}
-	if changed {
-		ended := make(map[string]time.Time)
-		for _, session := range state.Sessions {
-			if session.EndedAt != nil {
-				ended[session.ID] = *session.EndedAt
-			}
-		}
-		_ = s.Store.Update(func(value *api.State) error {
-			for index := range value.Sessions {
-				if endedAt, ok := ended[value.Sessions[index].ID]; ok && value.Sessions[index].Lifecycle == "running" {
-					value.Sessions[index].Lifecycle = "ended"
-					value.Sessions[index].EndedAt = &endedAt
-				}
-			}
-			return nil
-		})
-		for sessionID := range ended {
-			s.stopOutput(sessionID, true)
-		}
-		state, revision = s.Store.SnapshotVersion()
-	}
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
 	sortTerminalGroups(state.TerminalGroups)
@@ -714,6 +678,15 @@ func (s *Service) RosterVersion(ctx context.Context) (api.State, uint64) {
 		} else if session.Kind == "codex" || session.Kind == "claude" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
+	}
+	if elapsed := time.Since(startedAt); elapsed >= slowRosterThreshold {
+		s.logInfo(
+			"slow roster snapshot",
+			"duration", elapsed,
+			"projects", len(state.Projects),
+			"workspaces", len(state.Workspaces),
+			"sessions", len(state.Sessions),
+		)
 	}
 	return state, revision
 }
@@ -1774,6 +1747,12 @@ func (s *Service) logWarn(message string, keyValues ...any) {
 	logger.Warn(message, keyValues...)
 }
 
+func (s *Service) logInfo(message string, keyValues ...any) {
+	if s.Logger != nil {
+		s.Logger.Info(message, keyValues...)
+	}
+}
+
 func findWorkspace(state api.State, id string) (api.Workspace, error) {
 	for _, workspace := range state.Workspaces {
 		if workspace.ID == id {
@@ -2122,6 +2101,7 @@ func (s *Service) sessionEnvironment(id, kind string) []string {
 }
 
 func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
+	startedAt := time.Now()
 	if workspaceID == "" && groupID == "" {
 		return api.Session{}, errors.New("workspace or terminal group is required")
 	}
@@ -2198,9 +2178,11 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	// inside a plain shell is bound to the same Warren session by its own
 	// lifecycle hooks.
 	env := s.sessionEnvironment(id, kind)
+	runtimeStartedAt := time.Now()
 	if err := adapter.Create(ctx, runtimeName, workingDirectory, command, env); err != nil {
 		return api.Session{}, err
 	}
+	runtimeDuration := time.Since(runtimeStartedAt)
 	session := api.Session{
 		ID:              id,
 		WorkspaceID:     workspaceID,
@@ -2221,10 +2203,13 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	if injectedClaude {
 		session.AgentSessionID = id
 	}
+	storeStartedAt := time.Now()
 	if err := s.Store.Update(func(value *api.State) error { value.Sessions = append(value.Sessions, session); return nil }); err != nil {
 		_ = adapter.Kill(ctx, runtimeName)
 		return api.Session{}, err
 	}
+	storeDuration := time.Since(storeStartedAt)
+	outputStartedAt := time.Now()
 	if _, err := s.ensureOutput(ctx, session); err != nil {
 		_ = adapter.Kill(ctx, runtimeName)
 		_ = s.Store.Update(func(value *api.State) error {
@@ -2236,7 +2221,20 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		}
 		return api.Session{}, err
 	}
+	outputDuration := time.Since(outputStartedAt)
+	agentStartedAt := time.Now()
 	_, _ = s.ensureAgent(ctx, session)
+	agentDuration := time.Since(agentStartedAt)
+	s.logInfo(
+		"session create complete",
+		"session", session.ID,
+		"runtimeKind", session.RuntimeKind,
+		"runtimeCreate", runtimeDuration,
+		"store", storeDuration,
+		"output", outputDuration,
+		"agent", agentDuration,
+		"total", time.Since(startedAt),
+	)
 	return session, nil
 }
 

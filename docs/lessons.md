@@ -203,3 +203,35 @@ later.
 - **Prefer probes in the product over asking users to reproduce.** Once the
   app logs `surfaceReady` and lifecycle events at the right points, one
   manual workspace switch gives enough data to trace the whole sequence.
+## 004 - Idle output observers consumed interactive-path CPU
+
+### Symptom
+
+Terminal creation slowed down as the number of running Sessions grew, while
+the Headless process remained near one saturated CPU core even when most
+Sessions were idle.
+
+### Root cause
+
+Every Session had a spool watcher that called `file.Stat()` every 10 ms. This
+made idle cost proportional to Session count: 69 running Sessions produced
+about 6,900 metadata syscalls per second before any output encoding or
+broadcast work. Roster refresh separately repeated runtime probes per observer,
+adding more work to the same process during create.
+
+### Resolution boundary
+
+- Warren roster projection is cache-only; liveness probing stays in the single
+  lifecycle loop.
+- Session creation records phase durations so a future slowdown can distinguish
+  runtime launch, persistence, output adoption, agent discovery, roster, and
+  attach.
+- Event-driven Ghostline watching remains isolated from `main` while its output
+  cadence and callback semantics are reviewed independently.
+
+### Engineering lesson
+
+Observer cost must scale with changes, not with retained object count. A cheap
+syscall becomes a process-wide bottleneck when multiplied by hundreds of idle
+resources and an interactive polling frequency. Put reusable change detection
+in the owning library; keep product policy and diagnostics in the product.
