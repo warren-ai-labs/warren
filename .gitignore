@@ -10,6 +10,7 @@ Web/node_modules/
 Warren.app/
 Warren-*.zip
 Frameworks/
-.local/force-push-once.sh
+# Local-only release tooling and runbooks
+.local/
 __pycache__/
 *.pyc

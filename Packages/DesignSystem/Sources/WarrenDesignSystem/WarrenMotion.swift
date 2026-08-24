@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 public enum WarrenMotionRole: Sendable {
     case feedback
@@ -69,6 +72,101 @@ public struct WarrenStatusIndicator: View {
     }
 }
 
+#if os(macOS)
+private struct WarrenStatusPulseRing: NSViewRepresentable {
+    let color: Color
+    let size: CGFloat
+
+    func makeNSView(context: Context) -> WarrenStatusPulseView {
+        WarrenStatusPulseView(color: NSColor(color), size: size)
+    }
+
+    func updateNSView(_ nsView: WarrenStatusPulseView, context: Context) {
+        nsView.update(color: NSColor(color), size: size)
+    }
+}
+
+/// Keeps the infinite activity pulse below SwiftUI's invalidation boundary.
+/// A SwiftUI `repeatForever` animation makes the complete `NSHostingView`
+/// participate in every display cycle; with activity markers in the sidebar
+/// and tab bar that can starve the native terminal renderer. Core Animation
+/// updates this layer on the compositor without re-evaluating the view graph.
+@MainActor
+final class WarrenStatusPulseView: NSView {
+    static let animationKey = "warren.activity-pulse"
+
+    private let pulseLayer = CALayer()
+    private var pulseSize: CGFloat
+
+    init(color: NSColor, size: CGFloat) {
+        pulseSize = size
+        super.init(frame: NSRect(origin: .zero, size: CGSize(width: size, height: size)))
+        wantsLayer = true
+        layer?.masksToBounds = false
+        pulseLayer.backgroundColor = color.withAlphaComponent(0.65).cgColor
+        layer?.addSublayer(pulseLayer)
+        updateGeometry()
+        installAnimationIfNeeded()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: pulseSize, height: pulseSize)
+    }
+
+    override func layout() {
+        super.layout()
+        updateGeometry()
+        installAnimationIfNeeded()
+    }
+
+    func update(color: NSColor, size: CGFloat) {
+        let sizeChanged = pulseSize != size
+        pulseSize = size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pulseLayer.backgroundColor = color.withAlphaComponent(0.65).cgColor
+        updateGeometry()
+        CATransaction.commit()
+        if sizeChanged {
+            invalidateIntrinsicContentSize()
+        }
+        installAnimationIfNeeded()
+    }
+
+    private func updateGeometry() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pulseLayer.bounds = CGRect(x: 0, y: 0, width: pulseSize, height: pulseSize)
+        pulseLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        pulseLayer.cornerRadius = pulseSize / 2
+        CATransaction.commit()
+    }
+
+    private func installAnimationIfNeeded() {
+        guard pulseLayer.animation(forKey: Self.animationKey) == nil else { return }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 1
+        scale.toValue = 1.9
+
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 0.75
+        opacity.toValue = 0
+
+        let group = CAAnimationGroup()
+        group.animations = [scale, opacity]
+        group.duration = WarrenMotion.activityPulseDuration
+        group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.isRemovedOnCompletion = false
+        pulseLayer.add(group, forKey: Self.animationKey)
+    }
+}
+#else
 private struct WarrenStatusPulseRing: View {
     let color: Color
     let size: CGFloat
@@ -91,6 +189,7 @@ private struct WarrenStatusPulseRing: View {
             }
     }
 }
+#endif
 
 /// Warren's single indeterminate loading mark: a 2x4 braille-style dot grid
 /// with one dot lighting up and travelling clockwise around the ring.

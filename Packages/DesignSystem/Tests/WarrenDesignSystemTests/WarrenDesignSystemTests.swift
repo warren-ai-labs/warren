@@ -45,6 +45,27 @@ final class WarrenDesignSystemTests: XCTestCase {
         XCTAssertEqual(WarrenMotion.spinnerFrameDuration * 8, 0.72, accuracy: 0.0001)
     }
 
+    #if os(macOS)
+    @MainActor
+    func testStatusPulseUsesOnePersistentCoreAnimation() {
+        let view = WarrenStatusPulseView(color: .systemOrange, size: 7)
+        let animation = view.layer?.sublayers?.first?.animation(
+            forKey: WarrenStatusPulseView.animationKey
+        ) as? CAAnimationGroup
+
+        XCTAssertEqual(animation?.duration, WarrenMotion.activityPulseDuration)
+        XCTAssertEqual(animation?.repeatCount, .infinity)
+        XCTAssertEqual(animation?.animations?.count, 2)
+
+        view.update(color: .systemRed, size: 9)
+        XCTAssertEqual(view.intrinsicContentSize, NSSize(width: 9, height: 9))
+        XCTAssertNotNil(view.layer?.sublayers?.first?.animation(
+            forKey: WarrenStatusPulseView.animationKey
+        ))
+        XCTAssertEqual(view.layer?.sublayers?.count, 1)
+    }
+    #endif
+
     func testPresentationStackTracksTopmostRole() {
         var stack = WarrenPresentationStack()
         XCTAssertTrue(stack.isEmpty)

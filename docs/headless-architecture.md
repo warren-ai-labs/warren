@@ -51,7 +51,7 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 
 ## Output and Recovery
 
-- The Runtime writes each Session's raw PTY bytes to a dedicated append-only spool (`~/.warren/output/<runtime>.out`); ghostline writes its own spool, while tmux uses `pipe-pane -o -O`. The Host holds one SpoolWatcher per Session that keeps reading bytes from a persisted offset instead of polling.
+- The Runtime writes each Session's raw PTY bytes to a dedicated append-only spool (`~/.warren/output/<runtime>.out`); ghostline writes its own spool, while tmux uses `pipe-pane -o -O`. The Host holds one SpoolWatcher per Session that reads from a persisted offset. Ghostline wakes watchers through platform file notifications on Darwin and Linux, with a low-frequency heartbeat as a missed-event fallback.
 - A screen snapshot (`capture-pane` for tmux, a libghostty-vt snapshot for ghostline) is only used for first recovery and reanchoring: when a new client connects, the Host restarts and adopts, the Anchor is evicted from the Ring, or the spool is compacted, the Host sends a snapshot and reanchors.
 - Binary output frames use the same DENB envelope as the daemon protocol:
   `DENB | version | direction | kind | headerLen | payloadLen | JSON header | payload`,
