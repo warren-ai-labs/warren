@@ -18,8 +18,19 @@ const (
 	requestAuxiliary
 )
 
+// isCoordinatedGitMethod reports methods that run on the per-workspace Git
+// coordinator before they may reach the auxiliary lane.
+func isCoordinatedGitMethod(method string) bool {
+	switch method {
+	case "git.panel", "git.diff", "git.checkout", "git.pull", "git.push", "git.commit", "git.pr.create":
+		return true
+	default:
+		return false
+	}
+}
+
 func requestLaneFor(method string) requestLane {
-	if method == "git.panel" {
+	if isCoordinatedGitMethod(method) {
 		return requestAuxiliary
 	}
 	return requestControl

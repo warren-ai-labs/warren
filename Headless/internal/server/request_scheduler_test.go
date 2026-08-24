@@ -14,8 +14,8 @@ func TestRequestLaneDefaultsToControl(t *testing.T) {
 		want   requestLane
 	}{
 		{method: "git.panel", want: requestAuxiliary},
-		{method: "git.diff", want: requestControl},
-		{method: "git.commit", want: requestControl},
+		{method: "git.diff", want: requestAuxiliary},
+		{method: "git.commit", want: requestAuxiliary},
 		{method: "future.method", want: requestControl},
 	}
 	for _, test := range tests {
@@ -330,5 +330,25 @@ func waitExecutor(t *testing.T, wait func(context.Context) error) {
 	defer cancel()
 	if err := wait(ctx); err != nil {
 		t.Fatalf("executor did not stop: %v", err)
+	}
+}
+
+func TestGitMethodsUseAuxiliary(t *testing.T) {
+	methods := []string{
+		"git.panel", "git.diff", "git.checkout",
+		"git.pull", "git.push", "git.commit", "git.pr.create",
+	}
+	for _, method := range methods {
+		if got := requestLaneFor(method); got != requestAuxiliary {
+			t.Errorf("requestLaneFor(%q) = %d; want requestAuxiliary", method, got)
+		}
+		if !isCoordinatedGitMethod(method) {
+			t.Errorf("isCoordinatedGitMethod(%q) = false; want true", method)
+		}
+	}
+	for _, method := range []string{"session.attach", "session.input", "roster", "future.method"} {
+		if isCoordinatedGitMethod(method) {
+			t.Errorf("isCoordinatedGitMethod(%q) = true; want false", method)
+		}
 	}
 }
