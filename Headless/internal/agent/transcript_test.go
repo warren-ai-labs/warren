@@ -65,6 +65,50 @@ func TestReadNewNormalizesCodexTranscript(t *testing.T) {
 	}
 }
 
+func TestContentStringLimitBoundsBlockAssembly(t *testing.T) {
+	large := strings.Repeat("x", maxEventContent*2)
+	value, err := json.Marshal([]map[string]any{
+		{"text": "prefix"},
+		{"text": large},
+		{"text": large},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := contentStringLimit(value, 16)
+	want := "prefix\n" + strings.Repeat("x", 9) + "…"
+	if got != want {
+		t.Fatalf("limited content = %q, want %q", got, want)
+	}
+}
+
+func TestContentStringLimitKeepsFullReadAndNestedContent(t *testing.T) {
+	value := json.RawMessage(`[{"text":"hello"},{"type":"image"},{"content":"nested content"}]`)
+	if got, want := contentStringLimit(value, 0), "hello\n[image]\nnested content"; got != want {
+		t.Fatalf("full content = %q, want %q", got, want)
+	}
+	if got, want := contentStringLimit(value, 8), "hello\n[i…"; got != want {
+		t.Fatalf("limited content = %q, want %q", got, want)
+	}
+}
+
+func TestTruncatePreservesRuneLimit(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		limit int
+		want  string
+	}{
+		{value: "abcdef", limit: 3, want: "abc…"},
+		{value: "ééé", limit: 2, want: "éé…"},
+		{value: "éé", limit: 3, want: "éé"},
+	} {
+		if got := truncate(test.value, test.limit); got != test.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", test.value, test.limit, got, test.want)
+		}
+	}
+}
+
 func TestCodexDeveloperAndInjectedContextCollapseToSystemInstructions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-instructions.jsonl")
 	writeLines(t, path,
