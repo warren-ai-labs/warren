@@ -30,7 +30,11 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 )
 
-var version = "dev"
+var (
+	version  = "dev"
+	revision = "unknown"
+	dirty    = "false"
+)
 
 const tokenRepairInterval = time.Second
 
@@ -256,6 +260,8 @@ func main() {
 	}()
 	httpHandler := server.NewHTTPServer(service, token, logger)
 	httpHandler.BuildVersion = version
+	httpHandler.BuildRevision = revision
+	httpHandler.BuildDirty = dirty == "true"
 	httpHandler.GhostlineVersion = ghostlineRPCVersion
 	httpHandler.GhostlineRPCVersion = ghostlineRPCVersion
 	httpHandler.GhostlineTagVersion = ghostlineTagVersion
@@ -310,7 +316,15 @@ func main() {
 		}()
 	}
 	httpHandler.Tunnels = tunnelManager
-	logger.Info("warren headless ready", "listen", listener.Addr().String(), "host", state.Snapshot().Host.Name, "version", version, "tokenFile", *tokenPath)
+	logger.Info(
+		"warren headless ready",
+		"listen", listener.Addr().String(),
+		"host", state.Snapshot().Host.Name,
+		"version", version,
+		"revision", revision,
+		"dirty", dirty,
+		"tokenFile", *tokenPath,
+	)
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fatal(err)

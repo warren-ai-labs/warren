@@ -22,6 +22,12 @@
     <string>0.8.2</string>
     <key>CFBundleVersion</key>
     <string>17</string>
+    <key>WarrenBuildVersion</key>
+    <string>development</string>
+    <key>WarrenBuildRevision</key>
+    <string>unknown</string>
+    <key>WarrenBuildDirty</key>
+    <false/>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
