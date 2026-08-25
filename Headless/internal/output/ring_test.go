@@ -20,6 +20,26 @@ func TestRingAppendEvictsByCountAndBytes(t *testing.T) {
 	}
 }
 
+func TestRingAppendReusesFrameStorageAfterCountEviction(t *testing.T) {
+	ring := NewRing(0, 2, 1024, 0)
+	for _, payload := range []string{"one", "two"} {
+		if _, err := ring.Append("s", []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capacity := cap(ring.frames)
+	if _, err := ring.Append("s", []byte("three")); err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(ring.frames); got != capacity {
+		t.Fatalf("frame capacity = %d, want retained capacity %d", got, capacity)
+	}
+	frames := ring.Frames()
+	if len(frames) != 2 || string(frames[0].Payload) != "two" || string(frames[1].Payload) != "three" {
+		t.Fatalf("retained frames = %#v, want two and three", frames)
+	}
+}
+
 func TestRingRecoveryPlans(t *testing.T) {
 	ring := NewRing(7, 256, 8*1024*1024, 0)
 	for _, payload := range []string{"hello ", "world", "\r\n"} {

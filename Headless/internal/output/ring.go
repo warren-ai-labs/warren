@@ -101,24 +101,39 @@ func (r *Ring) Append(sessionID string, payload []byte) (Frame, error) {
 		Sequence:  sequence,
 		Payload:   append([]byte(nil), payload...),
 	}
+	// Evict before append so a full ring reuses its backing storage instead of
+	// growing then allocating a replacement slice for every output frame.
+	if len(r.frames) >= r.Capacity {
+		r.discardOldest(len(r.frames) - r.Capacity + 1)
+	}
 	r.frames = append(r.frames, frame)
 	r.nextSequence = sequence + uint64(len(payload))
 
-	if len(r.frames) > r.Capacity {
-		r.frames = append([]Frame(nil), r.frames[len(r.frames)-r.Capacity:]...)
-	}
 	totalBytes := 0
 	for _, value := range r.frames {
 		totalBytes += len(value.Payload)
 	}
-	for len(r.frames) > 0 {
-		if totalBytes <= r.MaxBytes {
-			break
-		}
-		totalBytes -= len(r.frames[0].Payload)
-		r.frames = r.frames[1:]
+	discard := 0
+	for totalBytes > r.MaxBytes && discard < len(r.frames) {
+		totalBytes -= len(r.frames[discard].Payload)
+		discard++
 	}
+	r.discardOldest(discard)
 	return frame, nil
+}
+
+func (r *Ring) discardOldest(count int) {
+	if count <= 0 || len(r.frames) == 0 {
+		return
+	}
+	if count >= len(r.frames) {
+		clear(r.frames)
+		r.frames = r.frames[:0]
+		return
+	}
+	remaining := copy(r.frames, r.frames[count:])
+	clear(r.frames[remaining:])
+	r.frames = r.frames[:remaining]
 }
 
 func (r *Ring) Plan(anchor *Anchor) Plan {
