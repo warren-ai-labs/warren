@@ -6,6 +6,7 @@ import Combine
 import WarrenDesignSystem
 import WarrenDomain
 import WarrenClientCore
+import WarrenObservation
 
 private struct TestTerminalSurface: View {
     let context: WarrenDesktopTerminalContext
@@ -53,10 +54,16 @@ private func makeTabBar(
         selectedEndpointID: "local",
         webStatus: WarrenDesktopWebStatus(),
         externalIDEOptions: nil,
+        embeddedEditorAvailable: false,
+        embeddedEditorTabVisible: false,
+        embeddedEditorSelected: false,
+        embeddedEditorDefault: false,
         onToggleSidebar: {},
         onSettings: {},
         onChromePopover: { _ in },
         onOpenInExternalIDE: { _ in },
+        onOpenEmbeddedEditor: {},
+        onCloseEmbeddedEditor: {},
         onSelectEndpoint: { _ in },
         onSelectTab: { _ in },
         onMoveTab: { _, _ in },
@@ -109,6 +116,15 @@ final class WarrenDesktopTests: XCTestCase {
 
         XCTAssertEqual(layout.direct, [.externalIDE, .web, .notifications])
         XCTAssertEqual(layout.overflow, [.endpoint, .settings])
+    }
+
+    func testEmbeddedEditorKeepsIDEControlAvailableWithoutExternalApplications() {
+        XCTAssertTrue(
+            WarrenDesktopWorkspaceTabTrailingControl.available(
+                externalIDEOptions: nil,
+                embeddedEditorAvailable: true
+            ).contains(.externalIDE)
+        )
     }
 
     func testWorkspaceTabTrailingExternalControlsAreDeduplicatedAndCapped() {
@@ -454,6 +470,131 @@ final class WarrenDesktopTests: XCTestCase {
                 + WarrenLayoutMetrics.paneHeaderHeight
                 + WarrenLayoutMetrics.paneMinimumHeight
         )
+    }
+
+    func testEmbeddedEditorUsesAClosableLocalTabAndStaysMountedBehindSessions() throws {
+        let defaults = UserDefaults.standard
+        let previousDefault = defaults.object(
+            forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE
+        )
+        defaults.set(false, forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE)
+        defer {
+            if let previousDefault {
+                defaults.set(
+                    previousDefault,
+                    forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE
+                )
+            } else {
+                defaults.removeObject(
+                    forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE
+                )
+            }
+        }
+        let recorder = WarrenSemanticRecorder()
+        var received: [WarrenDesktopAction] = []
+        let root = WarrenDesktopRoot(
+            projection: WarrenDesktopFixture.preview.projection,
+            actions: WarrenDesktopActions { received.append($0) },
+            embeddedEditorAvailable: true,
+            editorSurface: { workspace in
+                AnyView(
+                    Text("editor:\(workspace.name)")
+                        .warrenSemanticElement(
+                            id: "embedded-editor.surface",
+                            role: .group,
+                            label: "Embedded editor"
+                        )
+                )
+            },
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertNil(
+            recorder.snapshot().nodes.first { $0.id == "tab.workspace-editor" }
+        )
+        try recorder.perform(.press, on: "workspace-ide.open")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(
+            recorder.snapshot().nodes.first {
+                $0.id == "workspace-editor.install"
+            }
+        )
+        try recorder.perform(.press, on: "workspace-editor.open")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let snapshot = recorder.snapshot()
+        XCTAssertEqual(
+            snapshot.nodes.first { $0.id == "tab.workspace-editor" }?.value,
+            "Selected"
+        )
+        XCTAssertEqual(
+            snapshot.nodes.first { $0.id == "tab.tab-main" }?.value,
+            "Not selected"
+        )
+        XCTAssertNotNil(snapshot.nodes.first { $0.id == "embedded-editor.surface" })
+        XCTAssertTrue(received.isEmpty)
+
+        try recorder.perform(.press, on: "tab.tab-main")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let restoredSnapshot = recorder.snapshot()
+        XCTAssertEqual(
+            restoredSnapshot.nodes.first { $0.id == "tab.tab-main" }?.value,
+            "Selected"
+        )
+        XCTAssertEqual(received, [.selectTab("tab-main")])
+        XCTAssertNotNil(
+            restoredSnapshot.nodes.first { $0.id == "embedded-editor.surface" }
+        )
+
+        NotificationCenter.default.post(
+            name: WarrenDesktopCommand.selectTab,
+            object: nil,
+            userInfo: [WarrenDesktopCommand.selectTabIndexKey: 2]
+        )
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            recorder.snapshot().nodes.first { $0.id == "tab.workspace-editor" }?.value,
+            "Selected"
+        )
+        XCTAssertEqual(received, [.selectTab("tab-main")])
+
+        NotificationCenter.default.post(
+            name: WarrenDesktopCommand.nextTab,
+            object: nil
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(
+            recorder.snapshot().nodes.first { $0.id == "embedded-editor.surface" }
+        )
+        XCTAssertEqual(received, [.selectTab("tab-main"), .selectTab("tab-main")])
+
+        try recorder.perform(.press, on: "tab.workspace-editor")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        try recorder.perform(.press, on: "tab.workspace-editor.close")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let closedSnapshot = recorder.snapshot()
+        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "tab.workspace-editor" })
+        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
+        XCTAssertEqual(received, [.selectTab("tab-main"), .selectTab("tab-main")])
     }
 
     func testTabBarDragFillerSpansEmptyTrackWhenTabsFit() {
@@ -1078,6 +1219,40 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testWorkspaceContentModePersistenceIsScopedAndDropsStaleWorkspaces() {
+        let suiteName = "warren-workspace-content-mode-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let workspaces = WarrenDesktopFixture.preview.projection.groups.flatMap(\.workspaces)
+        let editorWorkspace = workspaces[0]
+        let terminalWorkspace = workspaces[1]
+
+        WarrenDesktopWorkspaceContentModePersistence.save(
+            [
+                editorWorkspace.id: .editor,
+                terminalWorkspace.id: .terminal,
+                WorkspaceID(): .editor,
+            ],
+            scope: "local",
+            validWorkspaceIDs: Set(workspaces.map(\.id)),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceContentModePersistence.restore(
+                scope: "local",
+                defaults: defaults
+            ),
+            [editorWorkspace.id: .editor]
+        )
+        XCTAssertTrue(
+            WarrenDesktopWorkspaceContentModePersistence.restore(
+                scope: "remote",
+                defaults: defaults
+            ).isEmpty
+        )
+    }
+
     func testActionsExposeProjectWorkspaceAndTabIntentWithoutSideEffects() {
         var received: [WarrenDesktopAction] = []
         let actions = WarrenDesktopActions(
@@ -1371,6 +1546,56 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertNil(WarrenDesktopTabSelector.tabID(in: tabs, number: 0))
         XCTAssertNil(WarrenDesktopTabSelector.tabID(in: tabs, number: 3))
         XCTAssertNil(WarrenDesktopTabSelector.tabID(in: [], number: 1))
+    }
+
+    func testTabNumberSelectorAppendsTheLocalEditorTab() {
+        let tabs = WarrenDesktopFixture.preview.projection.tabs
+
+        XCTAssertEqual(
+            WarrenDesktopTabSelector.selection(
+                in: tabs,
+                includesEditor: true,
+                number: tabs.count + 1
+            ),
+            .editor
+        )
+        XCTAssertNil(WarrenDesktopTabSelector.selection(
+            in: tabs,
+            includesEditor: false,
+            number: tabs.count + 1
+        ))
+    }
+
+    func testIDEPrimaryActionRequiresTheDefaultCheck() {
+        XCTAssertEqual(
+            WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: false,
+                embeddedEditorSelected: false
+            ),
+            .presentChoices
+        )
+        XCTAssertEqual(
+            WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: true,
+                embeddedEditorSelected: false
+            ),
+            .openEmbeddedEditor
+        )
+        XCTAssertEqual(
+            WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: true,
+                embeddedEditorSelected: true
+            ),
+            .presentChoices
+        )
+    }
+
+    func testEmbeddedEditorInstallGuideUsesOfficialDocumentation() {
+        XCTAssertEqual(
+            WarrenDesktopExternalIDEPopoverContent.codeServerInstallationGuideURL
+                .absoluteString,
+            "https://coder.com/docs/code-server/install"
+        )
     }
 
     func testTabTitleUsesDirectoryNameForInteractiveShell() {

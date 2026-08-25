@@ -3,6 +3,7 @@ import SwiftUI
 import WarrenClientCore
 import WarrenDesignSystem
 import WarrenDomain
+import WarrenObservation
 
 /// Superset v2's workspace chrome is one 40pt row. Leading controls only
 /// appear when the left rail is collapsed; an expanded sidebar owns its own
@@ -20,6 +21,10 @@ struct WarrenDesktopTabBar: View {
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
+    let embeddedEditorAvailable: Bool
+    let embeddedEditorTabVisible: Bool
+    let embeddedEditorSelected: Bool
+    let embeddedEditorDefault: Bool
     let notices: [WarrenDesktopNotice]
     let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
@@ -29,6 +34,8 @@ struct WarrenDesktopTabBar: View {
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
+    let onOpenEmbeddedEditor: () -> Void
+    let onCloseEmbeddedEditor: () -> Void
     let onSelectEndpoint: (String) -> Void
     let onSelectTab: (String) -> Void
     let onMoveTab: (String, String?) -> Void
@@ -60,6 +67,10 @@ struct WarrenDesktopTabBar: View {
         selectedEndpointID: String,
         webStatus: WarrenDesktopWebStatus,
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorAvailable: Bool,
+        embeddedEditorTabVisible: Bool,
+        embeddedEditorSelected: Bool,
+        embeddedEditorDefault: Bool,
         notices: [WarrenDesktopNotice] = [],
         notificationsMuted: Bool = false,
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
@@ -69,6 +80,8 @@ struct WarrenDesktopTabBar: View {
         onSettings: @escaping () -> Void,
         onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
         onOpenInExternalIDE: @escaping (WarrenDesktopExternalIDEOption) -> Void,
+        onOpenEmbeddedEditor: @escaping () -> Void,
+        onCloseEmbeddedEditor: @escaping () -> Void,
         onSelectEndpoint: @escaping (String) -> Void,
         onSelectTab: @escaping (String) -> Void,
         onMoveTab: @escaping (String, String?) -> Void,
@@ -97,6 +110,10 @@ struct WarrenDesktopTabBar: View {
         self.selectedEndpointID = selectedEndpointID
         self.webStatus = webStatus
         self.externalIDEOptions = externalIDEOptions
+        self.embeddedEditorAvailable = embeddedEditorAvailable
+        self.embeddedEditorTabVisible = embeddedEditorTabVisible
+        self.embeddedEditorSelected = embeddedEditorSelected
+        self.embeddedEditorDefault = embeddedEditorDefault
         self.notices = notices
         self.notificationsMuted = notificationsMuted
         self.externallyVisibleControls = externallyVisibleControls
@@ -106,6 +123,8 @@ struct WarrenDesktopTabBar: View {
         self.onSettings = onSettings
         self.onChromePopover = onChromePopover
         self.onOpenInExternalIDE = onOpenInExternalIDE
+        self.onOpenEmbeddedEditor = onOpenEmbeddedEditor
+        self.onCloseEmbeddedEditor = onCloseEmbeddedEditor
         self.onSelectEndpoint = onSelectEndpoint
         self.onSelectTab = onSelectTab
         self.onMoveTab = onMoveTab
@@ -151,7 +170,7 @@ struct WarrenDesktopTabBar: View {
                                 tab: tab,
                                 displayTitle: tabTitles[tab.id] ?? tab.title,
                                 activity: activity,
-                                isSelected: selectedTabID == tab.id,
+                                isSelected: !embeddedEditorSelected && selectedTabID == tab.id,
                                 isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
                                 onSelect: { onSelectTab(tab.id) },
                                 onClose: { onCloseTab(tab.id) },
@@ -187,17 +206,30 @@ struct WarrenDesktopTabBar: View {
                                 }
                             )
                         }
+
+                        if embeddedEditorTabVisible {
+                            WarrenDesktopEditorTabItem(
+                                isSelected: embeddedEditorSelected,
+                                onSelect: onOpenEmbeddedEditor,
+                                onClose: onCloseEmbeddedEditor
+                            )
+                        }
                     }
                     .background {
                         WarrenDesktopTabScrollFollower(
-                            selectedTabID: selectedTabID,
+                            selectedTabID: embeddedEditorSelected
+                                ? Self.editorTabID
+                                : selectedTabID,
                             tabIDs: tabs.map(\.id)
+                                + (embeddedEditorTabVisible ? [Self.editorTabID] : [])
                         )
                     }
                     .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
                 }
                 .frame(
-                    maxWidth: Self.tabTrackWidth(tabCount: tabs.count),
+                    maxWidth: Self.tabTrackWidth(
+                        tabCount: tabs.count + (embeddedEditorTabVisible ? 1 : 0)
+                    ),
                     alignment: .leading
                 )
                 .layoutPriority(1)
@@ -227,6 +259,9 @@ struct WarrenDesktopTabBar: View {
                         selectedEndpointID: selectedEndpointID,
                         webStatus: webStatus,
                         externalIDEOptions: externalIDEOptions,
+                        embeddedEditorAvailable: embeddedEditorAvailable,
+                        embeddedEditorSelected: embeddedEditorSelected,
+                        embeddedEditorDefault: embeddedEditorDefault,
                         notices: notices,
                         notificationsMuted: notificationsMuted,
                         externallyVisibleControls: externallyVisibleControls,
@@ -235,6 +270,7 @@ struct WarrenDesktopTabBar: View {
                         onSettings: onSettings,
                         onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
+                        onOpenEmbeddedEditor: onOpenEmbeddedEditor,
                         onSelectEndpoint: onSelectEndpoint
                     )
                 }
@@ -248,6 +284,8 @@ struct WarrenDesktopTabBar: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace tab bar")
     }
+
+    private static let editorTabID = "warren.workspace.editor"
 }
 
 enum WarrenDesktopTabScrollPosition {
@@ -430,7 +468,7 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
 
     var systemImage: String {
         switch self {
-        case .externalIDE: "chevron.left.forwardslash.chevron.right"
+        case .externalIDE: "macwindow"
         case .endpoint: "server.rack"
         case .web: "globe"
         case .notifications: "bell"
@@ -449,10 +487,13 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
     }
 
     static func available(
-        externalIDEOptions: [WarrenDesktopExternalIDEOption]?
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorAvailable: Bool = false
     ) -> [Self] {
         allCases.filter { control in
-            control != .externalIDE || !(externalIDEOptions?.isEmpty ?? true)
+            control != .externalIDE
+                || embeddedEditorAvailable
+                || !(externalIDEOptions?.isEmpty ?? true)
         }
     }
 }
@@ -463,6 +504,9 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let selectedEndpointID: String
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
+    let embeddedEditorAvailable: Bool
+    let embeddedEditorSelected: Bool
+    let embeddedEditorDefault: Bool
     let notices: [WarrenDesktopNotice]
     let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
@@ -471,6 +515,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
+    let onOpenEmbeddedEditor: () -> Void
     let onSelectEndpoint: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -499,7 +544,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
         WarrenDesktopWorkspaceTabTrailingControl.layout(
             externallyVisibleControls: externallyVisibleControls,
             availableControls: WarrenDesktopWorkspaceTabTrailingControl.available(
-                externalIDEOptions: externalIDEOptions
+                externalIDEOptions: externalIDEOptions,
+                embeddedEditorAvailable: embeddedEditorAvailable
             )
         )
     }
@@ -511,7 +557,23 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     ) -> some View {
         switch control {
         case .externalIDE:
-            if let externalIDEOptions, !externalIDEOptions.isEmpty {
+            if embeddedEditorAvailable {
+                WarrenDesktopIDEControl(
+                    embeddedEditorSelected: embeddedEditorSelected,
+                    embeddedEditorDefault: embeddedEditorDefault,
+                    onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                    onPresentChoices: { onChromePopover(.externalIDE) }
+                )
+                .warrenSemanticElement(
+                    id: "workspace-ide.open",
+                    role: .button,
+                    label: "Open in IDE",
+                    value: embeddedEditorDefault
+                        ? "Embedded editor default"
+                        : "Choose an IDE",
+                    action: idePrimaryAction
+                )
+            } else if let externalIDEOptions, !externalIDEOptions.isEmpty {
                 WarrenDesktopExternalIDEMenu(
                     options: externalIDEOptions,
                     onPresent: { onChromePopover(.externalIDE) },
@@ -554,6 +616,67 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 action: onSettings,
                 edgeSpaced: true
             )
+        }
+    }
+
+    private func idePrimaryAction() {
+        switch WarrenDesktopIDEPrimaryAction.resolve(
+            embeddedEditorDefault: embeddedEditorDefault,
+            embeddedEditorSelected: embeddedEditorSelected
+        ) {
+        case .openEmbeddedEditor:
+            onOpenEmbeddedEditor()
+        case .presentChoices:
+            onChromePopover(.externalIDE)
+        }
+    }
+}
+
+enum WarrenDesktopIDEPrimaryAction: Equatable {
+    case openEmbeddedEditor
+    case presentChoices
+
+    static func resolve(
+        embeddedEditorDefault: Bool,
+        embeddedEditorSelected: Bool
+    ) -> Self {
+        embeddedEditorDefault && !embeddedEditorSelected
+            ? .openEmbeddedEditor
+            : .presentChoices
+    }
+}
+
+private struct WarrenDesktopIDEControl: View {
+    let embeddedEditorSelected: Bool
+    let embeddedEditorDefault: Bool
+    let onOpenEmbeddedEditor: () -> Void
+    let onPresentChoices: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        WarrenDesktopChromeButton(
+            systemImage: "macwindow",
+            label: "Open in IDE",
+            hint: embeddedEditorDefault && !embeddedEditorSelected
+                ? "Open the embedded editor"
+                : "Choose an IDE",
+            action: primaryAction,
+            tint: embeddedEditorSelected ? tokens.info : nil,
+            edgeSpaced: true
+        )
+    }
+
+    private func primaryAction() {
+        switch WarrenDesktopIDEPrimaryAction.resolve(
+            embeddedEditorDefault: embeddedEditorDefault,
+            embeddedEditorSelected: embeddedEditorSelected
+        ) {
+        case .openEmbeddedEditor:
+            onOpenEmbeddedEditor()
+        case .presentChoices:
+            onPresentChoices()
         }
     }
 }

@@ -89,6 +89,36 @@ The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when
 needed. Use `Tools > Install CLI` to reinstall it manually.
 
+### Embedded editor
+
+The macOS client can show a workspace-scoped VS Code-compatible editor next
+to its existing Terminal workflow. Install `code-server` before selecting the
+**Editor** button in the top-right workspace actions:
+
+```sh
+brew install code-server
+```
+
+Warren starts the editor lazily on a random loopback-only port and stops it
+when the Editor surface closes. It uses an isolated profile under
+`~/Library/Application Support/Warren/EmbeddedEditor`. After the editor is
+ready, Warren installs `golang.go` and `rust-lang.rust-analyzer` in a background
+utility task; extension downloads never block the editor from opening. Existing
+VS Code and Cursor profiles are not read or modified.
+
+The managed profile uses Warren's Ember colors and a compact editor layout:
+the File Explorer lives on the right, while the Activity Bar, title controls,
+welcome surfaces, editor action toolbar, minimap, and secondary sidebar stay
+hidden. Tabs, breadcrumbs, language diagnostics, the status bar, Quick Open,
+the Command Palette, Search, Problems, and diff editors remain available.
+Warren refreshes only these managed UI settings on launch and preserves other
+valid JSON settings in the isolated profile.
+
+The MVP is available for the Local execution endpoint only. Set
+`WARREN_CODE_SERVER_PATH` to an explicit executable when `code-server` is not
+on the app's `PATH`. Remote Host integration requires a Host-owned editor
+service and is not part of this version.
+
 ### Raycast integration
 
 The repository includes a Raycast extension whose command is named **Terminal**.

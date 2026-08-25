@@ -175,7 +175,7 @@ struct WarrenDesktopExternalIDEMenu: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: onPresent) {
-            Image(systemName: "chevron.left.forwardslash.chevron.right")
+            Image(systemName: "macwindow")
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
                 .accessibilityHidden(true)
                 .frame(width: 28, height: 28)
