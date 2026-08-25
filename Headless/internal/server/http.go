@@ -1370,6 +1370,16 @@ func makeRoster(state api.State) rosterMessage {
 	return rosterMessage{Type: "roster", State: state}
 }
 
+func publicSession(session api.Session) api.Session {
+	session.OutputCursor = ""
+	return session
+}
+
+func publicSessionMovePreflight(value api.SessionMovePreflight) api.SessionMovePreflight {
+	value.Session = publicSession(value.Session)
+	return value
+}
+
 func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	if command.Type != "request" {
 		return fmt.Errorf("unsupported message type: %s", command.Type)
@@ -1468,7 +1478,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: session, Snapshot: snapshot})
+		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: publicSession(session), Snapshot: snapshot})
 	case "settings.get":
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime":        p.server.Service.DefaultRuntime,
@@ -1686,7 +1696,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, value)
+		return p.writeResult(command.ID, publicSession(value))
 	case "session.delete":
 		id := stringParam(params, "id")
 		if err := p.server.Service.DeleteSession(ctx, id); err != nil {
@@ -1720,7 +1730,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if !ok {
 			return fmt.Errorf("session not found: %s", id)
 		}
-		return p.writeResult(command.ID, value)
+		return p.writeResult(command.ID, publicSession(value))
 	case "session.rename":
 		if err := p.server.Service.RenameSession(stringParam(params, "id"), stringParam(params, "title")); err != nil {
 			return err
@@ -1746,7 +1756,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, value)
+		return p.writeResult(command.ID, publicSession(value))
 	case "session.move.preflight":
 		id := stringParam(params, "id")
 		if id == "" {
@@ -1761,13 +1771,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, value)
+		return p.writeResult(command.ID, publicSessionMovePreflight(value))
 	case "session.undo":
 		value, err := p.server.Service.UndoSessionMove(stringParam(params, "operation"))
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, value)
+		return p.writeResult(command.ID, publicSession(value))
 	case "session.attach":
 		id := stringParam(params, "id")
 		session, ok := p.server.Service.Session(id)
@@ -1827,7 +1837,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 		}
 		p.logInfo("attach: resize done", "session", id)
-		if err := p.writeResult(command.ID, session); err != nil {
+		if err := p.writeResult(command.ID, publicSession(session)); err != nil {
 			lock.Unlock()
 			resume()
 			p.detach()

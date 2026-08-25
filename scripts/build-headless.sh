@@ -54,16 +54,14 @@ validate_arm64_artifact() {
     fi
 }
 
-ghostline_directory="$(go list -m -f '{{.Dir}}' github.com/abcdlsj/ghostline)"
-ghostline_library="$ghostline_directory/third_party/lib/libghostty-vt.dylib"
-library_directory="$output_directory/.ghostty-vt/arm64"
-mkdir -p "$library_directory"
-if [[ ! -f "$ghostline_library" ]]; then
-    echo "Missing arm64 libghostty-vt.dylib: $ghostline_library" >&2
+compatibility_module_directory="$repository_root/Headless/cmd/ghostline-v0-compat"
+compatibility_ghostline_directory="$(go -C "$compatibility_module_directory" list -m -f '{{.Dir}}' github.com/abcdlsj/ghostline)"
+compatibility_library="$compatibility_ghostline_directory/third_party/lib/libghostty-vt.dylib"
+if [[ ! -f "$compatibility_library" ]]; then
+    echo "Missing v0.8 arm64 libghostty-vt.dylib: $compatibility_library" >&2
     exit 66
 fi
-validate_arm64_artifact "$ghostline_library"
-install -m 755 "$ghostline_library" "$library_directory/libghostty-vt.dylib"
+validate_arm64_artifact "$compatibility_library"
 
 build_macos_product() {
     local binary_name="$1"
@@ -73,14 +71,27 @@ build_macos_product() {
     GOARCH=arm64 \
     CGO_ENABLED=1 \
     CGO_CFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
-    CGO_LDFLAGS="-arch arm64 -mmacosx-version-min=13.0 -L$library_directory -Wl,-rpath,$library_directory" \
+    CGO_LDFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
     go build \
         -ldflags "$headless_ldflags" \
         -o "$destination" \
         "$repository_root/Headless/cmd/$binary_name"
 }
 
+build_v0_compatibility() {
+    GOOS=darwin \
+    GOARCH=arm64 \
+    CGO_ENABLED=1 \
+    CGO_CFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
+    CGO_LDFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
+    go -C "$compatibility_module_directory" build \
+        -o "$output_directory/ghostline-v0-compat" \
+        .
+}
+
 build_macos_product warren-headless "$output_directory/warren-headless"
 build_macos_product warren "$output_directory/warren"
+build_v0_compatibility
 cp -f "$output_directory/warren" "$output_directory/warren-cli"
-install -m 755 "$library_directory/libghostty-vt.dylib" "$output_directory/libghostty-vt.dylib"
+validate_arm64_artifact "$output_directory/ghostline-v0-compat"
+install -m 755 "$compatibility_library" "$output_directory/libghostline-v0-compat.dylib"

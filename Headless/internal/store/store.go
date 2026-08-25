@@ -151,6 +151,10 @@ func clone(value api.State) api.State {
 	result.Workspaces = append([]api.Workspace(nil), value.Workspaces...)
 	result.TerminalGroups = append([]api.TerminalGroup(nil), value.TerminalGroups...)
 	result.Sessions = append([]api.Session(nil), value.Sessions...)
+	if value.GhostlineMigration != nil {
+		migration := *value.GhostlineMigration
+		result.GhostlineMigration = &migration
+	}
 	result.Operations = append([]api.OperationAudit(nil), value.Operations...)
 	for index := range result.Sessions {
 		if value.Sessions[index].EndedAt == nil {

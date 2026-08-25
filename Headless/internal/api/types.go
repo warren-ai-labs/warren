@@ -118,7 +118,11 @@ type Session struct {
 	Lifecycle   string `json:"lifecycle"`
 	Epoch       uint64 `json:"epoch,omitempty"`
 	Sequence    uint64 `json:"sequence,omitempty"`
-	Pinned      bool   `json:"pinned,omitempty"`
+	// OutputCursor is the opaque Ghostline v1 position immediately after the
+	// output durably reflected by Epoch and Sequence. It is never exposed to
+	// terminal clients and must not be synthesized from a byte offset.
+	OutputCursor string `json:"outputCursor,omitempty"`
+	Pinned       bool   `json:"pinned,omitempty"`
 	// AgentSessionID is the CLI's own conversation ID (Codex thread ID or
 	// Claude session ID) bound to this Warren session.
 	AgentSessionID string `json:"agentSessionId,omitempty"`
@@ -347,12 +351,39 @@ type State struct {
 	Workspaces     []Workspace     `json:"workspaces"`
 	TerminalGroups []TerminalGroup `json:"terminalGroups"`
 	Sessions       []Session       `json:"sessions"`
+	// GhostlineMigration is the one in-flight (or most recently completed)
+	// ownership journal. It is separate from terminal Sessions because
+	// Ghostline transfers the complete PTY batch atomically while Warren owns
+	// only the route and process lifecycle around that transfer.
+	GhostlineMigration *GhostlineMigration `json:"ghostlineMigration,omitempty"`
 	// Operations is the bounded mutation audit trail. Entries are only added
 	// for operations that have a safe, compare-and-swap undo representation.
 	Operations []OperationAudit `json:"operations,omitempty"`
 	// WorktreeOwnershipMigrated records that legacy workspace ownership has
 	// been reconciled against the configured Warren worktree root.
 	WorktreeOwnershipMigrated bool `json:"worktreeOwnershipMigrated,omitempty"`
+}
+
+const (
+	GhostlineMigrationPreparing = "preparing"
+	GhostlineMigrationPrepared  = "prepared"
+	GhostlineMigrationCommitted = "committed"
+	GhostlineMigrationRouted    = "routed"
+	GhostlineMigrationRetired   = "retired"
+)
+
+// GhostlineMigration records one rolling handoff. SessionID identifies this
+// migration transaction, not a terminal session. Socket paths are local-only
+// control-plane data; clients always attach through Warren's current route.
+type GhostlineMigration struct {
+	SessionID      string    `json:"sessionId"`
+	SourceSocket   string    `json:"sourceSocket"`
+	TargetSocket   string    `json:"targetSocket"`
+	SourceProtocol string    `json:"sourceProtocol"`
+	HandoffVersion string    `json:"handoffVersion,omitempty"`
+	Phase          string    `json:"phase"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // OperationAudit records a reversible session move (or its reversal). The
