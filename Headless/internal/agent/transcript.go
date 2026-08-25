@@ -1381,20 +1381,77 @@ func contentStringLimit(value json.RawMessage, limit int) string {
 		Content json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(value, &blocks) == nil {
-		var parts []string
+		if limit <= 0 {
+			parts := make([]string, 0, len(blocks))
+			for _, block := range blocks {
+				switch {
+				case block.Text != "":
+					parts = append(parts, block.Text)
+				case block.Type == "image":
+					parts = append(parts, "[image]")
+				case len(block.Content) > 0:
+					parts = append(parts, contentStringLimit(block.Content, 0))
+				}
+			}
+			return strings.Join(parts, "\n")
+		}
+
+		var content strings.Builder
+		remaining := limit
+		hasPart := false
 		for _, block := range blocks {
+			if block.Text == "" && block.Type != "image" && len(block.Content) == 0 {
+				continue
+			}
+			if hasPart && appendStringPrefix(&content, "\n", &remaining) {
+				return content.String() + "…"
+			}
+
+			var part string
 			switch {
 			case block.Text != "":
-				parts = append(parts, block.Text)
+				part = block.Text
 			case block.Type == "image":
-				parts = append(parts, "[image]")
-			case len(block.Content) > 0:
-				parts = append(parts, contentStringLimit(block.Content, limit))
+				part = "[image]"
+			default:
+				nestedLimit := remaining
+				if nestedLimit == 0 {
+					nestedLimit = 1
+				}
+				part = contentStringLimit(block.Content, nestedLimit)
+			}
+			hasPart = true
+			if appendStringPrefix(&content, part, &remaining) {
+				return content.String() + "…"
 			}
 		}
-		return truncate(strings.Join(parts, "\n"), limit)
+		return content.String()
 	}
 	return truncate(string(value), limit)
+}
+
+// appendStringPrefix appends at most the remaining rune budget and reports
+// whether value contains content beyond that budget.
+func appendStringPrefix(builder *strings.Builder, value string, remaining *int) bool {
+	if value == "" {
+		return false
+	}
+	if *remaining <= 0 {
+		return true
+	}
+
+	count := 0
+	for index := range value {
+		if count == *remaining {
+			builder.WriteString(value[:index])
+			*remaining = 0
+			return true
+		}
+		count++
+	}
+	builder.WriteString(value)
+	*remaining -= count
+	return false
 }
 
 func rawToAny(value json.RawMessage, contentLimit int) any {
@@ -1418,11 +1475,14 @@ func truncate(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
+	count := 0
+	for index := range value {
+		if count == limit {
+			return value[:index] + "…"
+		}
+		count++
 	}
-	return string(runes[:limit]) + "…"
+	return value
 }
 
 func firstNonEmpty(values ...string) string {
