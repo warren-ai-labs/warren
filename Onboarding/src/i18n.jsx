@@ -118,6 +118,28 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.9.1",
+        dateISO: "2026-08-25",
+        date: "August 25, 2026",
+        title: "Warren refreshes Ghostline v1 migration.",
+        summary:
+          "A patch release that updates Ghostline v1.0.0 to commit 773f4fff and ships corrected binary migration and crash-window handling.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Refresh the Ghostline v1.0.0 module content and checksum to commit 773f4fffbc9879a8b724b1873e230dcaa39dd58e.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Ship Ghostline's updated binary migration and crash-window handling for rolling upgrades from the v0 compatibility bridge.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.9.0",
         dateISO: "2026-08-25",
         date: "August 25, 2026",
@@ -716,6 +738,28 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.9.1",
+        dateISO: "2026-08-25",
+        date: "2026 年 8 月 25 日",
+        title: "Warren 刷新 Ghostline v1 迁移实现。",
+        summary:
+          "修复版本：将 Ghostline v1.0.0 更新到 commit 773f4fff，内置修正后的二进制迁移与崩溃窗口处理。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "将 Ghostline v1.0.0 模块内容和校验值刷新到 commit 773f4fffbc9879a8b724b1873e230dcaa39dd58e。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "内置 Ghostline 更新后的二进制迁移和崩溃窗口处理，支持从 v0 兼容桥滚动升级。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.9.0",
         dateISO: "2026-08-25",

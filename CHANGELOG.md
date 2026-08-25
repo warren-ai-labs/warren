@@ -6,6 +6,25 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.9.1] - 2026-08-25
+
+> Patch release: Warren refreshes the Ghostline v1.0.0 dependency to commit
+> `773f4fffbc9879a8b724b1873e230dcaa39dd58e` (`Exercise binary migration
+> crash windows`) so the bundled runtime includes the corrected migration
+> handoff behavior. This release targets arm64 Apple Silicon Macs running
+> macOS 13 or later; a local Apple Development build may fail Gatekeeper until
+> it is replaced by a notarized Developer ID build.
+
+### Changed
+
+- Refresh the Ghostline v1.0.0 module content and checksum to the current
+  release commit.
+
+### Fixed
+
+- Ship Ghostline's updated binary migration and crash-window handling for
+  rolling upgrades from the v0 compatibility bridge.
+
 ## [0.9.0] - 2026-08-25
 
 > Major release: Warren moves to Ghostline v1, adds an embedded workspace
