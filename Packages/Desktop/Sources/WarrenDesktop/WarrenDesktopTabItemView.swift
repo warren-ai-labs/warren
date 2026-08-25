@@ -229,6 +229,135 @@ struct WarrenDesktopTabItem: View {
     }
 }
 
+/// A device-local tab that selects the cached editor surface without creating
+/// or mutating a Host-owned tab.
+struct WarrenDesktopEditorTabItem: View {
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenForceHover) private var forceHover
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var isTabFocused: Bool
+    @FocusState private var isCloseFocused: Bool
+    @State private var isHovered = false
+    @State private var isCloseHovered = false
+
+    private var exposesClose: Bool {
+        isSelected || isHovered || isCloseFocused || forceHover
+    }
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        ZStack(alignment: .trailing) {
+            Button(action: onSelect) {
+                HStack(spacing: WarrenSpacing.small) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(isSelected ? tokens.info : tokens.mutedForeground)
+                        .accessibilityHidden(true)
+
+                    Text("Editor")
+                        .font(WarrenTypography.tabShellTitle)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, WarrenSpacing.medium)
+                .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth)
+                .frame(
+                    width: WarrenLayoutMetrics.tabWidth,
+                    height: WarrenLayoutMetrics.tabBarHeight,
+                    alignment: .leading
+                )
+                .contentShape(.rect)
+            }
+            .buttonStyle(WarrenTabButtonStyle(isFocused: isTabFocused))
+            .focused($isTabFocused)
+            .foregroundStyle(
+                isSelected
+                    ? tokens.foreground.opacity(0.90)
+                    : tokens.mutedForeground
+            )
+            .accessibilityLabel("Tab Editor")
+            .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .warrenSemanticElement(
+                id: "tab.workspace-editor",
+                role: .tab,
+                label: "Tab Editor",
+                value: isSelected ? "Selected" : "Not selected",
+                isSelected: isSelected,
+                action: onSelect
+            )
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .accessibilityHidden(true)
+            }
+            .buttonStyle(WarrenChromeButtonStyle(isFocused: isCloseFocused))
+            .frame(
+                width: WarrenLayoutMetrics.tabCloseButtonSize,
+                height: WarrenLayoutMetrics.tabCloseButtonSize
+            )
+            .contentShape(.rect)
+            .background(
+                isCloseHovered
+                    ? (isSelected ? tokens.muted.opacity(0.65) : tokens.fillHover)
+                    : .clear
+            )
+            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+            .opacity(exposesClose ? 1 : 0)
+            .allowsHitTesting(exposesClose)
+            .focused($isCloseFocused)
+            .onHover { isCloseHovered = $0 }
+            .accessibilityHidden(!exposesClose)
+            .accessibilityLabel("Close tab Editor")
+            .warrenSemanticElement(
+                id: "tab.workspace-editor.close",
+                role: .button,
+                label: "Close tab Editor",
+                isEnabled: exposesClose,
+                action: onClose
+            )
+            .padding(.trailing, WarrenSpacing.xs)
+        }
+        .frame(width: WarrenLayoutMetrics.tabWidth, height: WarrenLayoutMetrics.tabBarHeight)
+        .background(
+            isSelected
+                ? tokens.background
+                : (isHovered ? tokens.fillHover : .clear)
+        )
+        .animation(
+            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+            value: isHovered
+        )
+        .animation(
+            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+            value: isSelected
+        )
+        .overlay {
+            Rectangle()
+                .stroke(isSelected ? tokens.border : .clear, lineWidth: isSelected ? 1 : 0)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(isSelected ? .clear : tokens.border)
+                .frame(width: WarrenSpacing.hairline)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(isSelected ? tokens.background : tokens.border)
+                .frame(height: WarrenSpacing.hairline)
+        }
+        .contentShape(.rect)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// Tab-specific button feedback: focus ring and press opacity only.
 ///
 /// Unlike the shared row style, this never paints a hover background.

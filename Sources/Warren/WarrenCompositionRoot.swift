@@ -21,6 +21,7 @@ private struct WarrenProjectFileDialogLabels: ViewModifier {
 
 struct WarrenCompositionRoot: View {
     @StateObject private var remoteModel: WarrenRemoteApplicationModel
+    @StateObject private var embeddedEditorModel: WarrenEmbeddedEditorModel
     @State private var surfaceManager: TerminalSurfaceManager
     @State private var isProjectImporterPresented = false
     @State private var supersetImportPreview: SupersetImportPreview?
@@ -59,6 +60,7 @@ struct WarrenCompositionRoot: View {
         _remoteModel = StateObject(wrappedValue: WarrenRemoteApplicationModel(
             surfaceManager: surfaceManager
         ))
+        _embeddedEditorModel = StateObject(wrappedValue: WarrenEmbeddedEditorModel())
         // Endpoint configuration is user input, not frame state. Seed the
         // catalog once and refresh it from disk in the background so CLI
         // changes appear without restarting Warren.
@@ -115,7 +117,14 @@ struct WarrenCompositionRoot: View {
             autoOpenShell: remoteModel.autoOpenShell,
             onSetAutoOpenShell: { remoteModel.setAutoOpenShell($0) },
             autoStartAI: remoteModel.autoStartAI,
-            onSetAutoStartAI: { remoteModel.setAutoStartAI($0) }
+            onSetAutoStartAI: { remoteModel.setAutoStartAI($0) },
+            embeddedEditorAvailable: selectedEndpointID == "local",
+            editorSurface: { workspace in
+                AnyView(WarrenEmbeddedEditorSurface(
+                    workspace: workspace,
+                    model: embeddedEditorModel
+                ))
+            }
         ) { context in
             WarrenTerminalSurfaceView(
                 context: context,
@@ -243,7 +252,13 @@ struct WarrenCompositionRoot: View {
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
         }
-        .onChange(of: selectedEndpointID) { _ in connectSelectedEndpoint() }
+        .onChange(of: selectedEndpointID) { _ in
+            embeddedEditorModel.stop()
+            connectSelectedEndpoint()
+        }
+        .onDisappear {
+            embeddedEditorModel.stop()
+        }
     }
 
     @ViewBuilder

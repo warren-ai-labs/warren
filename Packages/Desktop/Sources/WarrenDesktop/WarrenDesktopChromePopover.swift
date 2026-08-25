@@ -1,5 +1,6 @@
 import SwiftUI
 import WarrenDesignSystem
+import WarrenObservation
 
 /// Top-right workspace controls share one app-owned popover contract. A
 /// control only reports which popover it wants; the window root owns
@@ -200,6 +201,10 @@ struct WarrenDesktopEndpointPopoverContent: View {
 
 struct WarrenDesktopExternalIDEPopover: View {
     let options: [WarrenDesktopExternalIDEOption]
+    let embeddedEditorAvailable: Bool
+    let embeddedEditorDefault: Bool
+    let onOpenEmbeddedEditor: () -> Void
+    let onSetEmbeddedEditorDefault: (Bool) -> Void
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
     let onDismiss: () -> Void
 
@@ -211,6 +216,10 @@ struct WarrenDesktopExternalIDEPopover: View {
         ) {
             WarrenDesktopExternalIDEPopoverContent(
                 options: options,
+                embeddedEditorAvailable: embeddedEditorAvailable,
+                embeddedEditorDefault: embeddedEditorDefault,
+                onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                onSetEmbeddedEditorDefault: onSetEmbeddedEditorDefault,
                 onOpen: onOpen,
                 onDismiss: onDismiss
             )
@@ -219,15 +228,112 @@ struct WarrenDesktopExternalIDEPopover: View {
 }
 
 struct WarrenDesktopExternalIDEPopoverContent: View {
+    static let codeServerInstallationGuideURL = URL(
+        string: "https://coder.com/docs/code-server/install"
+    )!
+
     let options: [WarrenDesktopExternalIDEOption]
+    let embeddedEditorAvailable: Bool
+    let embeddedEditorDefault: Bool
+    let onOpenEmbeddedEditor: () -> Void
+    let onSetEmbeddedEditorDefault: (Bool) -> Void
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
+            if embeddedEditorAvailable {
+                Button(action: openEmbeddedEditor) {
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 14, weight: .light))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .frame(
+                                width: WarrenLayoutMetrics.externalIDEIconSize,
+                                height: WarrenLayoutMetrics.externalIDEIconSize
+                            )
+                            .accessibilityHidden(true)
+                        Text("Embedded Editor")
+                            .font(WarrenTypography.popoverItem)
+                            .foregroundStyle(tokens.foreground)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Embedded Editor")
+                .warrenSemanticElement(
+                    id: "workspace-editor.open",
+                    role: .button,
+                    label: "Open Embedded Editor",
+                    action: openEmbeddedEditor
+                )
+
+                Toggle(
+                    "Open embedded editor by default",
+                    isOn: Binding(
+                        get: { embeddedEditorDefault },
+                        set: { onSetEmbeddedEditorDefault($0) }
+                    )
+                )
+                .toggleStyle(.checkbox)
+                .font(WarrenTypography.popoverMeta)
+                .foregroundStyle(tokens.mutedForeground)
+                .padding(.horizontal, WarrenSpacing.standard)
+                .padding(.vertical, WarrenSpacing.compact)
+                .accessibilityValue(embeddedEditorDefault ? "Checked" : "Unchecked")
+
+                Button(action: openCodeServerInstallationGuide) {
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 14, weight: .light))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .frame(
+                                width: WarrenLayoutMetrics.externalIDEIconSize,
+                                height: WarrenLayoutMetrics.externalIDEIconSize
+                            )
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Install code-server")
+                                .font(WarrenTypography.popoverItem)
+                                .foregroundStyle(tokens.foreground)
+                            Text("View installation guide")
+                                .font(WarrenTypography.popoverMeta)
+                                .foregroundStyle(tokens.mutedForeground)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Install code-server")
+                .accessibilityHint("Open the official installation guide")
+                .warrenSemanticElement(
+                    id: "workspace-editor.install",
+                    role: .button,
+                    label: "Install code-server",
+                    action: openCodeServerInstallationGuide
+                )
+
+                if !options.isEmpty {
+                    Rectangle()
+                        .fill(tokens.border)
+                        .frame(height: WarrenSpacing.hairline)
+                }
+            }
+
             ForEach(WarrenDesktopExternalIDEMenuPresentation.items(from: options)) { item in
                 Button {
                     onOpen(item.option)
@@ -270,5 +376,15 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
                        height: WarrenLayoutMetrics.externalIDEIconSize)
                 .foregroundStyle(tokens.mutedForeground)
         }
+    }
+
+    private func openEmbeddedEditor() {
+        onOpenEmbeddedEditor()
+        onDismiss()
+    }
+
+    private func openCodeServerInstallationGuide() {
+        openURL(Self.codeServerInstallationGuideURL)
+        onDismiss()
     }
 }
