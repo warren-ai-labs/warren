@@ -37,11 +37,13 @@ const (
 )
 
 type HTTPServer struct {
-	Service      *Service
-	Token        string
-	Logger       *slog.Logger
-	Tunnels      *tunnel.Manager
-	BuildVersion string
+	Service       *Service
+	Token         string
+	Logger        *slog.Logger
+	Tunnels       *tunnel.Manager
+	BuildVersion  string
+	BuildRevision string
+	BuildDirty    bool
 	// GhostlineVersion is the legacy health field and aliases the RPC version.
 	GhostlineVersion string
 	// GhostlineRPCVersion is the protocol version reported by the running
@@ -155,6 +157,8 @@ func (s *HTTPServer) Handler() http.Handler {
 			"ok":                  true,
 			"version":             api.Version,
 			"build":               s.BuildVersion,
+			"revision":            s.BuildRevision,
+			"dirty":               s.BuildDirty,
 			"ghostlineVersion":    rpcVersion,
 			"ghostlineRPCVersion": rpcVersion,
 			"ghostlineTagVersion": s.GhostlineTagVersion,

@@ -69,6 +69,10 @@ enum WarrenMain {
             environment: ProcessInfo.processInfo.environment,
             arguments: CommandLine.arguments
         )
+        TerminalDiagnostics.log(
+            "build_identity",
+            WarrenBuildIdentity.current.diagnosticFields
+        )
         guard let instanceLock = WarrenSingleInstanceLock() else {
             WarrenSingleInstanceLock.activateExistingApplication()
             return

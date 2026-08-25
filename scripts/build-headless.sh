@@ -7,7 +7,12 @@ output_directory="${1:-$repository_root/.build/headless}"
 mkdir -p "$output_directory"
 
 build_version="$(bash "$repository_root/scripts/version.sh")"
-headless_ldflags="-X main.version=$build_version"
+build_revision="$(git -C "$repository_root" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
+build_dirty=false
+if [[ -n "$(git -C "$repository_root" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    build_dirty=true
+fi
+headless_ldflags="-X main.version=$build_version -X main.revision=$build_revision -X main.dirty=$build_dirty"
 if [[ -n "${WARREN_GNAR_DEFAULT_EDGE:-}" ]]; then
     # The value is a public URL, not a credential. It is embedded only in the
     # release binary; user settings continue to store custom overrides.

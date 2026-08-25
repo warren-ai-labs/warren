@@ -13,6 +13,12 @@ esac
 
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 app_path="$repository_root/Warren.app"
+build_version="$(bash "$repository_root/scripts/version.sh")"
+build_revision="$(git -C "$repository_root" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
+build_dirty=false
+if [[ -n "$(git -C "$repository_root" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    build_dirty=true
+fi
 
 if [[ "$(uname -s)" != Darwin ]]; then
     echo "Warren.app builds are supported only on macOS." >&2
@@ -63,6 +69,9 @@ install -m 755 "$binary_directory/WarrenDaemonMenuBar" "$staging_path/Contents/M
 install -m 755 "$repository_root/.build/warren-cli" "$staging_path/Contents/MacOS/warren-cli"
 install -m 755 "$repository_root/.build/warren-headless" "$staging_path/Contents/MacOS/warren-headless"
 install -m 644 "$repository_root/Support/Info.plist" "$staging_path/Contents/Info.plist"
+plutil -replace WarrenBuildVersion -string "$build_version" "$staging_path/Contents/Info.plist"
+plutil -replace WarrenBuildRevision -string "$build_revision" "$staging_path/Contents/Info.plist"
+plutil -replace WarrenBuildDirty -bool "$build_dirty" "$staging_path/Contents/Info.plist"
 
 # Release builds may ship the gnar worker inside Warren.app. The source tree
 # remains usable without it, while WARREN_GNAR_BINARY gives CI/release jobs an
