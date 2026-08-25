@@ -540,6 +540,9 @@ Failure reports must identify the last successful invariant, the first violating
 - iOS native client.
 - Multi-person sharing and permission UI.
 - Automation scheduler.
+- Native split Pane layouts inside a client Tab; the intended boundary and
+  current tmux workaround are recorded in
+  [RFC 0008](docs/rfc/0008-native-tab-splits.md), which is Deferred.
 - Runtime multi-window/pane to UI Pane mapping (tmux alternative).
 - Cross-device real-time Client Layout sync.
 - CRDT.
