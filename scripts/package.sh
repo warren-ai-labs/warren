@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
-version="0.8.2"
+version="0.9.0"
 
 # This is the release-only packaging entry point. build-app.sh stamps the
 # resulting arm64 bundle as `release`.

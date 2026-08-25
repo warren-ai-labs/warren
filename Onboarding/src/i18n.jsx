@@ -118,6 +118,32 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.9.0",
+        dateISO: "2026-08-25",
+        date: "August 25, 2026",
+        title: "Warren moves to Ghostline v1.",
+        summary:
+          "A major release that adds an embedded workspace editor, improves command palette and terminal responsiveness, and migrates existing sessions through a bundled Ghostline v0 compatibility bridge.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add a workspace-scoped embedded editor for local workspaces, with an isolated code-server profile, managed layout, and background language extension setup.",
+              "Add build identity diagnostics covering the release version, source revision, and dirty working-tree state.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Migrate the default Ghostline runtime to v1 and bundle a v0.8 compatibility bridge and arm64 library for one-time migration of retained sessions.",
+              "Replace command-palette graph scans with a normalized, ranked resource index, native keyboard navigation, IME-safe input handling, contextual match status, and a bounded visible result set.",
+              "Improve terminal and session responsiveness by reusing output and roster state, bounding transcript assembly, and making output replay more efficient.",
+              "Defer native terminal split panes while the embedded editor and existing terminal surfaces remain the supported workflow.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.8.2",
         dateISO: "2026-08-23",
         date: "August 23, 2026",
@@ -690,6 +716,32 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.9.0",
+        dateISO: "2026-08-25",
+        date: "2026 年 8 月 25 日",
+        title: "Warren 迁移到 Ghostline v1。",
+        summary:
+          "重大版本：新增嵌入式 Workspace 编辑器，提升命令面板与终端响应速度，并通过内置的 Ghostline v0 兼容桥迁移已有会话。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "为本地 Workspace 新增范围明确的嵌入式编辑器，使用隔离的 code-server 配置、托管布局，并在后台安装语言扩展。",
+              "新增构建身份诊断，记录发布版本、源码修订和工作树是否有未提交修改。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "默认 Ghostline 运行时迁移到 v1，并内置 v0.8 兼容桥及 arm64 库，用于保留会话的一次性迁移。",
+              "命令面板改用规范化的资源排序索引，支持原生键盘导航、IME 安全输入、上下文匹配状态和有界可见结果。",
+              "通过复用输出与 roster 状态、限制 Transcript 组装范围并优化输出回放，提升终端和会话响应速度。",
+              "暂缓原生终端分栏；嵌入式编辑器和现有终端界面仍是当前支持的工作流。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.8.2",
         dateISO: "2026-08-23",
