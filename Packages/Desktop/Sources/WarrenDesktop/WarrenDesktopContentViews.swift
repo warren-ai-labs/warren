@@ -287,3 +287,19 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         )
     }
 }
+
+struct WarrenDesktopEmbeddedEditorPane<Surface: View>: View {
+    let workspace: Workspace
+    let surface: Surface
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        surface
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(tokens.background)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Editor for \(workspace.name)")
+    }
+}

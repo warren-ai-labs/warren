@@ -378,7 +378,10 @@ Window
 └── Session Context Screen
     ├── Top Bar
     ├── Context-scoped Tab Bar
-    └── Active Terminal
+    ├── Preset Bar with Terminal / Editor mode
+    └── Active Workspace Content
+        ├── Terminal
+        └── Embedded Editor (local Workspace only)
 ```
 
 Behavior requirements:
@@ -394,6 +397,14 @@ Behavior requirements:
 - After clicking a Workspace with no Tabs, show a non-interactive `Starting Shell…` loading Tab and content progress state immediately, then create the default Shell in that Workspace's serial command queue. Rapid repeated clicks share the same in-flight operation; on success the loading Tab is replaced in place; on failure it is removed and a recoverable error is shown. If the user has already navigated elsewhere, the creation result must not steal the selection back.
 - Clicking a Tab must switch the Active Session immediately and hand focus to Ghostty.
 - Presets create a Session in the Workspace captured at click time; switching Workspaces must not change the in-flight request target.
+- A local Workspace may open Editor from the top-right IDE control and switch between Terminal and Editor in the Preset Bar. This is client presentation state: it does not create, close, move, or relabel a Terminal Session.
+- The Terminal Surface stays mounted while Editor is visible so switching modes cannot discard terminal grid, recovery, or focus state. The editor surface may be recreated when it is closed.
+- The embedded-editor MVP is Desktop- and Local-endpoint-only. It starts one `code-server` child process for the visible Workspace, binds it to a random `127.0.0.1` port, and terminates it when the editor closes or the endpoint changes.
+- `code-server` uses a Warren-owned user-data and extension directory. Go and rust-analyzer installation starts only after the editor is ready and runs as a background utility task; existing VS Code and Cursor profiles are outside Warren ownership.
+- The embedded workbench uses Warren's Ember palette, keeps File Explorer on the right, and hides duplicate global chrome through supported VS Code settings. Tabs, breadcrumbs, status, diagnostics, Quick Open, Search, Problems, and diff remain available; Warren-managed settings override those UI keys while preserving unrelated valid JSON profile settings.
+- A missing editor executable, startup timeout, or server exit must leave Terminal usable and show a retryable Editor state.
+- While focus is inside the embedded editor, Warren menu equivalents yield to the WebView so editor commands such as `Command+T`, `Command+W`, `Command+F`, `Command+K`, and `Command+B` remain available. Warren shortcuts resume when focus returns to its chrome or Terminal.
+- The MVP does not expose its loopback listener through Public Access, Relay, or `warren-headless`. Remote Workspace editing requires a later Host-owned service with Warren authentication instead of a client-local path assumption.
 - In Terminal Group mode, `Command+T` creates a shell in the captured Group; in Workspace mode it preserves the existing Workspace target.
 - The Tab add button sits right after the last Tab; with no Tabs it sits at the start position.
 - Icons that are meaningless, actionless, or redundant are not shown.
@@ -407,6 +418,15 @@ Behavior requirements:
 - Structured Web projections are fed by the agent CLI's own local JSONL transcript, tailed by the Host and normalized into `agent` events. The transcript never leaves the Host and never replaces the PTY stream: if a transcript is missing or its format changes, the session remains a plain terminal.
 - Transcripts are bound to Warren sessions by the CLI's own conversation ID, never guessed from cwd alone: Claude is started with `--session-id` (deterministic transcript path), Codex reports `session_id`/`transcript_path` through the Warren-managed `SessionStart` hook into `~/.warren/agent-bind/`. The cwd+mtime finder is only a fallback.
 - When Warren launches Codex, it uses `--dangerously-bypass-hook-trust` only to trust the Warren-generated and -validated Hook; it must not bypass Codex command approval or sandbox.
+
+Embedded-editor review risks and mitigations:
+
+- Business and coupling: Editor mode is not a Session or Runtime and sends no Host intent; the Composition Root owns its process and injects an editor surface into Desktop chrome.
+- Interaction: the existing top-right IDE control opens Editor; the mode picker retains Terminal navigation, semantic actions, loading, unavailable, failure, and retry states. Terminal remains the default and Terminal Groups are unchanged.
+- Compatibility: UI trimming uses supported VS Code settings instead of DOM or CSS injection. This avoids version-fragile selectors; an invalid hand-edited profile settings file produces a recoverable Editor error instead of being overwritten.
+- Performance: no editor process starts during app launch or ordinary Terminal use. Profile preparation performs no extension command or network download; extension installation begins only after server readiness and runs in the background, and only one visible editor process is retained.
+- Out-of-the-box use: `code-server` is an explicit optional prerequisite with a Homebrew command, executable override, isolated writable data, and a recoverable missing-tool state.
+- Security: the unauthenticated editor listener is restricted to a random loopback port and dies with the client surface. It is never bound to LAN or routed through Warren Public Access.
 
 ## 11. Web/PWA Interaction Design
 

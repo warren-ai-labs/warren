@@ -12,7 +12,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: "cpu"
         case .presets: "hammer"
         case .workspaces: "arrow.triangle.branch"
-        case .externalIDEs: "chevron.left.forwardslash.chevron.right"
+        case .externalIDEs: "macwindow"
         case .publicAccess: "globe"
         }
     }
@@ -24,7 +24,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
         case .presets: "Choose visible presets and customize every launch command."
         case .workspaces: "How projects import worktrees and enter sessions."
-        case .externalIDEs: "IDEs the workspace menu can open worktrees in."
+        case .externalIDEs: "Choose the IDE button default and manage workspace editors."
         case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
         }
     }
@@ -36,7 +36,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
-        case .externalIDEs: [rawValue, detail, "ide", "editor", "vscode", "goland", "android", "custom", "path", "open"]
+        case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
         }
     }
@@ -81,6 +81,8 @@ struct WarrenDesktopSettingsView: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+    @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
+    private var embeddedEditorDefaultIDE = false
     @State private var publicAccessEdgeURL = ""
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
@@ -617,6 +619,23 @@ struct WarrenDesktopSettingsView: View {
 
     private func externalIDEsSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("External IDEs", section: .externalIDEs, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Toggle(
+                    "Open Embedded Editor directly from the IDE button",
+                    isOn: $embeddedEditorDefaultIDE
+                )
+                .toggleStyle(.switch)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityIdentifier("settings.external-ides.embedded-editor-default")
+                Text(
+                    "When off, the IDE button opens the IDE picker. This is the "
+                        + "same default shown in the IDE menu."
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
                 Text("Installed").font(WarrenTypography.settingsBody)
                 if installedIDEs.isEmpty {
