@@ -134,6 +134,54 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         }
     }
 
+    struct Delta: Decodable, Sendable {
+        struct EntityChanges<Value: Decodable & Sendable>: Decodable, Sendable {
+            let upsert: [Value]
+            let remove: [String]
+            let order: [String]?
+
+            private enum CodingKeys: String, CodingKey {
+                case upsert
+                case remove
+                case order
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                upsert = try container.decodeIfPresent([Value].self, forKey: .upsert) ?? []
+                remove = try container.decodeIfPresent([String].self, forKey: .remove) ?? []
+                order = try container.decodeIfPresent([String].self, forKey: .order)
+            }
+        }
+
+        let baseRevision: UInt64
+        let revision: UInt64
+        let host: Host?
+        let projects: EntityChanges<Project>?
+        let workspaces: EntityChanges<Workspace>?
+        let terminalGroups: EntityChanges<TerminalGroup>?
+        let sessions: EntityChanges<Session>?
+    }
+
+    struct StreamMessage: Decodable, Sendable {
+        let type: String
+        let state: RemoteRoster?
+        let delta: Delta?
+
+        private enum CodingKeys: String, CodingKey {
+            case type = "t"
+            case state
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            type = try container.decode(String.self, forKey: .type)
+            state = try container.decodeIfPresent(RemoteRoster.self, forKey: .state)
+            delta = type == "roster.delta" ? try Delta(from: decoder) : nil
+        }
+    }
+
+    let revision: UInt64?
     let host: Host
     let projects: [Project]
     let workspaces: [Workspace]
@@ -142,6 +190,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        revision = try container.decodeIfPresent(UInt64.self, forKey: .revision)
         host = try container.decode(Host.self, forKey: .host)
         projects = try container.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
@@ -150,11 +199,82 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case revision
         case host
         case projects
         case workspaces
         case terminalGroups
         case sessions
+    }
+
+    private init(
+        revision: UInt64?,
+        host: Host,
+        projects: [Project],
+        workspaces: [Workspace],
+        terminalGroups: [TerminalGroup],
+        sessions: [Session]
+    ) {
+        self.revision = revision
+        self.host = host
+        self.projects = projects
+        self.workspaces = workspaces
+        self.terminalGroups = terminalGroups
+        self.sessions = sessions
+    }
+
+    func applying(_ delta: Delta) -> RemoteRoster? {
+        guard let revision,
+              revision == delta.baseRevision,
+              delta.revision >= delta.baseRevision else {
+            return nil
+        }
+        return RemoteRoster(
+            revision: delta.revision,
+            host: delta.host ?? host,
+            projects: Self.applying(projects, changes: delta.projects, id: \.id),
+            workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
+            terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
+            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id)
+        )
+    }
+
+    private static func applying<Value: Decodable & Sendable>(
+        _ current: [Value],
+        changes: Delta.EntityChanges<Value>?,
+        id: (Value) -> String
+    ) -> [Value] {
+        guard let changes else { return current }
+        var valuesByID: [String: Value] = [:]
+        for value in current {
+            valuesByID[id(value)] = value
+        }
+        for value in changes.upsert {
+            valuesByID[id(value)] = value
+        }
+        for value in changes.remove {
+            valuesByID.removeValue(forKey: value)
+        }
+
+        var result: [Value] = []
+        var emitted: Set<String> = []
+        if let order = changes.order {
+            for valueID in order {
+                guard let value = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
+                result.append(value)
+            }
+        }
+        for value in current {
+            let valueID = id(value)
+            guard let latest = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
+            result.append(latest)
+        }
+        for value in changes.upsert {
+            let valueID = id(value)
+            guard let latest = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
+            result.append(latest)
+        }
+        return result
     }
 }
 
@@ -217,6 +337,7 @@ struct WarrenResizeRequestBuffer: Sendable {
 
 private enum RemoteWireEvent: Sendable {
     case roster
+    case rosterDelta(RemoteRoster.Delta)
     case agent(sessionID: TerminalSessionID, status: AgentStatus)
     case output(Data)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
@@ -365,6 +486,7 @@ private actor WarrenRemoteWire {
                     "t": "auth",
                     "token": token,
                     "version": "1.0",
+                    "capabilities": ["roster-delta"],
                 ])))
             }
             group.addTask {
@@ -565,6 +687,15 @@ private actor WarrenRemoteWire {
     }
 
     private func handleText(_ data: Data) async -> Bool {
+        if let message = try? JSONDecoder().decode(RemoteRoster.StreamMessage.self, from: data) {
+            if message.type == "roster", let roster = message.state {
+                guard latestRosterSignal.offer(roster) else { return true }
+                return await eventBuffer.send(.roster)
+            }
+            if message.type == "roster.delta", let delta = message.delta {
+                return await eventBuffer.send(.rosterDelta(delta))
+            }
+        }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["t"] as? String else { return true }
         if type == "response" {
@@ -596,11 +727,6 @@ private actor WarrenRemoteWire {
                         + "(desktop=1.0, daemon=\(version)); update both together."
                 ))
             }
-        } else if type == "roster", let state = object["state"],
-                  let encoded = try? JSONSerialization.data(withJSONObject: state),
-                  let roster = try? JSONDecoder().decode(RemoteRoster.self, from: encoded) {
-            guard latestRosterSignal.offer(roster) else { return true }
-            return await eventBuffer.send(.roster)
         } else if type == "agent.status",
                   let sessionString = object["session"] as? String,
                   let sessionID = TerminalSessionID(uuidString: sessionString),
@@ -788,7 +914,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var pendingFocusResizeSize: TerminalSize?
     private var focusClaimInFlight = false
     private var focusClaimGeneration = 0
-    private var pendingInput = Data()
+    private let inputRouter = WarrenTerminalInputRouter()
     private var initialRefreshPending = false
     private var currentRoster: RemoteRoster?
     private var rosterApplicationGeneration: UInt64 = 0
@@ -927,6 +1053,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     if case .roster = event {
                         attempt = 0
                     }
+                    if case .rosterDelta = event {
+                        attempt = 0
+                    }
                     if case .disconnected = event {
                         break
                     }
@@ -961,6 +1090,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// selected tab on a fresh transport. The projection and navigation are
     /// intentionally kept: the old tab remains visible while reconnecting.
     private func resetAttachmentState() {
+        let previousSessionID = selectedSessionID
         attachingSessionID = nil
         selectedSessionID = nil
         attachedSessionID = nil
@@ -970,7 +1100,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         pendingFocusResizeSize = nil
         focusClaimInFlight = false
         focusClaimGeneration += 1
-        pendingInput.removeAll(keepingCapacity: true)
+        if let previousSessionID {
+            inputRouter.discard(for: previousSessionID)
+        }
         initialRefreshPending = false
         attachGeneration &+= 1
         outputAnchors.removeAll()
@@ -2028,6 +2160,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         apply(roster)
     }
 
+    private func refreshRosterAfterDeltaMismatch(using wire: WarrenRemoteWire) async {
+        do {
+            try await refreshRoster(using: wire)
+        } catch {
+            present(error)
+        }
+    }
+
     private func findProject(path: String) -> (id: String, path: String)? {
         guard let project = currentRoster?.projects.first(where: {
             normalizedPath($0.path) == normalizedPath(path)
@@ -2169,19 +2309,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
              .toggleSidebar:
             break
         }
-    }
-
-    func sendInput(_ data: Data) async {
-        guard !data.isEmpty else { return }
-        // The Ghostty surface is mounted before `session.attach` completes.
-        // Keystrokes in that window must be buffered and replayed after the
-        // daemon grants control; sending them early makes the daemon reject
-        // the frame and the old disconnect path would reconnect in a loop.
-        guard attachedSessionID == selectedSessionID, let wire else {
-            pendingInput.append(data)
-            return
-        }
-        await wire.sendInput(data)
     }
 
     func resize(columns: Int, rows: Int) {
@@ -2530,7 +2657,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         focusClaimInFlight = false
         focusClaimGeneration += 1
         attachGeneration &+= 1
-        pendingInput.removeAll(keepingCapacity: true)
+        inputRouter.discard(for: id)
         cancelResizeRequests()
         focusTask?.cancel()
         focusTask = nil
@@ -2673,6 +2800,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ensureDeletionReconciliation(using: wire)
                 return
             }
+            currentRoster = roster
+            apply(roster)
+            ensureDeletionReconciliation(using: wire)
+        case .rosterDelta(let delta):
+            guard let wire else { return }
+            guard let current = currentRoster else {
+                await refreshRosterAfterDeltaMismatch(using: wire)
+                return
+            }
+            if let revision = current.revision, delta.baseRevision < revision {
+                return
+            }
+            guard let roster = current.applying(delta) else {
+                await refreshRosterAfterDeltaMismatch(using: wire)
+                return
+            }
+            cancelTransientConnectionIssue()
+            clearMaintenance()
+            guard Self.shouldApplyRoster(roster, after: currentRoster) else { return }
             currentRoster = roster
             apply(roster)
             ensureDeletionReconciliation(using: wire)
@@ -2957,10 +3103,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             pendingFocusResizeSize = nil
             focusClaimInFlight = false
             focusClaimGeneration += 1
-            pendingInput.removeAll(keepingCapacity: true)
+            inputRouter.discard(for: selectedSessionID)
             cancelResizeRequests()
         }
         if navigation.selectedTabID == nil {
+            let previousSessionID = selectedSessionID
             selectedSessionID = nil
             attachedSessionID = nil
             focusedSessionID = nil
@@ -2969,7 +3116,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             pendingFocusResizeSize = nil
             focusClaimInFlight = false
             focusClaimGeneration += 1
-            pendingInput.removeAll(keepingCapacity: true)
+            if let previousSessionID {
+                inputRouter.discard(for: previousSessionID)
+            }
             cancelResizeRequests()
         } else if WarrenRemoteTerminalProtocol.shouldAttach(
             previousTabID: previousTabID,
@@ -3004,8 +3153,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             "session": sessionID.description,
             "existing": existingSurface != nil ? "true" : "false",
         ])
+        inputRouter.prepare(for: sessionID)
         if let previousSessionID = selectedSessionID, previousSessionID != sessionID {
-            pendingInput.removeAll(keepingCapacity: true)
             pendingFocusSessionID = nil
             pendingFocusSize = nil
             pendingFocusResizeSize = nil
@@ -3032,8 +3181,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // surface with an anchor from an older surface instance.
             outputAnchors.removeValue(forKey: sessionID)
             suppressFramedAnchorUpdates.remove(sessionID)
-            let inputBridge = WarrenOrderedInputBridge { [weak self] data in
-                await self?.sendInput(data)
+            let inputRouter = self.inputRouter
+            let inputBridge = WarrenOrderedInputBridge { [inputRouter, sessionID] data in
+                inputRouter.enqueue(data, for: sessionID)
             }
             surface = GhosttySurface(
                 id: sessionID,
@@ -3078,10 +3228,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 "session": sessionID.description,
             ])
             surfaceManager.requestPresent(sessionID)
-            if !pendingInput.isEmpty {
-                let buffered = pendingInput
-                pendingInput.removeAll(keepingCapacity: true)
-                await wire.sendInput(buffered)
+            inputRouter.activate(for: sessionID) { [wire] data in
+                await wire.sendInput(data)
             }
             if pendingFocusSessionID == sessionID {
                 let pendingSize = pendingFocusSize ?? size
@@ -3094,6 +3242,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 selectedSessionID = nil
                 attachedSessionID = nil
                 focusedSessionID = nil
+                inputRouter.discard(for: sessionID)
                 removeMountedSurface(sessionID: sessionID)
                 // Only a failure for the currently selected session belongs in
                 // the notice center. A stale attach can be cancelled by a

@@ -32,6 +32,34 @@ type spoolRuntime struct {
 	recoverCalls   int
 }
 
+func TestOutputWatcherCadenceFollowsPeerAttachment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "output.spool")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	watcher, err := output.NewSpoolWatcher(path, 0, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Close()
+
+	service := &Service{
+		outputs: map[string]*outputSession{
+			"session": {watcher: watcher},
+		},
+	}
+	peer := &wsPeer{}
+	service.registerPeer("session", peer)
+	if got := watcher.Interval(); got != foregroundOutputPoll {
+		t.Fatalf("foreground poll interval = %v, want %v", got, foregroundOutputPoll)
+	}
+
+	service.detachPeer(peer, "session")
+	if got := watcher.Interval(); got != backgroundOutputPoll {
+		t.Fatalf("background poll interval = %v, want %v", got, backgroundOutputPoll)
+	}
+}
+
 func newSpoolRuntime(t *testing.T) *spoolRuntime {
 	t.Helper()
 	return &spoolRuntime{

@@ -56,6 +56,70 @@ func TestProjectEventsMatchesTranscriptReadProjection(t *testing.T) {
 	}
 }
 
+func TestProjectEventsDefaultsToConversationAndErrors(t *testing.T) {
+	events, err := ProjectEvents([]api.AgentEvent{
+		{Sequence: 1, Type: "user", Content: "question"},
+		{Sequence: 2, Type: "reasoning", Content: "private thought"},
+		{Sequence: 3, Type: "tool_call", ToolName: "shell"},
+		{Sequence: 4, Type: "tool_output", Output: "noisy output"},
+		{Sequence: 5, Type: "assistant", Content: "answer"},
+		{Sequence: 6, Type: "error", Error: "failed"},
+	}, ReadOptions{Recent: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := eventTypes(events), "user,assistant,error"; got != want {
+		t.Fatalf("default types = %q, want %q", got, want)
+	}
+}
+
+func TestProjectEventsAddsToolCallsOnlyWhenToolsRequested(t *testing.T) {
+	events, err := ProjectEvents([]api.AgentEvent{
+		{Sequence: 1, Type: "user", Content: "question"},
+		{Sequence: 2, Type: "tool_call", ToolName: "shell", ToolInput: map[string]any{"command": "rg TODO"}},
+		{Sequence: 3, Type: "tool_output", ToolName: "shell", Output: "lots of output"},
+		{Sequence: 4, Type: "assistant", Content: "answer"},
+	}, ReadOptions{Recent: 0, Tools: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := eventTypes(events), "user,tool_call,assistant"; got != want {
+		t.Fatalf("tool summary types = %q, want %q", got, want)
+	}
+	if events[1].ToolName != "shell" || events[1].Output != "" {
+		t.Fatalf("tool summary = %#v", events[1])
+	}
+}
+
+func TestProjectEventsIncludesBoundedToolOutputOnDemand(t *testing.T) {
+	events, err := ProjectEvents([]api.AgentEvent{
+		{Sequence: 1, Type: "tool_call", ToolName: "shell"},
+		{Sequence: 2, Type: "tool_output", ToolName: "shell", Output: strings.Repeat("x", 20)},
+	}, ReadOptions{Recent: 0, ToolOutput: true, ContentLimit: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := eventTypes(events), "tool_call,tool_output"; got != want {
+		t.Fatalf("tool output types = %q, want %q", got, want)
+	}
+	if got, want := events[1].Output, "xxxxxxxx…"; got != want {
+		t.Fatalf("tool output = %q, want %q", got, want)
+	}
+}
+
+func TestProjectEventsExplicitToolOutputRemainsAvailable(t *testing.T) {
+	events, err := ProjectEvents([]api.AgentEvent{
+		{Sequence: 1, Type: "tool_call", ToolName: "shell"},
+		{Sequence: 2, Type: "tool_output", ToolName: "shell", Output: "result"},
+	}, ReadOptions{Recent: 0, IncludeTypes: []string{"tool_output"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "tool_output" || events[0].Output != "result" {
+		t.Fatalf("explicit tool output = %#v", events)
+	}
+}
+
 func TestReadTranscriptIncludeAndExcludeTypes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	writeReadLines(t, path,
@@ -133,6 +197,50 @@ func TestReadTranscriptRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestReadTranscriptChunkStreamsExactBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	want := []byte("first line\nsecond line\nthird line\n")
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []byte
+	var offset int64
+	for {
+		chunk, next, eof, err := ReadTranscriptChunk(path, offset, 9)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, chunk...)
+		if eof {
+			break
+		}
+		if next <= offset {
+			t.Fatalf("offset did not advance: %d -> %d", offset, next)
+		}
+		offset = next
+	}
+	if string(got) != string(want) {
+		t.Fatalf("chunked transcript = %q, want %q", got, want)
+	}
+}
+
+func TestReadTranscriptChunkRejectsInvalidBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeReadLines(t, path, `{"type":"summary","summary":"fixture"}`)
+	for _, test := range []struct {
+		offset int64
+		limit  int
+	}{
+		{offset: -1, limit: 1},
+		{offset: 0, limit: 0},
+	} {
+		if _, _, _, err := ReadTranscriptChunk(path, test.offset, test.limit); err == nil {
+			t.Fatalf("ReadTranscriptChunk(%d, %d) accepted invalid bounds", test.offset, test.limit)
+		}
+	}
+}
+
 func TestReadTranscriptRejectsInvalidOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	writeReadLines(t, path, `{"type":"summary","summary":"fixture"}`)
@@ -187,4 +295,12 @@ func writeReadLines(t *testing.T, path string, lines ...string) {
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func eventTypes(events []api.AgentEvent) string {
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return strings.Join(types, ",")
 }

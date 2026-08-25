@@ -257,6 +257,66 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
+    func testRemoteRosterAppliesRevisionedEntityDelta() throws {
+        let roster = try JSONDecoder().decode(
+            RemoteRoster.self,
+            from: Data(
+                """
+                {
+                  "revision": 7,
+                  "host": {"id": "host", "name": "Before"},
+                  "projects": [
+                    {"id": "project-a", "name": "A", "path": "/a"},
+                    {"id": "project-b", "name": "B", "path": "/b"}
+                  ],
+                  "workspaces": [
+                    {"id": "workspace-old", "project": "project-a", "name": "Old", "path": "/a"}
+                  ],
+                  "terminalGroups": [],
+                  "sessions": []
+                }
+                """.utf8
+            )
+        )
+        let message = try JSONDecoder().decode(
+            RemoteRoster.StreamMessage.self,
+            from: Data(
+                """
+                {
+                  "t": "roster.delta",
+                  "baseRevision": 7,
+                  "revision": 9,
+                  "host": {"id": "host", "name": "After"},
+                  "projects": {
+                    "upsert": [{"id": "project-a", "name": "A renamed", "path": "/a"}],
+                    "order": ["project-b", "project-a"]
+                  },
+                  "workspaces": {
+                    "upsert": [{"id": "workspace-new", "project": "project-a", "name": "New", "path": "/a/new"}],
+                    "remove": ["workspace-old"],
+                    "order": ["workspace-new"]
+                  }
+                }
+                """.utf8
+            )
+        )
+        let delta = try XCTUnwrap(message.delta)
+        let updated = try XCTUnwrap(roster.applying(delta))
+
+        XCTAssertEqual(updated.revision, 9)
+        XCTAssertEqual(updated.host.name, "After")
+        XCTAssertEqual(updated.projects.map(\.id), ["project-b", "project-a"])
+        XCTAssertEqual(updated.projects.last?.name, "A renamed")
+        XCTAssertEqual(updated.workspaces.map(\.id), ["workspace-new"])
+        XCTAssertNil(updated.sessions.first)
+
+        let staleMessage = try JSONDecoder().decode(
+            RemoteRoster.StreamMessage.self,
+            from: Data("{\"t\":\"roster.delta\",\"baseRevision\":8,\"revision\":10}".utf8)
+        )
+        XCTAssertNil(updated.applying(try XCTUnwrap(staleMessage.delta)))
+    }
+
     func testReconnectDelayBacksOffExponentiallyAndCapsAtThirtySeconds() {
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 0), 500)
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 1), 1_000)
@@ -568,6 +628,40 @@ final class WarrenRemoteModelTests: XCTestCase {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while recorder.count < expected.count, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(recorder.data, expected)
+    }
+
+    func testTerminalInputRouterBuffersUntilAttachAndDropsStaleSurfaceInput() async throws {
+        let router = WarrenTerminalInputRouter()
+        let recorder = LockedDataRecorder()
+        let firstSessionID = TerminalSessionID()
+        let secondSessionID = TerminalSessionID()
+
+        router.prepare(for: firstSessionID)
+        router.enqueue(Data("before-attach".utf8), for: firstSessionID)
+        router.activate(for: firstSessionID) { data in
+            recorder.append(data)
+        }
+
+        let firstDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while recorder.count < Data("before-attach".utf8).count,
+              ContinuousClock.now < firstDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(recorder.data, Data("before-attach".utf8))
+
+        router.prepare(for: secondSessionID)
+        router.enqueue(Data("stale".utf8), for: firstSessionID)
+        router.enqueue(Data("second".utf8), for: secondSessionID)
+        router.activate(for: secondSessionID) { data in
+            recorder.append(data)
+        }
+
+        let expected = Data("before-attachsecond".utf8)
+        let secondDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while recorder.count < expected.count, ContinuousClock.now < secondDeadline {
+            try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertEqual(recorder.data, expected)
     }

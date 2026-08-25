@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -777,6 +778,62 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	}
 	if previous["hasMore"] != false {
 		t.Fatalf("previous history hasMore = %v, want false", previous["hasMore"])
+	}
+}
+
+func TestAgentTranscriptChunkOverWebSocketStreamsOnlyBoundJSONL(t *testing.T) {
+	directory := t.TempDir()
+	transcriptPath := filepath.Join(directory, "rollout-raw.jsonl")
+	want := "{\"type\":\"user\",\"message\":\"first\"}\n{\"type\":\"assistant\",\"message\":\"second\"}\n"
+	if err := os.WriteFile(transcriptPath, []byte(want), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: "session-raw", Kind: "codex", Lifecycle: "ended",
+			TranscriptPath: transcriptPath, CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	var got strings.Builder
+	var offset int64
+	for {
+		chunk := requestResult[api.AgentTranscriptChunk](t, connection, "agent.transcript", map[string]any{
+			"session": "session-raw",
+			"offset":  strconv.FormatInt(offset, 10),
+			"limit":   "11",
+		})
+		got.WriteString(chunk.Data)
+		if chunk.EOF {
+			break
+		}
+		if chunk.Next <= offset {
+			t.Fatalf("transcript chunk did not advance: %d -> %d", offset, chunk.Next)
+		}
+		offset = chunk.Next
+	}
+	if got.String() != want {
+		t.Fatalf("raw transcript = %q, want %q", got.String(), want)
+	}
+
+	if _, err := service.agentTranscriptChunk(context.Background(), "session-raw", 0, agentTranscriptChunkBytes+1); err == nil {
+		t.Fatal("oversized transcript chunk was accepted")
+	}
+	if _, err := service.agentTranscriptChunk(context.Background(), "missing", 0, 1); err == nil {
+		t.Fatal("missing session was accepted")
 	}
 }
 

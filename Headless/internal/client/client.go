@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -184,6 +185,24 @@ func (c *Client) AgentHistory(
 		"session": sessionID,
 		"before":  before,
 		"limit":   limit,
+	}, &value)
+	return value, err
+}
+
+// AgentTranscriptChunk reads a bounded raw JSONL range from the transcript
+// bound to sessionID. Offset is encoded as a decimal string so large files do
+// not lose precision while crossing JSON's floating-point default.
+func (c *Client) AgentTranscriptChunk(
+	ctx context.Context,
+	sessionID string,
+	offset int64,
+	limit int,
+) (api.AgentTranscriptChunk, error) {
+	var value api.AgentTranscriptChunk
+	err := c.Request(ctx, "agent.transcript", map[string]any{
+		"session": sessionID,
+		"offset":  strconv.FormatInt(offset, 10),
+		"limit":   strconv.Itoa(limit),
 	}, &value)
 	return value, err
 }

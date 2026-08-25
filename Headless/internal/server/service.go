@@ -36,6 +36,8 @@ const (
 	metadataRefreshInterval = 750 * time.Millisecond
 	metadataProbeTimeout    = 2 * time.Second
 	slowRosterThreshold     = 50 * time.Millisecond
+	foregroundOutputPoll    = 10 * time.Millisecond
+	backgroundOutputPoll    = 50 * time.Millisecond
 	cursorPersistEvery      = 256 * 1024
 	orphanReapInterval      = 30 * time.Second
 	// agentMessageMaxBytes bounds one pushed agent batch so a large
@@ -49,6 +51,10 @@ const (
 	agentAttachHistoryMaxBytes  = 256 * 1024
 	agentHistoryDefaultLimit    = 200
 	agentHistoryMaxLimit        = 500
+	// agentTranscriptChunkBytes keeps the explicit raw-transcript escape hatch
+	// streamable. The CLI writes each response before asking for the next one,
+	// so neither the Host nor the client has to retain the complete JSONL.
+	agentTranscriptChunkBytes = 256 * 1024
 	// orphanReapGrace protects a session between tmux creation and its state
 	// record becoming durable, so a concurrent reaper cannot kill a brand-new
 	// runtime while CreateSession is still persisting it.
@@ -167,7 +173,7 @@ type outputSession struct {
 	runtimeName       string
 	runtimeKind       string
 	ring              *output.Ring
-	watcher           *ghostline.SpoolWatcher
+	watcher           *output.SpoolWatcher
 	responder         *ghostline.QueryResponder
 	prepareLock       *sessionLock
 	persistedSequence uint64
@@ -641,6 +647,11 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// the single lifecycle loop so additional observers cannot multiply process
 	// launches, runtime RPCs, or Session writes.
 	state, revision := s.Store.SnapshotVersion()
+	// Store revisions begin at zero, while an omitted JSON field means an old
+	// server did not support revisioned roster snapshots. Offset the opaque
+	// wire token so every current snapshot carries a non-zero revision without
+	// persisting it into State.
+	state.Revision = revision + 1
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
 	sortTerminalGroups(state.TerminalGroups)
@@ -2745,7 +2756,7 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 		persistedSequence: session.Sequence,
 		reanchorRequired:  true,
 	}
-	watcher, err := ghostline.NewSpoolWatcher(
+	watcher, err := output.NewSpoolWatcher(
 		adapter.SpoolPath(session.Runtime),
 		spoolOffset,
 		func(data []byte) { s.recordOutput(session.ID, data) },
@@ -2756,6 +2767,7 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 		return nil, fmt.Errorf("watch output spool: %w", err)
 	}
 	watcher.SetMaxBytes(s.maxSpoolBytes())
+	watcher.SetInterval(backgroundOutputPoll)
 	watcher.Start()
 	outputSession.watcher = watcher
 	outputSession.ring = output.NewRing(session.Epoch, s.ringCapacity(), s.ringMaxBytes(), session.Sequence)
@@ -3227,6 +3239,50 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 	result.Cursor = page[0].Sequence
 	result.HasMore = start > 0
 	return result
+}
+
+// agentTranscriptChunk returns raw JSONL only from the transcript already
+// bound to this Warren session. The caller never supplies a filesystem path,
+// which prevents the remote read API from becoming a general file reader.
+func (s *Service) agentTranscriptChunk(
+	ctx context.Context,
+	sessionID string,
+	offset int64,
+	limit int,
+) (api.AgentTranscriptChunk, error) {
+	if offset < 0 {
+		return api.AgentTranscriptChunk{}, errors.New("transcript offset cannot be negative")
+	}
+	if limit == 0 {
+		limit = agentTranscriptChunkBytes
+	}
+	if limit < 0 || limit > agentTranscriptChunkBytes {
+		return api.AgentTranscriptChunk{}, fmt.Errorf("transcript chunk limit must be between 1 and %d bytes", agentTranscriptChunkBytes)
+	}
+
+	session, ok := s.Session(sessionID)
+	if !ok {
+		return api.AgentTranscriptChunk{}, fmt.Errorf("session not found: %s", sessionID)
+	}
+	if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
+		return api.AgentTranscriptChunk{}, fmt.Errorf("session is not bound to an agent: %s", sessionID)
+	}
+	if session.TranscriptPath == "" && session.Lifecycle == "running" {
+		if _, err := s.ensureAgent(ctx, session); err != nil {
+			return api.AgentTranscriptChunk{}, err
+		}
+		if refreshed, found := s.Session(sessionID); found {
+			session = refreshed
+		}
+	}
+	if session.TranscriptPath == "" {
+		return api.AgentTranscriptChunk{}, fmt.Errorf("agent transcript is not ready: %s", sessionID)
+	}
+	data, next, eof, err := agent.ReadTranscriptChunk(session.TranscriptPath, offset, limit)
+	if err != nil {
+		return api.AgentTranscriptChunk{}, err
+	}
+	return api.AgentTranscriptChunk{Data: string(data), Next: next, EOF: eof}, nil
 }
 
 // agentTail returns the newest events fitting both the event-count and
@@ -3709,6 +3765,10 @@ func (s *Service) prepareAttach(ctx context.Context, session api.Session) (*sess
 		})
 	}
 	if outputSession.watcher != nil {
+		// A background watcher may be up to one poll behind. Drain before the
+		// attach checkpoint so the newly visible terminal reuses its current
+		// ring tail instead of waiting for the next background tick.
+		outputSession.watcher.Drain()
 		paused := make(chan struct{})
 		go func() {
 			outputSession.watcher.Pause()
@@ -3717,9 +3777,9 @@ func (s *Service) prepareAttach(ctx context.Context, session api.Session) (*sess
 		select {
 		case <-paused:
 		case <-prepareContext.Done():
-			// Pause has no cancellation-aware API in the current Ghostline
-			// release. Finish it in the background and immediately resume the
-			// watcher once it is safe, while unblocking this request now.
+			// Pause has no cancellation-aware API. Finish it in the background
+			// and immediately resume the watcher once it is safe, while
+			// unblocking this request now.
 			go func() {
 				<-paused
 				release()
@@ -3888,8 +3948,12 @@ func (s *Service) PingOutput(sessionID string) {
 	s.lazyInit()
 	s.outputMu.Lock()
 	outputSession := s.outputs[sessionID]
+	active := len(s.peers[sessionID]) > 0
 	s.outputMu.Unlock()
 	if outputSession != nil && outputSession.watcher != nil {
+		if active {
+			outputSession.watcher.SetInterval(foregroundOutputPoll)
+		}
 		outputSession.watcher.Ping()
 	}
 }
@@ -3907,6 +3971,7 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 		delete(s.focusedPeers, sessionID)
 	}
 	s.outputMu.Unlock()
+	s.refreshOutputWatcherCadence(sessionID)
 }
 
 func (s *Service) registerAgentPeer(sessionID string, peer *wsPeer) {
@@ -3944,11 +4009,33 @@ func (s *Service) hasAgentPeers(sessionID string) bool {
 func (s *Service) registerPeer(sessionID string, peer *wsPeer) {
 	s.lazyInit()
 	s.outputMu.Lock()
-	defer s.outputMu.Unlock()
 	if s.peers[sessionID] == nil {
 		s.peers[sessionID] = map[*wsPeer]struct{}{}
 	}
 	s.peers[sessionID][peer] = struct{}{}
+	s.outputMu.Unlock()
+	s.refreshOutputWatcherCadence(sessionID)
+}
+
+// refreshOutputWatcherCadence keeps the terminal that a client is currently
+// viewing on the fast path while reducing background spool stat calls. A
+// newly attached terminal is also pinged immediately, so changing tabs never
+// waits for the background cadence before rendering its retained tail.
+func (s *Service) refreshOutputWatcherCadence(sessionID string) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	outputSession := s.outputs[sessionID]
+	active := len(s.peers[sessionID]) > 0
+	s.outputMu.Unlock()
+	if outputSession == nil || outputSession.watcher == nil {
+		return
+	}
+	if active {
+		outputSession.watcher.SetInterval(foregroundOutputPoll)
+		outputSession.watcher.Ping()
+		return
+	}
+	outputSession.watcher.SetInterval(backgroundOutputPoll)
 }
 
 // focusPeerLocked updates focus ownership and optionally resizes the shared
