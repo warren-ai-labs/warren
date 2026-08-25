@@ -32,6 +32,10 @@ type ReadOptions struct {
 	Full         bool
 	IncludeTypes []string
 	ExcludeTypes []string
+	// Tools adds compact tool-call records to the conversation projection.
+	// ToolOutput additionally includes the bounded raw tool results.
+	ToolOutput bool
+	Tools      bool
 }
 
 // ProjectEvents applies the same filtering and content limits as
@@ -49,14 +53,7 @@ func ProjectEvents(events []api.AgentEvent, options ReadOptions) ([]api.AgentEve
 		return nil, errors.New("content limit cannot be negative")
 	}
 
-	include := normalizedTypes(options.IncludeTypes)
-	exclude := normalizedTypes(options.ExcludeTypes)
-	contentLimit := options.ContentLimit
-	if options.Full {
-		contentLimit = 0
-	} else if contentLimit == 0 {
-		contentLimit = DefaultReadContentLimit
-	}
+	include, exclude, contentLimit := readProjectionOptions(options)
 	result := make([]api.AgentEvent, 0, min(len(events), max(1, options.Recent)))
 	for _, event := range events {
 		if !includeReadEvent(event, include, exclude) {
@@ -101,14 +98,7 @@ func ReadTranscript(ctx context.Context, provider, path string, options ReadOpti
 	}
 	defer file.Close()
 
-	include := normalizedTypes(options.IncludeTypes)
-	exclude := normalizedTypes(options.ExcludeTypes)
-	contentLimit := options.ContentLimit
-	if options.Full {
-		contentLimit = 0
-	} else if contentLimit == 0 {
-		contentLimit = DefaultReadContentLimit
-	}
+	include, exclude, contentLimit := readProjectionOptions(options)
 	parserLimit := maxEventContent
 	if options.Full {
 		parserLimit = 0
@@ -163,6 +153,45 @@ func ReadTranscript(ctx context.Context, provider, path string, options ReadOpti
 	return result, nil
 }
 
+// ReadTranscriptChunk returns one exact byte range from a bound transcript.
+// It deliberately does not parse or normalize the JSONL: callers use it for
+// the explicit full-transcript escape hatch and stream the result onward in
+// small chunks. The returned EOF applies to the file size observed for this
+// read; a concurrently-running Agent may append another record afterwards.
+func ReadTranscriptChunk(path string, offset int64, limit int) ([]byte, int64, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, offset, false, errors.New("agent transcript path is required")
+	}
+	if offset < 0 {
+		return nil, offset, false, errors.New("transcript offset cannot be negative")
+	}
+	if limit <= 0 {
+		return nil, offset, false, errors.New("transcript chunk limit must be positive")
+	}
+
+	file, err := openRegularFile(path)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, offset, false, err
+	}
+	if offset >= info.Size() {
+		return nil, offset, true, nil
+	}
+	size := min(int64(limit), info.Size()-offset)
+	data := make([]byte, int(size))
+	read, err := file.ReadAt(data, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, offset, false, err
+	}
+	data = data[:read]
+	next := offset + int64(read)
+	return data, next, next >= info.Size(), nil
+}
+
 func appendRecent(events []api.AgentEvent, event api.AgentEvent, recent int) []api.AgentEvent {
 	if recent <= 0 || len(events) < recent {
 		return append(events, event)
@@ -185,21 +214,42 @@ func normalizedTypes(values []string) map[string]bool {
 	return result
 }
 
-// These records are useful to the live UI internally but usually distract an
-// external agent from the conversation. An explicit --include can opt back in.
-var defaultReadIgnoredTypes = map[string]bool{
-	"attachment":          true,
-	"system_instructions": true,
-	"usage":               true,
+// defaultReadTypes is deliberately conversation-first. Tool transcripts can
+// dominate a long-running Agent session but are rarely useful to a caller
+// trying to understand the user request and the Agent's answer.
+var defaultReadTypes = map[string]bool{
+	"user":      true,
+	"assistant": true,
+	"error":     true,
+}
+
+func readProjectionOptions(options ReadOptions) (map[string]bool, map[string]bool, int) {
+	include := normalizedTypes(options.IncludeTypes)
+	if len(include) == 0 {
+		include = make(map[string]bool, len(defaultReadTypes)+2)
+		for typeName := range defaultReadTypes {
+			include[typeName] = true
+		}
+	}
+	if options.Tools || options.ToolOutput {
+		include["tool_call"] = true
+	}
+	if options.ToolOutput {
+		include["tool_output"] = true
+	}
+
+	contentLimit := options.ContentLimit
+	if options.Full {
+		contentLimit = 0
+	} else if contentLimit == 0 {
+		contentLimit = DefaultReadContentLimit
+	}
+	return include, normalizedTypes(options.ExcludeTypes), contentLimit
 }
 
 func includeReadEvent(event api.AgentEvent, include, exclude map[string]bool) bool {
 	typeName := strings.ToLower(strings.TrimSpace(event.Type))
-	if len(include) > 0 {
-		if !include[typeName] {
-			return false
-		}
-	} else if defaultReadIgnoredTypes[typeName] {
+	if !include[typeName] {
 		return false
 	}
 	return !exclude[typeName]

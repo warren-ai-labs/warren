@@ -601,7 +601,7 @@ func sessionRead(ctx context.Context, c *client.Client, params map[string]any, f
 }
 
 func sessionAgentReadFlag(params map[string]any) bool {
-	for _, key := range []string{"recent", "limit", "count", "all", "include", "filter", "exclude", "text-only", "text", "plain", "full", "full-content", "no-truncate", "chars", "max-chars", "head"} {
+	for _, key := range []string{"recent", "limit", "count", "all", "include", "filter", "exclude", "text-only", "text", "plain", "full", "full-content", "no-truncate", "chars", "max-chars", "head", "tools", "tool-output"} {
 		if _, ok := params[key]; ok {
 			return true
 		}
@@ -680,10 +680,10 @@ func agentReadOptions(params map[string]any) (agent.ReadOptions, error) {
 		}
 		contentLimit = parsed
 	}
-	full := boolValue(params, "full") || boolValue(params, "full-content") || boolValue(params, "no-truncate")
+	full := boolValue(params, "full-content") || boolValue(params, "no-truncate")
 	contentFlag := firstFlagValue(params, "chars", "max-chars", "head") != ""
 	if full && contentFlag {
-		return agent.ReadOptions{}, newUsageError("--full cannot be combined with --chars, --max-chars, or --head", agentReadUsageText())
+		return agent.ReadOptions{}, newUsageError("--full-content cannot be combined with --chars, --max-chars, or --head", agentReadUsageText())
 	}
 	return agent.ReadOptions{
 		Recent:       recent,
@@ -691,6 +691,8 @@ func agentReadOptions(params map[string]any) (agent.ReadOptions, error) {
 		Full:         full,
 		IncludeTypes: splitTypeFlag(stringValue(params, "include")),
 		ExcludeTypes: append(splitTypeFlag(stringValue(params, "filter")), splitTypeFlag(stringValue(params, "exclude"))...),
+		Tools:        boolValue(params, "tools"),
+		ToolOutput:   boolValue(params, "tool-output"),
 	}, nil
 }
 
@@ -724,6 +726,31 @@ func readAgentHistory(ctx context.Context, c *client.Client, sessionID string, o
 
 func agentReadTextOnly(params map[string]any) bool {
 	return boolValue(params, "text") || boolValue(params, "text-only") || boolValue(params, "plain")
+}
+
+// agentReadFullTranscript is the rare escape hatch for callers that need the
+// original provider JSONL. It deliberately streams bounded server chunks to
+// stdout instead of retaining an unbounded transcript in the daemon or CLI.
+func agentReadFullTranscript(ctx context.Context, c *client.Client, sessionID string) error {
+	var offset int64
+	for {
+		chunk, err := c.AgentTranscriptChunk(ctx, sessionID, offset, 0)
+		if err != nil {
+			return err
+		}
+		if chunk.Data != "" {
+			if _, err := io.WriteString(os.Stdout, chunk.Data); err != nil {
+				return err
+			}
+		}
+		if chunk.EOF {
+			return nil
+		}
+		if chunk.Next <= offset {
+			return errors.New("agent transcript read did not advance")
+		}
+		offset = chunk.Next
+	}
 }
 
 func printAgentText(events []api.AgentEvent) error {
@@ -1055,6 +1082,9 @@ func agentReadCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
+	if boolValue(params, "full") {
+		return agentReadFullTranscript(ctx, c, id)
+	}
 	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
 	if err != nil {
 		return err
@@ -1697,6 +1727,7 @@ var agentReadValueFlags = map[string]bool{
 var agentReadBooleanFlags = map[string]bool{
 	"all": true, "full": true, "full-content": true,
 	"no-truncate": true, "text": true, "text-only": true, "plain": true,
+	"tools": true, "tool-output": true,
 	"current": true, "help": true,
 }
 
@@ -1729,8 +1760,19 @@ func validateAgentReadArgs(args []string) (bool, error) {
 		return false, errors.New("--all cannot be combined with --recent, --limit, or --count")
 	}
 	contentFlag := present["chars"] || present["max-chars"] || present["head"]
-	if (present["full"] || present["full-content"] || present["no-truncate"]) && contentFlag {
-		return false, errors.New("--full cannot be combined with --chars, --max-chars, or --head")
+	if present["full"] {
+		for _, name := range []string{
+			"recent", "limit", "count", "all", "include", "filter", "exclude",
+			"chars", "max-chars", "head", "full-content", "no-truncate",
+			"text", "text-only", "plain", "tools", "tool-output",
+		} {
+			if present[name] {
+				return false, fmt.Errorf("--full cannot be combined with --%s", name)
+			}
+		}
+	}
+	if (present["full-content"] || present["no-truncate"]) && contentFlag {
+		return false, errors.New("--full-content and --no-truncate cannot be combined with --chars, --max-chars, or --head")
 	}
 	return help, nil
 }
@@ -2751,7 +2793,7 @@ func agentUsageText() string {
   warren agent list [--all | --ended] [--limit N]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
-  warren agent read AGENT_ID [--current] [--recent N | --all] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
+  warren agent read AGENT_ID [--current] [--recent N | --all] [--tools] [--tool-output] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
   warren agent wait AGENT_ID [--timeout DURATION] [--current]
   warren agent attach AGENT_ID [--current]
   warren agent remove AGENT_ID [--force] [--current] [--dry-run]
@@ -2808,13 +2850,17 @@ func agentReadUsageText() string {
 	return `Usage:
   warren agent read AGENT_ID [--current]
       [--recent N | --all]
+      [--tools] [--tool-output]
       [--include TYPE,...] [--filter TYPE,...]
       [--chars N | --full] [--text-only]
 
 Read the normalized transcript for a Warren Agent. By default, only the
-newest 20 useful activities are returned and text fields are limited to 2000
-characters. --full disables text truncation; --all returns all matching
-activities (up to 100000). --text-only prints user and assistant text.
+newest 20 user, assistant, and error activities are returned and text fields
+are limited to 2000 characters. --tools adds tool-call summaries;
+--tool-output additionally includes bounded tool results. --all returns all
+matching activities (up to 100000). --text-only prints user and assistant
+text. --full streams the exact bound transcript JSONL and cannot be combined
+with projection flags.
 `
 }
 

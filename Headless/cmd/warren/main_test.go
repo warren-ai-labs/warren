@@ -100,7 +100,10 @@ func TestSessionReadUsesPTYUnlessTranscriptFlagsAreExplicit(t *testing.T) {
 	if sessionAgentReadFlag(parseFlags(nil)) {
 		t.Fatal("default session read unexpectedly selects transcript output")
 	}
-	if !sessionAgentReadFlag(parseFlags([]string{"--text-only"})) || !sessionAgentReadFlag(parseFlags([]string{"--recent", "5"})) {
+	if !sessionAgentReadFlag(parseFlags([]string{"--text-only"})) ||
+		!sessionAgentReadFlag(parseFlags([]string{"--recent", "5"})) ||
+		!sessionAgentReadFlag(parseFlags([]string{"--tools"})) ||
+		!sessionAgentReadFlag(parseFlags([]string{"--tool-output"})) {
 		t.Fatal("explicit transcript flags did not select the Agent projection")
 	}
 }
@@ -377,6 +380,8 @@ func TestValidateAgentReadArgs(t *testing.T) {
 		{name: "missing value", args: []string{"agent-1", "--recent"}, want: "requires a value"},
 		{name: "missing include value", args: []string{"codex", "--include", "--all"}, want: "requires a value"},
 		{name: "short flag", args: []string{"codex", "-v"}, want: "unknown flag"},
+		{name: "raw full and tools", args: []string{"agent-1", "--full", "--tools"}, want: "--full cannot"},
+		{name: "raw full and text", args: []string{"agent-1", "--full", "--text-only"}, want: "--full cannot"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -387,6 +392,32 @@ func TestValidateAgentReadArgs(t *testing.T) {
 	}
 	if help, err := validateAgentReadArgs([]string{"-h"}); err != nil || !help {
 		t.Fatalf("validate -h = help %v, err %v; want help", help, err)
+	}
+}
+
+func TestAgentReadOptionsMakeToolsExplicit(t *testing.T) {
+	options, err := agentReadOptions(parseFlags([]string{"--tools"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.Tools || options.ToolOutput || options.Full {
+		t.Fatalf("tool summary options = %#v", options)
+	}
+
+	options, err = agentReadOptions(parseFlags([]string{"--tool-output"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Tools || !options.ToolOutput || options.ContentLimit != agent.DefaultReadContentLimit {
+		t.Fatalf("tool output options = %#v", options)
+	}
+
+	options, err = agentReadOptions(parseFlags([]string{"--full-content"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.Full {
+		t.Fatalf("full-content options = %#v", options)
 	}
 }
 

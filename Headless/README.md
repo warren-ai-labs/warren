@@ -133,9 +133,13 @@ the interactive composer. Use `--no-prompt` to create an idle Agent
 explicitly. `--wait` can wait for that first turn to finish.
 
 `warren agent read AGENT_ID` reads the normalized transcript, never the PTY.
-By default it returns the newest 20 useful activities and limits text fields to
-2,000 characters. Use `--recent N`, `--all`, `--include TYPE,...`, `--filter
-TYPE,...`, `--full`, or `--text-only` to control the projection. `agent send`
+By default it returns the newest 20 user, assistant, and error activities and
+limits text fields to 2,000 characters. `--tools` adds compact tool-call
+records; `--tool-output` is the explicit opt-in for bounded raw tool results.
+Use `--recent N`, `--all`, `--include TYPE,...`, `--filter TYPE,...`, or
+`--text-only` to control the normalized projection. `--full` is the rare
+escape hatch: it streams the exact JSONL from the transcript bound to that
+Agent, without loading the whole file into the daemon or CLI. `agent send`
 waits for the transcript watcher, writes the composer text, and submits a
 separate kitty-protocol Enter event. `agent wait` blocks until the current or
 next turn finishes. `agent attach` is the explicit raw TTY operation.

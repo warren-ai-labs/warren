@@ -327,8 +327,21 @@ type AgentHistoryResult struct {
 	HasMore bool         `json:"hasMore"`
 }
 
+// AgentTranscriptChunk is one bounded raw JSONL segment from the transcript
+// bound to a Warren Agent session. Paths are intentionally not exposed: the
+// Host resolves the binding from the session ID before every read.
+type AgentTranscriptChunk struct {
+	Data string `json:"data"`
+	Next int64  `json:"next"`
+	EOF  bool   `json:"eof"`
+}
+
 type State struct {
-	Schema         int             `json:"schema"`
+	Schema int `json:"schema"`
+	// Revision is a transient, non-zero roster token used by streaming clients
+	// to validate deltas. It is populated only in observer snapshots and is
+	// never written into the durable state file.
+	Revision       uint64          `json:"revision,omitempty"`
 	Host           Host            `json:"host"`
 	Projects       []Project       `json:"projects"`
 	Workspaces     []Workspace     `json:"workspaces"`
@@ -375,23 +388,24 @@ type SessionMovePreflight struct {
 }
 
 type Envelope struct {
-	Type      string         `json:"t"`
-	ID        string         `json:"id,omitempty"`
-	Token     string         `json:"token,omitempty"`
-	Version   string         `json:"version,omitempty"`
-	Method    string         `json:"method,omitempty"`
-	Params    map[string]any `json:"params,omitempty"`
-	Session   string         `json:"session,omitempty"`
-	Workspace string         `json:"workspace,omitempty"`
-	Project   string         `json:"project,omitempty"`
-	Command   string         `json:"command,omitempty"`
-	Kind      string         `json:"kind,omitempty"`
-	Title     string         `json:"title,omitempty"`
-	Data      string         `json:"data,omitempty"`
-	Cols      int            `json:"cols,omitempty"`
-	Rows      int            `json:"rows,omitempty"`
-	Epoch     uint64         `json:"epoch,omitempty"`
-	Sequence  uint64         `json:"sequence,omitempty"`
+	Type         string         `json:"t"`
+	ID           string         `json:"id,omitempty"`
+	Token        string         `json:"token,omitempty"`
+	Version      string         `json:"version,omitempty"`
+	Capabilities []string       `json:"capabilities,omitempty"`
+	Method       string         `json:"method,omitempty"`
+	Params       map[string]any `json:"params,omitempty"`
+	Session      string         `json:"session,omitempty"`
+	Workspace    string         `json:"workspace,omitempty"`
+	Project      string         `json:"project,omitempty"`
+	Command      string         `json:"command,omitempty"`
+	Kind         string         `json:"kind,omitempty"`
+	Title        string         `json:"title,omitempty"`
+	Data         string         `json:"data,omitempty"`
+	Cols         int            `json:"cols,omitempty"`
+	Rows         int            `json:"rows,omitempty"`
+	Epoch        uint64         `json:"epoch,omitempty"`
+	Sequence     uint64         `json:"sequence,omitempty"`
 }
 
 type Response struct {

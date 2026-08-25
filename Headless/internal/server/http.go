@@ -34,6 +34,7 @@ const (
 	outboundQueueCapacity = 8192
 	outboundWriteTimeout  = 30 * time.Second
 	slowMutationTimeout   = 30 * time.Second
+	rosterDeltaBatchDelay = 75 * time.Millisecond
 )
 
 type HTTPServer struct {
@@ -919,7 +920,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	_ = peer.writeJSON(makeRoster(state))
-	peer.startRoster(request.Context(), state, revision)
+	peer.startRoster(request.Context(), state, revision, supportsRosterDeltas(envelope.Capabilities))
 	for {
 		messageType, data, err := connection.ReadMessage()
 		if err != nil {
@@ -1057,6 +1058,15 @@ func compatibleProtocolVersion(client, server string) bool {
 	clientMajor := strings.SplitN(client, ".", 2)[0]
 	serverMajor := strings.SplitN(server, ".", 2)[0]
 	return clientMajor != "" && clientMajor == serverMajor
+}
+
+func supportsRosterDeltas(capabilities []string) bool {
+	for _, capability := range capabilities {
+		if capability == "roster-delta" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *HTTPServer) authorized(value string) bool {
@@ -1263,31 +1273,94 @@ func (p *wsPeer) writeError(id string, err error) error {
 	return p.writeJSON(api.Response{Type: "response", ID: id, OK: false, Error: err.Error()})
 }
 
-func (p *wsPeer) startRoster(parent context.Context, initial api.State, initialRevision uint64) {
+func (p *wsPeer) startRoster(parent context.Context, initial api.State, initialRevision uint64, useDeltas bool) {
 	ctx, cancel := context.WithCancel(parent)
 	p.rosterCancel = cancel
 	go func() {
 		ticker := time.NewTicker(750 * time.Millisecond)
 		defer ticker.Stop()
 		state := initial
-		revision := initialRevision
-		var last []byte
-		for {
-			data, _ := json.Marshal(makeRoster(state))
-			if !bytes.Equal(data, last) {
-				last = append(last[:0], data...)
+		deliveredRevision := initial.Revision
+		observedRevision := initialRevision
+		last, _ := json.Marshal(makeRoster(initial))
+		changes := p.server.Service.Store.ChangesSince(observedRevision)
+		var batchTimer *time.Timer
+		var batch <-chan time.Time
+		defer func() {
+			if batchTimer != nil {
+				batchTimer.Stop()
+			}
+		}()
+
+		publish := func(next api.State, revision uint64) bool {
+			if useDeltas {
+				delta := makeRosterDelta(state, next, deliveredRevision, revision)
+				if !delta.hasChanges() {
+					return true
+				}
+				data, err := json.Marshal(delta)
+				if err != nil {
+					return true
+				}
 				if !p.enqueue(outboundMessage{kind: websocket.TextMessage, data: data}) {
 					p.close()
-					return
+					return false
 				}
+				state = next
+				deliveredRevision = revision
+				return true
 			}
+
+			data, err := json.Marshal(makeRoster(next))
+			if err != nil {
+				return true
+			}
+			if bytes.Equal(data, last) {
+				return true
+			}
+			last = append(last[:0], data...)
+			if !p.enqueue(outboundMessage{kind: websocket.TextMessage, data: data}) {
+				p.close()
+				return false
+			}
+			state = next
+			deliveredRevision = revision
+			return true
+		}
+		refresh := func() bool {
+			next, storeRevision := p.server.Service.RosterVersion(ctx)
+			observedRevision = storeRevision
+			return publish(next, next.Revision)
+		}
+		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-p.server.Service.Store.ChangesSince(revision):
-				state, revision = p.server.Service.RosterVersion(ctx)
+			case <-changes:
+				if !useDeltas {
+					if !refresh() {
+						return
+					}
+					changes = p.server.Service.Store.ChangesSince(observedRevision)
+					continue
+				}
+				if batchTimer == nil {
+					batchTimer = time.NewTimer(rosterDeltaBatchDelay)
+					batch = batchTimer.C
+				}
+				changes = nil
+			case <-batch:
+				batchTimer = nil
+				batch = nil
+				if !refresh() {
+					return
+				}
+				changes = p.server.Service.Store.ChangesSince(observedRevision)
 			case <-ticker.C:
-				state, revision = p.server.Service.RosterVersion(ctx)
+				if !refresh() {
+					return
+				}
+				changes = p.server.Service.Store.ChangesSince(observedRevision)
 			}
 		}
 	}()
@@ -1313,6 +1386,33 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPage(sessionID, before, limit))
+	case "agent.transcript":
+		sessionID := stringParam(params, "session")
+		if sessionID == "" {
+			return fmt.Errorf("session parameter required")
+		}
+		var offset int64
+		if rawOffset, specified := params["offset"]; specified {
+			value, ok := rawOffset.(string)
+			if !ok {
+				return fmt.Errorf("transcript offset must be an integer")
+			}
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("transcript offset must be an integer")
+			}
+			offset = parsed
+		}
+		value, err := p.server.Service.agentTranscriptChunk(
+			ctx,
+			sessionID,
+			offset,
+			intParam(params, "limit"),
+		)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "agent.snapshot":
 		sessionID := stringParam(params, "session")
 		if sessionID == "" {
