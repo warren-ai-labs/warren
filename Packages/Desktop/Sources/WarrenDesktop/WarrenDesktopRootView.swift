@@ -48,6 +48,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetAutoOpenShell: (Bool) -> Void
     private let autoStartAI: Bool
     private let onSetAutoStartAI: (Bool) -> Void
+    private let embeddedEditorAvailable: Bool
+    private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
     private let externalIDEService = WarrenDesktopExternalIDEService.live
     @State private var sidebarState: WarrenDesktopSidebarState
@@ -67,6 +69,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var pendingDeletion: WarrenDesktopDeletionRequest?
     @State private var pendingDeletionEndpointID: String?
     @State private var deleteWorkspaceRemoveWorktree = false
+    @State private var workspaceContentModes: [WorkspaceID: WarrenDesktopWorkspaceContentMode]
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var terminalTitleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
@@ -75,6 +78,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var terminalFontSize = TerminalFontPreference.defaultSize
     @AppStorage(WarrenPreferenceKey.noticeMuted)
     private var notificationsMuted = false
+    @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
+    private var embeddedEditorDefaultIDE = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -122,6 +127,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSetAutoOpenShell: @escaping (Bool) -> Void = { _ in },
         autoStartAI: Bool = false,
         onSetAutoStartAI: @escaping (Bool) -> Void = { _ in },
+        embeddedEditorAvailable: Bool = false,
+        editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -159,6 +166,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onSetAutoOpenShell = onSetAutoOpenShell
         self.autoStartAI = autoStartAI
         self.onSetAutoStartAI = onSetAutoStartAI
+        self.embeddedEditorAvailable = embeddedEditorAvailable
+        self.editorSurface = editorSurface
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -169,6 +178,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             initialValue: persistenceEnabled
                 ? Self.restoredSidebarTree(scope: selectedEndpointID)
                 : WarrenDesktopSidebarTreeState()
+        )
+        _workspaceContentModes = State(
+            initialValue: persistenceEnabled
+                ? WarrenDesktopWorkspaceContentModePersistence.restore(
+                    scope: selectedEndpointID
+                )
+                : [:]
         )
     }
 
@@ -196,8 +212,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let isAddingSession = isAddingSession(in: presentation)
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
+        let contentMode = workspaceContentMode(for: presentation.workspace)
         let tabBarView = makeTabBarView(
             presentation: presentation,
+            contentMode: contentMode,
             tabTitles: tabTitles,
             tabActivities: tabActivities,
             pinnedSessionIDs: pinnedSessionIDs,
@@ -229,6 +247,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 makeWorkspaceColumn(
                     presentation: presentation,
                     tabBarView: tabBarView,
+                    contentMode: contentMode,
                     isAddingSession: isAddingSession
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -260,10 +279,23 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onChange(of: sidebarTree) { newState in
             if persistenceEnabled { Self.persist(newState, scope: selectedEndpointID) }
         }
+        .onChange(of: workspaceContentModes) { newModes in
+            guard persistenceEnabled else { return }
+            WarrenDesktopWorkspaceContentModePersistence.save(
+                newModes,
+                scope: selectedEndpointID,
+                validWorkspaceIDs: Set(projection.groups.flatMap(\.workspaces).map(\.id))
+            )
+        }
         .onChange(of: selectedEndpointID) { newEndpointID in
             sidebarTree = persistenceEnabled
                 ? Self.restoredSidebarTree(scope: newEndpointID)
                 : WarrenDesktopSidebarTreeState()
+            workspaceContentModes = persistenceEnabled
+                ? WarrenDesktopWorkspaceContentModePersistence.restore(
+                    scope: newEndpointID
+                )
+                : [:]
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
@@ -353,8 +385,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private var availableTrailingControls: [WarrenDesktopWorkspaceTabTrailingControl] {
         WarrenDesktopWorkspaceTabTrailingControl.available(
-            externalIDEOptions: externalIDEOptions
+            externalIDEOptions: externalIDEOptions,
+            embeddedEditorAvailable: embeddedEditorChromeAvailable
         )
+    }
+
+    private var embeddedEditorChromeAvailable: Bool {
+        embeddedEditorAvailable && externalIDEOptions != nil
     }
 
     private var trailingControlLayout: (direct: [WarrenDesktopWorkspaceTabTrailingControl], overflow: [WarrenDesktopWorkspaceTabTrailingControl]) {
@@ -421,6 +458,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     if let options = externalIDEOptions {
                         WarrenDesktopExternalIDEPopover(
                             options: options,
+                            embeddedEditorAvailable: embeddedEditorChromeAvailable,
+                            embeddedEditorDefault: embeddedEditorDefaultIDE,
+                            onOpenEmbeddedEditor: {
+                                setWorkspaceContentMode(
+                                    .editor,
+                                    for: makePresentation().workspace
+                                )
+                            },
+                            onSetEmbeddedEditorDefault: {
+                                embeddedEditorDefaultIDE = $0
+                            },
                             onOpen: openInExternalIDE,
                             onDismiss: { setChromePopover(nil) }
                         )
@@ -477,6 +525,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// preserving the navigation ownership rules.
     private func makeTabBarView(
         presentation: Presentation,
+        contentMode: WarrenDesktopWorkspaceContentMode,
         tabTitles: [String: String],
         tabActivities: [TerminalSessionID: AgentActivityState],
         pinnedSessionIDs: Set<TerminalSessionID>,
@@ -497,6 +546,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             selectedEndpointID: selectedEndpointID,
             webStatus: webStatus,
             externalIDEOptions: externalIDEOptions,
+            embeddedEditorAvailable: embeddedEditorAvailable && presentation.workspace != nil,
+            embeddedEditorTabVisible: hasEmbeddedEditorTab(for: presentation.workspace),
+            embeddedEditorSelected: contentMode == .editor,
+            embeddedEditorDefault: embeddedEditorDefaultIDE,
             notices: notices,
             notificationsMuted: notificationsMuted,
             externallyVisibleControls: externallyVisibleControls,
@@ -508,8 +561,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 setChromePopover(chromePopover == popover ? nil : popover)
             },
             onOpenInExternalIDE: openInExternalIDE,
+            onOpenEmbeddedEditor: {
+                setWorkspaceContentMode(.editor, for: presentation.workspace)
+            },
+            onCloseEmbeddedEditor: {
+                closeEmbeddedEditor(for: presentation.workspace)
+            },
             onSelectEndpoint: onSelectEndpoint,
-            onSelectTab: { dispatch(.selectTab($0)) },
+            onSelectTab: { selectTab($0, in: presentation) },
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
             },
@@ -521,7 +580,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             canAddTab: presentation.workspace != nil || presentation.terminalGroup != nil,
             isAddingTab: isAddingSession,
             onAddTab: {
-                addSession(in: presentation)
+                handleNewSession(in: presentation)
             },
             onCloseTab: { dispatch(.closeTab($0)) },
             onCloseOtherTabs: { dispatch(.closeOtherTabs($0)) },
@@ -539,9 +598,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func makeWorkspaceColumn(
         presentation: Presentation,
         tabBarView: AnyView,
+        contentMode: WarrenDesktopWorkspaceContentMode,
         isAddingSession: Bool
     ) -> AnyView {
-        AnyView(
+        return AnyView(
             VStack(spacing: 0) {
                 if chromeMode.showsIndependentTopBar {
                     WarrenDesktopTopBar(
@@ -551,15 +611,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     )
                 }
                 tabBarView
-                WarrenDesktopPresetBar(
-                    workspace: presentation.workspace,
-                    terminalGroup: presentation.terminalGroup,
-                    isBusy: isAddingSession,
-                    onLaunch: { request in
-                        launchSession(request, in: presentation)
-                    }
-                )
-                HStack(spacing: 0) {
+                if contentMode == .terminal {
+                    WarrenDesktopPresetBar(
+                        workspace: presentation.workspace,
+                        terminalGroup: presentation.terminalGroup,
+                        isBusy: isAddingSession,
+                        onLaunch: { request in
+                            launchSession(request, in: presentation)
+                        }
+                    )
+                }
+                ZStack {
                     WarrenDesktopWorkspaceContent(
                         workspace: presentation.contentWorkspace,
                         terminalGroup: presentation.contentTerminalGroup,
@@ -576,14 +638,64 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             family: terminalFontFamily,
                             size: terminalFontSize
                         ),
-                        wantsTerminalFocus: !commandPalettePresented && !settingsPresented,
+                        wantsTerminalFocus: contentMode == .terminal
+                            && !commandPalettePresented
+                            && !settingsPresented,
                         onAddProject: { dispatch(.addProject) },
                         onImportSuperset: { dispatch(.importSuperset) },
                         terminalSurface: terminalSurface
                     )
+                    .opacity(contentMode == .terminal ? 1 : 0)
+                    .allowsHitTesting(contentMode == .terminal)
+                    .accessibilityHidden(contentMode != .terminal)
+
+                    if let workspace = presentation.workspace,
+                       workspaceContentModes[workspace.id] != nil,
+                       embeddedEditorAvailable {
+                        WarrenDesktopEmbeddedEditorPane(
+                            workspace: workspace,
+                            surface: editorSurface(workspace)
+                        )
+                        .opacity(contentMode == .editor ? 1 : 0)
+                        .allowsHitTesting(contentMode == .editor)
+                        .accessibilityHidden(contentMode != .editor)
+                    }
                 }
             }
         )
+    }
+
+    private func workspaceContentMode(
+        for workspace: Workspace?
+    ) -> WarrenDesktopWorkspaceContentMode {
+        guard embeddedEditorAvailable,
+              let workspace else {
+            return .terminal
+        }
+        return workspaceContentModes[workspace.id] ?? .terminal
+    }
+
+    private func setWorkspaceContentMode(
+        _ mode: WarrenDesktopWorkspaceContentMode,
+        for workspace: Workspace?
+    ) {
+        guard embeddedEditorAvailable, let workspace else { return }
+        guard workspaceContentMode(for: workspace) != mode else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        workspaceContentModes[workspace.id] = mode
+    }
+
+    private func hasEmbeddedEditorTab(for workspace: Workspace?) -> Bool {
+        guard embeddedEditorAvailable, let workspace else { return false }
+        return workspaceContentModes[workspace.id] != nil
+    }
+
+    private func closeEmbeddedEditor(for workspace: Workspace?) {
+        guard embeddedEditorAvailable,
+              let workspace,
+              workspaceContentModes[workspace.id] != nil else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        workspaceContentModes.removeValue(forKey: workspace.id)
     }
 
     private var settingsOverlay: AnyView {
@@ -765,6 +877,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) -> String? {
         switch control {
         case .externalIDE:
+            if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
+                return "Embedded editor default"
+            }
+            if embeddedEditorChromeAvailable {
+                return "Choose an IDE"
+            }
             return externalIDEOptions?.first?.name
         case .endpoint:
             return endpointOptions.first { $0.id == selectedEndpointID }?.label
@@ -789,7 +907,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) -> Bool {
         switch control {
         case .externalIDE:
-            return !(externalIDEOptions?.isEmpty ?? true)
+            if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
+                return false
+            }
+            return embeddedEditorChromeAvailable
+                || !(externalIDEOptions?.isEmpty ?? true)
         case .endpoint, .web, .notifications:
             return true
         case .settings:
@@ -803,13 +925,23 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) -> AnyView? {
         switch control {
         case .externalIDE:
-            guard let options = externalIDEOptions, !options.isEmpty else { return nil }
+            guard let options = externalIDEOptions else { return nil }
             return AnyView(
                 WarrenDesktopExternalIDEPopoverContent(
                     options: options,
+                    embeddedEditorAvailable: embeddedEditorChromeAvailable,
+                    embeddedEditorDefault: embeddedEditorDefaultIDE,
+                    onOpenEmbeddedEditor: {
+                        setWorkspaceContentMode(
+                            .editor,
+                            for: makePresentation().workspace
+                        )
+                    },
+                    onSetEmbeddedEditorDefault: {
+                        embeddedEditorDefaultIDE = $0
+                    },
                     onOpen: { option in
                         openInExternalIDE(option)
-                        onBack()
                     },
                     onDismiss: onBack
                 )
@@ -883,6 +1015,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) {
         switch control {
         case .externalIDE:
+            if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
+                setWorkspaceContentMode(.editor, for: makePresentation().workspace)
+                setChromePopover(nil)
+                return
+            }
             guard externalIDEOptions != nil else { return }
             setChromePopover(.externalIDE)
         case .endpoint:
@@ -933,10 +1070,33 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func handleNewSession(in presentation: Presentation) {
+        setWorkspaceContentMode(.terminal, for: presentation.workspace)
         addSession(in: presentation)
     }
 
     private func handleTabMove(forward: Bool, in presentation: Presentation) {
+        if hasEmbeddedEditorTab(for: presentation.workspace) {
+            let mode = workspaceContentMode(for: presentation.workspace)
+            if mode == .editor {
+                guard let tabID = forward
+                    ? presentation.tabs.first?.id
+                    : presentation.tabs.last?.id else { return }
+                selectTab(tabID, in: presentation)
+                return
+            }
+            if let selectedTabID = navigation.selectedTabID,
+               let selectedIndex = presentation.tabs.firstIndex(where: {
+                   $0.id == selectedTabID
+               }) {
+                let isBoundary = forward
+                    ? selectedIndex == presentation.tabs.indices.last
+                    : selectedIndex == presentation.tabs.indices.first
+                if isBoundary {
+                    setWorkspaceContentMode(.editor, for: presentation.workspace)
+                    return
+                }
+            }
+        }
         guard let tabID = WarrenDesktopTabCycler.tabID(
             forward: forward,
             in: presentation.tabs,
@@ -951,14 +1111,29 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) {
         let rawIndex = note.userInfo?[WarrenDesktopCommand.selectTabIndexKey]
         guard let index = tabIndex(from: rawIndex),
-              let tabID = WarrenDesktopTabSelector.tabID(
+              let selection = WarrenDesktopTabSelector.selection(
                 in: presentation.tabs,
+                includesEditor: hasEmbeddedEditorTab(for: presentation.workspace),
                 number: index
               ) else { return }
+        switch selection {
+        case .tab(let tabID):
+            selectTab(tabID, in: presentation)
+        case .editor:
+            setWorkspaceContentMode(.editor, for: presentation.workspace)
+        }
+    }
+
+    private func selectTab(_ tabID: String, in presentation: Presentation) {
+        setWorkspaceContentMode(.terminal, for: presentation.workspace)
         dispatch(.selectTab(tabID))
     }
 
     private func handleCloseTab(in presentation: Presentation) {
+        if workspaceContentMode(for: presentation.workspace) == .editor {
+            closeEmbeddedEditor(for: presentation.workspace)
+            return
+        }
         guard let tab = presentation.tab, tab.sessionID != nil else { return }
         dispatch(.closeTab(tab.id))
     }
@@ -1238,6 +1413,23 @@ enum WarrenDesktopTabCycler {
 /// Pure rule for the ⌘1…⌘9 menu shortcuts: the number is a 1-based position
 /// inside the active workspace's tab track.
 enum WarrenDesktopTabSelector {
+    enum Selection: Equatable {
+        case tab(String)
+        case editor
+    }
+
+    static func selection(
+        in tabs: [ClientTab],
+        includesEditor: Bool,
+        number: Int
+    ) -> Selection? {
+        if let tabID = tabID(in: tabs, number: number) {
+            return .tab(tabID)
+        }
+        guard includesEditor, number == tabs.count + 1 else { return nil }
+        return .editor
+    }
+
     static func tabID(in tabs: [ClientTab], number: Int) -> String? {
         guard number >= 1, tabs.indices.contains(number - 1) else { return nil }
         return tabs[number - 1].id

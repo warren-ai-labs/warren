@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import GhosttyAdapter
 import WarrenDesktop
+import WebKit
 
 enum WebCommand {
     static let copyLocalURL = Notification.Name("Web.copyLocalURL")
@@ -88,7 +89,8 @@ enum WarrenMain {
 }
 
 @MainActor
-private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
+    NSMenuItemValidation {
     private var window: NSWindow?
     private var daemonMenuBarProcess: Process?
     private let updater = WarrenUpdater()
@@ -408,6 +410,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         NotificationCenter.default.post(name: Notification.Name(rawValue), object: nil)
     }
 
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard WarrenEmbeddedEditorFocus.contains(window?.firstResponder) else { return true }
+        if menuItem.action == #selector(selectTabNumber(_:)) {
+            return true
+        }
+        return menuItem.action != #selector(postCommand(_:))
+    }
+
     @objc private func toggleFullScreen(_ sender: NSMenuItem) {
         window?.toggleFullScreen(nil)
     }
@@ -504,6 +514,10 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             keyEquivalent: "q"
         )
         appMenuItem.submenu = appMenu
+
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = WarrenStandardEditMenu.make()
+        mainMenu.addItem(editMenuItem)
 
         let sessionMenuItem = NSMenuItem()
         mainMenu.addItem(sessionMenuItem)
@@ -650,6 +664,59 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLI.target = target
         toolsMenuItem.submenu = toolsMenu
         return mainMenu
+    }
+}
+
+enum WarrenStandardEditMenu {
+    @MainActor
+    static func make() -> NSMenu {
+        let menu = NSMenu(title: "Edit")
+        menu.addItem(
+            withTitle: "Undo",
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        )
+        let redo = menu.addItem(
+            withTitle: "Redo",
+            action: Selector(("redo:")),
+            keyEquivalent: "z"
+        )
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Cut",
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        )
+        menu.addItem(
+            withTitle: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        menu.addItem(
+            withTitle: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        return menu
+    }
+}
+
+enum WarrenEmbeddedEditorFocus {
+    @MainActor
+    static func contains(_ responder: NSResponder?) -> Bool {
+        var view = responder as? NSView
+        while let current = view {
+            if current is WKWebView { return true }
+            view = current.superview
+        }
+        return false
     }
 }
 

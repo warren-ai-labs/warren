@@ -3,6 +3,11 @@ import SwiftUI
 import WarrenDesignSystem
 import WarrenDomain
 
+public enum WarrenDesktopWorkspaceContentMode: String, Hashable, Sendable {
+    case terminal
+    case editor
+}
+
 /// Pinned command launchers between the workspace tabs and pane toolbar.
 ///
 /// Superset calls this its PresetsBar. Warren keeps its executable built-ins
@@ -74,6 +79,7 @@ struct WarrenDesktopPresetBar: View {
             .padding(.horizontal, WarrenSpacing.compact)
             .frame(minWidth: 0, minHeight: WarrenLayoutMetrics.presetBarHeight)
         }
+        .frame(maxWidth: .infinity)
         .frame(height: WarrenLayoutMetrics.presetBarHeight)
         .background(tokens.background)
         .overlay(alignment: .bottom) {
@@ -94,7 +100,6 @@ struct WarrenDesktopPresetBar: View {
         default: ""
         }
     }
-
 }
 
 struct WarrenDesktopPresetIcon: View {
