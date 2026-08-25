@@ -486,7 +486,8 @@ func (s *Service) reconcile(ctx context.Context) {
 	probeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	running := s.runningSessions(probeContext)
-	for _, session := range s.Store.Snapshot().Sessions {
+	state := s.Store.Snapshot()
+	for _, session := range state.Sessions {
 		if session.Lifecycle != "running" {
 			s.stopOutput(session.ID, false)
 			continue
@@ -501,7 +502,7 @@ func (s *Service) reconcile(ctx context.Context) {
 		}
 		_, _ = s.ensureOutput(ctx, session)
 		s.applyAgentState(session)
-		_, _ = s.ensureAgent(probeContext, session)
+		_, _ = s.ensureAgentWithState(probeContext, session, &state)
 	}
 }
 
@@ -2776,6 +2777,14 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 // is best-effort: no transcript yet, an unknown CLI layout, or a missing CLI
 // must never make the terminal session fail.
 func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentSession, error) {
+	state := s.Store.Snapshot()
+	return s.ensureAgentWithState(ctx, session, &state)
+}
+
+// ensureAgentWithState reuses one mutable reconciliation snapshot across the
+// running sessions. A deep Store snapshot is intentionally expensive, so the
+// lifecycle loop must not take one for every session it inspects.
+func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
 	dedicated := session.Kind == "codex" || session.Kind == "claude"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
@@ -2786,7 +2795,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 	}
 
 	workspacePath, pathErr := sessionWorkingDirectory(
-		s.Store.Snapshot(),
+		*state,
 		session.WorkspaceID,
 		session.TerminalGroupID,
 	)
@@ -2822,7 +2831,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 				// Re-bind to the CLI's new transcript; startAgentWatcher
 				// resets the stale projection before switching files.
 				entry = s.startAgentWatcher(session.ID, provider, transcriptPath, false)
-				s.persistAgentMeta(session.ID, agentSessionID, transcriptPath)
+				s.persistAgentMetaWithState(state, session.ID, agentSessionID, transcriptPath)
 				return entry, nil
 			}
 			return entry, nil
@@ -2836,7 +2845,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 
 		if transcriptPath == "" {
 			found, err := s.AgentFinder.Find(ctx, session.Kind, workspacePath, session.CreatedAt)
-			if err != nil || found == "" || s.transcriptTakenByOther(found, session.ID) {
+			if err != nil || found == "" || s.transcriptTakenByOtherInState(*state, found, session.ID) {
 				// Keep the placeholder so reconcile retries at its next tick
 				// instead of re-running discovery concurrently from every caller.
 				return entry, nil
@@ -2846,19 +2855,19 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
 		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude") {
-			s.clearShellAgent(session)
+			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
-		state, stateErr := agent.ReadAgentStatus(agent.StatePath(session.ID))
-		if stateErr == nil && state.Activity == api.AgentActivityExited {
-			s.clearShellAgent(session)
+		agentState, stateErr := agent.ReadAgentStatus(agent.StatePath(session.ID))
+		if stateErr == nil && agentState.Activity == api.AgentActivityExited {
+			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
 		info, statErr := os.Stat(binding.TranscriptPath)
 		if statErr != nil || info.IsDir() {
 			return nil, nil
 		}
-		if s.transcriptTakenByOther(binding.TranscriptPath, session.ID) {
+		if s.transcriptTakenByOtherInState(*state, binding.TranscriptPath, session.ID) {
 			return nil, nil
 		}
 		provider = binding.Provider
@@ -2867,7 +2876,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 	}
 
 	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated)
-	s.persistAgentMeta(session.ID, agentSessionID, transcriptPath)
+	s.persistAgentMetaWithState(state, session.ID, agentSessionID, transcriptPath)
 	return entry, nil
 }
 
@@ -2964,6 +2973,11 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 // clearShellAgent tears down a shell overlay after its agent CLI exited and
 // drops the persisted binding so clients stop treating the tab as an agent.
 func (s *Service) clearShellAgent(session api.Session) {
+	state := s.Store.Snapshot()
+	s.clearShellAgentWithState(session, &state)
+}
+
+func (s *Service) clearShellAgentWithState(session api.Session, state *api.State) {
 	if session.Kind == "codex" || session.Kind == "claude" {
 		return
 	}
@@ -2975,22 +2989,35 @@ func (s *Service) clearShellAgent(session api.Session) {
 		return
 	}
 	s.stopAgent(session.ID)
-	_ = s.Store.Update(func(state *api.State) error {
-		for index := range state.Sessions {
-			if state.Sessions[index].ID == session.ID {
-				state.Sessions[index].AgentSessionID = ""
-				state.Sessions[index].TranscriptPath = ""
+	if err := s.Store.Update(func(value *api.State) error {
+		for index := range value.Sessions {
+			if value.Sessions[index].ID == session.ID {
+				value.Sessions[index].AgentSessionID = ""
+				value.Sessions[index].TranscriptPath = ""
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return
+	}
+	for index := range state.Sessions {
+		if state.Sessions[index].ID == session.ID {
+			state.Sessions[index].AgentSessionID = ""
+			state.Sessions[index].TranscriptPath = ""
+			return
+		}
+	}
 }
 
 // transcriptTakenByOther prevents the cwd+mtime fallback from assigning one
 // transcript to several Warren sessions. A transcript that another running
 // session already projects must never be stolen.
 func (s *Service) transcriptTakenByOther(transcriptPath, sessionID string) bool {
-	for _, other := range s.Store.Snapshot().Sessions {
+	return s.transcriptTakenByOtherInState(s.Store.Snapshot(), transcriptPath, sessionID)
+}
+
+func (s *Service) transcriptTakenByOtherInState(state api.State, transcriptPath, sessionID string) bool {
+	for _, other := range state.Sessions {
 		if other.ID != sessionID && other.Lifecycle == "running" && other.TranscriptPath == transcriptPath {
 			return true
 		}
@@ -3027,14 +3054,20 @@ func (s *Service) boundTranscript(session api.Session, workspacePath string) str
 // persistAgentMeta records the CLI session ID and transcript path on the
 // Session so roster consumers and a daemon restart keep the exact binding.
 func (s *Service) persistAgentMeta(sessionID, agentSessionID, transcriptPath string) {
-	for _, session := range s.Store.Snapshot().Sessions {
+	state := s.Store.Snapshot()
+	s.persistAgentMetaWithState(&state, sessionID, agentSessionID, transcriptPath)
+}
+
+func (s *Service) persistAgentMetaWithState(state *api.State, sessionID, agentSessionID, transcriptPath string) {
+	for index := range state.Sessions {
+		session := &state.Sessions[index]
 		if session.ID != sessionID {
 			continue
 		}
 		if session.AgentSessionID == agentSessionID && session.TranscriptPath == transcriptPath {
 			return
 		}
-		_ = s.Store.Update(func(value *api.State) error {
+		if err := s.Store.Update(func(value *api.State) error {
 			for index := range value.Sessions {
 				if value.Sessions[index].ID == sessionID {
 					value.Sessions[index].AgentSessionID = agentSessionID
@@ -3042,7 +3075,11 @@ func (s *Service) persistAgentMeta(sessionID, agentSessionID, transcriptPath str
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return
+		}
+		session.AgentSessionID = agentSessionID
+		session.TranscriptPath = transcriptPath
 		return
 	}
 }
