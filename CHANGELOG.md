@@ -6,6 +6,35 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.9.0] - 2026-08-25
+
+> Major release: Warren moves to Ghostline v1, adds an embedded workspace
+> editor, and makes terminal and session workflows faster and easier to
+> diagnose. Existing Ghostline v0 sessions are migrated through the bundled
+> v0.8 compatibility bridge. This release targets arm64 Apple Silicon Macs
+> running macOS 13 or later; a local Apple Development build may fail
+> Gatekeeper until it is replaced by a notarized Developer ID build.
+
+### Added
+
+- Add a workspace-scoped embedded editor for local workspaces, with an
+  isolated code-server profile, managed layout, and background language
+  extension setup.
+- Add build identity diagnostics covering the release version, source revision,
+  and dirty working-tree state.
+
+### Changed
+
+- Migrate the default Ghostline runtime to v1 and bundle a v0.8 compatibility
+  bridge and arm64 library for one-time migration of retained sessions.
+- Replace command-palette graph scans with a normalized, ranked resource index,
+  native keyboard navigation, IME-safe input handling, contextual match status,
+  and a bounded visible result set.
+- Improve terminal and session responsiveness by reusing output and roster
+  state, bounding transcript assembly, and making output replay more efficient.
+- Defer native terminal split panes while the embedded editor and existing
+  terminal surfaces remain the supported workflow.
+
 ## [0.8.2] - 2026-08-23
 
 > Patch release: Warren now embeds gnar v1.7.2 and keeps the onboarding
