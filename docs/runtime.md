@@ -78,8 +78,9 @@ Good:
 Not so good:
 
 - Newer and less battle-tested than tmux; the API is still evolving.
-- Requires the arm64 libghostty-vt dylib bundled by the Ghostline module on
-  macOS 13 and later.
+- Ghostline v1 statically links its terminal core. The macOS app additionally
+  bundles the v0.8 bridge's arm64 libghostty-vt dylib only for one-time v0
+  migration.
 - A forced restart of the ghostline server process ends its sessions. Normal
   protocol upgrades are rolled in place: a fresh server adopts every session
   from the old one before the old process exits, so children keep running.

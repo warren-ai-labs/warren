@@ -88,11 +88,28 @@ func TestGhostlineRuntimeLifecycle(t *testing.T) {
 	if !sessions["warren_ghost_test"] {
 		t.Fatalf("List missing session: %v", sessions)
 	}
-	if size, err := runtime.SpoolSize(ctx, "warren_ghost_test"); err != nil || size <= 0 {
-		t.Fatalf("SpoolSize = %d, %v", size, err)
+	checkpoint, err := runtime.Checkpoint(ctx, "warren_ghost_test")
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
 	}
-	if path := runtime.SpoolPath("warren_ghost_test"); path == "" {
-		t.Fatal("SpoolPath returned empty")
+	if checkpoint.Cursor.String() == "" {
+		t.Fatal("Checkpoint returned an empty v1 cursor")
+	}
+	reader, err := runtime.OpenOutput(ctx, "warren_ghost_test", checkpoint.Cursor)
+	if err != nil {
+		t.Fatalf("OpenOutput: %v", err)
+	}
+	defer reader.Close()
+	if err := runtime.Input(ctx, "warren_ghost_test", []byte("echo cursor-output\r")); err != nil {
+		t.Fatalf("Input cursor output: %v", err)
+	}
+	buffer := make([]byte, 4096)
+	read, err := reader.Read(buffer)
+	if err != nil {
+		t.Fatalf("Read cursor output: %v", err)
+	}
+	if read == 0 {
+		t.Fatal("OpenOutput returned no newly written data")
 	}
 	if err := runtime.Kill(ctx, "warren_ghost_test"); err != nil {
 		t.Fatalf("Kill: %v", err)

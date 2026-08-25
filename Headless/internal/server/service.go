@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -174,6 +175,11 @@ type outputSession struct {
 	runtimeKind       string
 	ring              *output.Ring
 	watcher           *output.SpoolWatcher
+	reader            *ghostline.OutputReader
+	readerDone        chan struct{}
+	readerCancel      context.CancelFunc
+	outputCursor      ghostline.Cursor
+	hasOutputCursor   bool
 	responder         *ghostline.QueryResponder
 	prepareLock       *sessionLock
 	persistedSequence uint64
@@ -230,6 +236,16 @@ type OutputRuntime interface {
 	RemoveSpool(string)
 }
 
+// CursorOutputRuntime is implemented by Ghostline v1. The service owns one
+// reader per session and treats Cursor as an opaque durable token; the
+// browser-facing output protocol deliberately continues to use its own
+// lightweight sequence anchors.
+type CursorOutputRuntime interface {
+	Runtime
+	Checkpoint(context.Context, string) (ghostline.Checkpoint, error)
+	OpenOutput(context.Context, string, ghostline.Cursor) (*ghostline.OutputReader, error)
+}
+
 // runtimeKindFor resolves the engine for a session, falling back to the
 // daemon default. Runtime selection is a headless-side decision.
 func (s *Service) runtimeKindFor(session api.Session) string {
@@ -256,6 +272,11 @@ func (s *Service) runtimeForKind(kind string) Runtime {
 
 func (s *Service) outputAdapterFor(session api.Session) OutputRuntime {
 	adapter, _ := s.runtimeFor(session).(OutputRuntime)
+	return adapter
+}
+
+func (s *Service) cursorOutputRuntimeFor(session api.Session) CursorOutputRuntime {
+	adapter, _ := s.runtimeFor(session).(CursorOutputRuntime)
 	return adapter
 }
 
@@ -411,9 +432,14 @@ func (s *Service) Shutdown() {
 	}
 	s.outputMu.Unlock()
 	for _, outputSession := range outputs {
-		outputSession.watcher.Close()
+		if outputSession.watcher != nil {
+			outputSession.watcher.Close()
+		}
+		s.stopCursorOutput(outputSession)
 		outputSession.mu.Lock()
-		_ = s.persistCursorLocked(outputSession)
+		if s.Store != nil {
+			_ = s.persistCursorLocked(outputSession)
+		}
 		outputSession.mu.Unlock()
 	}
 	s.agentsMu.Lock()
@@ -647,6 +673,10 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// the single lifecycle loop so additional observers cannot multiply process
 	// launches, runtime RPCs, or Session writes.
 	state, revision := s.Store.SnapshotVersion()
+	// The store also carries Ghostline's local recovery data. Browser and CLI
+	// clients only need logical Warren identities, never a daemon socket path
+	// or an opaque output cursor.
+	state.GhostlineMigration = nil
 	// Store revisions begin at zero, while an omitted JSON field means an old
 	// server did not support revisioned roster snapshots. Offset the opaque
 	// wire token so every current snapshot carries a non-zero revision without
@@ -673,6 +703,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	})
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
+		session.OutputCursor = ""
 		if session.Scope == "" {
 			session.Scope = session.ScopeKind()
 		}
@@ -2706,17 +2737,87 @@ func sessionWorkingDirectory(state api.State, workspaceID, groupID string) (stri
 	return "", fmt.Errorf("workspace not found: %s", workspaceID)
 }
 
-// ensureOutput adopts a running Session: idempotently installs the output
-// pipe, opens the spool watcher from the persisted offset, and creates the
-// output ring. Repeating attach/adopt never stacks another pipe.
+// ensureOutput adopts a running Session. Tmux keeps its file-backed watcher;
+// Ghostline v1 opens one caller-owned cursor reader. Repeating attach/adopt
+// never stacks another watcher or reader.
 func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outputSession, error) {
 	s.lazyInit()
 	s.outputMu.Lock()
 	if existing := s.outputs[session.ID]; existing != nil {
 		s.outputMu.Unlock()
+		if s.cursorOutputRuntimeFor(session) != nil {
+			if err := s.ensureCursorOutput(session, existing); err != nil {
+				return nil, err
+			}
+		}
 		return existing, nil
 	}
 	s.outputMu.Unlock()
+
+	if cursorRuntime := s.cursorOutputRuntimeFor(session); cursorRuntime != nil {
+		outputSession := &outputSession{
+			sessionID:         session.ID,
+			runtimeName:       session.Runtime,
+			runtimeKind:       s.runtimeKindFor(session),
+			ring:              output.NewRing(session.Epoch, s.ringCapacity(), s.ringMaxBytes(), session.Sequence),
+			responder:         s.newQueryResponder(),
+			prepareLock:       newSessionLock(),
+			persistedSequence: session.Sequence,
+			// A Host restart has no retained browser ring. The next attach must
+			// replay a fresh atomic checkpoint instead of pretending that an
+			// opaque Ghostline cursor is a browser byte offset.
+			reanchorRequired: true,
+		}
+		cursor, cursorErr := ghostline.ParseCursor(session.OutputCursor)
+		if cursorErr != nil {
+			s.logWarn("discard invalid ghostline output cursor", "session", session.ID, "error", cursorErr)
+		}
+		if session.OutputCursor == "" || cursorErr != nil {
+			checkpointContext, cancelCheckpoint := context.WithTimeout(ctx, s.commandTimeout())
+			checkpoint, err := cursorRuntime.Checkpoint(checkpointContext, session.Runtime)
+			cancelCheckpoint()
+			if err != nil {
+				return nil, fmt.Errorf("checkpoint ghostline output: %w", err)
+			}
+			cursor = checkpoint.Cursor
+		}
+		outputSession.outputCursor = cursor
+		outputSession.hasOutputCursor = true
+
+		s.outputMu.Lock()
+		if previous := s.outputs[session.ID]; previous != nil {
+			s.outputMu.Unlock()
+			if err := s.ensureCursorOutput(session, previous); err != nil {
+				return nil, err
+			}
+			return previous, nil
+		}
+		s.outputs[session.ID] = outputSession
+		s.outputMu.Unlock()
+
+		if session.OutputCursor == "" || cursorErr != nil {
+			outputSession.mu.Lock()
+			if s.Store != nil {
+				if err := s.persistCursorLocked(outputSession); err != nil {
+					outputSession.mu.Unlock()
+					s.logWarn("persist ghostline output cursor", "session", session.ID, "error", err)
+				} else {
+					outputSession.mu.Unlock()
+				}
+			} else {
+				outputSession.mu.Unlock()
+			}
+		}
+		if err := s.ensureCursorOutput(session, outputSession); err != nil {
+			s.outputMu.Lock()
+			if s.outputs[session.ID] == outputSession {
+				delete(s.outputs, session.ID)
+			}
+			s.outputMu.Unlock()
+			return nil, err
+		}
+		return outputSession, nil
+	}
 
 	adapter := s.outputAdapterFor(session)
 	if adapter == nil {
@@ -2781,6 +2882,128 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 	s.outputs[session.ID] = outputSession
 	s.outputMu.Unlock()
 	return outputSession, nil
+}
+
+// ensureCursorOutput resumes a v1 reader from the last fully recorded
+// Ghostline cursor. The cursor is updated only after every byte returned by a
+// reader has been appended to the browser ring, so a daemon crash can at most
+// replay a bounded tail and cannot lose output.
+func (s *Service) ensureCursorOutput(session api.Session, outputSession *outputSession) error {
+	if s.cursorOutputRuntimeFor(session) == nil {
+		return nil
+	}
+	outputSession.mu.Lock()
+	running := outputSession.reader != nil
+	hasCursor := outputSession.hasOutputCursor
+	outputSession.mu.Unlock()
+	if running {
+		return nil
+	}
+	if !hasCursor {
+		return errors.New("ghostline output reader has no cursor")
+	}
+	return s.startCursorOutput(session, outputSession)
+}
+
+func (s *Service) startCursorOutput(session api.Session, outputSession *outputSession) error {
+	runtime := s.cursorOutputRuntimeFor(session)
+	if runtime == nil {
+		return nil
+	}
+	outputSession.mu.Lock()
+	if outputSession.reader != nil {
+		outputSession.mu.Unlock()
+		return nil
+	}
+	cursor := outputSession.outputCursor
+	outputSession.mu.Unlock()
+
+	// The reader outlives the HTTP request that happened to create or attach
+	// this session. Its explicit cancellation is retained in outputSession and
+	// Close always unblocks a pending remote read.
+	readerContext, cancel := context.WithCancel(context.Background())
+	reader, err := runtime.OpenOutput(readerContext, session.Runtime, cursor)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("open ghostline output: %w", err)
+	}
+	done := make(chan struct{})
+	outputSession.mu.Lock()
+	if outputSession.reader != nil {
+		outputSession.mu.Unlock()
+		cancel()
+		_ = reader.Close()
+		return nil
+	}
+	outputSession.reader = reader
+	outputSession.readerDone = done
+	outputSession.readerCancel = cancel
+	outputSession.mu.Unlock()
+
+	go s.readCursorOutput(session, outputSession, reader, readerContext, done)
+	return nil
+}
+
+func (s *Service) readCursorOutput(session api.Session, outputSession *outputSession, reader *ghostline.OutputReader, readerContext context.Context, done chan struct{}) {
+	defer func() {
+		outputSession.mu.Lock()
+		if outputSession.reader == reader {
+			outputSession.reader = nil
+			outputSession.readerDone = nil
+			outputSession.readerCancel = nil
+		}
+		outputSession.mu.Unlock()
+		close(done)
+	}()
+
+	buffer := make([]byte, 64*1024)
+	for {
+		count, readErr := reader.Read(buffer)
+		if count > 0 {
+			data := append([]byte(nil), buffer[:count]...)
+			s.recordCursorOutput(session.ID, data, reader.Cursor())
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) && readerContext.Err() == nil {
+				s.logWarn("read ghostline output", "session", session.ID, "error", readErr)
+			}
+			return
+		}
+		if count == 0 {
+			s.logWarn("read ghostline output", "session", session.ID, "error", io.ErrNoProgress)
+			return
+		}
+	}
+}
+
+// stopCursorOutput closes and joins a caller-owned v1 reader. It intentionally
+// runs before an attach obtains the broadcast lock: a reader can be waiting to
+// publish output under that lock, and reversing the order would deadlock the
+// checkpoint boundary.
+func (s *Service) stopCursorOutput(outputSession *outputSession) {
+	if outputSession == nil {
+		return
+	}
+	outputSession.mu.Lock()
+	reader := outputSession.reader
+	done := outputSession.readerDone
+	cancel := outputSession.readerCancel
+	if cancel != nil {
+		cancel()
+	}
+	if reader != nil {
+		_ = reader.Close()
+	}
+	outputSession.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func (s *Service) resumeCursorOutput(session api.Session, outputSession *outputSession) {
+	if err := s.ensureCursorOutput(session, outputSession); err != nil {
+		s.logWarn("resume ghostline output", "session", session.ID, "error", err)
+	}
 }
 
 // ensureAgent starts a transcript watcher for a running Codex/Claude session
@@ -3583,19 +3806,29 @@ func (s *Service) commandTimeout() time.Duration {
 }
 
 func (s *Service) recordOutput(sessionID string, data []byte) {
+	s.recordOutputWithCursor(sessionID, data, nil)
+}
+
+// recordCursorOutput records one complete v1 reader batch. Cursor is opaque:
+// it becomes durable only after the complete batch has entered the browser
+// ring, preserving the at-least-once recovery boundary across a Host crash.
+func (s *Service) recordCursorOutput(sessionID string, data []byte, cursor ghostline.Cursor) {
+	s.recordOutputWithCursor(sessionID, data, &cursor)
+}
+
+func (s *Service) recordOutputWithCursor(sessionID string, data []byte, cursor *ghostline.Cursor) {
 	s.outputMu.Lock()
 	outputSession := s.outputs[sessionID]
 	attached := len(s.peers[sessionID]) > 0
 	s.outputMu.Unlock()
-	if outputSession == nil {
+	if outputSession == nil || len(data) == 0 {
 		return
 	}
+	frames := make([]output.Frame, 0, len(data)/output.MaxPayload+1)
 	var replies [][]byte
 	for _, chunk := range output.SplitPayload(data) {
 		outputSession.mu.Lock()
 		frame, err := outputSession.ring.Append(sessionID, chunk)
-		epoch := outputSession.ring.Epoch
-		sequence := outputSession.ring.Upper()
 		if !attached {
 			replies = append(replies, outputSession.responder.Feed(chunk)...)
 		}
@@ -3603,10 +3836,33 @@ func (s *Service) recordOutput(sessionID string, data []byte) {
 		if err != nil {
 			continue
 		}
-		// Ring first, then clients: recovery is always authoritative even when
-		// a peer cannot keep up and has to reconnect.
+		frames = append(frames, frame)
+	}
+	if len(frames) == 0 {
+		return
+	}
+
+	outputSession.mu.Lock()
+	if cursor != nil {
+		outputSession.outputCursor = *cursor
+		outputSession.hasOutputCursor = true
+	}
+	epoch := outputSession.ring.Epoch
+	sequence := outputSession.ring.Upper()
+	persist := sequence-outputSession.persistedSequence >= cursorPersistEvery
+	if persist {
+		outputSession.persistedSequence = sequence
+	}
+	outputSession.mu.Unlock()
+
+	// Ring first, then clients: recovery is always authoritative even when a
+	// peer cannot keep up and has to reconnect. A v1 cursor is not persisted
+	// until all frames from this reader batch were appended above.
+	for _, frame := range frames {
 		s.broadcastFrame(frame)
-		s.maybePersistCursor(sessionID, epoch, sequence)
+	}
+	if persist {
+		s.persistOutputCursor(outputSession, epoch, sequence)
 	}
 	for _, reply := range replies {
 		_ = s.runtimeForKind(outputSession.runtimeKind).Input(context.Background(), outputSession.runtimeName, reply)
@@ -3626,9 +3882,20 @@ func (s *Service) maybePersistCursor(sessionID string, epoch, sequence uint64) {
 		return
 	}
 	outputSession.persistedSequence = sequence
+	outputSession.mu.Unlock()
+	s.persistOutputCursor(outputSession, epoch, sequence)
+}
+
+func (s *Service) persistOutputCursor(outputSession *outputSession, _, _ uint64) {
+	if s.Store == nil {
+		return
+	}
+	outputSession.mu.Lock()
 	err := s.persistCursorLocked(outputSession)
 	outputSession.mu.Unlock()
-	_ = err
+	if err != nil {
+		s.logWarn("persist output cursor", "session", outputSession.sessionID, "error", err)
+	}
 }
 
 func (s *Service) persistCursorLocked(outputSession *outputSession) error {
@@ -3639,6 +3906,9 @@ func (s *Service) persistCursorLocked(outputSession *outputSession) error {
 			if value.Sessions[index].ID == outputSession.sessionID && value.Sessions[index].Lifecycle == "running" {
 				value.Sessions[index].Epoch = epoch
 				value.Sessions[index].Sequence = sequence
+				if outputSession.hasOutputCursor {
+					value.Sessions[index].OutputCursor = outputSession.outputCursor.String()
+				}
 			}
 		}
 		return nil
@@ -3728,10 +3998,9 @@ func (s *Service) attachOutput(ctx context.Context, peer *wsPeer, session api.Se
 	return s.attachOutputLocked(ctx, peer, session, anchor)
 }
 
-// prepareAttach pauses the session's spool watcher before taking the
-// broadcast lock. A paused watcher cannot read or broadcast, so a reanchor
-// snapshot is an atomic point in the byte stream: bytes at or below the
-// snapshot are represented exactly once.
+// prepareAttach stops the cursor reader or pauses the spool watcher before
+// taking the broadcast lock. That makes a reanchor snapshot an atomic point
+// in the byte stream: bytes at or below it are represented exactly once.
 func (s *Service) prepareAttach(ctx context.Context, session api.Session) (*sessionLock, func(), error) {
 	// The desktop client has a shorter request timeout than the daemon's
 	// command timeout. Bound the entire preparation phase independently so a
@@ -3754,6 +4023,7 @@ func (s *Service) prepareAttach(ctx context.Context, session api.Session) (*sess
 	if err := prepareLock.LockContext(prepareContext); err != nil {
 		return nil, nil, fmt.Errorf("lock attach preparation: %w", err)
 	}
+	cursorRuntime := s.cursorOutputRuntimeFor(session) != nil
 
 	var releaseOnce sync.Once
 	release := func() {
@@ -3761,8 +4031,17 @@ func (s *Service) prepareAttach(ctx context.Context, session api.Session) (*sess
 			if outputSession.watcher != nil {
 				outputSession.watcher.Resume()
 			}
+			if cursorRuntime {
+				s.resumeCursorOutput(session, outputSession)
+			}
 			prepareLock.Unlock()
 		})
+	}
+	if cursorRuntime {
+		// The reader can be blocked in broadcastFrame. Stop and join it before
+		// this attach takes the same broadcast lock, otherwise checkpointing
+		// would wait on itself.
+		s.stopCursorOutput(outputSession)
 	}
 	if outputSession.watcher != nil {
 		// A background watcher may be up to one poll behind. Drain before the
@@ -3831,6 +4110,9 @@ func (s *Service) attachOutputLocked(ctx context.Context, peer *wsPeer, session 
 			}
 		}
 		return peer.enqueueSynced(session.ID, recovery.Epoch, recovery.Upper)
+	}
+	if s.cursorOutputRuntimeFor(session) != nil {
+		return s.reanchorCursorOutput(ctx, peer, session, outputSession, recovery)
 	}
 
 	// Spool recovery: when the ring evicted the client's anchor, the PTY
@@ -3933,6 +4215,89 @@ func (s *Service) attachOutputLocked(ctx context.Context, peer *wsPeer, session 
 	// its own lightweight message. Sending every retained event here would
 	// create one oversized WebSocket message for transcripts with thousands
 	// of events (and would burden clients that only render the status light).
+	if status := s.agentStatus(session.ID); status.Activity != "" {
+		if err := peer.enqueueAgentStatus(session.ID, status); err != nil {
+			return err
+		}
+	}
+	if tail := s.agentTail(session.ID, agentAttachHistoryMaxEvents, agentAttachHistoryMaxBytes); len(tail) > 0 {
+		return peer.enqueueAgentEvents(session.ID, tail)
+	}
+	return nil
+}
+
+// reanchorCursorOutput rebuilds every live browser terminal from one atomic
+// Ghostline checkpoint. The previous reader was joined by prepareAttach, so
+// no raw output can interleave between Checkpoint and the replacement reader.
+func (s *Service) reanchorCursorOutput(ctx context.Context, peer *wsPeer, session api.Session, outputSession *outputSession, recovery output.Recovery) error {
+	runtime := s.cursorOutputRuntimeFor(session)
+	if runtime == nil {
+		return errors.New("ghostline cursor runtime is unavailable")
+	}
+	checkpointContext, cancelCheckpoint := context.WithTimeout(ctx, s.commandTimeout())
+	checkpoint, err := runtime.Checkpoint(checkpointContext, session.Runtime)
+	cancelCheckpoint()
+	if err != nil {
+		return fmt.Errorf("checkpoint ghostline output: %w", err)
+	}
+
+	outputSession.mu.Lock()
+	epoch := recovery.Epoch
+	upper := recovery.Upper
+	outputSession.ring.Reset(epoch, upper)
+	outputSession.persistedSequence = upper
+	outputSession.outputCursor = checkpoint.Cursor
+	outputSession.hasOutputCursor = true
+	outputSession.reanchorRequired = false
+	outputSession.mu.Unlock()
+	s.persistOutputCursor(outputSession, epoch, upper)
+
+	s.outputMu.Lock()
+	peers := make([]*wsPeer, 0, len(s.peers[session.ID]))
+	for candidate := range s.peers[session.ID] {
+		peers = append(peers, candidate)
+	}
+	s.outputMu.Unlock()
+	for _, candidate := range peers {
+		if err := candidate.enqueueAttached(session.ID, epoch, upper, true); err != nil {
+			if candidate == peer {
+				return err
+			}
+			s.detachPeer(candidate, session.ID)
+			continue
+		}
+		failed := false
+		for _, chunk := range output.SplitPayload(checkpoint.Replay) {
+			encoded, encodeErr := output.EncodeOutput(session.ID, epoch, upper, chunk)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			if !candidate.enqueueBinary(encoded) {
+				failed = true
+				break
+			}
+		}
+		if failed {
+			if candidate == peer {
+				return errors.New("outbound queue overflow during ghostline reanchor")
+			}
+			s.detachPeer(candidate, session.ID)
+			continue
+		}
+		if err := candidate.enqueueSynced(session.ID, epoch, upper); err != nil {
+			if candidate == peer {
+				return err
+			}
+			s.detachPeer(candidate, session.ID)
+		}
+	}
+
+	if err := s.startCursorOutput(session, outputSession); err != nil {
+		return err
+	}
+	// Agent history is independent of the terminal checkpoint. Existing peers
+	// already have it; only the newly attached peer needs the bounded initial
+	// projection.
 	if status := s.agentStatus(session.ID); status.Activity != "" {
 		if err := peer.enqueueAgentStatus(session.ID, status); err != nil {
 			return err
@@ -4205,6 +4570,7 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	if outputSession != nil && outputSession.watcher != nil {
 		outputSession.watcher.Close()
 	}
+	s.stopCursorOutput(outputSession)
 	if notify {
 		for _, peer := range peers {
 			_ = peer.enqueueExited(sessionID)

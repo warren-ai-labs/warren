@@ -98,8 +98,9 @@ go test -race ./Headless/...
    and stamp the marker as `build`; they are not release commands.
 
    The package task produces an arm64 macOS archive for macOS 13 and later and
-   must run on an arm64 Apple Silicon Mac. The build uses the arm64
-   `libghostty-vt.dylib` bundled by the Ghostline module; no separate Ghostty
+   must run on an arm64 Apple Silicon Mac. Ghostline v1 statically links its
+   terminal core; the app bundles the v0.8 bridge's arm64
+   `libghostty-vt.dylib` only for one-time v0 migration. No separate Ghostty
    checkout or architecture-specific environment variable is required.
 
    `WARREN_GNAR_DEFAULT_EDGE` is injected into the headless binaries at

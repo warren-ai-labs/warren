@@ -11,8 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/abcdlsj/ghostline"
 )
 
 // Stale artifacts are unusual and the cleanup is deliberately low frequency;
@@ -103,7 +101,7 @@ func cleanupStaleGhostlineArtifacts(socketPath string) (int, error) {
 }
 
 func cleanupGhostlineCandidate(socketPath, stableSocketPath string, legacyPIDAlive bool) (int, error) {
-	if ghostline.Ping(socketPath) || ghostline.Ping(socketPath+".admin") {
+	if ghostlineSocketReady(socketPath) || ghostlineSocketReady(socketPath+".admin") {
 		return 0, nil
 	}
 	if socketPath == stableSocketPath && legacyPIDAlive {

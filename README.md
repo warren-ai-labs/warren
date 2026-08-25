@@ -81,9 +81,11 @@ mise run dev
 
 `mise run dev` and `mise run package` build arm64 binaries for macOS 13 and
 later. macOS app builds require an arm64 Apple Silicon Mac; the headless
-daemon and CLI can still be built for non-macOS hosts. The macOS build uses the
-arm64 `libghostty-vt.dylib` bundled by the Ghostline module, so no separate
-Ghostty checkout or architecture environment variable is required.
+daemon and CLI can still be built for non-macOS hosts. Ghostline v1 statically
+links its terminal core. The app additionally bundles a short-lived v0.8
+compatibility bridge and its arm64 `libghostty-vt.dylib` only for upgrading an
+existing v0 session daemon, so no separate Ghostty checkout or architecture
+environment variable is required.
 
 The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when
