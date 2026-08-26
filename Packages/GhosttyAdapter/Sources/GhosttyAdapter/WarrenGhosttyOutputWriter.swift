@@ -109,8 +109,14 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     init(
         inMemory: InMemoryTerminalSession,
         ansiObserver: TerminalANSIObserver,
-        budgetBytes: Int = 128 * 1024,
-        yield: Duration = .milliseconds(8)
+        // Recovery snapshots are already framed atomically by Headless. A
+        // small 128 KiB slice budget made a multi-megabyte TUI snapshot take
+        // seconds of scheduled drains, so input echoes sat behind replay.
+        // Keep the work off-main but consume each recovery frame in one pass.
+        // This only reduces drain scheduling overhead; the protocol still
+        // replays a full snapshot before its synced presentation boundary.
+        budgetBytes: Int = 8 * 1024 * 1024,
+        yield: Duration = .milliseconds(1)
     ) {
         precondition(budgetBytes > 0)
         self.inMemory = inMemory
