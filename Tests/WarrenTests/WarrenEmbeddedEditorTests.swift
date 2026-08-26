@@ -70,6 +70,10 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             settings["extensions.showRecommendationsOnlyOnDemand"] as? Bool,
             true
         )
+        XCTAssertEqual(settings["git.openDiffOnClick"] as? Bool, false)
+        XCTAssertEqual(settings["git.showInlineOpenFileAction"] as? Bool, true)
+        XCTAssertEqual(settings["scm.graph.pageOnScroll"] as? Bool, false)
+        XCTAssertEqual(settings["scm.graph.pageSize"] as? Int, 6)
         XCTAssertEqual(settings["go.showWelcome"] as? Bool, false)
         XCTAssertEqual(settings["go.survey.prompt"] as? Bool, false)
         XCTAssertEqual(settings["go.toolsManagement.checkForUpdates"] as? String, "off")
@@ -119,6 +123,28 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(model.activeWorkspacePath, "/work/warren")
+        XCTAssertEqual(model.phase, .unavailable)
+        model.stop()
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    @MainActor
+    func testPrewarmStaysIdleWithoutExecutableAndDefersToActivation() async {
+        let model = WarrenEmbeddedEditorModel(
+            environment: [:],
+            supportDirectory: FileManager.default.temporaryDirectory,
+            executableResolver: { _ in nil }
+        )
+
+        // Prewarming is opportunistic: without a code-server binary it must
+        // not flip the UI into an editor failure state before the pane is
+        // even opened.
+        model.prewarm()
+        await Task.yield()
+        XCTAssertEqual(model.phase, .idle)
+
+        model.activate(workspacePath: "/work/warren")
+        await Task.yield()
         XCTAssertEqual(model.phase, .unavailable)
         model.stop()
         XCTAssertEqual(model.phase, .idle)
@@ -180,7 +206,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertTrue(source.contains("event.buttons !== 0"))
         XCTAssertTrue(source.contains("stopImmediatePropagation"))
         XCTAssertTrue(source.contains("sourceEvent?.type !== \"pointerup\""))
-        XCTAssertTrue(source.contains("sourceEvent?.clientX"))
+        XCTAssertTrue(source.contains("collapseToOrigin"))
+        XCTAssertTrue(source.contains("lastActiveAt"))
         XCTAssertTrue(source.contains("pointermove"))
         XCTAssertTrue(source.contains("mousemove"))
     }
@@ -256,7 +283,10 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         WarrenEmbeddedEditorPointerBridge.install(in: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         let navigation = WarrenEmbeddedEditorTestNavigation()
-        await navigation.load("<button id='target'>Target</button>", in: webView)
+        await navigation.load(#"""
+        <button id='target'>Target</button>
+        <button id='fresh-target'>Fresh</button>
+        """#, in: webView)
 
         let result = try await webView.evaluateJavaScript(#"""
         (() => {
@@ -265,6 +295,10 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                 pointerUps: 0,
                 mouseUps: 0,
                 staleMoves: 0,
+                staleUpClientX: null,
+                staleUpClientY: null,
+                freshUpClientX: null,
+                freshUpClientY: null,
                 mouseOnlyPointerUps: 0,
                 mouseOnlyMouseUps: 0,
                 mouseDownOnlyMouseUps: 0,
@@ -273,7 +307,11 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                 normalMoves: 0
             };
             target.addEventListener("pointerup", () => result.pointerUps++);
-            target.addEventListener("mouseup", () => result.mouseUps++);
+            target.addEventListener("mouseup", (event) => {
+                result.mouseUps++;
+                result.staleUpClientX = event.clientX;
+                result.staleUpClientY = event.clientY;
+            });
             target.addEventListener("mousemove", () => result.staleMoves++);
             target.dispatchEvent(new PointerEvent("pointerdown", {
                 bubbles: true,
@@ -283,12 +321,45 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                 pointerType: "mouse",
                 isPrimary: true
             }));
+            // Simulate a tap whose press went idle long before the drift;
+            // the collapsed mouseup must land on the original position.
+            window.__warrenPointerState.lastActiveAt = performance.now() - 5000;
             target.dispatchEvent(new MouseEvent("mousemove", {
                 bubbles: true,
                 button: 0,
                 buttons: 0,
                 clientX: 20,
                 clientY: 30
+            }));
+
+            const freshTarget = document.getElementById("fresh-target");
+            freshTarget.addEventListener("mouseup", (event) => {
+                result.freshUpClientX = event.clientX;
+                result.freshUpClientY = event.clientY;
+            });
+            freshTarget.dispatchEvent(new PointerEvent("pointerdown", {
+                bubbles: true,
+                button: 0,
+                buttons: 1,
+                pointerId: 11,
+                pointerType: "mouse",
+                isPrimary: true
+            }));
+            // A press that kept moving until the buttonless move counts as a
+            // dropped release; the synthetic mouseup keeps the drag endpoint.
+            freshTarget.dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                button: 0,
+                buttons: 1,
+                clientX: 5,
+                clientY: 6
+            }));
+            freshTarget.dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                button: 0,
+                buttons: 0,
+                clientX: 70,
+                clientY: 80
             }));
 
             const mouseOnlyTarget = document.createElement("button");
@@ -402,10 +473,16 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Int]
         )
 
-        XCTAssertEqual(counters["pointerUps"], 1)
-        XCTAssertEqual(counters["mouseUps"], 1)
-        XCTAssertEqual(counters["staleMoves"], 0)
-        XCTAssertEqual(counters["mouseOnlyPointerUps"], 1)
+            XCTAssertEqual(counters["pointerUps"], 1)
+            XCTAssertEqual(counters["mouseUps"], 1)
+            XCTAssertEqual(counters["staleMoves"], 0)
+            // Idle-press drift collapses back to the original click point.
+            XCTAssertEqual(counters["staleUpClientX"], 0)
+            XCTAssertEqual(counters["staleUpClientY"], 0)
+            // A dropped release after continuous movement keeps the endpoint.
+            XCTAssertEqual(counters["freshUpClientX"], 70)
+            XCTAssertEqual(counters["freshUpClientY"], 80)
+            XCTAssertEqual(counters["mouseOnlyPointerUps"], 1)
         XCTAssertEqual(counters["mouseOnlyMouseUps"], 1)
         XCTAssertEqual(counters["mouseDownOnlyMouseUps"], 1)
         XCTAssertEqual(counters["pointerOnlyMouseUps"], 1)
@@ -434,15 +511,35 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertTrue(source.contains("warren-editor-background-style"))
         XCTAssertTrue(source.contains("#workbench-container"))
         XCTAssertTrue(source.contains(".monaco-workbench .part.editor"))
+        XCTAssertTrue(source.contains(".monaco-progress-container"))
+        XCTAssertTrue(source.contains("document.fonts"))
         XCTAssertTrue(source.contains("postMessage(\"ready\")"))
         XCTAssertTrue(source.contains("warren-statusbar-hidden"))
+        XCTAssertTrue(source.contains("warren-workbench-fill-style"))
+        XCTAssertTrue(source.contains(".monaco-workbench > .monaco-grid-view"))
+        XCTAssertTrue(source.contains(".part.titlebar"))
         XCTAssertTrue(source.contains("const controlClass = \"warren-sidebar-control\""))
         XCTAssertTrue(source.contains("id: \"files\""))
         XCTAssertTrue(source.contains("icon: \"folder-opened\""))
         XCTAssertTrue(source.contains("id: \"search\""))
+        XCTAssertTrue(source.contains("id: \"git\""))
+        XCTAssertTrue(source.contains("icon: \"git-commit\""))
+        XCTAssertTrue(source.contains("label: \"Git Commit Changes\""))
+        XCTAssertTrue(source.contains("id: \"markdown-preview\""))
+        XCTAssertTrue(source.contains("icon: \"open-preview\""))
+        XCTAssertTrue(source.contains("label: \"Markdown Preview\""))
         XCTAssertTrue(source.contains("id: \"reload\""))
         XCTAssertTrue(source.contains("KeyE"))
         XCTAssertTrue(source.contains("KeyF"))
+        XCTAssertTrue(source.contains("KeyG"))
+        XCTAssertTrue(source.contains("KeyV"))
+        XCTAssertTrue(source.contains("usesMetaModifier"))
+        XCTAssertTrue(source.contains("navigator.platform"))
+        XCTAssertTrue(source.contains("codicon-source-control-view-icon"))
+        XCTAssertTrue(source.contains("scm-viewlet"))
+        XCTAssertTrue(source.contains("scm-provider"))
+        XCTAssertTrue(source.contains("history-item-change"))
+        XCTAssertTrue(source.contains("codicon-go-to-file"))
         XCTAssertTrue(source.contains("warrenEmbeddedEditor"))
         XCTAssertFalse(source.contains("warren-search-sidebar-close"))
         XCTAssertFalse(source.contains("KeyB"))
@@ -463,43 +560,91 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let navigation = WarrenEmbeddedEditorTestNavigation()
         await navigation.load(#"""
         <style>
-            .monaco-workbench,
-            .split-view-container {
+            body { margin: 0; }
+            .monaco-workbench {
                 height: 200px;
+                position: relative;
+            }
+            .split-view-container {
+                height: 100%;
                 position: relative;
             }
             .split-view-view {
                 position: absolute;
-                width: 320px;
+                width: 100%;
+            }
+            .monaco-split-view2.horizontal .split-view-view {
+                height: 100%;
+                width: auto;
             }
         </style>
         <div class="monaco-workbench">
-            <div class="split-view-container">
-                <div class="split-view-view title-row" style="top: 0px; height: 35px;">
-                    <div class="part titlebar">workspace — code-server</div>
+          <div class="monaco-grid-view">
+            <div class="monaco-grid-branch-node">
+              <div class="monaco-split-view2 vertical">
+                <div class="monaco-scrollable-element">
+                  <div class="split-view-container">
+                    <div class="split-view-view title-row" style="top: 0px; height: 30px;">
+                        <div class="part titlebar">workspace — code-server</div>
+                    </div>
+                    <div class="split-view-view main-row" style="top: 30px; height: 148px;">
+                      <div class="monaco-grid-view">
+                        <div class="monaco-grid-branch-node">
+                          <div class="monaco-split-view2 horizontal">
+                            <div class="monaco-scrollable-element">
+                              <div class="split-view-container middle-columns" style="width: 320px;">
+                                <div class="split-view-view center-column" style="left: 0px; width: 240px;">
+                                  <div class="monaco-split-view2 vertical">
+                                    <div class="monaco-scrollable-element">
+                                      <div class="split-view-container center-stack">
+                                        <div class="split-view-view editor-row" style="top: 0px; height: 126px;">
+                                            <div class="part editor"></div>
+                                        </div>
+                                        <div class="split-view-view panel-row" style="top: 126px; height: 22px; display: none;">
+                                            <div class="part panel"></div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div class="split-view-view side-column" style="left: 240px; width: 80px;">
+                                    <div class="part sidebar"></div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="split-view-view status-row" style="top: 178px; height: 22px;">
+                        <div class="part statusbar"></div>
+                    </div>
+                  </div>
                 </div>
-                <div class="split-view-view main-row" style="top: 35px; height: 143px;">
-                    <div class="part editor"></div>
-                    <div class="part sidebar"></div>
-                </div>
-                <div class="split-view-view status-row" style="top: 178px; height: 22px;">
-                    <div class="part statusbar"></div>
-                </div>
+              </div>
             </div>
+          </div>
         </div>
         """#, in: webView)
 
         let result = try await webView.evaluateJavaScript(#"""
         (() => {
-            const title = document.querySelector(".title-row");
-            const main = document.querySelector(".main-row");
-            const status = document.querySelector(".status-row");
+            const metrics = (selector) => {
+                const element = document.querySelector(selector);
+                const rect = element.getBoundingClientRect();
+                return {
+                    top: Math.round(rect.top),
+                    bottom: Math.round(rect.bottom),
+                    height: Math.round(rect.height),
+                    display: getComputedStyle(element).display
+                };
+            };
             return JSON.stringify({
-                titleDisplay: getComputedStyle(title).display,
-                titleHeight: title.getBoundingClientRect().height,
-                mainTop: Number.parseFloat(main.style.top),
-                mainHeight: main.getBoundingClientRect().height,
-                statusTop: Number.parseFloat(status.style.top)
+                title: metrics(".title-row"),
+                main: metrics(".main-row"),
+                editorRow: metrics(".editor-row"),
+                sidebar: metrics(".side-column"),
+                status: metrics(".status-row")
             });
         })();
         """#)
@@ -508,11 +653,21 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
 
-        XCTAssertEqual(layout["titleDisplay"] as? String, "none")
-        XCTAssertEqual(layout["titleHeight"] as? Double, 0)
-        XCTAssertEqual(layout["mainTop"] as? Double, 0)
-        XCTAssertEqual(layout["mainHeight"] as? Double, 178)
-        XCTAssertEqual(layout["statusTop"] as? Double, 178)
+        let title = try XCTUnwrap(layout["title"] as? [String: Any])
+        let main = try XCTUnwrap(layout["main"] as? [String: Any])
+        let editorRow = try XCTUnwrap(layout["editorRow"] as? [String: Any])
+        let sidebar = try XCTUnwrap(layout["sidebar"] as? [String: Any])
+        let status = try XCTUnwrap(layout["status"] as? [String: Any])
+
+        XCTAssertEqual(title["display"] as? String, "none")
+        XCTAssertEqual(main["top"] as? Int, 0)
+        XCTAssertEqual(main["height"] as? Int, 178)
+        // The nested editor stack absorbs the reclaimed title bar height too,
+        // otherwise the freed space leaks out as a gap above the status bar.
+        XCTAssertEqual(editorRow["top"] as? Int, 0)
+        XCTAssertEqual(editorRow["height"] as? Int, 178)
+        XCTAssertEqual(sidebar["bottom"] as? Int, 178)
+        XCTAssertEqual(status["top"] as? Int, 178)
     }
 
     @MainActor
@@ -594,9 +749,11 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let result = try await webView.evaluateJavaScript(#"""
         (() => {
             const shortcuts = [];
+            const keyCodes = [];
             window.addEventListener("keydown", (event) => {
-                if (event.metaKey && event.shiftKey) {
+                if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
                     shortcuts.push(event.code);
+                    keyCodes.push(event.keyCode);
                 }
             }, true);
             const files = document.querySelector(
@@ -604,6 +761,12 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             );
             const search = document.querySelector(
                 ".warren-sidebar-control-search .action-label"
+            );
+            const git = document.querySelector(
+                ".warren-sidebar-control-git .action-label"
+            );
+            const markdownPreview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
             );
             const reload = document.querySelector(
                 ".warren-sidebar-control-reload .action-label"
@@ -614,19 +777,23 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             const content = document.querySelector(".part.sidebar > .content");
             const titlePanel = document.querySelector(".title-panel");
             const titleGlobalActions = document.querySelector(".title-global-actions");
-            const iconMetrics = [files, search, reload].map((control) => {
+            const iconMetrics = [files, search, git, markdownPreview, reload].map((control) => {
                 const rect = control.getBoundingClientRect();
                 const icon = getComputedStyle(control, "::before");
                 return `${rect.width}x${rect.height}@${icon.fontSize}`;
             });
             files?.click();
             search?.click();
+            git?.click();
+            markdownPreview?.click();
             reload?.click();
             return JSON.stringify({
                 filesPresent: files !== null,
                 searchPresent: search !== null,
+                gitPresent: git !== null,
+                markdownPreviewPresent: markdownPreview !== null,
                 reloadPresent: reload !== null,
-                controlsInHeader: [files, search, reload].every(
+                controlsInHeader: [files, search, git, markdownPreview, reload].every(
                     (control) => control?.closest(".header-or-footer.header") === header
                 ),
                 separateToolbarRow:
@@ -640,7 +807,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                     getComputedStyle(titleGlobalActions).display === "none",
                 contentHeight: content.getBoundingClientRect().height,
                 iconMetrics,
-                shortcuts
+                shortcuts,
+                keyCodes
             });
         })();
         """#)
@@ -652,6 +820,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
 
         XCTAssertEqual(behavior["filesPresent"] as? Bool, true)
         XCTAssertEqual(behavior["searchPresent"] as? Bool, true)
+        XCTAssertEqual(behavior["gitPresent"] as? Bool, true)
+        XCTAssertEqual(behavior["markdownPreviewPresent"] as? Bool, true)
         XCTAssertEqual(behavior["reloadPresent"] as? Bool, true)
         XCTAssertEqual(behavior["controlsInHeader"] as? Bool, true)
         XCTAssertEqual(behavior["separateToolbarRow"] as? Bool, true)
@@ -663,8 +833,165 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             Set(behavior["iconMetrics"] as? [String] ?? []).count,
             1
         )
-        XCTAssertEqual(behavior["shortcuts"] as? [String], ["KeyE", "KeyF"])
+        // WKWebView tests run on macOS, so the synthetic shortcuts resolve
+        // through metaKey (Cmd) like production.
+        XCTAssertEqual(
+            behavior["shortcuts"] as? [String],
+            ["KeyE", "KeyF", "KeyG", "KeyV"]
+        )
+        XCTAssertEqual(behavior["keyCodes"] as? [Int], [69, 70, 71, 86])
         XCTAssertEqual(messageHandler.messages, ["reload"])
+    }
+
+    @MainActor
+    func testEditorChromeGitButtonUsesNativeSourceControlAction() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="monaco-workbench">
+            <div class="part activitybar">
+                <div class="composite-bar">
+                    <ul class="actions-container">
+                        <li class="action-item">
+                            <a class="action-label codicon codicon-source-control-view-icon"
+                               aria-label="Source Control"></a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            <div class="part sidebar">
+                <div class="header-or-footer header">
+                    <div class="monaco-action-bar">
+                        <ul class="actions-container"></ul>
+                    </div>
+                </div>
+                <div class="title">
+                    <div class="title-actions">
+                        <div class="action-item">View Actions</div>
+                    </div>
+                </div>
+                <div class="content">
+                    <div class="composite viewlet scm-viewlet">
+                        <div class="pane-header">
+                            <div class="actions">Changes Actions</div>
+                        </div>
+                        <div class="scm-provider">
+                            <div class="actions">Repository Actions</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script>
+            window.sourceControlClicks = 0;
+            document.querySelector(
+                ".codicon-source-control-view-icon"
+            ).addEventListener("click", () => {
+                window.sourceControlClicks += 1;
+            });
+        </script>
+        """#, in: webView)
+        // Give the injected observers a moment to mount the sidebar controls.
+        try await Task.sleep(for: .milliseconds(400))
+
+        let result = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const git = document.querySelector(
+                ".warren-sidebar-control-git .action-label"
+            );
+            git?.click();
+            const display = (selector) => getComputedStyle(
+                document.querySelector(selector)
+            ).display;
+            return JSON.stringify({
+                sourceControlClicks: window.sourceControlClicks,
+                shortcutEvents: window.__warrenShortcutEvents ?? 0,
+                titleActions: display(".part.sidebar > .title > .title-actions"),
+                changesActions: display(
+                    ".scm-viewlet .pane-header > .actions"
+                ),
+                providerActions: display(
+                    ".scm-viewlet .scm-provider > .actions"
+                )
+            });
+        })();
+        """#)
+        let data = try XCTUnwrap((result as? String)?.data(using: .utf8))
+        let behavior = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(behavior["sourceControlClicks"] as? Int, 1)
+        XCTAssertEqual(behavior["shortcutEvents"] as? Int, 0)
+        XCTAssertEqual(behavior["titleActions"] as? String, "none")
+        XCTAssertEqual(behavior["changesActions"] as? String, "none")
+        XCTAssertEqual(behavior["providerActions"] as? String, "none")
+    }
+
+    @MainActor
+    func testEditorChromeOpensHistoryChangesAsFilesInsteadOfDiffs() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="scm-history-view">
+            <div class="history-item-change">
+                <div class="monaco-list-row" id="changed-file">
+                    <span class="file-label">Sources/Warren.swift</span>
+                    <a class="action-label codicon codicon-go-to-file"
+                       aria-label="Open File"></a>
+                </div>
+            </div>
+        </div>
+        <script>
+            const row = document.getElementById("changed-file");
+            const openFile = row.querySelector(".codicon-go-to-file");
+            window.historyClickCount = 0;
+            window.openFileClickCount = 0;
+            row.addEventListener("click", (event) => {
+                if (event.target === row) {
+                    window.historyClickCount += 1;
+                }
+            });
+            openFile.addEventListener("click", () => window.openFileClickCount += 1);
+        </script>
+        """#, in: webView)
+
+        let result = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const row = document.getElementById("changed-file");
+            const event = new MouseEvent("click", {
+                bubbles: true,
+                cancelable: true,
+                button: 0
+            });
+            const dispatched = row.dispatchEvent(event);
+            return JSON.stringify({
+                dispatched,
+                defaultPrevented: event.defaultPrevented,
+                historyClickCount: window.historyClickCount,
+                openFileClickCount: window.openFileClickCount
+            });
+        })();
+        """#)
+        let data = try XCTUnwrap((result as? String)?.data(using: .utf8))
+        let behavior = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(behavior["dispatched"] as? Bool, false)
+        XCTAssertEqual(behavior["defaultPrevented"] as? Bool, true)
+        XCTAssertEqual(behavior["historyClickCount"] as? Int, 0)
+        XCTAssertEqual(behavior["openFileClickCount"] as? Int, 1)
     }
 }
 

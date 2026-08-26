@@ -182,10 +182,14 @@ enum WarrenEmbeddedEditorProfile {
             "extensions.autoUpdate": false,
             "extensions.ignoreRecommendations": true,
             "extensions.showRecommendationsOnlyOnDemand": true,
+            "git.openDiffOnClick": false,
+            "git.showInlineOpenFileAction": true,
             "go.showWelcome": false,
             "go.survey.prompt": false,
             "go.toolsManagement.checkForUpdates": "off",
             "security.workspace.trust.enabled": false,
+            "scm.graph.pageOnScroll": false,
+            "scm.graph.pageSize": 6,
             "telemetry.telemetryLevel": "off",
             "update.showReleaseNotes": false,
             "window.commandCenter": false,
@@ -260,6 +264,17 @@ enum WarrenEmbeddedEditorPointerBridge {
         const stateKey = "__warrenPointerState";
         const cancelFunction = "__warrenCancelPointerInteraction";
 
+        const originOf = (event) => ({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            screenX: event.screenX,
+            screenY: event.screenY,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            altKey: event.altKey,
+            shiftKey: event.shiftKey
+        });
+
         window.addEventListener("pointerdown", (event) => {
             if (event.button !== 0 || !event.isPrimary) {
                 return;
@@ -268,7 +283,9 @@ enum WarrenEmbeddedEditorPointerBridge {
                 target: event.target,
                 pointerId: event.pointerId,
                 pointerType: event.pointerType,
-                isPrimary: event.isPrimary
+                isPrimary: event.isPrimary,
+                startedAt: performance.now(),
+                origin: originOf(event)
             };
         }, true);
         window.addEventListener("mousedown", (event) => {
@@ -281,7 +298,9 @@ enum WarrenEmbeddedEditorPointerBridge {
                 target: event.target,
                 pointerId: 1,
                 pointerType: "mouse",
-                isPrimary: true
+                isPrimary: true,
+                startedAt: performance.now(),
+                origin: originOf(event)
             };
         }, true);
 
@@ -306,7 +325,7 @@ enum WarrenEmbeddedEditorPointerBridge {
             window[cancelFunction]?.();
         }, true);
 
-        window[cancelFunction] = (sourceEvent) => {
+        window[cancelFunction] = (sourceEvent, collapseToOrigin) => {
             const state = window[stateKey];
             if (!state || !state.target) {
                 return;
@@ -321,6 +340,21 @@ enum WarrenEmbeddedEditorPointerBridge {
                 // The target may already be detached while switching workspaces.
             }
 
+            // A stale press ended somewhere the user never pressed. Finish at
+            // the original pointer position so Monaco collapses the selection
+            // back to a caret instead of freezing the drifted range.
+            const endpoint = collapseToOrigin && state.origin
+                ? state.origin
+                : sourceEvent;
+            const coordinates = {
+                clientX: endpoint?.clientX ?? 0,
+                clientY: endpoint?.clientY ?? 0,
+                screenX: endpoint?.screenX ?? 0,
+                screenY: endpoint?.screenY ?? 0
+            };
+            const modifiers = collapseToOrigin
+                ? (state.origin ?? {})
+                : (endpoint ?? {});
             const pointerInit = {
                 bubbles: true,
                 cancelable: true,
@@ -330,14 +364,11 @@ enum WarrenEmbeddedEditorPointerBridge {
                 isPrimary: state.isPrimary,
                 button: 0,
                 buttons: 0,
-                clientX: sourceEvent?.clientX ?? 0,
-                clientY: sourceEvent?.clientY ?? 0,
-                screenX: sourceEvent?.screenX ?? 0,
-                screenY: sourceEvent?.screenY ?? 0,
-                ctrlKey: sourceEvent?.ctrlKey ?? false,
-                metaKey: sourceEvent?.metaKey ?? false,
-                altKey: sourceEvent?.altKey ?? false,
-                shiftKey: sourceEvent?.shiftKey ?? false
+                ...coordinates,
+                ctrlKey: modifiers.ctrlKey ?? false,
+                metaKey: modifiers.metaKey ?? false,
+                altKey: modifiers.altKey ?? false,
+                shiftKey: modifiers.shiftKey ?? false
             };
             if (sourceEvent?.type !== "pointerup") {
                 state.target.dispatchEvent(new PointerEvent("pointercancel", pointerInit));
@@ -351,14 +382,11 @@ enum WarrenEmbeddedEditorPointerBridge {
                 composed: true,
                 button: 0,
                 buttons: 0,
-                clientX: sourceEvent?.clientX ?? 0,
-                clientY: sourceEvent?.clientY ?? 0,
-                screenX: sourceEvent?.screenX ?? 0,
-                screenY: sourceEvent?.screenY ?? 0,
-                ctrlKey: sourceEvent?.ctrlKey ?? false,
-                metaKey: sourceEvent?.metaKey ?? false,
-                altKey: sourceEvent?.altKey ?? false,
-                shiftKey: sourceEvent?.shiftKey ?? false
+                ...coordinates,
+                ctrlKey: modifiers.ctrlKey ?? false,
+                metaKey: modifiers.metaKey ?? false,
+                altKey: modifiers.altKey ?? false,
+                shiftKey: modifiers.shiftKey ?? false
             };
             if (sourceEvent?.type !== "mouseup") {
                 state.target.dispatchEvent(new MouseEvent("mouseup", mouseInit));
@@ -366,17 +394,33 @@ enum WarrenEmbeddedEditorPointerBridge {
             }
         };
 
-        const releaseStalePointer = (event) => {
-            // WKWebView can omit pointerup after a macOS tap-to-click gesture.
-            // VS Code #146486 and nyaterm #243 document the same stale selection.
-            if (!window[stateKey] || event.buttons !== 0) {
+        const trackPressedPointer = (event) => {
+            const state = window[stateKey];
+            if (!state) {
                 return;
             }
+            if (event.buttons !== 0) {
+                // The press is still moving; remember when it was last alive
+                // so a later buttonless move can tell a fresh release from a
+                // long-idle tap.
+                state.lastActiveAt = performance.now();
+                return;
+            }
+            // WKWebView can omit pointerup after a macOS tap-to-click gesture.
+            // VS Code #146486 and nyaterm #243 document the same stale
+            // selection: Monaco keeps dragging with no button held, so later
+            // trackpad drift paints an unintended selection.
             event.stopImmediatePropagation();
-            window[cancelFunction](event);
+            const idleForMs = performance.now()
+                - (state.lastActiveAt ?? state.startedAt ?? 0);
+            // A press that kept moving until now behaves like a normal
+            // release that WebKit dropped; finish where the pointer is. A
+            // press idle for a while followed by motion is a stray tap, so
+            // collapse back to the original click position instead.
+            window[cancelFunction](event, idleForMs > 300);
         };
-        window.addEventListener("pointermove", releaseStalePointer, true);
-        window.addEventListener("mousemove", releaseStalePointer, true);
+        window.addEventListener("pointermove", trackPressedPointer, true);
+        window.addEventListener("mousemove", trackPressedPointer, true);
     })();
     """#
 
@@ -486,129 +530,206 @@ enum WarrenEmbeddedEditorChrome {
             return Number.isFinite(parsed) ? parsed : fallback;
         };
 
-        const attach = () => {
-            const titlebar = document.querySelector(
-                ".monaco-workbench .part.titlebar"
-            );
-            const titleRow = titlebar?.closest(".split-view-view");
-            const container = titleRow?.parentElement;
-            if (!titleRow
-                || !container?.classList.contains("split-view-container")) {
-                return false;
+        const installStyle = () => {
+            if (document.getElementById("warren-workbench-fill-style")) {
+                return;
             }
-            const rows = Array.from(container.children).filter(
-                (child) => child.classList.contains("split-view-view")
-            );
-            const mainRow = rows.find(
-                (row) => row !== titleRow && row.querySelector(".part.editor")
-            );
-            if (!mainRow) {
-                return false;
-            }
-            const statusRow = rows.find(
-                (row) => row.querySelector(".part.statusbar")
-            );
-            waitObserver?.disconnect();
-
-            const sync = () => {
-                const containerRect = container.getBoundingClientRect();
-                const statusTop = statusRow
-                    ? pixels(
-                        statusRow.style.top,
-                        statusRow.getBoundingClientRect().top - containerRect.top
-                    )
-                    : container.clientHeight;
-                let mainTop = 0;
-                for (const row of rows) {
-                    if (row === titleRow || row === mainRow || row === statusRow) {
-                        continue;
-                    }
-                    const height = pixels(
-                        row.style.height,
-                        row.getBoundingClientRect().height
-                    );
-                    setImportant(row, "top", `${mainTop}px`);
-                    mainTop += height;
+            const style = document.createElement("style");
+            style.id = "warren-workbench-fill-style";
+            style.textContent = `
+                .monaco-workbench > .monaco-grid-view,
+                .monaco-workbench > .monaco-grid-view .monaco-grid-branch-node,
+                .monaco-workbench > .monaco-grid-view .monaco-split-view2,
+                .monaco-workbench > .monaco-grid-view .monaco-split-view2
+                    > .monaco-scrollable-element,
+                .monaco-workbench > .monaco-grid-view .monaco-split-view2
+                    > .monaco-scrollable-element > .split-view-container,
+                .monaco-workbench > .monaco-grid-view .split-view-view > .part {
+                    height: 100% !important;
                 }
-                setImportant(titleRow, "display", "none");
-                setImportant(titleRow, "height", "0px");
-                setImportant(titleRow, "top", "0px");
-                setImportant(mainRow, "top", `${mainTop}px`);
-                setImportant(
-                    mainRow,
-                    "height",
-                    `${Math.max(statusTop - mainTop, 0)}px`
-                );
-            };
+            `;
+            document.documentElement.appendChild(style);
+        };
 
-            sync();
-            layoutObserver = new MutationObserver(sync);
-            for (const row of rows) {
-                layoutObserver.observe(row, {
-                    attributeFilter: ["style"],
-                    attributes: true
+        // Hiding the title bar through CSS alone leaves every nested split
+        // sized as if the row were still visible; the reclaimed space leaks
+        // out as a gap above the status bar. Re-stack each split of the
+        // workbench grid so hidden rows collapse and the flexible content
+        // rows absorb the freed height.
+        const redistribute = () => {
+            const gridRoot = document.querySelector(
+                ".monaco-workbench > .monaco-grid-view"
+            );
+            if (!gridRoot || !gridRoot.isConnected) {
+                return false;
+            }
+            waitObserver?.disconnect();
+            installStyle();
+
+            for (const split of gridRoot.querySelectorAll(".monaco-split-view2")) {
+                const isVertical = split.classList.contains("vertical");
+                const container = split.querySelector(
+                    ":scope > .monaco-scrollable-element > .split-view-container"
+                );
+                if (!container) {
+                    continue;
+                }
+                const rows = Array.from(container.children).filter((row) =>
+                    row.classList.contains("split-view-view")
+                );
+                if (!rows.length) {
+                    continue;
+                }
+
+                // Warren only ever removes the title bar row; hide it before
+                // measuring so it contributes nothing to the stack.
+                for (const row of rows) {
+                    if (row.querySelector(".part.titlebar")) {
+                        setImportant(row, "display", "none");
+                    }
+                }
+
+                const axis = isVertical ? "top" : "left";
+                const sizeProperty = isVertical ? "height" : "width";
+                const extent = (row) => {
+                    if (getComputedStyle(row).display === "none") {
+                        return 0;
+                    }
+                    return pixels(
+                        row.style.getPropertyValue(sizeProperty),
+                        row.getBoundingClientRect()[sizeProperty]
+                    );
+                };
+                const ordered = rows.slice().sort(
+                    (first, second) =>
+                        first.getBoundingClientRect()[axis]
+                            - second.getBoundingClientRect()[axis]
+                );
+                let flexibleRow = null;
+                for (const row of ordered) {
+                    if (row.querySelector(".part.editor")) {
+                        flexibleRow = row;
+                        break;
+                    }
+                }
+                flexibleRow ??= ordered.reduce(
+                    (largest, row) =>
+                        extent(row) >= extent(largest) ? row : largest,
+                    ordered[0]
+                );
+                const fixedExtent = ordered.reduce(
+                    (total, row) => row === flexibleRow ? total : total + extent(row),
+                    0
+                );
+                const totalExtent = isVertical
+                    ? container.clientHeight
+                    : container.clientWidth;
+                setImportant(
+                    flexibleRow,
+                    sizeProperty,
+                    `${Math.max(totalExtent - fixedExtent, 0)}px`
+                );
+                let offset = 0;
+                for (const row of ordered) {
+                    setImportant(row, axis, `${offset}px`);
+                    offset += extent(row);
+                }
+            }
+            if (!layoutObserver) {
+                layoutObserver = new MutationObserver(redistribute);
+                layoutObserver.observe(gridRoot, {
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ["style"]
                 });
             }
-            resizeObserver = new ResizeObserver(sync);
-            resizeObserver.observe(container);
+            if (!resizeObserver) {
+                resizeObserver = new ResizeObserver(redistribute);
+                resizeObserver.observe(gridRoot);
+            }
             return true;
         };
 
-        if (!attach()) {
+        if (!redistribute()) {
+            let pollTimer = null;
             const watch = () => {
-                if (attach()) {
-                    return;
+                if (redistribute() && pollTimer) {
+                    clearInterval(pollTimer);
                 }
-                waitObserver = new MutationObserver(attach);
+            };
+            pollTimer = setInterval(() => {
+                if (redistribute()) {
+                    clearInterval(pollTimer);
+                }
+            }, 250);
+            // Stop the safety net after 20 seconds to avoid busy-looping on
+            // pages without a workbench grid.
+            setTimeout(() => clearInterval(pollTimer), 20_000);
+            const observeWhenParsed = () => {
+                waitObserver = new MutationObserver(watch);
                 waitObserver.observe(document.documentElement, {
                     childList: true,
                     subtree: true
                 });
             };
+            // At document-start the root element may not exist yet.
             if (document.documentElement) {
-                watch();
+                observeWhenParsed();
             } else {
-                window.addEventListener("DOMContentLoaded", watch, { once: true });
+                window.addEventListener("DOMContentLoaded", observeWhenParsed, { once: true });
             }
         }
     })();
 
+
     (() => {
+        const editorPartSelector = ".monaco-workbench .part.editor";
+        const startupProgressSelector =
+            ".monaco-workbench .part.editor .monaco-progress-container";
         let observer;
         let notified = false;
-        const notifyWhenPainted = () => {
+        const postReady = () => {
+            window.webkit?.messageHandlers?.\#(reloadMessageHandlerName)
+                ?.postMessage("\#(readyMessage)");
+        };
+        // Reveal only once the workbench stopped showing its startup
+        // progress and icon fonts finished loading; otherwise the page is
+        // visible but still unresponsive for a few seconds.
+        const notifyWhenSettled = () => {
             if (notified
-                || !document.querySelector(
-                    ".monaco-workbench .part.editor"
-                )) {
+                || !document.querySelector(editorPartSelector)
+                || document.querySelector(startupProgressSelector)) {
                 return false;
             }
             notified = true;
             observer?.disconnect();
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
-                    window.webkit?.messageHandlers?.\#(reloadMessageHandlerName)
-                        ?.postMessage("\#(readyMessage)");
+                    Promise.race([
+                        document.fonts?.ready ?? Promise.resolve(),
+                        new Promise((resolve) => setTimeout(resolve, 1500))
+                    ]).then(postReady, postReady);
                 });
             });
             return true;
         };
 
-        if (!notifyWhenPainted()) {
+        if (!notifyWhenSettled()) {
             const watch = () => {
-                if (notifyWhenPainted()) {
-                    return;
-                }
-                observer = new MutationObserver(notifyWhenPainted);
+                notifyWhenSettled();
+            };
+            const observeWhenParsed = () => {
+                observer = new MutationObserver(watch);
                 observer.observe(document.documentElement, {
                     childList: true,
                     subtree: true
                 });
             };
+            // At document-start the root element may not exist yet.
             if (document.documentElement) {
-                watch();
+                observeWhenParsed();
             } else {
-                window.addEventListener("DOMContentLoaded", watch, { once: true });
+                window.addEventListener("DOMContentLoaded", observeWhenParsed, { once: true });
             }
         }
     })();
@@ -673,8 +794,45 @@ enum WarrenEmbeddedEditorChrome {
     })();
 
     (() => {
+        const historyChangeSelector = [
+            ".scm-history-view .history-item-change",
+            ".scm-history-view .history-item-change .monaco-list-row"
+        ].join(",");
+
+        document.addEventListener("click", (event) => {
+            if (event.button !== 0 || event.defaultPrevented) {
+                return;
+            }
+            const target = event.target instanceof Element
+                ? event.target
+                : event.target?.parentElement;
+            if (!target
+                || target.closest(".action-label")
+                || !target.closest(historyChangeSelector)) {
+                return;
+            }
+            const change = target.closest(".history-item-change");
+            const openFile = change?.querySelector(
+                ".action-label.codicon-go-to-file"
+            );
+            if (!openFile) {
+                return;
+            }
+            // Git's history rows open a diff by default. Warren's compact
+            // history affordance is for navigating to the current file.
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            openFile.click();
+        }, true);
+    })();
+
+    (() => {
         const controlClass = "warren-sidebar-control";
         let waitObserver;
+        let syncObserver;
+
+        const injected = () =>
+            !!document.querySelector(`.${controlClass}-files`);
 
         const installStyle = () => {
             if (document.getElementById("warren-sidebar-toolbar-style")) {
@@ -713,6 +871,19 @@ enum WarrenEmbeddedEditorChrome {
                 .monaco-workbench .part.sidebar
                     > .title
                     > .global-actions-left {
+                    display: none !important;
+                }
+                .monaco-workbench .part.sidebar
+                    > .title
+                    > .title-actions,
+                .monaco-workbench .part.sidebar
+                    .scm-viewlet
+                    .pane-header
+                    > .actions,
+                .monaco-workbench .part.sidebar
+                    .scm-viewlet
+                    .scm-provider
+                    > .actions {
                     display: none !important;
                 }
                 .monaco-workbench .part.sidebar
@@ -769,21 +940,65 @@ enum WarrenEmbeddedEditorChrome {
             document.documentElement.appendChild(style);
         };
 
+        // VS Code's keybinding service still reads keyCode in the browser;
+        // KeyboardEvent constructors leave it at zero. macOS web builds
+        // resolve default bindings through metaKey (Cmd), other platforms
+        // through ctrlKey. Sending both would match neither binding.
+        const usesMetaModifier = () => /mac/i.test(navigator.platform ?? "");
+        const sendShortcut = (key, code) => {
+            const keyCode = key.toUpperCase().charCodeAt(0);
+            const isMeta = usesMetaModifier();
+            const keyboardEvent = (type) => {
+                const syntheticEvent = new KeyboardEvent(type, {
+                    key,
+                    code,
+                    ctrlKey: !isMeta,
+                    metaKey: isMeta,
+                    shiftKey: true,
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true
+                });
+                Object.defineProperty(syntheticEvent, "keyCode", {
+                    configurable: true,
+                    value: keyCode
+                });
+                Object.defineProperty(syntheticEvent, "which", {
+                    configurable: true,
+                    value: keyCode
+                });
+                return syntheticEvent;
+            };
+            // Dispatch from the focused element so the event bubbles through
+            // the same path as a real keystroke. An iframe swallows events
+            // behind its document boundary, so fall back to the body.
+            const focused = document.activeElement;
+            const target = !focused || focused.tagName === "IFRAME"
+                ? document.body
+                : focused;
+            target.dispatchEvent(keyboardEvent("keydown"));
+            target.dispatchEvent(keyboardEvent("keyup"));
+        };
         const dispatchShortcut = (event, key, code) => {
             event.preventDefault();
             event.stopPropagation();
-            const target = document.activeElement ?? document.body;
-            const keyboardEvent = (type) => new KeyboardEvent(type, {
-                key,
-                code,
-                metaKey: true,
-                shiftKey: true,
-                bubbles: true,
-                cancelable: true,
-                composed: true
-            });
-            target.dispatchEvent(keyboardEvent("keydown"));
-            target.dispatchEvent(keyboardEvent("keyup"));
+            sendShortcut(key, code);
+        };
+
+        const openSourceControl = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const sourceControl = document.querySelector(
+                ".part.activitybar "
+                    + ".action-label.codicon-source-control-view-icon"
+            );
+            if (sourceControl) {
+                sourceControl.click();
+                return;
+            }
+            // Older VS Code builds may not expose the activity bar action.
+            // Their macOS keybinding remains the compatible fallback.
+            dispatchShortcut(event, "g", "KeyG");
         };
 
         const makeAction = ({ id, icon, label, activate }) => {
@@ -819,6 +1034,23 @@ enum WarrenEmbeddedEditorChrome {
                 activate: (event) => dispatchShortcut(event, "f", "KeyF")
             },
             {
+                id: "git",
+                icon: "git-commit",
+                label: "Git Commit Changes",
+                activate: openSourceControl
+            },
+            {
+                id: "markdown-preview",
+                icon: "open-preview",
+                label: "Markdown Preview",
+                activate: (event) => {
+                    dispatchShortcut(event, "v", "KeyV");
+                    // The first invocation may race the markdown extension's
+                    // activation; a second press lands once it is ready.
+                    setTimeout(() => sendShortcut("v", "KeyV"), 350);
+                }
+            },
+            {
                 id: "reload",
                 icon: "refresh",
                 label: "Reload Editor",
@@ -848,32 +1080,56 @@ enum WarrenEmbeddedEditorChrome {
                     || actions.querySelector(`.${controlClass}-files`)) {
                     return;
                 }
+                syncObserver?.disconnect();
                 actions.append(...controls.map(makeAction));
             };
 
             sync();
-            new MutationObserver(sync).observe(workbench, {
+            // Keep the observer referenced: an inline observer can be
+            // collected before the header is rendered, leaving the toolbar
+            // permanently empty.
+            syncObserver?.disconnect();
+            syncObserver = new MutationObserver(sync);
+            syncObserver.observe(workbench, {
                 childList: true,
                 subtree: true
             });
             return true;
         };
 
-        if (!attach()) {
+        if (!attach() || !injected()) {
+            let pollTimer = null;
             const watch = () => {
-                if (attach()) {
+                if (injected() && pollTimer) {
+                    clearInterval(pollTimer);
+                    waitObserver?.disconnect();
                     return;
                 }
-                waitObserver = new MutationObserver(attach);
+                attach();
+            };
+            pollTimer = setInterval(() => {
+                if (injected()) {
+                    clearInterval(pollTimer);
+                    waitObserver?.disconnect();
+                    return;
+                }
+                attach();
+            }, 250);
+            // Stop the safety net after 20 seconds; a workbench that never
+            // renders the sidebar header cannot host the controls.
+            setTimeout(() => clearInterval(pollTimer), 20_000);
+            const observeWhenParsed = () => {
+                waitObserver = new MutationObserver(watch);
                 waitObserver.observe(document.documentElement, {
                     childList: true,
                     subtree: true
                 });
             };
+            // At document-start the root element may not exist yet.
             if (document.documentElement) {
-                watch();
+                observeWhenParsed();
             } else {
-                window.addEventListener("DOMContentLoaded", watch, { once: true });
+                window.addEventListener("DOMContentLoaded", observeWhenParsed, { once: true });
             }
         }
     })();
@@ -989,9 +1245,12 @@ private final class WarrenEmbeddedEditorNavigationDelegate:
     private func scheduleRevealFallback(for webView: WKWebView) {
         let identifier = ObjectIdentifier(webView)
         cancelRevealFallback(for: webView)
+        // The workbench keeps initializing after the document finishes
+        // loading; give the settled readiness signal room to fire before
+        // falling back to a plain reveal.
         revealFallbacks[identifier] = Task { @MainActor [weak self, weak webView] in
             defer { self?.revealFallbacks.removeValue(forKey: identifier) }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(6))
             guard !Task.isCancelled,
                   let webView,
                   webView.isHidden else { return }
@@ -1090,6 +1349,26 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         generation = requestGeneration
         launchTask = Task { [weak self] in
             await self?.launch(generation: requestGeneration)
+        }
+    }
+
+    /// Starts the shared local editor server without attaching a workspace
+    /// web view. Calling it when a workspace is selected hides the cold
+    /// start from the first time the editor pane is opened; opening the pane
+    /// afterwards only loads a page against an already running server.
+    func prewarm() {
+        guard executableResolver(environment) != nil else { return }
+        switch phase {
+        case .idle, .unavailable, .failed:
+            break
+        case .preparing, .starting, .ready:
+            return
+        }
+        let prewarmGeneration = UUID()
+        generation = prewarmGeneration
+        phase = .preparing
+        launchTask = Task { [weak self] in
+            await self?.launch(generation: prewarmGeneration)
         }
     }
 
