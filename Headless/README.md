@@ -1,14 +1,17 @@
 # Warren Headless
 
-Warren Headless holds Projects, Workspaces, Git worktrees, Terminal Sessions, and ghostline/tmux runtimes on a Host (local Mac or remote VPS). Both the Desktop and the CLI are clients; a client disconnecting never ends a Session.
+Warren Headless holds Projects, Workspaces, Git worktrees, and Terminal
+Sessions on a Host (local Mac or remote VPS). Ghostline is the active runtime;
+tmux is a deprecated legacy runtime kept only for existing sessions. Both the
+Desktop and the CLI are clients; a client disconnecting never ends a Session.
 
 ## Installation
 
 A remote host needs Go 1.25 and Git. The default runtime is
 [ghostline](https://github.com/abcdlsj/ghostline): server-side PTY sessions
 with libghostty-vt snapshots, needing neither tmux nor any other terminal
-multiplexer. `--runtime tmux` is a fully supported alternative runtime for
-environments that prefer or require tmux.
+multiplexer. The historical `--runtime tmux` value is legacy-only and is not
+an active rendering target.
 
 ```sh
 go install github.com/abcdlsj/warren/Headless/cmd/warren-headless@latest
@@ -42,7 +45,7 @@ Default files:
 - State: `~/.warren/state.json`
 - Token: `~/.warren/token`
 - ghostline socket: `~/.warren/ghostline.sock` (default runtime)
-- tmux socket: `warren-headless` (alternative runtime)
+- tmux socket: `warren-headless` (deprecated legacy runtime)
 - Worktrees: `~/.warren/worktrees/`
 
 From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the endpoint, and sets up port forwarding:
@@ -226,8 +229,8 @@ still render with their own terminal emulator. Input is written to the PTY
 verbatim, so there is no tmux paste-vs-key translation and kitty-protocol keys
 (for example Shift+Enter) reach the application unchanged.
 
-The tmux adapter (`--runtime tmux`) is a fully supported alternative runtime;
-ghostline remains the default and recommended choice.
+The tmux adapter is deprecated and retained only for existing sessions;
+ghostline is the sole active rendering target.
 
 See [docs/runtime.md](../docs/runtime.md) for the full comparison, how to
 switch the default, and why sessions keep the engine they were created with.

@@ -4,9 +4,9 @@ High-value pitfalls and the context around them, numbered in the order they
 were recorded. Each entry is a short story: symptom, root cause, what we
 learned, and the current state.
 
-## 001 - tmux snapshot replay misaligns TUI color blocks (and why ghostline exists)
+## 001 - tmux is a deprecated legacy runtime (and why ghostline exists)
 
-### Symptom
+### Historical symptom
 
 With the tmux runtime, agent TUIs (Codex, Claude Code, etc.) show misaligned
 background-color blocks on soft-wrapped colored history. A tab switch or
@@ -51,15 +51,13 @@ The color-block problem is exactly what pushed Warren away from tmux:
 
 ### Current state
 
-ghostline is the default runtime: the server owns the PTY and emulates it
-server-side with libghostty-vt, so the client parses the original PTY bytes
-once instead of tmux's re-rendered output. tmux remains supported but its
-snapshot replay keeps the BCE limitation. Warren deliberately keeps snapshot
-bytes faithful and tracks upstream instead of applying a lossy workaround;
-surfaces are retained across tab switches so one manual resize reflows
-Ghostty back into alignment, and later switches resume from an anchor without
-replaying history. A live scroll can still re-trigger BCE corruption until
-upstream changes the behavior.
+ghostline is the only active runtime target: the server owns the PTY and
+emulates it server-side with libghostty-vt, so the client parses the original
+PTY bytes once instead of tmux's re-rendered output. tmux is deprecated and is
+kept only for existing legacy sessions; no new rendering work, bug fixes, or
+experience guarantees are planned for it. All current and future terminal UX
+work belongs in ghostline's checkpoint, output cursor, resize, and surface
+presentation paths.
 
 ## 002 - Ghostty open-url fallback flooded os_log and pegged a core
 
