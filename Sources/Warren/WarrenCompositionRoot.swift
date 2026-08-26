@@ -252,6 +252,12 @@ struct WarrenCompositionRoot: View {
             restoreEndpointSelection()
             await monitorEndpointConfiguration()
         }
+        .task(id: selectedWorkspacePath) {
+            // Warm the shared local editor server as soon as a workspace is
+            // selected so opening the editor pane skips the cold start.
+            guard selectedWorkspacePath != nil else { return }
+            embeddedEditorModel.prewarm()
+        }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()
             connectSelectedEndpoint()
@@ -439,6 +445,16 @@ struct WarrenCompositionRoot: View {
     }
 
     private var isLocalEndpoint: Bool { selectedEndpointID == "local" }
+
+    /// Path of the workspace the sidebar currently points at, used to warm
+    /// the embedded editor before its pane is ever opened.
+    private var selectedWorkspacePath: String? {
+        guard isLocalEndpoint,
+              case .workspace(let workspaceID) = activeNavigation.selection
+        else { return nil }
+        return activeProjection.workspace(id: workspaceID)?.path
+    }
+
     private var activeProjection: WarrenDesktopProjection {
         remoteModel.projection
     }
