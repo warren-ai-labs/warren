@@ -176,6 +176,58 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
+    func testSubscribeParametersCarryAnchorWithoutFocusClaim() throws {
+        let sessionID = TerminalSessionID()
+
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(sessionID: sessionID, size: nil),
+            ["id": sessionID.description]
+        )
+
+        let anchor = TerminalOutputAnchor(epoch: 7, sequence: 8192)
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: nil,
+                anchor: anchor
+            ),
+            [
+                "id": sessionID.description,
+                "epoch": "7",
+                "sequence": "8192",
+            ]
+        )
+    }
+
+    func testSubscribeParametersCanClaimMeasuredViewport() {
+        let sessionID = TerminalSessionID()
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: TerminalSize(columns: 120, rows: 40),
+                claimControl: true
+            ),
+            [
+                "id": sessionID.description,
+                "claim": "true",
+                "cols": "120",
+                "rows": "40",
+            ]
+        )
+    }
+
+    func testControlClaimParametersDisableOutputWork() {
+        let sessionID = TerminalSessionID()
+
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID),
+            [
+                "id": sessionID.description,
+                "output": "false",
+            ]
+        )
+    }
+
     func testRemoteRosterAttachesInitialTabAndDoesNotDuplicateMountedSurface() {
         XCTAssertTrue(WarrenRemoteTerminalProtocol.shouldAttach(
             previousTabID: nil,

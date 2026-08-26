@@ -1,17 +1,16 @@
 # Warren Headless
 
 Warren Headless holds Projects, Workspaces, Git worktrees, and Terminal
-Sessions on a Host (local Mac or remote VPS). Ghostline is the active runtime;
-tmux is a deprecated legacy runtime kept only for existing sessions. Both the
+Sessions on a Host (local Mac or remote VPS). Ghostline is the sole terminal
+runtime. Both the
 Desktop and the CLI are clients; a client disconnecting never ends a Session.
 
 ## Installation
 
 A remote host needs Go 1.25 and Git. The default runtime is
 [ghostline](https://github.com/abcdlsj/ghostline): server-side PTY sessions
-with libghostty-vt snapshots, needing neither tmux nor any other terminal
-multiplexer. The historical `--runtime tmux` value is legacy-only and is not
-an active rendering target.
+with libghostty-vt snapshots, needing no terminal multiplexer. Configurations
+selecting any removed runtime are rejected at startup; use ghostline.
 
 ```sh
 go install github.com/abcdlsj/warren/Headless/cmd/warren-headless@latest
@@ -45,7 +44,6 @@ Default files:
 - State: `~/.warren/state.json`
 - Token: `~/.warren/token`
 - ghostline socket: `~/.warren/ghostline.sock` (default runtime)
-- tmux socket: `warren-headless` (deprecated legacy runtime)
 - Worktrees: `~/.warren/worktrees/`
 
 From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the endpoint, and sets up port forwarding:
@@ -212,7 +210,11 @@ script calls this endpoint before replacing the daemon binary.
 
 ## Output Pipeline
 
-Each Session's raw PTY bytes are written to a dedicated append-only spool (`~/.warren/output/<runtime>.out` by default); ghostline writes its own spool, while tmux uses `pipe-pane -o -O`. The Host's SpoolWatcher reads from a persisted offset, wakes through platform file notifications on Darwin and Linux, writes into a bounded OutputRing, and broadcasts to clients as DENB binary frames (`sessionID/epoch/sequence/payloadLength`). A low-frequency heartbeat covers missed file events without polling every idle Session at interactive cadence. On reconnect, a client sends its last confirmed Recovery Anchor; the Host replays the exact bytes while the Anchor is still in the Ring or the spool gap is small, otherwise it sends a screen snapshot and reanchors. Raw spool replay is bounded to the same order as the in-memory ring, so a long-detached session never replays tens of megabytes of terminal bytes. Every client has its own outbound queue; a slow client only disconnects itself.
+Ghostline owns the PTY output stream and exposes an atomic checkpoint (screen
+replay plus cursor) for recovery. The Host broadcasts bounded DENB frames
+(`sessionID/epoch/sequence/payloadLength`) and sends a `synced` marker only
+after the checkpoint is complete. Every client has its own outbound queue; a
+slow client only disconnects itself.
 
 ## Runtime
 
@@ -223,17 +225,11 @@ server process (`ghostline serve`, spawned automatically on first start and
 reconnected over `~/.warren/ghostline.sock`), so daemon upgrades and restarts
 never end sessions. A server-side libghostty-vt emulator renders screen
 snapshots (visible grid + scrollback, SGR preserved) at the client's size.
-The output pipeline is unchanged: raw PTY bytes are appended to the same
-spool files, so recovery anchors and reanchor behave identically, and clients
-still render with their own terminal emulator. Input is written to the PTY
-verbatim, so there is no tmux paste-vs-key translation and kitty-protocol keys
+The Host keeps a bounded in-memory output ring and a durable Ghostline cursor;
+checkpoint recovery is atomic and clients still render with their own terminal
+emulator. Input is written to the PTY
+verbatim, and kitty-protocol keys
 (for example Shift+Enter) reach the application unchanged.
-
-The tmux adapter is deprecated and retained only for existing sessions;
-ghostline is the sole active rendering target.
-
-See [docs/runtime.md](../docs/runtime.md) for the full comparison, how to
-switch the default, and why sessions keep the engine they were created with.
 
 Known limits:
 

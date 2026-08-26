@@ -886,7 +886,7 @@ func TestDesktopAttachResizesBeforeFirstSnapshot(t *testing.T) {
 	assertResizePrecedesCapture(t, runtime, 88, 27)
 }
 
-func TestPassiveAttachResizesBeforeSnapshotWhenNoFocusOwner(t *testing.T) {
+func TestPassiveAttachSeedsSnapshotWithoutResizingSharedRuntime(t *testing.T) {
 	state, session := testSession(t)
 	runtime := &recordingRuntime{
 		memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("prompt")}},
@@ -897,11 +897,17 @@ func TestPassiveAttachResizesBeforeSnapshotWhenNoFocusOwner(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
+	// A passive attach carries the viewer's viewport but must never mutate
+	// the shared runtime: a pre-snapshot resize would SIGWINCH the child and
+	// its redraw bytes would race (and be skipped by) the snapshot capture,
+	// leaving full-screen TUIs repainting regions no client ever received.
 	_ = requestResultBeforeBinary[api.Session](t, connection, "session.attach", map[string]any{
 		"id": session.ID, "focused": false, "cols": "88", "rows": "27",
 	})
 	waitForCapture(t, runtime.captureSeen)
-	assertResizePrecedesCapture(t, runtime, 88, 27)
+	if _, resizes := runtime.snapshotOrder(); len(resizes) != 0 {
+		t.Fatalf("passive attach resized the shared runtime: %#v", resizes)
+	}
 }
 
 func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
@@ -1327,17 +1333,16 @@ func TestRosterProjectionIgnoresObserverCancellation(t *testing.T) {
 	}
 }
 
-func TestRosterProjectionDoesNotProbeEndedLegacySessions(t *testing.T) {
+func TestRosterProjectionDoesNotProbeEndedSessions(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ghostlineRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
-	tmuxRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
 	service := &Service{
 		Store:          state,
 		Runtime:        ghostlineRuntime,
-		Runtimes:       map[string]Runtime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime},
+		Runtimes:       map[string]Runtime{"ghostline": ghostlineRuntime},
 		DefaultRuntime: "ghostline",
 	}
 	endedAt := time.Now().UTC()
@@ -1356,9 +1361,7 @@ func TestRosterProjectionDoesNotProbeEndedLegacySessions(t *testing.T) {
 			t.Fatalf("legacy session projection changed: %#v", roster.Sessions[0])
 		}
 	}
-	for kind, runtime := range map[string]*listingRuntime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime} {
-		if lists, exists := runtime.probeCounts(); lists != 0 || exists != 0 {
-			t.Fatalf("%s probes for ended legacy session: lists=%d exists=%d", kind, lists, exists)
-		}
+	if lists, exists := ghostlineRuntime.probeCounts(); lists != 0 || exists != 0 {
+		t.Fatalf("probes for ended session: lists=%d exists=%d", lists, exists)
 	}
 }

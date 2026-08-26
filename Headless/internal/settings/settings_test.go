@@ -12,8 +12,8 @@ func TestNormalizedDefaultsToGhostline(t *testing.T) {
 	if (Settings{}).Normalized() != RuntimeGhostline {
 		t.Fatalf("empty settings normalized = %q", (Settings{}).Normalized())
 	}
-	if (Settings{DefaultRuntime: RuntimeTmux}).Normalized() != RuntimeTmux {
-		t.Fatal("tmux setting not preserved")
+	if (Settings{DefaultRuntime: RuntimeGhostline}).Normalized() != RuntimeGhostline {
+		t.Fatal("ghostline setting not preserved")
 	}
 	if (Settings{DefaultRuntime: "bogus"}).Normalized() != RuntimeGhostline {
 		t.Fatal("invalid setting must fall back to ghostline")
@@ -23,7 +23,7 @@ func TestNormalizedDefaultsToGhostline(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	value := Settings{
-		DefaultRuntime: RuntimeTmux,
+		DefaultRuntime: RuntimeGhostline,
 		RuntimeEnv:     map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
 		GnarEdge:       "https://gnar.example.com",
 		GnarAccount:    "personal",
@@ -38,7 +38,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if loaded.DefaultRuntime != RuntimeTmux {
+	if loaded.DefaultRuntime != RuntimeGhostline {
 		t.Fatalf("loaded default = %q", loaded.DefaultRuntime)
 	}
 	if loaded.RuntimeEnv["GIT_PAGER"] != "less" || loaded.RuntimeEnv["TERM"] != "xterm-256color" {
@@ -58,6 +58,16 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.AutoStartAI {
 		t.Fatal("loaded autoStartAI = false, want true")
+	}
+}
+
+func TestLoadRejectsRemovedTmuxRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"defaultRuntime":"tmux"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load accepted removed tmux runtime")
 	}
 }
 

@@ -196,7 +196,8 @@ final class GhosttyAdapterTests: XCTestCase {
         defer { window.orderOut(nil) }
 
         let terminalSurface = try await waitUntilSurfaceAvailable(on: surface.state)
-        // tmux requests the kitty keyboard protocol from its outer terminal.
+        // Nested terminal applications may request the kitty keyboard protocol
+        // from their outer terminal.
         // Ghostty may then encode Shift+Enter as CSI 13;2u instead of firing
         // the text: keybind, which is exactly what Warren must handle.
         surface.receive(Data("\u{1b}[>1u".utf8))
