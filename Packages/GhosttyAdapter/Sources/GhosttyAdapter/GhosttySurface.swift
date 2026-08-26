@@ -41,8 +41,8 @@ public final class GhosttySurface: Identifiable {
         attachmentID: TerminalAttachmentID,
         workingDirectory: String,
         font: TerminalFontPreference = .init(),
-        outputRenderBudgetBytes: Int = 128 * 1024,
-        outputRenderYield: Duration = .milliseconds(8),
+        outputRenderBudgetBytes: Int = 8 * 1024 * 1024,
+        outputRenderYield: Duration = .milliseconds(1),
         onInput: @escaping @Sendable (Data) -> Void,
         onResize: @escaping @Sendable (Int, Int) -> Void
     ) {

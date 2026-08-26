@@ -85,7 +85,47 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertEqual(manager.snapshot().hiddenRenderAttemptCount, 0)
     }
 
-    func testRecoveryGateRetainsPresentRequestUntilSynced() async throws {
+    func testAttachRetriesWhenHostWindowAppearsAfterFirstLayoutTurn() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        let surface = makeSurface()
+        manager.insert(surface)
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        manager.submit(
+            host: host,
+            intent: TerminalPresentationIntent(
+                activeSessionID: surface.id,
+                viewportSize: host.bounds.size,
+                wantsTerminalFocus: false
+            ),
+            onFocused: { _, _ in },
+            onBlurred: { _ in }
+        )
+        // The first reconciliation runs before AppKit has attached the host
+        // to a window. It must retry instead of leaving the surface black.
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertNil(surface.mountedTerminalView?.window)
+
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+        try await waitUntil {
+            surface.mountedTerminalView?.window === window
+                && !(surface.mountedTerminalView?.isHidden ?? true)
+        }
+    }
+
+    func testRecoveryGateEnablesDisplayOnlyAfterSynced() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 1)
         let surface = makeSurface()
@@ -110,8 +150,10 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         try await waitUntil { surface.mountedTerminalView?.window === window }
         manager.beginRecovery(for: surface.id)
         manager.requestPresent(surface.id)
+        XCTAssertFalse(manager.isDisplayVisible(surface.id))
 
         manager.endRecovery(for: surface.id)
+        XCTAssertTrue(manager.isDisplayVisible(surface.id))
         try await waitUntil { !(surface.mountedTerminalView?.isHidden ?? true) }
     }
 

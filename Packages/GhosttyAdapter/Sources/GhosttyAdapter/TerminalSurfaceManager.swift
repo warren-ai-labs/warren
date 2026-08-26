@@ -121,14 +121,23 @@ public struct TerminalSurfaceManagerSnapshot: Equatable, Sendable {
 /// turn, outside `body`, `layout`, and `updateNSView` call stacks.
 @MainActor
 public final class TerminalSurfaceManager {
+    private enum RecoveryPresentationPhase: String {
+        /// Recovery bytes may be installed, but the display link and all
+        /// presentation requests remain disabled.
+        case recovering
+        /// The atomic recovery boundary has arrived. Drawing and presenting
+        /// are allowed through the single `schedulePresent` path.
+        case ready
+    }
+
     private final class Entry {
         let surface: GhosttySurface
         let view: AppTerminalView
         var transitionGeneration: UInt64 = 0
         var presentationGeneration: UInt64 = 0
         var presentationTask: Task<Void, Never>?
-        var recoveryPresentationGated = false
-        var presentationPendingAfterRecovery = false
+        var recoveryPhase: RecoveryPresentationPhase = .ready
+        var displayVisible = false
 
         init(surface: GhosttySurface, view: AppTerminalView) {
             self.surface = surface
@@ -181,6 +190,23 @@ public final class TerminalSurfaceManager {
         entries[sessionID]?.surface
     }
 
+    /// Whether the retained surface is the one currently selected by the
+    /// mounted terminal host. Cold recovery uses this as a layout barrier:
+    /// subscribing before the host becomes active can capture an intermediate
+    /// grid and force a second SIGWINCH immediately after the first frame.
+    public func isActive(_ sessionID: TerminalSessionID) -> Bool {
+        policy.activeSessionID == sessionID
+    }
+
+    public func isPresentable(_ sessionID: TerminalSessionID) -> Bool {
+        guard isActive(sessionID), let entry = entries[sessionID] else { return false }
+        return entry.surface.terminalViewIsPresentable
+    }
+
+    public func isDisplayVisible(_ sessionID: TerminalSessionID) -> Bool {
+        entries[sessionID]?.displayVisible == true
+    }
+
     public func insert(_ surface: GhosttySurface, recoveryGated: Bool = false) {
         guard entries[surface.id] == nil else { return }
         let view = AppTerminalView(frame: .zero)
@@ -188,11 +214,11 @@ public final class TerminalSurfaceManager {
         view.controller = surface.state.controller
         view.configuration = surface.state.configuration
         view.setFocusLossReportingSuppressed(true)
-        view.setSurfaceVisible(false)
         view.isHidden = true
         surface.mountedTerminalView = view
         let entry = Entry(surface: surface, view: view)
-        entry.recoveryPresentationGated = recoveryGated
+        setDisplayVisible(false, for: entry)
+        entry.recoveryPhase = recoveryGated ? .recovering : .ready
         entries[surface.id] = entry
         surfaceCreationCount &+= 1
         scheduleReconciliation()
@@ -285,12 +311,30 @@ public final class TerminalSurfaceManager {
     public func requestPresent(_ sessionID: TerminalSessionID) {
         guard let entry = entries[sessionID] else {
             hiddenRenderAttemptCount &+= 1
+            TerminalDiagnostics.log("present_request_dropped", [
+                "session": sessionID.description,
+                "reason": "surface_absent",
+            ])
+            return
+        }
+        if entry.recoveryPhase == .recovering {
+            TerminalDiagnostics.log("present_request_deferred", [
+                "session": sessionID.description,
+                "reason": "recovery_gate",
+            ])
             return
         }
         guard policy.activeSessionID == sessionID else {
-            // Reconciliation always presents the entry when it becomes
-            // active, so a request arriving before SwiftUI's next turn is
-            // intentionally retained by the lifecycle transition.
+            // Keep the request until the lifecycle transition activates this
+            // surface. A network recovery can complete before SwiftUI's
+            // reconciliation turn; dropping the request here leaves the
+            // newly attached pane permanently black until a second tab switch.
+            TerminalDiagnostics.log("present_request_deferred", [
+                "session": sessionID.description,
+                "reason": "inactive_surface",
+                "active": policy.activeSessionID?.description ?? "nil",
+            ])
+            scheduleReconciliation()
             return
         }
         schedulePresent(entry, generation: entry.transitionGeneration)
@@ -301,19 +345,27 @@ public final class TerminalSurfaceManager {
     /// that the target sequence has rendered.
     public func beginRecovery(for sessionID: TerminalSessionID) {
         guard let entry = entries[sessionID] else { return }
-        entry.recoveryPresentationGated = true
-        entry.presentationPendingAfterRecovery = false
+        entry.recoveryPhase = .recovering
         cancelPresentation(for: entry)
-        entry.view.setSurfaceVisible(false)
+        setDisplayVisible(false, for: entry)
     }
 
     public func endRecovery(for sessionID: TerminalSessionID) {
         guard let entry = entries[sessionID] else { return }
-        entry.recoveryPresentationGated = false
-        if entry.presentationPendingAfterRecovery,
-           policy.activeSessionID == sessionID {
-            entry.presentationPendingAfterRecovery = false
+        entry.recoveryPhase = .ready
+        if policy.activeSessionID == sessionID {
+            // Recovery hid the Ghostty display link to prevent progressive
+            // replay. Re-enable it before waiting for a final draw; otherwise
+            // presentation and rendering wait on each other until an unrelated
+            // resize happens to wake the surface.
+            setDisplayVisible(true, for: entry)
+            entry.surface.requestDisplayRefresh()
             schedulePresent(entry, generation: entry.transitionGeneration)
+        } else {
+            // The remote marker can arrive before the AppKit reconciliation
+            // that activates this surface. Reconcile the ready phase into the
+            // mounted host rather than requiring a second tab switch.
+            scheduleReconciliation()
         }
     }
 
@@ -409,7 +461,7 @@ public final class TerminalSurfaceManager {
         // mismatch even though AppKit already knows the final size.
         let viewport = sanitizedViewport(host.bounds.size, fallback: latestIntent.viewportSize)
         cancelPresentation(for: entry)
-        entry.view.setSurfaceVisible(false)
+        setDisplayVisible(false, for: entry)
         entry.view.isHidden = true
         if entry.view.superview !== host {
             entry.view.removeFromSuperview()
@@ -421,20 +473,40 @@ public final class TerminalSurfaceManager {
 
         installWindowObservers(for: host.window)
         DispatchQueue.main.async { [weak self, weak host, weak entry] in
-            guard let self, let host, let entry,
-                  isCurrent(
-                      sessionID,
-                      entry: entry,
-                      host: host,
-                      generation: generation,
-                      requiresVisibleView: false
-                  )
-            else {
-                self?.staleCommandCancellationCount &+= 1
+            guard let self, let host, let entry else { return }
+            guard isCurrent(
+                sessionID,
+                entry: entry,
+                host: host,
+                generation: generation,
+                requiresVisibleView: false
+            ) else {
+                // During cold app launch SwiftUI may mount the host before its
+                // window exists.  Treating that first turn as a stale attach
+                // leaves the surface hidden forever until a second tab switch
+                // schedules another reconciliation.  Retry once the host is
+                // attached to a window; reconciliation will invalidate this
+                // generation if the user selected another tab meanwhile.
+                if self.host === host,
+                   self.entries[sessionID] === entry,
+                   self.latestIntent.activeSessionID == sessionID {
+                    TerminalDiagnostics.log("attach_waiting_for_window", [
+                        "session": sessionID.description,
+                    ])
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self, weak host, weak entry] in
+                        guard let self, let host, let entry,
+                              self.host === host,
+                              self.entries[sessionID] === entry,
+                              self.latestIntent.activeSessionID == sessionID else { return }
+                        self.scheduleReconciliation()
+                    }
+                } else {
+                    self.staleCommandCancellationCount &+= 1
+                }
                 return
             }
             entry.view.isHidden = false
-            entry.view.setSurfaceVisible(true)
+            self.setDisplayVisible(entry.recoveryPhase == .ready, for: entry)
             entry.view.fitToSize()
             entry.surface.resyncIfNeeded()
             schedulePresent(entry, generation: generation)
@@ -453,7 +525,7 @@ public final class TerminalSurfaceManager {
         if entry.view.window?.firstResponder === entry.view {
             entry.view.window?.makeFirstResponder(nil)
         }
-        entry.view.setSurfaceVisible(false)
+        setDisplayVisible(false, for: entry)
         entry.view.isHidden = true
         entry.view.removeFromSuperview()
         onBlurred(sessionID)
@@ -467,7 +539,7 @@ public final class TerminalSurfaceManager {
         if entry.view.window?.firstResponder === entry.view {
             entry.view.window?.makeFirstResponder(nil)
         }
-        entry.view.setSurfaceVisible(false)
+        setDisplayVisible(false, for: entry)
         entry.view.isHidden = true
         entry.view.removeFromSuperview()
         entry.surface.mountedTerminalView = nil
@@ -503,10 +575,7 @@ public final class TerminalSurfaceManager {
     }
 
     private func schedulePresent(_ entry: Entry, generation: UInt64) {
-        guard !entry.recoveryPresentationGated else {
-            entry.presentationPendingAfterRecovery = true
-            return
-        }
+        guard entry.recoveryPhase == .ready else { return }
         let sessionID = entry.surface.id
         cancelPresentation(for: entry)
         let presentationGeneration = entry.presentationGeneration
@@ -554,7 +623,7 @@ public final class TerminalSurfaceManager {
                             "enqueuedNow": String(entry.surface.outputWriter.enqueuedSequence),
                             "renderedEpoch": String(entry.surface.renderedEpoch),
                             "renderedSequence": String(entry.surface.renderedSequence),
-                            "recoveryGate": entry.recoveryPresentationGated ? "true" : "false",
+                            "recoveryPhase": entry.recoveryPhase.rawValue,
                         ])
                         return
                     }
@@ -588,6 +657,11 @@ public final class TerminalSurfaceManager {
         entry.presentationGeneration &+= 1
         entry.presentationTask?.cancel()
         entry.presentationTask = nil
+    }
+
+    private func setDisplayVisible(_ visible: Bool, for entry: Entry) {
+        entry.displayVisible = visible
+        entry.view.setSurfaceVisible(visible)
     }
 
     private func outputHasReached(

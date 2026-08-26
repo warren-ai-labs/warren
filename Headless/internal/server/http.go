@@ -1898,28 +1898,24 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if anchor != nil {
 			anchorLabel = fmt.Sprintf("epoch=%d sequence=%d", anchor.Epoch, anchor.Sequence)
 		}
-		p.logInfo("subscribe: begin", "session", id, "anchor", anchorLabel)
+		claimControl, claimSpecified, claimErr := optionalBoolParam(params, "claim")
+		if claimErr != nil {
+			return claimErr
+		}
+		columns, rows, sizeSpecified, sizeErr := attachSizeFromParams(params)
+		if sizeErr != nil {
+			return sizeErr
+		}
+		p.logInfo("subscribe: begin", "session", id, "anchor", anchorLabel,
+			"claim", claimControl, "claimSpecified", claimSpecified,
+			"size", fmt.Sprintf("%dx%d", columns, rows), "specified", sizeSpecified)
 		lock, resume, err := p.server.Service.prepareAttach(ctx, session)
 		if err != nil {
 			return err
 		}
 		p.server.Service.registerPeer(session.ID, p)
-		claimControl, _, err := optionalBoolParam(params, "claim")
-		if err != nil {
-			lock.Unlock()
-			resume()
-			p.server.Service.detachPeer(p, session.ID)
-			return err
-		}
 		if claimControl {
-			columns, rows, specified, sizeErr := attachSizeFromParams(params)
-			if sizeErr != nil {
-				lock.Unlock()
-				resume()
-				p.server.Service.detachPeer(p, session.ID)
-				return sizeErr
-			}
-			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, specified); focusErr != nil {
+			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified); focusErr != nil {
 				lock.Unlock()
 				resume()
 				p.server.Service.detachPeer(p, session.ID)
