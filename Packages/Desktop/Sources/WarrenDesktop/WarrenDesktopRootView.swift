@@ -146,10 +146,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onNoticeAdd = onNoticeAdd
         self.onNoticeRead = onNoticeRead
         self.onNoticeDismiss = onNoticeDismiss
-        self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.normalizedExternalControls(
-            externallyVisibleControls
-        )
         self.endpointOptions = endpointOptions
+        self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
+            externallyVisibleControls,
+            endpointCount: endpointOptions.count
+        )
         self.selectedEndpointID = selectedEndpointID
         self.onSelectEndpoint = onSelectEndpoint
         self.actions = actions

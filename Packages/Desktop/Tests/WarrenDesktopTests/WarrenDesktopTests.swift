@@ -118,6 +118,51 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(layout.overflow, [.endpoint, .settings])
     }
 
+    func testWorkspaceTabTrailingExposesEndpointForMultipleServers() {
+        let controls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
+            WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
+            endpointCount: 2
+        )
+        let layout = WarrenDesktopWorkspaceTabTrailingControl.layout(
+            externallyVisibleControls: controls,
+            availableControls: WarrenDesktopWorkspaceTabTrailingControl.allCases
+        )
+
+        XCTAssertEqual(controls, [.externalIDE, .endpoint, .web, .notifications])
+        XCTAssertEqual(layout.direct, controls)
+        XCTAssertEqual(layout.overflow, [.settings])
+    }
+
+    func testWorkspaceTabTrailingKeepsEndpointInOverflowForSingleServer() {
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
+                WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
+                endpointCount: 1
+            ),
+            WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls
+        )
+    }
+
+    func testEndpointAppearanceAssignsDifferentPaletteEntries() {
+        let endpoints = [
+            WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true),
+            WarrenDesktopEndpointOption(id: "vps", label: "VPS"),
+        ]
+
+        let localColor = WarrenDesktopEndpointAppearance.color(
+            for: "local",
+            in: endpoints,
+            tokens: WarrenColorTokens.dark
+        )
+        let remoteColor = WarrenDesktopEndpointAppearance.color(
+            for: "vps",
+            in: endpoints,
+            tokens: WarrenColorTokens.dark
+        )
+
+        XCTAssertNotEqual(localColor, remoteColor)
+    }
+
     func testEmbeddedEditorKeepsIDEControlAvailableWithoutExternalApplications() {
         XCTAssertTrue(
             WarrenDesktopWorkspaceTabTrailingControl.available(
