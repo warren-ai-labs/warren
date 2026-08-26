@@ -405,6 +405,13 @@ enum WarrenRemoteTabOrdering {
 /// viewport is optional for compatibility with older clients, but a valid
 /// viewport is always sent when Ghostty has produced one.
 enum WarrenRemoteTerminalProtocol {
+    /// Only full reanchor snapshots replace the visible grid atomically.
+    /// Incremental ring-tail recovery stays live so input echoes are not held
+    /// behind historical replay.
+    static func shouldStageRecovery(reanchor: Bool, synced: Bool) -> Bool {
+        !synced && reanchor
+    }
+
     static func attachParameters(
         sessionID: TerminalSessionID,
         size: TerminalSize?,
@@ -2955,16 +2962,31 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             ])
             if !synced {
                 suppressFramedAnchorUpdates.insert(sessionID)
-                // Only a session whose surface is retained needs shielding:
-                // the snapshot bytes are diverted into a staging buffer and
-                // applied after synced, so the visible grid never shows a
-                // half-rebuilt screen or scrolls through replayed history.
+                // A true reanchor is a complete screen replacement and must
+                // stay hidden until the snapshot reaches its synced marker.
+                // Ring-tail recovery (reanchor=false) is an incremental
+                // prefix; exposing it immediately is important because PTY
+                // echoes produced while the replay is in flight must remain
+                // visible and interactive, matching the release client.
                 if surfaceManager.surface(for: sessionID) != nil {
-                    stagedRecoveryPayloads[sessionID] = []
-                    surfaceManager.beginRecovery(for: sessionID)
-                    TerminalDiagnostics.log("recovery_stage_start", [
-                        "session": sessionID.description,
-                    ])
+                    if WarrenRemoteTerminalProtocol.shouldStageRecovery(
+                        reanchor: reanchor,
+                        synced: synced
+                    ) {
+                        stagedRecoveryPayloads[sessionID] = []
+                        surfaceManager.beginRecovery(for: sessionID)
+                        TerminalDiagnostics.log("recovery_stage_start", [
+                            "session": sessionID.description,
+                            "mode": "reanchor",
+                        ])
+                    } else {
+                        stagedRecoveryPayloads.removeValue(forKey: sessionID)
+                        surfaceManager.endRecovery(for: sessionID)
+                        TerminalDiagnostics.log("recovery_stream_live", [
+                            "session": sessionID.description,
+                            "mode": "ring_tail",
+                        ])
+                    }
                 }
             } else {
                 suppressFramedAnchorUpdates.remove(sessionID)
@@ -3384,6 +3406,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // the daemon's recovery stream reaches its synced marker.
         surfaceManager.beginRecovery(for: sessionID)
 
+        // The roster can select a tab before SwiftUI has committed the
+        // terminal host (notably after a daemon/app restart). Do not ask the
+        // daemon for a checkpoint while the surface is still inactive: the
+        // first metrics in that state are a transient, smaller grid and the
+        // subsequent layout pass would immediately SIGWINCH the TUI. Keep the
+        // neutral placeholder up to a bounded deadline and let the normal
+        // resize callback converge if the host remains unfocused.
+        await waitForSurfaceActivation(sessionID, generation: generation)
+
         // SwiftUI/AppKit reports the actual Ghostty grid only after the
         // surface has entered a measured pane. Waiting here makes the very
         // first snapshot use the same rows/columns as the pixels on screen.
@@ -3434,6 +3465,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         } catch {
             if generation == attachGeneration, selectedSessionID == sessionID {
+                TerminalDiagnostics.log("attach_failed", [
+                    "session": sessionID.description,
+                    "error": String(describing: error),
+                    "generation": String(generation),
+                ])
                 selectedSessionID = nil
                 attachedSessionID = nil
                 focusedSessionID = nil
@@ -3469,6 +3505,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func waitForSurfaceActivation(
+        _ sessionID: TerminalSessionID,
+        generation: UInt64
+    ) async {
+        for _ in 0..<300 {
+            guard generation == attachGeneration,
+                  selectedSessionID == sessionID else { return }
+            if surfaceManager.isPresentable(sessionID) { return }
+            do {
+                try await Task.sleep(for: .milliseconds(16))
+            } catch {
+                return
+            }
+        }
     }
 
     /// Subscribes the daemon-side output stream for one session without

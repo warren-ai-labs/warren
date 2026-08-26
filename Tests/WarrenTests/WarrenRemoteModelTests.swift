@@ -216,6 +216,21 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
+    func testRecoveryStagesOnlyFullReanchorSnapshots() {
+        XCTAssertTrue(WarrenRemoteTerminalProtocol.shouldStageRecovery(
+            reanchor: true,
+            synced: false
+        ))
+        XCTAssertFalse(WarrenRemoteTerminalProtocol.shouldStageRecovery(
+            reanchor: false,
+            synced: false
+        ))
+        XCTAssertFalse(WarrenRemoteTerminalProtocol.shouldStageRecovery(
+            reanchor: true,
+            synced: true
+        ))
+    }
+
     func testControlClaimParametersDisableOutputWork() {
         let sessionID = TerminalSessionID()
 
