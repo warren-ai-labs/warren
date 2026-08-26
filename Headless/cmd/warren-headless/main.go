@@ -74,9 +74,7 @@ func main() {
 	statePath := flag.String("state", env("WARREN_STATE", filepath.Join(configDir, "state.json")), "state file")
 	tokenPath := flag.String("token-file", env("WARREN_TOKEN_FILE", filepath.Join(configDir, "token")), "authentication token file")
 	hostName := flag.String("name", env("WARREN_HOST_NAME", ""), "host display name")
-	// tmux-socket is only consulted by the tmux runtime.
-	tmuxSocket := flag.String("tmux-socket", env("WARREN_TMUX_SOCKET", "warren-headless"), "tmux socket name")
-	runtimeMode := flag.String("runtime", env("WARREN_RUNTIME", ""), "default runtime kind: ghostline or tmux (overrides settings.json)")
+	runtimeMode := flag.String("runtime", env("WARREN_RUNTIME", ""), "runtime kind (ghostline only; overrides settings.json)")
 	ghostlineSocket := flag.String("ghostline-socket", env("WARREN_GHOSTLINE_SOCKET", filepath.Join(configDir, "ghostline.sock")), "ghostline server socket path")
 	ghostlineServe := flag.Bool("ghostline-serve", false, "internal: run the ghostline session server (spawned by the daemon)")
 	ghostlineAdoptFrom := flag.String("adopt-from", "", "internal: adopt sessions from this old server admin socket")
@@ -84,7 +82,7 @@ func main() {
 	settingsFile := flag.String("settings-file", env("WARREN_SETTINGS_FILE", filepath.Join(configDir, "settings.json")), "headless settings file")
 	logFile := flag.String("log-file", env("WARREN_LOG_FILE", filepath.Join(configDir, "headless.log")), "daemon log file (empty disables file logging)")
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
-	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "per-session tmux output spool directory")
+	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
 	cloudflaredPath := flag.String("cloudflared-path", os.Getenv("WARREN_CLOUDFLARED_PATH"), "cloudflared binary path")
 	tailscalePath := flag.String("tailscale-path", os.Getenv("WARREN_TAILSCALE_PATH"), "tailscale binary path")
 	gnarPath := flag.String("gnar-path", os.Getenv("WARREN_GNAR_PATH"), "gnar binary path")
@@ -164,7 +162,7 @@ func main() {
 		gnarEdgeValue = gnarDefaultEdge
 	}
 	// Strip launcher-only pager/TERM semantics (agent/CI shells export
-	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline/tmux children
+	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline children
 	// inherit the daemon environment, then let settings.json override the
 	// result so explicit user values always win. The ghostline serve child
 	// inherits this final environment and must not re-sanitize it.
@@ -188,9 +186,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	// Runtime selection is a headless-side decision. Both engines are always
-	// registered so existing sessions keep working no matter which engine
-	// created them; DefaultRuntime only picks the engine for new sessions.
+	// Ghostline is the sole terminal runtime.
 	defaultKind := loadedSettings.Normalized()
 	runtimeSet := false
 	flag.Visit(func(entry *flag.Flag) {
@@ -202,10 +198,8 @@ func main() {
 		switch *runtimeMode {
 		case settings.RuntimeGhostline, "pty": // "pty" is the historical alias.
 			defaultKind = settings.RuntimeGhostline
-		case settings.RuntimeTmux:
-			defaultKind = settings.RuntimeTmux
 		default:
-			fatal(fmt.Errorf("unknown runtime %q (supported: ghostline, tmux)", *runtimeMode))
+			fatal(fmt.Errorf("unknown runtime %q (supported: ghostline)", *runtimeMode))
 		}
 	}
 	ghostlineTagVersion := ghostlineReleaseVersion()
@@ -220,12 +214,6 @@ func main() {
 	}
 	runtimes := map[string]server.Runtime{
 		settings.RuntimeGhostline: server.NewGhostlineRuntime(ghostlineClient),
-	}
-	tmuxAdapter := &runtime.Tmux{Socket: *tmuxSocket, OutputDir: *outputDir}
-	if err := tmuxAdapter.Check(nil); err != nil {
-		logger.Warn("tmux runtime unavailable", "error", err)
-	} else {
-		runtimes[settings.RuntimeTmux] = tmuxAdapter
 	}
 	runtimeAdapter := runtimes[defaultKind]
 	if runtimeAdapter == nil {

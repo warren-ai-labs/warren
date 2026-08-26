@@ -34,7 +34,7 @@ export class OutputBatcher {
       // A hidden tab has no rAF ticks, so without this bound a background
       // session could accumulate output forever. Overflow is a deliberate
       // reanchor: clear memory, ask the app to reconnect without an anchor,
-      // and let Host resend a tmux snapshot.
+      // and let Host resend a Ghostline checkpoint.
       this.reset();
       this.onOverflow();
       return;

@@ -187,7 +187,7 @@ func parseEnvelope(data []byte) (direction, kind byte, headerBytes, payload []by
 }
 
 // SplitPayload splits one logical payload into MaxPayload-sized chunks so a
-// large spool read or capture snapshot can be sequenced into valid frames.
+// large checkpoint replay can be sequenced into valid frames.
 func SplitPayload(payload []byte) [][]byte {
 	if len(payload) <= MaxPayload {
 		return [][]byte{payload}

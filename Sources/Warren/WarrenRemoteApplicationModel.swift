@@ -341,7 +341,7 @@ private enum RemoteWireEvent: Sendable {
     case agent(sessionID: TerminalSessionID, status: AgentStatus)
     case output(Data)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
-    case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool)
+    case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool, synced: Bool)
     case maintenance(message: String?)
     case disconnected(String)
 }
@@ -411,10 +411,10 @@ enum WarrenRemoteTerminalProtocol {
         anchor: TerminalOutputAnchor? = nil
     ) -> [String: String] {
         // Attach subscribes to output only and must not claim focus. The
-        // viewport is still sent so a daemon with no focus owner can resize
-        // the shared runtime before its reanchor snapshot: without this, the
-        // snapshot is captured at the session's last width and soft-wrapped
-        // history replays into Ghostty at the wrong wrap points.
+        // viewport is advisory: current daemons ignore it on passive attaches
+        // because a pre-snapshot resize makes child redraw bytes race the
+        // snapshot, but it is still sent so older-daemon fallbacks keep their
+        // soft-wrap seeding behavior.
         var params = ["id": sessionID.description, "focused": "false"]
         if let size {
             params["cols"] = String(size.columns)
@@ -425,6 +425,37 @@ enum WarrenRemoteTerminalProtocol {
             params["sequence"] = String(anchor.sequence)
         }
         return params
+    }
+
+    /// Parameters for a session output subscription. Passive subscribers do
+    /// not claim focus; a selected cold attach opts into a control claim so
+    /// the measured viewport is applied before the atomic checkpoint.
+    static func subscribeParameters(
+        sessionID: TerminalSessionID,
+        size: TerminalSize?,
+        anchor: TerminalOutputAnchor? = nil,
+        claimControl: Bool = false
+    ) -> [String: String] {
+        var params = ["id": sessionID.description]
+        if claimControl {
+            params["claim"] = "true"
+        }
+        if let size {
+            params["cols"] = String(size.columns)
+            params["rows"] = String(size.rows)
+        }
+        if let anchor {
+            params["epoch"] = String(anchor.epoch)
+            params["sequence"] = String(anchor.sequence)
+        }
+        return params
+    }
+
+    /// Parameters for swapping the control lease without any output work.
+    /// Tab promotion sends this instead of a replay-carrying attach so an
+    /// ordinary switch performs zero recovery on the daemon.
+    static func controlClaimParameters(sessionID: TerminalSessionID) -> [String: String] {
+        ["id": sessionID.description, "output": "false"]
     }
 
     static func shouldAttach(
@@ -744,11 +775,17 @@ private actor WarrenRemoteWire {
                   let sequence = (object["sequence"] as? NSNumber)?.uint64Value else {
                 return true
             }
+            // The daemon distinguishes snapshot resets (reanchor=true) from
+            // incremental recovery prefixes (reanchor=false) on every
+            // attached message. Only a true reset may divert frames into the
+            // staging buffer that shields the visible surface.
+            let reanchor = (object["reanchor"] as? Bool) ?? (type == "attached")
             return await eventBuffer.send(.anchor(
                 sessionID: sessionID,
                 epoch: epoch,
                 sequence: sequence,
-                reanchor: type == "attached"
+                reanchor: type == "synced" ? false : reanchor,
+                synced: type == "synced"
             ))
         } else if type == "error" {
             return await eventBuffer.send(.disconnected(
@@ -932,6 +969,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
     private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
     private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
+    /// Sessions with a live daemon-side output subscription feeding their
+    /// retained surface. One entry per warm/active surface; background
+    /// frames keep these surfaces current so tab promotion stays local.
+    private var outputSubscriptions: Set<TerminalSessionID> = []
+    /// Snapshot bytes staged while a reanchor rebuilds a session's screen.
+    /// Feeding a full snapshot into an already visible surface is what makes
+    /// a stale anchor flash and scroll; staging defers the bytes until the
+    /// synced marker arrives, then applies them in one pass.
+    private var stagedRecoveryPayloads: [TerminalSessionID: [Data]] = [:]
+    /// Set when the connected daemon predates session.subscribe. The model
+    /// falls back to legacy attach semantics for the whole connection
+    /// instead of failing every navigation.
+    private var subscriptionTransportUnavailable = false
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
@@ -958,6 +1008,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard let self else { return }
             self.outputAnchors.removeValue(forKey: sessionID)
             self.suppressFramedAnchorUpdates.remove(sessionID)
+            self.stagedRecoveryPayloads.removeValue(forKey: sessionID)
+            self.unsubscribeFromOutput(sessionID)
         }
         guard endpointConfiguration != configuration || eventTask == nil else {
             // The root view's `.task` can restart on window transitions such
@@ -1107,6 +1159,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         attachGeneration &+= 1
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
+        outputSubscriptions.removeAll()
+        stagedRecoveryPayloads.removeAll()
+        subscriptionTransportUnavailable = false
         cancelResizeRequests()
         focusTask?.cancel()
         focusTask = nil
@@ -1118,12 +1173,30 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         appliedLiveTabSessionIDs.removeAll()
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
+        outputSubscriptions.removeAll()
+        stagedRecoveryPayloads.removeAll()
     }
 
     private func removeMountedSurface(sessionID: TerminalSessionID) {
         surfaceManager.remove(sessionID)
         outputAnchors.removeValue(forKey: sessionID)
         suppressFramedAnchorUpdates.remove(sessionID)
+        stagedRecoveryPayloads.removeValue(forKey: sessionID)
+        outputSubscriptions.remove(sessionID)
+    }
+
+    /// Best-effort daemon-side unsubscribe for a disposed surface. The
+    /// daemon also cleans up when the session exits or the socket drops, so
+    /// failures are deliberately ignored.
+    private func unsubscribeFromOutput(_ sessionID: TerminalSessionID) {
+        guard !subscriptionTransportUnavailable, wire != nil else { return }
+        guard outputSubscriptions.remove(sessionID) != nil else { return }
+        Task { [weak self] in
+            _ = try? await self?.wire?.request(
+                "session.unsubscribe",
+                params: ["id": sessionID.description]
+            )
+        }
     }
 
     private func clearMaintenance() {
@@ -1297,7 +1370,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -1333,7 +1406,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -1456,7 +1529,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     in: projection
                 )
             )
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
             return
         }
 
@@ -1491,7 +1564,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         if projection.tabs(in: workspace.id).isEmpty {
             createSession(workspaceID: workspace.id, request: .shell)
         } else {
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         }
     }
 
@@ -2197,7 +2270,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
         switch action {
         case .selectProject, .selectWorkspace, .openWorkspace, .selectTerminalGroup, .selectTab, .restoreNavigation:
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .openSession(let id):
             selectSession(id)
         case .deleteSession(let id):
@@ -2209,7 +2282,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // Close selects the replacement tab before the daemon confirms the
             // delete. Attach it immediately so the pane does not fall back to
             // the "Connecting…" placeholder while the roster catches up.
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .closeOtherTabs(let tabID):
             let tabs: [ClientTab]
             if let workspaceID = projection.workspaceID(forTabID: tabID) {
@@ -2222,7 +2295,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             for tab in tabs where tab.id != tabID {
                 if let id = tab.sessionID { closeSession(id) }
             }
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .closeAllTabs:
             for tab in selectedContextTabs {
                 if let id = tab.sessionID { closeSession(id) }
@@ -2629,7 +2702,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -2872,11 +2945,42 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 }
             }
             await feedOutput(payload, sessionID: sessionID)
-        case .anchor(let sessionID, let epoch, let sequence, let reanchor):
-            if reanchor {
+        case .anchor(let sessionID, let epoch, let sequence, let reanchor, let synced):
+            TerminalDiagnostics.log("recovery_anchor", [
+                "session": sessionID.description,
+                "reanchor": reanchor ? "true" : "false",
+                "epoch": String(epoch),
+                "sequence": String(sequence),
+                "surface": surfaceManager.surface(for: sessionID) != nil ? "retained" : "absent",
+            ])
+            if !synced {
                 suppressFramedAnchorUpdates.insert(sessionID)
+                // Only a session whose surface is retained needs shielding:
+                // the snapshot bytes are diverted into a staging buffer and
+                // applied after synced, so the visible grid never shows a
+                // half-rebuilt screen or scrolls through replayed history.
+                if surfaceManager.surface(for: sessionID) != nil {
+                    stagedRecoveryPayloads[sessionID] = []
+                    surfaceManager.beginRecovery(for: sessionID)
+                    TerminalDiagnostics.log("recovery_stage_start", [
+                        "session": sessionID.description,
+                    ])
+                }
             } else {
                 suppressFramedAnchorUpdates.remove(sessionID)
+                if let staged = stagedRecoveryPayloads.removeValue(forKey: sessionID),
+                   !staged.isEmpty,
+                   surfaceManager.surface(for: sessionID) != nil {
+                    TerminalDiagnostics.log("recovery_staged_apply", [
+                        "session": sessionID.description,
+                        "chunks": String(staged.count),
+                    ])
+                    for payload in staged {
+                        surfaceManager.enqueueRawOutput(payload, for: sessionID)
+                    }
+                }
+                surfaceManager.endRecovery(for: sessionID)
+                if selectedSessionID == sessionID { initialRefreshPending = false }
             }
             if let current = outputAnchors[sessionID] {
                 if epoch > current.epoch
@@ -2902,9 +3006,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func feedOutput(_ data: Data, sessionID: TerminalSessionID? = nil) async {
         guard !data.isEmpty,
               let targetSessionID = sessionID ?? selectedSessionID,
-              targetSessionID == selectedSessionID,
               surfaceManager.surface(for: targetSessionID) != nil else { return }
-        let nudge = initialRefreshPending
+        // A snapshot rebuild must never stream through a surface the user
+        // can see. Stage the bytes and apply them in one pass when the
+        // synced marker arrives; the visible grid stays frozen until then.
+        if stagedRecoveryPayloads[targetSessionID] != nil {
+            stagedRecoveryPayloads[targetSessionID]?.append(data)
+            return
+        }
+        let nudge = initialRefreshPending && targetSessionID == selectedSessionID
         if nudge {
             TerminalDiagnostics.log("feed_output", [
                 "session": targetSessionID.description,
@@ -3129,10 +3239,84 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // this explicit attach, the tab bar appears populated while the
             // pane remains empty until the user clicks the tab.
             Task { @MainActor [weak self] in
-                await self?.attachSelectedSession()
+                await self?.presentSelectedSession()
             }
         }
         fulfillPendingTerminalOpenRequest()
+    }
+
+    /// Entry point for every navigation that makes a session visible.
+    ///
+    /// A retained surface with a live output subscription is promoted
+    /// locally: its grid already holds the current screen, so presentation
+    /// is a reparent plus a control-lease swap and performs zero replay,
+    /// snapshot, or clear. Everything else takes the cold seeding path.
+    private func presentSelectedSession() async {
+        guard let tabID = navigation.selectedTabID,
+              let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        if !subscriptionTransportUnavailable,
+           surfaceManager.surface(for: sessionID) != nil,
+           outputSubscriptions.contains(sessionID) {
+            await promoteRetainedSession(sessionID)
+            return
+        }
+        await attachSelectedSession()
+    }
+
+    /// Promotes an already-current retained surface without touching the
+    /// terminal byte stream. The daemon-side work is one control-lease swap;
+    /// the pixels on screen are the live surface itself, not a replay.
+    private func promoteRetainedSession(_ sessionID: TerminalSessionID) async {
+        guard let wire else { return }
+        if selectedSessionID != sessionID {
+            pendingFocusSessionID = nil
+            pendingFocusSize = nil
+            pendingFocusResizeSize = nil
+            cancelResizeRequests()
+        }
+        inputRouter.prepare(for: sessionID)
+        selectedSessionID = sessionID
+        TerminalDiagnostics.log("tab_promote_local", [
+            "session": sessionID.description,
+        ])
+        do {
+            _ = try await wire.request(
+                "session.attach",
+                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
+            )
+        } catch {
+            // The control swap can fail when the session exited between the
+            // last roster and this switch. Re-seed through the cold path so
+            // the pane converges instead of silently losing input.
+            if selectedSessionID == sessionID {
+                await attachSelectedSession()
+            }
+            return
+        }
+        guard selectedSessionID == sessionID else { return }
+        attachedSessionID = sessionID
+        TerminalDiagnostics.log("promote_complete", [
+            "session": sessionID.description,
+        ])
+        surfaceManager.requestPresent(sessionID)
+        inputRouter.activate(for: sessionID) { [wire] data in
+            await wire.sendInput(data)
+        }
+        let measuredSize = surfaceManager
+            .surface(for: sessionID)?
+            .state.surfaceSize
+            .flatMap { TerminalSize(columns: Int($0.columns), rows: Int($0.rows)) }
+        guard pendingFocusSessionID == sessionID else { return }
+        // Mirror the legacy attach flow: focus ownership is claimed only when
+        // the surface actually gained keyboard focus (the manager reports it
+        // through onFocused, which parks the request here while the control
+        // swap was still in flight). An unfocused window switching tabs must
+        // not steal resize authority from another endpoint viewing the same
+        // terminal.
+        let pendingSize = pendingFocusSize ?? measuredSize
+        pendingFocusSessionID = nil
+        pendingFocusSize = nil
+        sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
     }
 
     private func attachSelectedSession() async {
@@ -3142,7 +3326,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               let wire else { return }
 
         // Mount before awaiting the attach response. The daemon may legally
-        // produce the first tmux snapshot immediately after it accepts the
+        // produce the first recovery snapshot immediately after it accepts the
         // attach request; feeding that snapshot into an already-created surface
         // prevents the initial prompt from disappearing in the network race.
         let existingSurface = surfaceManager.surface(for: sessionID)
@@ -3193,14 +3377,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 onInput: { data in inputBridge.send(data) },
                 onResize: { [weak self] columns, rows in Task { @MainActor in self?.resize(columns: columns, rows: rows) } }
             )
-            surfaceManager.insert(surface)
+            surfaceManager.insert(surface, recoveryGated: true)
         }
         selectedSessionID = sessionID
+        // Keep the newly mounted surface in a neutral placeholder state until
+        // the daemon's recovery stream reaches its synced marker.
+        surfaceManager.beginRecovery(for: sessionID)
 
         // SwiftUI/AppKit reports the actual Ghostty grid only after the
         // surface has entered a measured pane. Waiting here makes the very
-        // first tmux snapshot use the same rows/columns as the pixels on
-        // screen, instead of briefly capturing the tmux default 120x36 grid.
+        // first snapshot use the same rows/columns as the pixels on screen.
         // Keep a bounded fallback so a renderer that cannot obtain metrics
         // still attaches and can converge through its later resize callback.
         let size = await waitForSurfaceSize(surface, generation: generation)
@@ -3213,16 +3399,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               surfaceManager.surface(for: sessionID) === surface else { return }
         do {
             initialRefreshPending = true
-            _ = try await wire.request(
-                "session.attach",
-                params: WarrenRemoteTerminalProtocol.attachParameters(
-                    sessionID: sessionID,
-                    size: size,
-                    anchor: outputAnchors[sessionID]
-                )
-            )
+            let usedLegacyAttach = !(try await seedSessionSubscription(
+                sessionID: sessionID,
+                size: size,
+                generation: generation
+            ))
             guard generation == attachGeneration,
                   selectedSessionID == sessionID else { return }
+            if !usedLegacyAttach {
+                // The subscription carries no input authority. Swap the
+                // control lease separately so typing and focus ownership
+                // follow the visible tab.
+                _ = try await wire.request(
+                    "session.attach",
+                    params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
+                )
+                guard generation == attachGeneration,
+                      selectedSessionID == sessionID else { return }
+                outputSubscriptions.insert(sessionID)
+            }
             attachedSessionID = sessionID
             TerminalDiagnostics.log("attach_complete", [
                 "session": sessionID.description,
@@ -3243,6 +3438,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 attachedSessionID = nil
                 focusedSessionID = nil
                 inputRouter.discard(for: sessionID)
+                surfaceManager.endRecovery(for: sessionID)
                 removeMountedSurface(sessionID: sessionID)
                 // Only a failure for the currently selected session belongs in
                 // the notice center. A stale attach can be cancelled by a
@@ -3275,6 +3471,47 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return nil
     }
 
+    /// Subscribes the daemon-side output stream for one session without
+    /// claiming focus or input authority. Returns false when the connected
+    /// daemon predates subscriptions and the legacy attach was used instead;
+    /// the legacy attach already carries both output and control.
+    private func seedSessionSubscription(
+        sessionID: TerminalSessionID,
+        size: TerminalSize?,
+        generation: UInt64
+    ) async throws -> Bool {
+        guard let wire else { return false }
+        do {
+            _ = try await wire.request(
+                "session.subscribe",
+                params: WarrenRemoteTerminalProtocol.subscribeParameters(
+                    sessionID: sessionID,
+                    size: size,
+                    anchor: outputAnchors[sessionID],
+                    claimControl: true
+                )
+            )
+            return true
+        } catch {
+            guard error.localizedDescription.contains("unknown method") else {
+                throw error
+            }
+            subscriptionTransportUnavailable = true
+            TerminalDiagnostics.log("subscribe_unavailable", [
+                "session": sessionID.description,
+            ])
+            _ = try await wire.request(
+                "session.attach",
+                params: WarrenRemoteTerminalProtocol.attachParameters(
+                    sessionID: sessionID,
+                    size: size,
+                    anchor: outputAnchors[sessionID]
+                )
+            )
+            return false
+        }
+    }
+
     private func selectSession(_ id: TerminalSessionID) {
         guard let session = projection.sessions.first(where: { $0.id == id }) else { return }
         guard session.workspaceID != nil || session.terminalGroupID != nil else { return }
@@ -3290,7 +3527,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 in: projection
             )
         )
-        Task { await attachSelectedSession() }
+        Task { await presentSelectedSession() }
     }
 
     private func moveTab(_ tabID: String, before destinationTabID: String?) {

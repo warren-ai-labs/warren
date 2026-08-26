@@ -69,7 +69,6 @@ Prerequisites:
 - macOS 13+
 - Swift 6 toolchain (Xcode)
 - Go 1.25
-- tmux
 - [mise](https://mise.jdx.dev) for the task runner
 
 Build and run the macOS app:
@@ -247,7 +246,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
 - [docs/startup-performance-governance.md](docs/startup-performance-governance.md) — cold-start critical path, deferral rules, and review checklist
 - [docs/update-service.md](docs/update-service.md) — Cloudflare release proxy, caching, and updater endpoint contract
-- [docs/runtime.md](docs/runtime.md) — ghostline and tmux runtime comparison
+- [docs/runtime.md](docs/runtime.md) — ghostline runtime and recovery
 - [Headless/README.md](Headless/README.md) — headless daemon and CLI
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
 - [Web/README.md](Web/README.md) — Web/PWA client

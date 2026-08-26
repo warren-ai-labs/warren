@@ -983,7 +983,7 @@ func isSlowMutation(method string) bool {
 
 func isBackgroundRequest(method string) bool {
 	switch method {
-	case "git.panel", "git.diff":
+	case "git.panel", "git.diff", "session.subscribe":
 		return true
 	default:
 		return false
@@ -1086,10 +1086,16 @@ type wsPeer struct {
 	connection *websocket.Conn
 	outbound   chan outboundMessage
 
-	enqueueMu      sync.Mutex
-	closed         chan struct{}
-	closeFlag      bool
-	attached       *api.Session
+	enqueueMu sync.Mutex
+	closed    chan struct{}
+	closeFlag bool
+	attached  *api.Session
+	// outputs tracks every terminal session this peer subscribed to for
+	// output. A desktop client keeps one subscription per retained warm
+	// surface so background sessions keep consuming output; legacy web and
+	// mobile clients keep exactly the one implicit subscription created by
+	// their attach. Guarded by enqueueMu.
+	outputs        map[string]struct{}
 	controlSession string
 	agentSession   string
 	rosterCancel   context.CancelFunc
@@ -1114,9 +1120,9 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 
 func (p *wsPeer) close() {
 	p.enqueueMu.Lock()
-	sessionID, agentSessionID := p.closeLocked()
+	sessionIDs, agentSessionID := p.closeLocked()
 	p.enqueueMu.Unlock()
-	if sessionID != "" {
+	for _, sessionID := range sessionIDs {
 		p.server.Service.detachPeer(p, sessionID)
 	}
 	if agentSessionID != "" {
@@ -1154,9 +1160,9 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		// Queue overflow is a per-client failure: close only this peer. The
 		// client reconnects with its Recovery Anchor and Host re-serves the
 		// retained tail from the ring.
-		sessionID, agentSessionID := p.closeLocked()
+		sessionIDs, agentSessionID := p.closeLocked()
 		p.enqueueMu.Unlock()
-		if sessionID != "" {
+		for _, sessionID := range sessionIDs {
 			p.server.Service.detachPeer(p, sessionID)
 		}
 		if agentSessionID != "" {
@@ -1168,30 +1174,45 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 
 // closeLocked must be called with enqueueMu held. It is idempotent so both
 // the writer's error path and queue overflow can tear down the same peer
-// exactly once.
-// closeLocked must be called with enqueueMu held. It returns terminal and
-// agent-only subscription IDs so the caller can unregister after releasing
+// exactly once. It returns every terminal subscription ID and the
+// agent-only subscription ID so the caller can unregister after releasing
 // the lock, keeping registry lock ordering acyclic.
-func (p *wsPeer) closeLocked() (string, string) {
+func (p *wsPeer) closeLocked() ([]string, string) {
 	if p.closeFlag {
 		agentSessionID := p.agentSession
-		if p.attached != nil {
-			return p.attached.ID, agentSessionID
+		sessionIDs := make([]string, 0, len(p.outputs)+1)
+		for sessionID := range p.outputs {
+			sessionIDs = append(sessionIDs, sessionID)
 		}
-		return "", agentSessionID
+		if p.attached != nil {
+			alreadyTracked := false
+			for _, sessionID := range sessionIDs {
+				if sessionID == p.attached.ID {
+					alreadyTracked = true
+					break
+				}
+			}
+			if !alreadyTracked {
+				sessionIDs = append(sessionIDs, p.attached.ID)
+			}
+		}
+		return sessionIDs, agentSessionID
 	}
 	p.closeFlag = true
 	if p.rosterCancel != nil {
 		p.rosterCancel()
 		p.rosterCancel = nil
 	}
-	sessionID := ""
-	if p.attached != nil {
-		sessionID = p.attached.ID
+	sessionIDs := make([]string, 0, len(p.outputs)+1)
+	for sessionID := range p.outputs {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if p.attached != nil && p.outputs[p.attached.ID] == struct{}{} {
+		sessionIDs = append(sessionIDs, p.attached.ID)
 	}
 	close(p.closed)
 	close(p.outbound)
-	return sessionID, p.agentSession
+	return sessionIDs, p.agentSession
 }
 
 func (p *wsPeer) writeJSON(value any) error {
@@ -1787,6 +1808,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if session.Lifecycle != "running" {
 			return fmt.Errorf("session is not running: %s", id)
 		}
+		// Control-only claims carry no output intent: the desktop promotes a
+		// retained warm surface by swapping its control lease without any
+		// replay, snapshot, or runtime I/O. Legacy clients omit the flag and
+		// get the historical attach behavior below.
+		if outputOnly, outputSpecified, err := optionalBoolParam(params, "output"); err == nil && outputSpecified && !outputOnly {
+			p.claimControl(session)
+			return p.writeResult(command.ID, publicSession(session))
+		}
 		columns, rows, specified, err := attachSizeFromParams(params)
 		if err != nil {
 			return err
@@ -1823,20 +1852,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 		}
 		p.logInfo("attach: focus done", "session", id)
-		// A passive attach (focused=false) still carries the client's viewport
-		// size. When nobody owns focus, resize the shared runtime before the
-		// reanchor snapshot so soft-wrapped history is captured at the same
-		// width Ghostty will replay it. If another endpoint owns focus, leave
-		// the runtime alone and let that endpoint's focus handoff resize later.
-		if specified && focusSpecified && !focused && !p.server.Service.hasFocusedPeer(session.ID) {
-			if _, err := p.server.Service.resizeRuntime(ctx, session, columns, rows); err != nil {
-				lock.Unlock()
-				resume()
-				p.detach()
-				return err
-			}
-		}
-		p.logInfo("attach: resize done", "session", id)
+		// A passive attach deliberately ignores the carried viewport and
+		// never resizes: resizing here would SIGWINCH the child program and
+		// its redraw bytes would race the checkpoint below, so the client would
+		// never receive them and full-screen TUIs (Codex composer, vim
+		// statusline) keep repainting regions the terminal never saw.
+		// Viewport ownership belongs to the focus handoff, which resizes
+		// only after the snapshot has been delivered.
 		if err := p.writeResult(command.ID, publicSession(session)); err != nil {
 			lock.Unlock()
 			resume()
@@ -1845,7 +1867,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		p.logInfo("attach: result sent", "session", id)
 		anchor := anchorFromParams(params)
-		if err := p.server.Service.attachOutputLocked(ctx, p, session, anchor); err != nil {
+		if err := p.server.Service.attachOutputLocked(ctx, p, session, anchor, "session.attach"); err != nil {
 			lock.Unlock()
 			resume()
 			p.detach()
@@ -1858,6 +1880,79 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	case "session.detach":
 		p.detach()
 		return p.writeResult(command.ID, map[string]bool{"detached": true})
+	case "session.subscribe":
+		// Output-only subscription for one session. A peer may hold many at
+		// once; focus, resize, and input ownership are untouched so several
+		// endpoints can observe the same terminal without fighting over its
+		// shared runtime size.
+		id := stringParam(params, "id")
+		session, ok := p.server.Service.Session(id)
+		if !ok {
+			return fmt.Errorf("session not found: %s", id)
+		}
+		if session.Lifecycle != "running" {
+			return fmt.Errorf("session is not running: %s", id)
+		}
+		anchor := anchorFromParams(params)
+		anchorLabel := "none"
+		if anchor != nil {
+			anchorLabel = fmt.Sprintf("epoch=%d sequence=%d", anchor.Epoch, anchor.Sequence)
+		}
+		p.logInfo("subscribe: begin", "session", id, "anchor", anchorLabel)
+		lock, resume, err := p.server.Service.prepareAttach(ctx, session)
+		if err != nil {
+			return err
+		}
+		p.server.Service.registerPeer(session.ID, p)
+		claimControl, _, err := optionalBoolParam(params, "claim")
+		if err != nil {
+			lock.Unlock()
+			resume()
+			p.server.Service.detachPeer(p, session.ID)
+			return err
+		}
+		if claimControl {
+			columns, rows, specified, sizeErr := attachSizeFromParams(params)
+			if sizeErr != nil {
+				lock.Unlock()
+				resume()
+				p.server.Service.detachPeer(p, session.ID)
+				return sizeErr
+			}
+			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, specified); focusErr != nil {
+				lock.Unlock()
+				resume()
+				p.server.Service.detachPeer(p, session.ID)
+				return focusErr
+			}
+			p.claimControl(session)
+		}
+		// Passive subscribers never mutate the shared runtime. A selected
+		// desktop attach may explicitly claim control; in that case the resize
+		// above runs while the session output lock is held, before checkpoint.
+		// A subscription response is deliberately acknowledged before replaying
+		// the recovery payload. Desktop can claim the control lease and keep
+		// input responsive while the staged terminal output drains in the
+		// background; the `synced` marker remains the presentation boundary.
+		if err := p.writeResult(command.ID, map[string]bool{"subscribed": true}); err != nil {
+			lock.Unlock()
+			resume()
+			p.server.Service.detachPeer(p, session.ID)
+			return err
+		}
+		if err := p.server.Service.attachOutputLocked(ctx, p, session, anchor, "session.subscribe"); err != nil {
+			lock.Unlock()
+			resume()
+			p.server.Service.detachPeer(p, session.ID)
+			return err
+		}
+		lock.Unlock()
+		resume()
+		return nil
+	case "session.unsubscribe":
+		id := stringParam(params, "id")
+		p.server.Service.detachPeer(p, id)
+		return p.writeResult(command.ID, map[string]bool{"unsubscribed": true})
 	case "session.focus":
 		if p.attached == nil {
 			return fmt.Errorf("no attached session")
@@ -2000,13 +2095,26 @@ func (p *wsPeer) input(ctx context.Context, data []byte) error {
 	return nil
 }
 
-// attach only changes the peer's local projection and takes the Control
-// Lease for the session. It never touches the tmux session lifetime; detach
-// later only unsubscribes output.
+// attach is the legacy single-subscription attach: it swaps the control
+// lease and implicitly unsubscribes the previously attached session so a
+// web or mobile client that switches terminals stops receiving the old
+// session's frames. Desktop clients use subscribe plus claimControl instead,
+// keeping one output subscription per retained warm surface.
 func (p *wsPeer) attach(session api.Session) {
 	p.detach()
 	p.attached = &session
 	p.controlSession = session.ID
+}
+
+// claimControl swaps the control lease without touching output
+// subscriptions. The desktop keeps its per-surface subscriptions alive
+// across tab switches; only input, focus, and resize ownership follow this
+// pointer.
+func (p *wsPeer) claimControl(session api.Session) {
+	p.enqueueMu.Lock()
+	p.attached = &session
+	p.controlSession = session.ID
+	p.enqueueMu.Unlock()
 }
 
 func (p *wsPeer) subscribeAgent(sessionID string) error {
@@ -2041,6 +2149,21 @@ func (p *wsPeer) detach() {
 	}
 	p.attached = nil
 	p.controlSession = ""
+}
+
+func (p *wsPeer) addOutput(sessionID string) {
+	p.enqueueMu.Lock()
+	if p.outputs == nil {
+		p.outputs = map[string]struct{}{}
+	}
+	p.outputs[sessionID] = struct{}{}
+	p.enqueueMu.Unlock()
+}
+
+func (p *wsPeer) removeOutput(sessionID string) {
+	p.enqueueMu.Lock()
+	delete(p.outputs, sessionID)
+	p.enqueueMu.Unlock()
 }
 
 func stringParam(values map[string]any, key string) string {

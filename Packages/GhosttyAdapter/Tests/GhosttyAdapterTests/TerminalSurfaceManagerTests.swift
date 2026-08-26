@@ -85,6 +85,36 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertEqual(manager.snapshot().hiddenRenderAttemptCount, 0)
     }
 
+    func testRecoveryGateRetainsPresentRequestUntilSynced() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        let surface = makeSurface()
+        manager.insert(surface, recoveryGated: true)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil { surface.mountedTerminalView?.window === window }
+        manager.beginRecovery(for: surface.id)
+        manager.requestPresent(surface.id)
+
+        manager.endRecovery(for: surface.id)
+        try await waitUntil { !(surface.mountedTerminalView?.isHidden ?? true) }
+    }
+
     func testAttachUsesMeasuredHostGeometryWhenIntentIsStale() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 1)

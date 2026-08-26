@@ -9,13 +9,13 @@ import WarrenTerminalRenderer
 
 /// One Ghostty terminal surface backed by Warren's Host output stream.
 ///
-/// The terminal process itself remains owned by tmux/Host; Ghostty only
+/// The terminal process itself remains owned by the Host; Ghostty only
 /// renders the PTY byte stream and forwards input/resize back to Warren. This is
 /// the same in-memory shape Termio uses for its companion/status architecture.
 @MainActor
 public final class GhosttySurface: Identifiable {
     /// Matches the 1.12 line-height used by the Web terminal while keeping
-    /// Ghostty's cell grid authoritative for tmux resize calculations.
+    /// Ghostty's cell grid authoritative for resize calculations.
     private static let defaultCellHeightAdjustment = "12%"
 
     public let id: TerminalSessionID
@@ -342,7 +342,7 @@ public final class GhosttySurface: Identifiable {
     /// Re-submit Ghostty's current grid even when the renderer's pixel size
     /// has not changed. libghostty intentionally suppresses duplicate metric
     /// callbacks, while Warren must calibrate a newly adopted or re-selected
-    /// tmux runtime that may not match the persisted last-requested size.
+    /// runtime that may not match the persisted last-requested size.
     public func synchronizeViewport() {
         guard let size = state.surfaceSize else { return }
         TerminalDiagnostics.log("viewport_sync", [

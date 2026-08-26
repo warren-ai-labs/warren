@@ -47,7 +47,7 @@ public struct WarrenDesktopNavigationState: Equatable, Hashable, Sendable {
 }
 
 /// Pure navigation reducer. A click updates this state synchronously; Host and
-/// tmux side effects may finish later without becoming another selection owner.
+/// Runtime side effects may finish later without becoming another selection owner.
 public enum WarrenDesktopNavigationReducer {
     public static func initial(
         for projection: WarrenDesktopProjection

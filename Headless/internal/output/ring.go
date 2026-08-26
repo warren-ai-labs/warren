@@ -49,7 +49,7 @@ func (r Recovery) Anchor() Anchor {
 
 // Ring is a bounded sequence interval retained by Host for reconnecting
 // clients. Sequence values are byte positions since the epoch start, matching
-// the spool byte stream and the Swift Host OutputRing semantics.
+// the Ghostline output stream and the Swift Host OutputRing semantics.
 type Ring struct {
 	Capacity     int
 	MaxBytes     int
@@ -152,7 +152,7 @@ func (r *Ring) Plan(anchor *Anchor) Plan {
 // Recovery returns the frames needed by a client. For a tail the first frame
 // is trimmed so its header starts exactly at the requested byte; for reanchor
 // the entire retained interval is returned and callers decide whether to send
-// a tmux screen snapshot instead.
+// a full screen snapshot instead.
 func (r *Ring) Recovery(anchor *Anchor) Recovery {
 	plan := r.Plan(anchor)
 	recovery := Recovery{

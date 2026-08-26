@@ -14,7 +14,6 @@ import (
 // Runtime kinds supported by the headless daemon.
 const (
 	RuntimeGhostline = "ghostline"
-	RuntimeTmux      = "tmux"
 )
 
 // DefaultRuntimeKind is used when neither the settings file nor --runtime
@@ -41,10 +40,10 @@ func BuiltInGnarEdge() string {
 // sessions, not what clients render.
 type Settings struct {
 	// DefaultRuntime is the engine used for sessions created without an
-	// explicit runtimeKind. Supported: ghostline, tmux.
+	// explicit runtimeKind. Ghostline is the only supported runtime.
 	DefaultRuntime string `json:"defaultRuntime"`
-	// RuntimeEnv overrides environment variables inherited by terminal
-	// runtime children (ghostline/tmux sessions). It is applied after the
+	// RuntimeEnv overrides environment variables inherited by ghostline
+	// runtime children. It is applied after the
 	// daemon's built-in environment sanitization, so explicit values win;
 	// an empty value unsets the variable instead of passing an empty string.
 	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
@@ -156,7 +155,7 @@ func EffectiveGnarAccount(configured, hostName string) string {
 // Normalized returns the effective default runtime kind.
 func (s Settings) Normalized() string {
 	switch s.DefaultRuntime {
-	case RuntimeGhostline, RuntimeTmux:
+	case RuntimeGhostline:
 		return s.DefaultRuntime
 	default:
 		return DefaultRuntimeKind
@@ -195,6 +194,9 @@ func Load(path string) (Settings, error) {
 	var value Settings
 	if err := json.Unmarshal(data, &value); err != nil {
 		return Settings{}, err
+	}
+	if strings.TrimSpace(value.DefaultRuntime) != "" && value.DefaultRuntime != RuntimeGhostline {
+		return Settings{}, fmt.Errorf("unsupported runtime %q; migrate settings to ghostline", value.DefaultRuntime)
 	}
 	return value, nil
 }

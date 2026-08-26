@@ -13,7 +13,7 @@ const DefaultTerm = "xterm-256color"
 // make Warren terminal sessions behave like non-interactive pipelines:
 // PAGER/GIT_PAGER/GH_PAGER set to cat or empty suppress pagers, a dumb TERM
 // makes TUIs and pagers degrade, and an ambient NO_COLOR disables interactive
-// TUI colors. It mutates the current process environment so ghostline/tmux
+// TUI colors. It mutates the current process environment so ghostline
 // children inherit a real terminal environment; user-specified values are
 // applied afterwards by settings.
 func SanitizeEnvironment() {
