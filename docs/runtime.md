@@ -1,4 +1,4 @@
-# Terminal runtimes: ghostline and tmux
+# Terminal runtimes: ghostline (active) and tmux (deprecated)
 
 Warren's headless daemon can own terminal sessions with either of two
 engines:
@@ -7,13 +7,12 @@ engines:
   detached server process (`ghostline serve`) that owns PTY children and a
   libghostty-vt emulator, rendering screen snapshots with the same terminal
   core as the Ghostty client.
-- **tmux** — the classic, battle-tested terminal multiplexer, kept as a fully
-  supported alternative.
+- **tmux** — a deprecated legacy multiplexer retained only for existing
+  sessions. It is not an active rendering or compatibility target.
 
-Both engines are always registered when the daemon runs, so a session created
-with one engine keeps using that engine for its whole lifetime. Sessions
-record their engine in `runtimeKind`; the default only decides what new
-sessions use.
+Existing sessions retain their recorded `runtimeKind`; this is a migration
+boundary, not a promise that both engines receive ongoing feature work. New
+sessions and all terminal experience work use ghostline.
 
 ## Where the choice lives
 
@@ -50,8 +49,8 @@ The default can be changed three ways:
    explicit values win. An empty value unsets the variable (for example
    `"CI": ""`), which is different from passing an empty string.
 
-2. The `--runtime ghostline|tmux` flag (or `WARREN_RUNTIME`), which overrides
-   the settings file for this daemon invocation.
+2. The `--runtime ghostline` flag (or `WARREN_RUNTIME`), which overrides the
+   settings file for this daemon invocation. The tmux value is legacy-only.
 3. `PUT /v1/settings` (or the Desktop **Settings → Terminal runtime** panel),
    which persists to `settings.json` for future daemon starts.
 
@@ -91,7 +90,7 @@ Not so good:
   Ghostline release tag differs from the embedded tag. Development builds
   without a tag do not trigger the tag check.
 
-## tmux
+## tmux (deprecated)
 
 Good:
 
@@ -118,6 +117,6 @@ Not so good (why ghostline is the default):
 
 ## Recommendation
 
-Use ghostline for new deployments. Keep tmux for environments where the
-ghostline build requirements are not acceptable, or while migrating existing
-tmux sessions. Both are supported; neither is deprecated.
+Use ghostline for every new deployment and for all rendering fixes. Existing
+tmux sessions may remain readable until they are retired, but tmux receives no
+new UX work, bug fixes, or compatibility guarantees.
