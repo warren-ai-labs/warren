@@ -155,6 +155,17 @@ struct WarrenDesktopEndpointPopoverContent: View {
                     onDismiss()
                 } label: {
                     HStack(spacing: WarrenSpacing.compact) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(
+                                WarrenDesktopEndpointAppearance.color(
+                                    for: endpoint.id,
+                                    in: endpoints,
+                                    tokens: tokens
+                                )
+                            )
+                            .frame(width: 16)
+                            .accessibilityHidden(true)
                         Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
                             .font(WarrenTypography.popoverMeta)
                             .foregroundStyle(

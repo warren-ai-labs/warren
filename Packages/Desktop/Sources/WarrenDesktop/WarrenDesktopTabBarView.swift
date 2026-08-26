@@ -116,7 +116,10 @@ struct WarrenDesktopTabBar: View {
         self.embeddedEditorDefault = embeddedEditorDefault
         self.notices = notices
         self.notificationsMuted = notificationsMuted
-        self.externallyVisibleControls = externallyVisibleControls
+        self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
+            externallyVisibleControls,
+            endpointCount: endpointOptions.count
+        )
         self.isOverflowPresented = isOverflowPresented
         self.isNoticePresented = isNoticePresented
         self.onToggleSidebar = onToggleSidebar
@@ -420,9 +423,8 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
     case settings
 
     public static let maximumExternalButtonCount = 5
-    /// Keep the original high-signal chrome visible; execution-server
-    /// switching and Settings remain in More so the direct controls stay
-    /// visually quiet while preserving the five-button ceiling.
+    /// Keep the original high-signal chrome visible; Settings remains in More
+    /// while endpoint switching is added automatically when it is meaningful.
     public static let defaultExternalControls: [Self] = [
         .externalIDE,
         .web,
@@ -436,6 +438,23 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
                 .filter { seen.insert($0).inserted }
                 .prefix(maximumExternalButtonCount)
         )
+    }
+
+    /// Expose endpoint switching automatically when more than one execution
+    /// server is available. A single endpoint keeps the compact default chrome
+    /// and remains reachable through the existing overflow configuration.
+    public static func controlsForEndpointCount(
+        _ controls: [Self],
+        endpointCount: Int
+    ) -> [Self] {
+        let normalized = normalizedExternalControls(controls)
+        guard endpointCount > 1, !normalized.contains(.endpoint) else {
+            return normalized
+        }
+
+        var visible = normalized
+        visible.insert(.endpoint, at: min(1, visible.count))
+        return normalizedExternalControls(visible)
     }
 
     /// Produces direct top-bar controls and the one-level overflow list. The
@@ -698,12 +717,20 @@ private struct WarrenDesktopEndpointControl: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
+        let endpointColor = selectedEndpoint.map {
+            WarrenDesktopEndpointAppearance.color(
+                for: $0.id,
+                in: endpoints,
+                tokens: tokens
+            )
+        } ?? tokens.mutedForeground
         Button(action: onPresent) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "server.rack")
                     .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
                     .padding(.top, 2)
                     .padding(.trailing, 2)
+                    .foregroundStyle(endpointColor)
                     .accessibilityHidden(true)
                 WarrenStatusIndicator(
                     color: statusColor(presentation.tone, tokens: tokens),
