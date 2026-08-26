@@ -127,6 +127,8 @@ public final class TerminalSurfaceManager {
         var transitionGeneration: UInt64 = 0
         var presentationGeneration: UInt64 = 0
         var presentationTask: Task<Void, Never>?
+        var recoveryPresentationGated = false
+        var presentationPendingAfterRecovery = false
 
         init(surface: GhosttySurface, view: AppTerminalView) {
             self.surface = surface
@@ -179,7 +181,7 @@ public final class TerminalSurfaceManager {
         entries[sessionID]?.surface
     }
 
-    public func insert(_ surface: GhosttySurface) {
+    public func insert(_ surface: GhosttySurface, recoveryGated: Bool = false) {
         guard entries[surface.id] == nil else { return }
         let view = AppTerminalView(frame: .zero)
         view.delegate = surface.state
@@ -189,7 +191,9 @@ public final class TerminalSurfaceManager {
         view.setSurfaceVisible(false)
         view.isHidden = true
         surface.mountedTerminalView = view
-        entries[surface.id] = Entry(surface: surface, view: view)
+        let entry = Entry(surface: surface, view: view)
+        entry.recoveryPresentationGated = recoveryGated
+        entries[surface.id] = entry
         surfaceCreationCount &+= 1
         scheduleReconciliation()
     }
@@ -290,6 +294,27 @@ public final class TerminalSurfaceManager {
             return
         }
         schedulePresent(entry, generation: entry.transitionGeneration)
+    }
+
+    /// Prevents automatic presentation while a remote recovery is staged.
+    /// The surface remains mounted but hidden until `endRecovery` confirms
+    /// that the target sequence has rendered.
+    public func beginRecovery(for sessionID: TerminalSessionID) {
+        guard let entry = entries[sessionID] else { return }
+        entry.recoveryPresentationGated = true
+        entry.presentationPendingAfterRecovery = false
+        cancelPresentation(for: entry)
+        entry.view.setSurfaceVisible(false)
+    }
+
+    public func endRecovery(for sessionID: TerminalSessionID) {
+        guard let entry = entries[sessionID] else { return }
+        entry.recoveryPresentationGated = false
+        if entry.presentationPendingAfterRecovery,
+           policy.activeSessionID == sessionID {
+            entry.presentationPendingAfterRecovery = false
+            schedulePresent(entry, generation: entry.transitionGeneration)
+        }
     }
 
     public func enqueueRawOutput(_ data: Data, for sessionID: TerminalSessionID) {
@@ -478,6 +503,10 @@ public final class TerminalSurfaceManager {
     }
 
     private func schedulePresent(_ entry: Entry, generation: UInt64) {
+        guard !entry.recoveryPresentationGated else {
+            entry.presentationPendingAfterRecovery = true
+            return
+        }
         let sessionID = entry.surface.id
         cancelPresentation(for: entry)
         let presentationGeneration = entry.presentationGeneration
@@ -518,8 +547,14 @@ public final class TerminalSurfaceManager {
                             "session": sessionID.description,
                             "targetEpoch": targetEpoch.map { String($0) } ?? "nil",
                             "targetSequence": String(targetSequence),
+                            // The writer sequence at completion time. When
+                            // this exceeds targetSequence the presentation
+                            // fired while recovery bytes were still being
+                            // enqueued: the pane became visible mid-replay.
+                            "enqueuedNow": String(entry.surface.outputWriter.enqueuedSequence),
                             "renderedEpoch": String(entry.surface.renderedEpoch),
                             "renderedSequence": String(entry.surface.renderedSequence),
+                            "recoveryGate": entry.recoveryPresentationGated ? "true" : "false",
                         ])
                         return
                     }

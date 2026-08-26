@@ -33,7 +33,7 @@ private extension WarrenDesktopSettingsSection {
         switch self {
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
-        case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
+        case .terminalRuntime: [rawValue, detail, "ghostline", "runtime", "engine", "session", "headless"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
@@ -1277,7 +1277,6 @@ struct WarrenDesktopSettingsView: View {
         settingsSection("Terminal runtime", section: .terminalRuntime, tokens: tokens) {
             Picker("Default runtime", selection: runtimeSelection) {
                 Text("ghostline (recommended)").tag("ghostline")
-                Text("tmux").tag("tmux")
             }
             .pickerStyle(.segmented)
             .font(WarrenTypography.settingsControl)
@@ -1303,15 +1302,6 @@ struct WarrenDesktopSettingsView: View {
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
 
-            Text("tmux").font(WarrenTypography.settingsBody).foregroundStyle(tokens.foreground)
-            Text(
-                "Mature and battle-tested, but adds a middle layer that "
-                    + "re-parses and re-renders output, translates input keys, "
-                    + "and can misalign colored history on replay."
-            )
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 

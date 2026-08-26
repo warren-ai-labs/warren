@@ -1061,9 +1061,9 @@ export default function App() {
         const current = recoveryAnchorRef.current;
         if (current && !snapshotPendingRef.current) {
           if (decoded.header.epoch !== current.epoch || decoded.header.sequence !== current.sequence) {
-            // A gap means Host rotated the spool or the ring evicted our
-            // anchor; reconnect without an anchor and reanchor from a tmux
-            // snapshot instead of silently skipping or duplicating bytes.
+            // A gap means the ring evicted our anchor; reconnect without an
+            // anchor and reanchor from Ghostline's atomic checkpoint instead
+            // of silently skipping or duplicating bytes.
             reanchorRequiredRef.current = true;
             connectionRef.current?.reset();
             return;
