@@ -370,6 +370,7 @@ func writeHooksJSON(path string, document map[string]any) error {
 // The plugin reads WARREN_SESSION_ID from the OpenCode process environment
 // (injected by BindEnvironment) and writes the binding file immediately on
 // session creation/busy, eliminating the SQLite time-window race.
+// Only new OpenCode (>=1.18) is supported; the module uses PluginModule with id.
 const openCodeBindPluginSource = `import type { Plugin } from "@opencode-ai/plugin"
 import * as fs from "fs"
 import * as path from "path"
@@ -381,7 +382,7 @@ function atomicWrite(filePath: string, data: string) {
   fs.writeFileSync(tmp, data)
   fs.renameSync(tmp, filePath)
 }
-export default (async () => {
+export const WarrenBindPlugin: Plugin = async () => {
   return {
     event: async ({ event }: { event: any }) => {
       const bindFile = process.env.WARREN_BIND_FILE
@@ -413,7 +414,11 @@ export default (async () => {
       if (out) out.status = "ask"
     },
   }
-}) satisfies Plugin
+}
+export default {
+  id: "warren.bind",
+  server: WarrenBindPlugin,
+}
 // ${hookCommandMarker}
 `
 
