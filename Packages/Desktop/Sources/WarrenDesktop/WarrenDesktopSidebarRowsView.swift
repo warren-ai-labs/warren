@@ -19,6 +19,7 @@ struct WarrenDesktopSidebarRows: View {
     let selection: WarrenDesktopSidebarSelection?
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
+    let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let isInteractionDisabled: Bool
     let onAddProject: () -> Void
     let onRequestTerminalGroupCreate: () -> Void
@@ -47,6 +48,7 @@ struct WarrenDesktopSidebarRows: View {
                     disclosureExpanded: !tree.projectsCollapsed,
                     actionImage: "folder.badge.plus",
                     actionLabel: "Add project",
+                    actionVisible: endpointCapabilities.canAddProject,
                     actionEnabled: !isInteractionDisabled,
                     onToggle: toggleProjects,
                     onAction: onAddProject
@@ -56,7 +58,9 @@ struct WarrenDesktopSidebarRows: View {
                 VStack(spacing: WarrenSpacing.xs) {
                     Text("No workspaces yet")
                         .font(WarrenTypography.body)
-                    Text("Add a project or drop a Git repository folder")
+                    Text(endpointCapabilities.canAddProject
+                        ? "Add a project or drop a Git repository folder"
+                        : "Add a project from the remote CLI on the host machine")
                         .font(WarrenTypography.supporting)
                         .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
                         .multilineTextAlignment(.center)
@@ -65,7 +69,11 @@ struct WarrenDesktopSidebarRows: View {
                 .padding(.horizontal, WarrenSpacing.medium)
                 .padding(.vertical, WarrenSpacing.large)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("No workspaces yet. Add a project or drop a Git repository folder.")
+                .accessibilityLabel(
+                    endpointCapabilities.canAddProject
+                        ? "No workspaces yet. Add a project or drop a Git repository folder."
+                        : "No workspaces yet. Add a project from the remote CLI on the host machine."
+                )
             }
             if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
                 ForEach(visibleProjectGroups) { group in
@@ -620,6 +628,7 @@ private struct WarrenDesktopSidebarSectionHeader: View {
     var disclosureExpanded: Bool? = nil
     let actionImage: String
     let actionLabel: String
+    var actionVisible = true
     var actionEnabled = true
     var onToggle: (() -> Void)?
     let onAction: () -> Void
@@ -647,18 +656,20 @@ private struct WarrenDesktopSidebarSectionHeader: View {
                 titleLabel
             }
 
-            Button(action: onAction) {
-                Image(systemName: actionImage)
-                    .font(.system(size: 12, weight: .medium))
-                    .accessibilityHidden(true)
+            if actionVisible {
+                Button(action: onAction) {
+                    Image(systemName: actionImage)
+                        .font(.system(size: 12, weight: .medium))
+                        .accessibilityHidden(true)
+                }
+                .buttonStyle(WarrenChromeButtonStyle(isFocused: isActionFocused))
+                .disabled(!actionEnabled)
+                .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
+                       height: WarrenLayoutMetrics.sidebarActionButtonSize)
+                .contentShape(.rect)
+                .focused($isActionFocused)
+                .accessibilityLabel(actionLabel)
             }
-            .buttonStyle(WarrenChromeButtonStyle(isFocused: isActionFocused))
-            .disabled(!actionEnabled)
-            .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                   height: WarrenLayoutMetrics.sidebarActionButtonSize)
-            .contentShape(.rect)
-            .focused($isActionFocused)
-            .accessibilityLabel(actionLabel)
         }
         .foregroundStyle(tokens.mutedForeground)
         .frame(height: WarrenLayoutMetrics.sidebarSectionLabelHeight)

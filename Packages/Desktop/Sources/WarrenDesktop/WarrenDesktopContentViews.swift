@@ -11,6 +11,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let tab: ClientTab?
     let hasProjects: Bool
     let connectionState: WarrenDesktopConnectionState
+    let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let showsPaneHeader: Bool
     let session: WarrenDesktopSession?
     let hostName: String
@@ -108,33 +109,46 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
 
     private func emptyWelcome(tokens: WarrenColorTokens) -> some View {
         VStack(spacing: WarrenSpacing.standard) {
-            Text("Open a project to begin")
+            Text(endpointCapabilities.canAddProject || endpointCapabilities.canImportSuperset
+                ? "Open a project to begin"
+                : "No projects yet")
                 .font(WarrenTypography.emptyStateTitle)
                 .foregroundStyle(tokens.mutedForeground)
                 .multilineTextAlignment(.center)
-            Button(action: onAddProject) {
-                Text("Add Project…")
-                    .font(WarrenTypography.body)
+            if endpointCapabilities.canAddProject {
+                Button(action: onAddProject) {
+                    Text("Add Project…")
+                        .font(WarrenTypography.body)
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(isFocused: primaryButtonFocused))
+                .focused($primaryButtonFocused)
+                .warrenSemanticElement(
+                    id: "onboarding.add-project",
+                    role: .button,
+                    label: "Add Project",
+                    action: onAddProject
+                )
             }
-            .buttonStyle(WarrenPrimaryButtonStyle(isFocused: primaryButtonFocused))
-            .focused($primaryButtonFocused)
-            .warrenSemanticElement(
-                id: "onboarding.add-project",
-                role: .button,
-                label: "Add Project",
-                action: onAddProject
-            )
-            Button(action: onImportSuperset) {
-                Text("Import from Superset")
-                    .font(WarrenTypography.body)
+            if endpointCapabilities.canImportSuperset {
+                Button(action: onImportSuperset) {
+                    Text("Import from Superset")
+                        .font(WarrenTypography.body)
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle())
+                .warrenSemanticElement(
+                    id: "onboarding.import-superset",
+                    role: .button,
+                    label: "Import from Superset",
+                    action: onImportSuperset
+                )
             }
-            .buttonStyle(WarrenSecondaryButtonStyle())
-            .warrenSemanticElement(
-                id: "onboarding.import-superset",
-                role: .button,
-                label: "Import from Superset",
-                action: onImportSuperset
-            )
+            if !endpointCapabilities.canAddProject && !endpointCapabilities.canImportSuperset {
+                Text("Add a project from the remote CLI on the host machine.")
+                    .font(WarrenTypography.body)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.bottom, emptyStatePageOffset * 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
