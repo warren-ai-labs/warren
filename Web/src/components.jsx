@@ -1454,11 +1454,11 @@ export function SettingsPage({
             ) : (
               <section className="settings-section">
                 <header className="settings-page-heading">
-                  <h2>Terminal title</h2>
-                  <p>Build a title from live Session metadata.</p>
+                  <h2>Pane auxiliary title</h2>
+                  <p>Tab owns the primary title. This template drives the auxiliary bar below the preset row (workspace · branch · directory by default).</p>
                 </header>
                 <label>
-                  Title template
+                  Auxiliary template
                   <input value={titleTemplate} onChange={event => onTitleTemplateChange(event.target.value)} autoComplete="off" spellCheck="false" />
                 </label>
                 <div className="settings-preview">Preview: {titlePreview}</div>

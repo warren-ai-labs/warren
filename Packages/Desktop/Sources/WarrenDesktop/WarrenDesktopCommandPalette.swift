@@ -139,11 +139,17 @@ struct WarrenDesktopCommandPaletteSearch {
             }
 
             for group in projection.groups {
+                // Project: searchable by name, path and kind. Keep the primary title as the
+                // project name for ranking, but expose the full path and its basename as
+                // additional aliases so "warren" or "warren-feature" both match.
+                let projectPathBasename = (group.project.rootPath as NSString).lastPathComponent
                 append(
                     kind: .project(group.project.id),
                     title: group.project.name,
                     detail: Self.displayPath(group.project.rootPath),
                     path: group.project.rootPath,
+                    aliases: [projectPathBasename, group.project.name].compactMap { $0.isEmpty ? nil : $0 },
+                    context: [group.project.name, Self.displayPath(group.project.rootPath)],
                     status: group.project.pinned ? .pinned : nil,
                     priorityBoost: group.project.pinned ? 30 : 0
                 )
@@ -151,13 +157,21 @@ struct WarrenDesktopCommandPaletteSearch {
                     workspaceContext[workspace.id] = (group.project, workspace)
                     let title = Self.workspaceTitle(workspace)
                     let activity = projection.activity(in: workspace.id)
+                    let workspaceDetail: String
+                    if title.lowercased() == workspace.name.lowercased() {
+                        workspaceDetail = group.project.name
+                    } else {
+                        workspaceDetail = "\(group.project.name) › \(workspace.name)"
+                    }
+                    let pathBasename = (workspace.path as NSString).lastPathComponent
+                    let branch = workspace.branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     append(
                         kind: .workspace(workspace.id),
                         title: title,
-                        detail: "\(group.project.name) › \(workspace.name)",
+                        detail: workspaceDetail,
                         path: workspace.path,
-                        aliases: [workspace.name, workspace.branch].compactMap { $0 },
-                        context: [group.project.name],
+                        aliases: [workspace.name, branch, pathBasename].compactMap { $0.isEmpty ? nil : $0 },
+                        context: [group.project.name, workspace.name, branch].compactMap { $0.isEmpty ? nil : $0 },
                         status: activity.map(Status.activity)
                             ?? (workspace.pinned ? .pinned : nil),
                         priorityBoost: Self.priorityBoost(
@@ -171,17 +185,21 @@ struct WarrenDesktopCommandPaletteSearch {
             for terminalGroup in projection.terminalGroups {
                 terminalGroupsByID[terminalGroup.id] = terminalGroup
                 let activity = projection.activity(in: terminalGroup.id)
+                let homeBasename = terminalGroup.home.map { ($0 as NSString).lastPathComponent } ?? ""
+                let activityLabel = activity.map { Status.activity($0).label } ?? ""
                 append(
                     kind: .terminalGroup(terminalGroup.id),
                     title: terminalGroup.name,
                     detail: terminalGroup.home.map(Self.displayPath) ?? "Standalone sessions",
                     path: terminalGroup.home,
+                    aliases: [homeBasename, activityLabel].compactMap { $0.isEmpty ? nil : $0 },
+                    context: [terminalGroup.name],
                     status: activity.map(Status.activity),
                     priorityBoost: Self.priorityBoost(activity: activity, pinned: false)
                 )
             }
 
-            for session in projection.sessions {
+            for session in projection.sessions where session.state.isActive {
                 let tab = session.tabID.flatMap { tabsByID[$0] }
                 let workspaceID = projection.sessionWorkspaceIDs[session.id] ?? session.workspaceID
                 let terminalGroupID = projection.sessionTerminalGroupIDs[session.id]
@@ -207,13 +225,37 @@ struct WarrenDesktopCommandPaletteSearch {
                 }
                 let status = session.activity.map(Status.activity)
                     ?? (session.pinned ? .pinned : nil)
+                let sessionTitleValue = Self.sessionTitle(session, tab: tab)
+                let trimmedRuntime = session.runtimeProcess.trimmingCharacters(in: .whitespacesAndNewlines)
+                let sessionDetail: String
+                if trimmedRuntime.isEmpty
+                    || trimmedRuntime.lowercased() == sessionTitleValue.lowercased()
+                {
+                    sessionDetail = context
+                } else {
+                    sessionDetail = [context, trimmedRuntime].joined(separator: " · ")
+                }
+                // Comprehensive aliases: expose every textual facet so "very complete"
+                // search finds sessions by workspace/branch/project, directory, kind,
+                // runtime, custom title, tab title, generated title and status.
+                let workingDirBasename = (session.workingDirectory as NSString).lastPathComponent
+                let workspaceBranch = workspace?.branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let workspaceName = workspace?.name ?? ""
+                let projectName: String?
+                if let workspaceID, let pair = workspaceContext[workspaceID] {
+                    projectName = pair.project.name
+                } else if let terminalGroupID, let tg = terminalGroupsByID[terminalGroupID] {
+                    projectName = tg.name
+                } else {
+                    projectName = nil
+                }
+                let activityLabel = session.activity.map { Status.activity($0).label } ?? ""
+                let pinnedLabel = session.pinned ? Status.pinned.label : ""
+                let kindLabel = session.kind.displayName
                 append(
                     kind: .session(session.id),
-                    title: Self.sessionTitle(session, tab: tab),
-                    detail: [context, session.runtimeProcess]
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                        .joined(separator: " · "),
+                    title: sessionTitleValue,
+                    detail: sessionDetail,
                     path: session.workingDirectory,
                     aliases: [
                         session.title,
@@ -221,8 +263,14 @@ struct WarrenDesktopCommandPaletteSearch {
                         session.runtimeProcess,
                         tab?.title,
                         generatedTitle,
-                    ].compactMap { $0 },
-                    context: [context],
+                        workspaceName,
+                        workspaceBranch,
+                        workingDirBasename,
+                        kindLabel,
+                        activityLabel,
+                        pinnedLabel,
+                    ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
+                    context: [context, projectName, workspaceName, workspaceBranch].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
                     status: status,
                     priorityBoost: Self.priorityBoost(
                         activity: session.activity,
@@ -251,8 +299,10 @@ struct WarrenDesktopCommandPaletteSearch {
             guard !normalizedQuery.isEmpty, limit > 0 else { return [] }
             let tokens = normalizedQuery.split(whereSeparator: \.isWhitespace).map(String.init)
 
+            // Collect a slightly larger heap to allow visual deduplication without starving the limit.
+            let heapLimit = min(limit * 2, limit + 20)
             var bestResults: [Result] = []
-            bestResults.reserveCapacity(limit)
+            bestResults.reserveCapacity(heapLimit)
             for entry in entries {
                 guard let match = entry.match(query: normalizedQuery, tokens: tokens) else { continue }
                 let detail = match.pathMatched
@@ -270,10 +320,46 @@ struct WarrenDesktopCommandPaletteSearch {
                         ordinal: entry.ordinal
                     ),
                     into: &bestResults,
-                    limit: limit
+                    limit: heapLimit
                 )
             }
-            return bestResults.sorted(by: Self.resultPrecedes)
+            let sorted = bestResults.sorted(by: Self.resultPrecedes)
+            // Deduplicate by identity and collapse visually identical rows. A session
+            // should never appear multiple times; without collapsing, common titles like
+            // "Shell" with the same context produce repeated-looking rows.
+            var seenIDs = Set<String>()
+            var seenVisualKeys = Set<String>()
+            var deduped: [Result] = []
+            deduped.reserveCapacity(limit)
+            for result in sorted {
+                guard seenIDs.insert(result.id).inserted else { continue }
+                let visualKey = "\(result.title.lowercased())|\(result.detail.lowercased())|\(result.kind.label.lowercased())"
+                guard seenVisualKeys.insert(visualKey).inserted else { continue }
+                deduped.append(result)
+                if deduped.count >= limit { break }
+            }
+            // Diversify: avoid flooding with many rows sharing the same detail context
+            // (e.g., dozens of sessions in the same workspace). Cap per detail to keep
+            // the list scannable while preserving ranking.
+            if deduped.count > 8 {
+                var perDetailCount: [String: Int] = [:]
+                var diversified: [Result] = []
+                diversified.reserveCapacity(limit)
+                for result in deduped {
+                    let detailKey = result.detail.lowercased()
+                    let count = perDetailCount[detailKey, default: 0]
+                    // Allow at most 3 rows per identical detail context.
+                    if count >= 3 { continue }
+                    perDetailCount[detailKey] = count + 1
+                    diversified.append(result)
+                    if diversified.count >= limit { break }
+                }
+                // Only use diversified if it still leaves enough distinct results.
+                if diversified.count >= 8 || diversified.count == deduped.count {
+                    return diversified
+                }
+            }
+            return deduped
         }
 
         /// Empty-query suggestions stay deliberately narrow: only live or
@@ -530,6 +616,9 @@ struct WarrenDesktopCommandPalette: View {
     @State private var searchIndex: WarrenDesktopCommandPaletteSearch.Index
     @State private var rows: [WarrenDesktopCommandPaletteSearch.Result]
     @State private var selectedIndex = 0
+    @State private var searchTask: Task<Void, Never>?
+    @State private var indexTask: Task<Void, Never>?
+    @State private var isSearching = false
     @Environment(\.colorScheme) private var colorScheme
 
     init(
@@ -553,6 +642,54 @@ struct WarrenDesktopCommandPalette: View {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private struct GroupedSection: Identifiable {
+        let priority: Int
+        let title: String
+        var rows: [WarrenDesktopCommandPaletteSearch.Result]
+        var id: Int { priority }
+    }
+
+    private var groupedRows: [GroupedSection] {
+        guard !rows.isEmpty else { return [] }
+        var sections: [GroupedSection] = []
+        var currentPriority: Int?
+        var currentRows: [WarrenDesktopCommandPaletteSearch.Result] = []
+        var currentTitle = ""
+        func title(for priority: Int) -> String {
+            switch priority {
+            case 0: return "Sessions"
+            case 1: return "Workspaces"
+            case 2: return "Projects"
+            case 3: return "Terminal Groups"
+            default: return "Tabs"
+            }
+        }
+        for row in rows {
+            let p = row.kind.sortPriority
+            if p != currentPriority {
+                if let cp = currentPriority {
+                    sections.append(GroupedSection(priority: cp, title: currentTitle, rows: currentRows))
+                }
+                currentPriority = p
+                currentTitle = title(for: p)
+                currentRows = [row]
+            } else {
+                currentRows.append(row)
+            }
+        }
+        if let cp = currentPriority {
+            sections.append(GroupedSection(priority: cp, title: currentTitle, rows: currentRows))
+        }
+        // If grouping fragmented the global ranking (scores interleave priorities),
+        // fall back to flat rendering to preserve score order.
+        if sections.count > 3 {
+            let flatPriority = sections.map(\.priority)
+            let isFragmented = zip(flatPriority, flatPriority.dropFirst()).contains { $0 != $1 && $0 > $1 }
+            if isFragmented { return [GroupedSection(priority: 0, title: "Results", rows: rows)] }
+        }
+        return sections
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(spacing: 0) {
@@ -564,7 +701,7 @@ struct WarrenDesktopCommandPalette: View {
                     .frame(height: WarrenSpacing.hairline)
 
                 if rows.isEmpty {
-                    Text("No results found.")
+                    Text(isSearching ? "Searching…" : "No results found.")
                         .font(WarrenTypography.popoverItem)
                         .foregroundStyle(tokens.mutedForeground)
                         .frame(maxWidth: .infinity)
@@ -576,9 +713,21 @@ struct WarrenDesktopCommandPalette: View {
                             fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
                             surface: tokens.popoverSurface
                         ) {
-                            LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                ForEach(rows) { row in
-                                    resultRow(row, tokens: tokens)
+                            LazyVStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                                ForEach(groupedRows, id: \.priority) { section in
+                                    VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                                        if groupedRows.count > 1 {
+                                            Text(section.title.uppercased())
+                                                .font(WarrenTypography.sectionLabel)
+                                                .tracking(0.6)
+                                                .foregroundStyle(tokens.mutedForeground)
+                                                .padding(.horizontal, WarrenLayoutMetrics.commandPaletteItemHorizontalPadding)
+                                                .padding(.top, section.priority == groupedRows.first?.priority ? 0 : WarrenSpacing.small)
+                                        }
+                                        ForEach(section.rows) { row in
+                                            resultRow(row, tokens: tokens)
+                                        }
+                                    }
                                 }
                             }
                             .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
@@ -597,18 +746,82 @@ struct WarrenDesktopCommandPalette: View {
         .frame(width: width)
         .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.base)
         .onExitCommand(perform: onDismiss)
-        .onChange(of: query) { _ in refreshResults() }
+        .onChange(of: query) { newValue in
+            searchTask?.cancel()
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                isSearching = false
+                rows = searchIndex.suggestions()
+                selectedIndex = 0
+                return
+            }
+            // Immediate, cancellable search without artificial debounce. Previous
+            // 80ms sleep added perceptible input lag on every keystroke.
+            let snapshot = newValue
+            let indexSnapshot = searchIndex
+            // Keep the previous rows visible until the new results arrive to avoid
+            // flicker; do not toggle isSearching for the query path.
+            searchTask = Task { @MainActor in
+                // Yield to allow cancellation of superseded keystrokes without delay.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                let computed = await Task.detached(priority: .userInitiated) {
+                    indexSnapshot.results(for: snapshot)
+                }.value
+                guard !Task.isCancelled else { return }
+                rows = computed
+                // New query already reset to 0 at start, keep current keyboard
+                // position only if it remains valid (e.g., projection refresh).
+                if !rows.indices.contains(selectedIndex) {
+                    selectedIndex = 0
+                }
+            }
+        }
         .onChange(of: projection) { newProjection in
-            let updatedIndex = WarrenDesktopCommandPaletteSearch.Index(
-                projection: newProjection
-            )
-            searchIndex = updatedIndex
-            refreshResults(using: updatedIndex)
+            indexTask?.cancel()
+            searchTask?.cancel()
+            let querySnapshot = query
+            let hasQuery = !querySnapshot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hasQuery { isSearching = true }
+            // Preserve the currently selected row identity across roster refreshes.
+            let preservedID = rows.indices.contains(selectedIndex) ? rows[selectedIndex].id : nil
+            indexTask = Task { @MainActor in
+                let newIndex = await Task.detached(priority: .userInitiated) {
+                    WarrenDesktopCommandPaletteSearch.Index(projection: newProjection)
+                }.value
+                guard !Task.isCancelled else { return }
+                searchIndex = newIndex
+                if hasQuery {
+                    let computed = await Task.detached(priority: .userInitiated) {
+                        newIndex.results(for: querySnapshot)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    rows = computed
+                    isSearching = false
+                    if let preservedID, let newIdx = rows.firstIndex(where: { $0.id == preservedID }) {
+                        selectedIndex = newIdx
+                    } else if !rows.indices.contains(selectedIndex) {
+                        selectedIndex = 0
+                    }
+                } else {
+                    rows = newIndex.suggestions()
+                    isSearching = false
+                    if let preservedID, let newIdx = rows.firstIndex(where: { $0.id == preservedID }) {
+                        selectedIndex = newIdx
+                    } else if !rows.indices.contains(selectedIndex) {
+                        selectedIndex = 0
+                    }
+                }
+            }
         }
         .onChange(of: rows.count) { count in
             if !rows.indices.contains(selectedIndex) {
                 selectedIndex = max(0, count - 1)
             }
+        }
+        .onDisappear {
+            searchTask?.cancel()
+            indexTask?.cancel()
         }
     }
 
@@ -721,11 +934,6 @@ struct WarrenDesktopCommandPalette: View {
         .id(row.id)
         .accessibilityLabel("\(row.kind.label), \(row.title), \(row.detail), \(row.accessoryLabel)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { isHovered in
-            if isHovered, let index = rows.firstIndex(where: { $0.id == row.id }) {
-                selectedIndex = index
-            }
-        }
     }
 
     private func highlightedText(_ value: String) -> Text {
