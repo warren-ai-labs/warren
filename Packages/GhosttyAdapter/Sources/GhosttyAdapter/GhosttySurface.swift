@@ -181,6 +181,26 @@ public final class GhosttySurface: Identifiable {
             ])
             return false
         }
+        guard viewVisible else {
+            TerminalDiagnostics.log("present_now", [
+                "session": id.description,
+                "result": "false",
+                "surfaceReady": "true",
+                "size": size,
+                "viewAttached": viewAttached ? "true" : "false",
+                "viewHidden": viewHidden ? "true" : "false",
+                "viewVisible": "false",
+            ])
+            TerminalDiagnostics.log("present_stall_suspected", [
+                "session": id.description,
+                "reason": view == nil
+                    ? "no-mounted-view"
+                    : (!viewAttached ? "view-not-attached"
+                        : (viewHidden ? "view-hidden" : "view-not-visible")),
+                "view": terminalViewDescription,
+            ])
+            return false
+        }
         state.controller.tick()
         ghostty_surface_draw(raw)
         let fields = [
@@ -192,22 +212,7 @@ public final class GhosttySurface: Identifiable {
             "viewHidden": viewHidden ? "true" : "false",
             "viewVisible": viewVisible ? "true" : "false",
         ]
-        if viewVisible {
-            TerminalDiagnostics.logVerbose("present_now", fields)
-        } else {
-            // A draw was issued while the view could not present it. This is
-            // the closest cheap signal we can emit for a transient black pane
-            // without enabling the full Ghostty render log on the hot path.
-            TerminalDiagnostics.log("present_now", fields)
-            TerminalDiagnostics.log("present_stall_suspected", [
-                "session": id.description,
-                "reason": view == nil
-                    ? "no-mounted-view"
-                    : (!viewAttached ? "view-not-attached"
-                        : (viewHidden ? "view-hidden" : "view-not-visible")),
-                "view": terminalViewDescription,
-            ])
-        }
+        TerminalDiagnostics.logVerbose("present_now", fields)
         return true
     }
 
