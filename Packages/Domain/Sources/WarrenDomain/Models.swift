@@ -327,6 +327,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case shell
     case claude
     case codex
+    case opencode
     case trae
     case custom
 
@@ -335,6 +336,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .shell: "Shell"
         case .claude: "Claude Code"
         case .codex: "Codex"
+        case .opencode: "OpenCode"
         case .trae: "Trae Agent"
         case .custom: "Custom"
         }
@@ -434,6 +436,11 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
         kind: .codex,
         command: "codex --dangerously-bypass-hook-trust",
         title: "Codex"
+    )
+    public static let opencode = Self(
+        kind: .opencode,
+        command: "opencode",
+        title: "OpenCode"
     )
     public static let trae = Self(
         kind: .trae,

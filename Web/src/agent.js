@@ -34,7 +34,7 @@ export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = 
 export function groupAgentEvents(events = []) {
   const blocks = [];
   const pending = new Map();
-  for (const event of events) {
+  for (const event of coalesceAgentContent(events)) {
     if (event.type === "tool_call") {
       const block = { kind: "tool", call: event, outputs: [] };
       blocks.push(block);
@@ -51,6 +51,50 @@ export function groupAgentEvents(events = []) {
     }
   }
   return foldTurns(blocks);
+}
+
+// OpenCode stores a mutable part and the Host exposes each observed update as
+// an append-only event. Fold those deltas back into one renderable message so
+// streaming replies do not produce a bubble (or React key) per database poll.
+// Other providers already emit one event per message and pass through intact.
+function coalesceAgentContent(events) {
+  const result = [];
+  const positions = new Map();
+  for (const source of events || []) {
+    if (!source) continue;
+    if (!isOpenCodeContentEvent(source) || !source.id) {
+      result.push(source);
+      continue;
+    }
+    const key = `${source.provider}:${source.type}:${source.id}`;
+    const position = positions.get(key);
+    if (position === undefined) {
+      const event = { ...source };
+      result.push(event);
+      positions.set(key, result.length - 1);
+      continue;
+    }
+    const previous = result[position];
+    const event = {
+      ...previous,
+      ...source,
+      // Keep the first sequence so the merged block stays at the point where
+      // the provider first emitted the part. The latest metadata (especially
+      // model and stopReason) still comes from the newest update.
+      seq: previous.seq,
+      content: source.contentDelta
+        ? `${previous.content || ""}${source.content || ""}`
+        : (source.content || previous.content || ""),
+    };
+    if (!source.stopReason && previous.stopReason) event.stopReason = previous.stopReason;
+    result[position] = event;
+  }
+  return result;
+}
+
+function isOpenCodeContentEvent(event) {
+  return event.provider === "opencode"
+    && (event.type === "user" || event.type === "assistant" || event.type === "reasoning");
 }
 
 function foldTurns(blocks) {

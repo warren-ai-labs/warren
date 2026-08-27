@@ -251,6 +251,39 @@ func EnsureClaudeBindHook(claudeConfigDir string) (changed bool, err error) {
 	return ensureAgentHooks(filepath.Join(claudeConfigDir, "settings.json"), "claude")
 }
 
+// OpenCodePluginPath returns the Warren-managed OpenCode plugin path.
+// The plugin is auto-discovered from ~/.config/opencode/plugin/ and
+// project .opencode/plugin/; global ensures remote/empty projects still bind.
+func OpenCodePluginPath() string {
+	if value := os.Getenv("WARREN_OPENCODE_PLUGIN_PATH"); value != "" {
+		return value
+	}
+	if value := os.Getenv("XDG_CONFIG_HOME"); value != "" {
+		return filepath.Join(value, "opencode", "plugin", "warren-bind.ts")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "opencode", "plugin", "warren-bind.ts")
+}
+
+// EnsureOpenCodeBindPlugin installs the Warren binding plugin for OpenCode.
+// It is the hook-equivalent for OpenCode: on session.created/status=busy the
+// plugin reads WARREN_SESSION_ID and atomically writes the binding file so the
+// daemon can resolve the SQLite session without cwd+time guessing.
+func EnsureOpenCodeBindPlugin() (bool, error) {
+	path := OpenCodePluginPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, fmt.Errorf("create OpenCode plugin directory: %w", err)
+	}
+	existing, err := os.ReadFile(path)
+	if err == nil && string(existing) == openCodeBindPluginSource {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(openCodeBindPluginSource), 0o600); err != nil {
+		return false, fmt.Errorf("write OpenCode bind plugin: %w", err)
+	}
+	return true, nil
+}
+
 // ensureAgentHooks merges the Warren-managed hook command into the
 // SessionStart and SessionEnd arrays of either Codex hooks.json or Claude
 // settings.json. The marker in the command makes repeated installs
@@ -328,6 +361,58 @@ func writeHooksJSON(path string, document map[string]any) error {
 	}
 	return os.Rename(temporary, path)
 }
+
+// openCodeBindPluginSource is the hook-equivalent for OpenCode. Codex/Claude
+// use hooks.json; OpenCode uses a Plugin that receives the same bus events.
+// The plugin reads WARREN_SESSION_ID from the OpenCode process environment
+// (injected by BindEnvironment) and writes the binding file immediately on
+// session creation/busy, eliminating the SQLite time-window race.
+const openCodeBindPluginSource = `import type { Plugin } from "@opencode-ai/plugin"
+import * as fs from "fs"
+import * as path from "path"
+const marker = "warren-agent-bind-v1"
+function atomicWrite(filePath: string, data: string) {
+  const dir = path.dirname(filePath)
+  fs.mkdirSync(dir, { recursive: true })
+  const tmp = filePath + ".tmp." + process.pid
+  fs.writeFileSync(tmp, data)
+  fs.renameSync(tmp, filePath)
+}
+export default (async () => {
+  return {
+    event: async ({ event }: { event: any }) => {
+      const bindFile = process.env.WARREN_BIND_FILE
+      const stateFile = process.env.WARREN_STATE_FILE
+      const warrenSession = process.env.WARREN_SESSION_ID
+      if (!warrenSession || (!bindFile && !stateFile)) return
+      const kind = process.env.WARREN_AGENT_KIND || "opencode"
+      const props: any = (event as any).properties || {}
+      const t = (event as any).type as string
+      if (t === "session.created" || (t === "session.status" && props.status?.type === "busy")) {
+        const sid: string = props.info?.id || props.sessionID || ""
+        if (!sid || !bindFile) return
+        const cwd: string = props.info?.directory || (props.directory as string) || process.env.WARREN_WORKSPACE_PATH || ""
+        // Verify marker so a stale manual install does not shadow the managed one
+        // (marker: warren-agent-bind-v1)
+        const payload = JSON.stringify({ provider: kind, sessionId: sid, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\\n"
+        try { atomicWrite(bindFile, payload) } catch {}
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\\n") } catch {}
+      } else if (t === "session.error") {
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "failed", attention: { kind: "warning", reason: "error", since: new Date().toISOString() } } }) + "\\n") } catch {}
+      } else if (t === "session.idle") {
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\\n") } catch {}
+      }
+    },
+    "permission.ask": async (_perm: any, out: any) => {
+      const stateFile = process.env.WARREN_STATE_FILE
+      if (!stateFile) return
+      try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "blocked", attention: { kind: "approval", reason: "permission", since: new Date().toISOString() } } }) + "\\n") } catch {}
+      if (out) out.status = "ask"
+    },
+  }
+}) satisfies Plugin
+// ${hookCommandMarker}
+`
 
 // agentBindHookScript reads the hook event JSON from stdin. SessionStart
 // writes the transcript binding and resets the status file; SessionEnd marks

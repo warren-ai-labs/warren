@@ -109,3 +109,25 @@ test("groupAgentEvents keeps unmatched tool outputs standalone", () => {
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].kind, "tool_output");
 });
+
+test("groupAgentEvents coalesces OpenCode content deltas by part", () => {
+  const blocks = groupAgentEvents([
+    { seq: 1, provider: "opencode", id: "user-part", type: "user", content: "fix" },
+    { seq: 2, provider: "opencode", id: "assistant-part", type: "assistant", content: "hel" },
+    { seq: 3, provider: "opencode", id: "assistant-part", type: "assistant", content: "lo", contentDelta: true },
+    { seq: 4, provider: "opencode", id: "reasoning-part", type: "reasoning", content: "think" },
+    { seq: 5, provider: "opencode", id: "reasoning-part", type: "reasoning", content: " more", contentDelta: true },
+  ]);
+  assert.deepEqual(blocks.map(block => block.kind), ["user", "assistant", "activity_group"]);
+  assert.equal(blocks[1].event.content, "hello");
+  assert.equal(blocks[2].reasoning[0].content, "think more");
+});
+
+test("groupAgentEvents replaces a rewritten OpenCode part", () => {
+  const blocks = groupAgentEvents([
+    { seq: 1, provider: "opencode", id: "assistant-part", type: "assistant", content: "draft" },
+    { seq: 2, provider: "opencode", id: "assistant-part", type: "assistant", content: "final" },
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].event.content, "final");
+});

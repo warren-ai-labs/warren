@@ -61,6 +61,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "opencode",
+            title: "OpenCode",
+            subtitle: "Launch the OpenCode CLI in this project",
+            symbolName: "terminal.fill",
+            createButtonTitle: "Start OpenCode",
+            request: .opencode,
+            isPinned: true
+        ),
+        Self(
             id: "trae",
             title: "Trae Agent",
             subtitle: "Launch ByteDance's Trae Agent CLI in this project",
@@ -171,6 +180,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "shell": "Shell"
         case "claude": "Claude"
         case "codex": "Codex"
+        case "opencode": "OpenCode"
         case "trae": "Trae"
         default: title
         }
@@ -181,6 +191,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "shell": "preset-shell"
         case "claude": "preset-claude"
         case "codex": "preset-codex"
+        case "opencode": "preset-opencode"
         case "trae": "preset-trae"
         default: nil
         }
@@ -188,7 +199,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
 
     public var isAI: Bool {
         switch request.kind {
-        case .claude, .codex, .trae: true
+        case .claude, .codex, .opencode, .trae: true
         case .shell, .custom: false
         }
     }
@@ -211,6 +222,7 @@ extension TerminalSessionKind {
         case .shell: "terminal"
         case .claude: "sparkles"
         case .codex: "curlybraces"
+        case .opencode: "terminal.fill"
         case .trae: "sparkle.magnifyingglass"
         case .custom: "hammer"
         }

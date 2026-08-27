@@ -33,6 +33,8 @@ const (
 )
 
 // Finder locates the transcript file for a running Codex or Claude session.
+// OpenCode uses BindingFinder to resolve its database-backed conversation and
+// returns a Warren-owned cache path through this compatibility method.
 // A missing file is not an error: the CLI may not be installed, may not have
 // written a transcript yet, or may be running a version with a different
 // layout. Callers retry until the file appears.
@@ -46,14 +48,23 @@ type DefaultFinder struct {
 	CodexRoot string
 	// ClaudeRoot is the Claude Code projects directory (default ~/.claude/projects).
 	ClaudeRoot string
+	// OpenCodeRoot overrides OpenCode's current data directory containing
+	// opencode.db.
+	OpenCodeRoot string
 }
 
 func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, after time.Time) (string, error) {
-	switch kind {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "codex":
 		return f.findCodex(ctx, workspacePath, after)
 	case "claude":
 		return f.findClaude(ctx, workspacePath, after)
+	case "opencode":
+		binding, err := f.FindBinding(ctx, "compat", kind, workspacePath, after)
+		if err != nil || binding == nil {
+			return "", err
+		}
+		return binding.CachePath, nil
 	default:
 		return "", nil
 	}
@@ -352,9 +363,11 @@ func (w *Watcher) loop() {
 	defer close(w.done)
 	offset := int64(0)
 	sequence := uint64(0)
-	events, next, err := readNew(w.path, offset, w.parser)
+	var fileInfo os.FileInfo
+	events, next, currentFileInfo, err := readNewTracked(w.path, offset, w.parser, fileInfo)
 	if err == nil {
 		offset = next
+		fileInfo = currentFileInfo
 		w.lastStatus = w.parser.Status()
 		if len(events) > 0 {
 			for index := range events {
@@ -380,11 +393,12 @@ func (w *Watcher) loop() {
 		case <-w.stop:
 			return
 		case <-ticker.C:
-			events, next, err := readNew(w.path, offset, w.parser)
+			events, next, currentFileInfo, err := readNewTracked(w.path, offset, w.parser, fileInfo)
 			if err != nil {
 				continue
 			}
 			offset = next
+			fileInfo = currentFileInfo
 			status := w.parser.Status()
 			if len(events) > 0 {
 				for index := range events {
@@ -426,14 +440,27 @@ func (w *Watcher) append(events []api.AgentEvent) {
 // normalized events plus the next byte offset. A trailing partial line is
 // left for the next poll so no event is split across reads.
 func readNew(path string, offset int64, parser *parser) ([]api.AgentEvent, int64, error) {
+	events, next, _, err := readNewTracked(path, offset, parser, nil)
+	return events, next, err
+}
+
+// readNewTracked is the Watcher's version of readNew. OpenCode compacts its
+// cache by atomically replacing the JSONL file; size alone cannot tell whether
+// an offset still belongs to the same inode, so a replacement always restarts
+// at byte zero. The parser state then suppresses duplicate snapshots and
+// projects only any delta that arrived while the watcher was behind.
+func readNewTracked(path string, offset int64, parser *parser, previous os.FileInfo) ([]api.AgentEvent, int64, os.FileInfo, error) {
 	file, err := openRegularFile(path)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, previous, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, previous, err
+	}
+	if previous != nil && !os.SameFile(previous, info) {
+		offset = 0
 	}
 	size := info.Size()
 	if size < offset {
@@ -446,11 +473,11 @@ func readNew(path string, offset int64, parser *parser) ([]api.AgentEvent, int64
 		align = true
 	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, err
+		return nil, offset, info, err
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, info, err
 	}
 	baseOffset := offset
 	if align {
@@ -458,7 +485,7 @@ func readNew(path string, offset int64, parser *parser) ([]api.AgentEvent, int64
 			baseOffset += int64(index) + 1
 			data = data[index+1:]
 		} else {
-			return nil, baseOffset, nil
+			return nil, baseOffset, info, nil
 		}
 	}
 	var events []api.AgentEvent
@@ -471,7 +498,7 @@ func readNew(path string, offset int64, parser *parser) ([]api.AgentEvent, int64
 			break
 		}
 		if len(line) > maxTranscriptLine {
-			return nil, baseOffset + consumed, fmt.Errorf("transcript line exceeds %d bytes", maxTranscriptLine)
+			return nil, baseOffset + consumed, info, fmt.Errorf("transcript line exceeds %d bytes", maxTranscriptLine)
 		}
 		consumed += int64(len(line))
 		trimmed := bytes.TrimSpace(line[:len(line)-1])
@@ -480,7 +507,7 @@ func readNew(path string, offset int64, parser *parser) ([]api.AgentEvent, int64
 		}
 		events = append(events, parser.parse(trimmed)...)
 	}
-	return events, baseOffset + consumed, nil
+	return events, baseOffset + consumed, info, nil
 }
 
 type parser struct {
@@ -499,6 +526,11 @@ type parser struct {
 	lastAssistantContent string
 	lastReasoningContent string
 	lastEventType        string
+	// OpenCode persists mutable message and part rows. The parser keeps the
+	// previous snapshot so a cache update is projected as a text delta (or a
+	// single terminal tool transition) instead of duplicating the whole
+	// message on every poll.
+	opencodeMessages map[string]openCodeMessageSnapshot
 }
 
 func newParser(provider string) *parser {
@@ -507,10 +539,11 @@ func newParser(provider string) *parser {
 
 func newParserWithContentLimit(provider string, contentLimit int) *parser {
 	return &parser{
-		provider:      provider,
-		contentLimit:  contentLimit,
-		tracker:       *NewActivityTracker(),
-		codexCallTool: map[string]string{},
+		provider:         provider,
+		contentLimit:     contentLimit,
+		tracker:          *NewActivityTracker(),
+		codexCallTool:    map[string]string{},
+		opencodeMessages: map[string]openCodeMessageSnapshot{},
 	}
 }
 
@@ -560,6 +593,8 @@ func (p *parser) parseLine(line []byte) []api.AgentEvent {
 		return p.parseCodex(line)
 	case "claude":
 		return p.parseClaude(line)
+	case "opencode":
+		return p.parseOpenCode(line)
 	default:
 		return nil
 	}

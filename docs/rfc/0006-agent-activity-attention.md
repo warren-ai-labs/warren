@@ -3,7 +3,7 @@
 - Status: Accepted
 - Owner: Warren Headless, Web, Desktop, and CLI clients
 - Created: 2026-08-22
-- Scope: Codex and Claude session status projection
+- Scope: Codex, Claude, and OpenCode session status projection
 - Supersedes: the `waitingForInput` activity heuristic described in the first
   agent status implementation
 
@@ -139,8 +139,8 @@ client. A client must not look only at the selected Tab.
 Provider-specific formats stay outside the status reducer:
 
 ```text
-Codex / Claude transcript
-Codex / Claude hooks
+Codex / Claude transcript or hooks
+OpenCode SQLite projection
 PTY liveness observations (optional)
              │
              ▼
@@ -239,6 +239,16 @@ must not synthesize `approval` from a pending tool call. A future PTY prompt
 detector may emit `warning`, but it must not claim `approval` without a
 provider-confirmed request.
 
+### OpenCode
+
+The current OpenCode release stores sessions, messages, and parts in
+`opencode.db`. Warren opens that database read-only, binds one provider session
+ID to one Warren Session, and maps message `finish` values to terminal turn
+boundaries. Mutable text and reasoning parts are emitted as append-only event
+deltas with a stable part ID; clients use the `contentDelta` marker to merge
+those updates for display. Legacy OpenCode storage formats and resume/fork
+flags are outside this contract.
+
 ### Hooks and privacy
 
 Hooks report event type, Warren Session ID, provider conversation ID, request
@@ -283,8 +293,8 @@ recovered by the next roster or subscription snapshot.
 
 The implementation is complete only when all of the following hold:
 
-1. A known Codex or Claude user interruption returns to green `ready` and does
-   not emit yellow.
+1. A known Codex, Claude, or OpenCode user interruption returns to green
+   `ready` and does not emit yellow.
 2. A five-second pending tool remains amber `working`.
 3. A long no-progress operation becomes yellow `stalled` only after the
    configured grace period and carries the `stalled` reason.

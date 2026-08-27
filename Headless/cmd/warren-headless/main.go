@@ -236,7 +236,10 @@ func main() {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {
 				return err
 			}
-			_, err := agent.EnsureClaudeBindHook(agent.ClaudeConfigDir())
+			if _, err := agent.EnsureClaudeBindHook(agent.ClaudeConfigDir()); err != nil {
+				return err
+			}
+			_, err := agent.EnsureOpenCodeBindPlugin()
 			return err
 		},
 	}

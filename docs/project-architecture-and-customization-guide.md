@@ -97,14 +97,14 @@ The current source contains implementations for:
 - local and remote Git Project registration;
 - main-checkout and Git-worktree Workspaces;
 - standalone Terminal Groups;
-- Shell, Claude, Codex, and custom-command Sessions;
-- the Ghostline Runtime adapter;
+- Shell, Claude, Codex, OpenCode, and custom-command Sessions;
+- Ghostline Runtime adapter;
 - a macOS Ghostty terminal client;
 - a responsive React/xterm Web/PWA client;
 - a CLI that uses the same Host protocol;
 - SSH bootstrap and port forwarding for remote Hosts;
 - reconnect recovery using output anchors, rings, cursor streams, and native snapshots;
-- structured Codex and Claude transcript projection on the Web;
+- structured Codex, Claude, and OpenCode transcript projection on the Web;
 - optional gnar, Cloudflare, and Tailscale reachability adapters;
 - one-time Superset Project/Workspace import;
 - semantic UI and terminal probes for non-intrusive acceptance testing;
@@ -703,7 +703,7 @@ personal tool.
 
 - replace the fixed desktop preset catalog with decoded AppStorage values;
 - replace the Web `sessionPresets` constants with localStorage values;
-- preserve Shell, Claude, and Codex as safe built-in defaults;
+- preserve Shell, Claude, Codex, and OpenCode as safe built-in defaults;
 - validate empty IDs, duplicate IDs, empty commands, and unsupported icons;
 - keep `session.create` unchanged.
 

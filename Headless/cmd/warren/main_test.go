@@ -452,7 +452,7 @@ func TestValidateAgentCreateRequiresExplicitPromptMode(t *testing.T) {
 func TestAgentCreateProviderValidationHappensBeforeConnect(t *testing.T) {
 	err := run([]string{"agent", "create", "workspace-1", "--provider", "shell", "--no-prompt"})
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex or claude") {
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex, claude, or opencode") {
 		t.Fatalf("invalid provider error = %v, want local provider validation", err)
 	}
 }
@@ -504,6 +504,14 @@ func TestAgentCommandRejectsClaudePrintMode(t *testing.T) {
 	}
 }
 
+func TestAgentCommandRejectsOpenCodeSessionReuse(t *testing.T) {
+	for _, command := range []string{"opencode --continue", "opencode --session ses_existing", "opencode --fork"} {
+		if err := validateAgentCommand(command, "opencode"); err == nil || !strings.Contains(err.Error(), "start a new session") {
+			t.Fatalf("validateAgentCommand(%q) = %v, want session reuse rejection", command, err)
+		}
+	}
+}
+
 func TestAgentCommandAllowsProviderOptions(t *testing.T) {
 	for _, test := range []struct {
 		provider string
@@ -511,6 +519,7 @@ func TestAgentCommandAllowsProviderOptions(t *testing.T) {
 	}{
 		{provider: "codex", command: "codex-alias --dangerously-bypass-hook-trust --model gpt-5.6"},
 		{provider: "claude", command: "claude --dangerously-skip-permissions --model sonnet"},
+		{provider: "opencode", command: "opencode --model openai/gpt-5 --agent build"},
 	} {
 		if err := validateAgentCommand(test.command, test.provider); err != nil {
 			t.Fatalf("validateAgentCommand(%q) = %v, want options accepted", test.command, err)
@@ -532,6 +541,26 @@ func TestAppendAgentInitialPromptShellQuotesText(t *testing.T) {
 	want := "codex-alias --dangerously-bypass-hook-trust 'ship it'\"'\"'s ready\nnow'"
 	if got != want {
 		t.Fatalf("appendAgentInitialPrompt = %q, want %q", got, want)
+	}
+}
+
+func TestAppendAgentInitialPromptUsesOpenCodeOption(t *testing.T) {
+	got := appendAgentInitialPromptForProvider("opencode --model openai/gpt-5", "opencode", "ship it's ready\nnow")
+	want := "opencode --model openai/gpt-5 --prompt 'ship it'\"'\"'s ready\nnow'"
+	if got != want {
+		t.Fatalf("appendAgentInitialPromptForProvider = %q, want %q", got, want)
+	}
+}
+
+func TestAgentTextLinesCoalescesOpenCodeDeltas(t *testing.T) {
+	lines := agentTextLines([]api.AgentEvent{
+		{Provider: "opencode", Type: "user", ID: "user-part", Content: "question"},
+		{Provider: "opencode", Type: "assistant", ID: "assistant-part", Content: "hel"},
+		{Provider: "opencode", Type: "assistant", ID: "assistant-part", Content: "lo", ContentDelta: true},
+		{Provider: "codex", Type: "assistant", ID: "codex-event", Content: "done"},
+	})
+	if want := []string{"question", "hello", "done"}; !reflect.DeepEqual(lines, want) {
+		t.Fatalf("agentTextLines = %#v, want %#v", lines, want)
 	}
 }
 

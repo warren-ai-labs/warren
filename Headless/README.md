@@ -75,6 +75,8 @@ warren --endpoint my-vps workspace create PROJECT_ID --branch release/my-feature
 warren --endpoint my-vps workspace move WORKSPACE_ID --before OTHER_WORKSPACE_ID
 warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --prompt "Run the relevant tests"
 warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --command codex-alias --no-prompt
+warren --endpoint my-vps agent create WORKSPACE_ID --provider opencode --prompt "Run the relevant tests"
+warren --endpoint my-vps agent create WORKSPACE_ID --provider opencode --command opencode --no-prompt
 warren --endpoint my-vps session move SESSION_ID --group GROUP_ID --confirm
 warren --endpoint my-vps session move SESSION_ID --workspace WORKSPACE_ID --confirm
 warren --endpoint my-vps session current
@@ -125,14 +127,23 @@ confirmation prompt. The Web and Desktop project context menus also expose
 this toggle. Their **Import Existing Worktrees…** action opens a one-time
 multi-select list; already registered worktrees remain visible but disabled.
 
-`warren agent create` is the primary Codex/Claude entry point. `--provider`
-selects the transcript protocol and `--command` selects the executable or
-alias (defaulting to the provider name). `--prompt` is appended as the
-provider's initial positional prompt; `--command` may contain executable
-options but must not contain its own positional prompt or prompt option. Warren
-also rejects provider print/non-interactive mode because `agent send` relies on
-the interactive composer. Use `--no-prompt` to create an idle Agent
-explicitly. `--wait` can wait for that first turn to finish.
+`warren agent create` is the primary Codex/Claude/OpenCode entry point.
+`--provider` selects the transcript protocol and `--command` selects the
+executable or alias (defaulting to the provider name). For Codex and Claude,
+`--prompt` is appended as the provider's initial positional prompt. OpenCode
+receives the initial text through its `--prompt` option. `--command` may contain
+executable options but must not contain its own positional prompt or prompt
+option. Warren also rejects provider print/non-interactive mode because
+`agent send` relies on the interactive composer. Use `--no-prompt` to create an
+idle Agent explicitly. `--wait` can wait for that first turn to finish.
+
+OpenCode sessions are deliberately started without `--continue`, `--session`,
+or `--fork`. Warren binds one OpenCode conversation to one Warren session; a
+resume or fork flag would make the provider identity diverge from the durable
+Warren identity. With `--no-prompt`, OpenCode does not create its SQLite
+conversation until the first prompt is entered in Terminal; after that initial
+input, send subsequent prompts through the same Warren Agent session. With
+`--prompt`, Warren performs that first turn during creation.
 
 `warren agent read AGENT_ID` reads the normalized transcript, never the PTY.
 By default it returns the newest 20 user, assistant, and error activities and
@@ -147,8 +158,8 @@ separate kitty-protocol Enter event. `agent wait` blocks until the current or
 next turn finishes. `agent attach` is the explicit raw TTY operation.
 
 `session` is the generic PTY resource. `session create` starts shells,
-custom commands, and other interactive programs; it does not create Codex or
-Claude Agents. `session send` writes terminal input and `session read` returns
+custom commands, and other interactive programs; it does not create Codex,
+Claude, or OpenCode Agents. `session send` writes terminal input and `session read` returns
 raw PTY output with `--timeout`/`--contains`. Agent transcript and turn flags
 are rejected on these commands so a TUI cannot be mistaken for conversation
 data. The `trae` preset likewise only launches a shell command; it is not an
@@ -245,11 +256,13 @@ Known limits:
 
 ## Agent Transcript Projection
 
-For `codex` and `claude` sessions, `warren-headless` also watches the JSONL
-transcript written by the CLI itself (Codex: `~/.codex/sessions/**/rollout-*.jsonl`,
-Claude Code: `~/.claude/projects/**/<session>.jsonl`), normalizes messages,
-reasoning, tool calls, and tool output into `agent` events, and sends them to
+For `codex`, `claude`, and `opencode` sessions, `warren-headless` projects the
+provider's own activity into normalized `agent` events and sends them to
 attached clients as `{"t":"agent","session":...,"events":[...]}` text messages.
+Codex and Claude write JSONL transcripts (Codex:
+`~/.codex/sessions/**/rollout-*.jsonl`, Claude Code:
+`~/.claude/projects/**/<session>.jsonl`). OpenCode stores SQLite rows in
+`opencode.db`.
 Live batches are split so a single message stays around 256 KiB; the complete
 Host-owned activity/attention status is its own lightweight
 `{"t":"agent.status","session":...,"status":{...}}` message. The
@@ -261,7 +274,20 @@ request (`session`, optional `before` sequence cursor and `limit`, returning
 `events`, `cursor` and `hasMore`). This keeps any single WebSocket message far
 below client message-size limits even for transcripts with thousands of events.
 The PTY byte stream remains the source of truth; the transcript is a
-best-effort side channel.
+best-effort, read-only side channel.
+
+OpenCode's data root follows `WARREN_OPENCODE_DATA_DIR` when an operator needs
+to point Warren at a separate store, then the provider's platform data
+directory (`~/.local/share/opencode` on macOS and Linux, or
+`%LOCALAPPDATA%\opencode` on Windows). `XDG_DATA_HOME/opencode` is honored when configured. Warren opens
+the SQLite database with a read-only connection and never creates or mutates
+the provider database. If no usable SQLite schema is found, the Agent
+projection waits for a later successful poll. Warren mirrors one bound
+conversation into a private
+JSONL cache under `~/.warren/opencode-cache/`; mutable snapshots are compacted
+periodically so a long response does not grow quadratically. The cache survives
+a daemon restart for recovery and is removed when the Warren session is
+explicitly deleted.
 
 Each Warren session is bound to one CLI conversation by its own session ID,
 so several agents in the same workspace never mix transcripts:
@@ -281,10 +307,19 @@ so several agents in the same workspace never mix transcripts:
   returns to a plain shell after `SessionEnd`. Sessions created before this
   feature need to be reopened so the shell picks up the new environment.
 
+OpenCode has no Warren hook binding. The daemon discovers a newly created
+OpenCode session by workspace and creation time, then persists both the Warren
+session ID and the OpenCode session ID. Subsequent polls use that exact ID, so
+two Warren sessions in one workspace cannot silently consume each other's
+conversation. If the provider database is unavailable or the schema changes,
+the terminal remains usable and the Agent projection simply waits for a future
+successful poll.
+
 The bound CLI session ID and transcript path are stored on the Session and
-shown in the Web Agent view. When a binding is not available yet (hook not
-installed, CLI version with a different layout), discovery falls back to
-cwd + mtime matching so the session still works.
+shown in the Web Agent view. For Codex and Claude, when a hook binding is not
+available yet (for example, an older CLI layout), discovery falls back to cwd
+and mtime matching. OpenCode remains unbound until its provider session can be
+identified safely.
 
 The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its

@@ -123,8 +123,9 @@ type Session struct {
 	// terminal clients and must not be synthesized from a byte offset.
 	OutputCursor string `json:"outputCursor,omitempty"`
 	Pinned       bool   `json:"pinned,omitempty"`
-	// AgentSessionID is the CLI's own conversation ID (Codex thread ID or
-	// Claude session ID) bound to this Warren session.
+	// AgentSessionID is the provider's own conversation ID (Codex thread ID,
+	// Claude session ID, or OpenCode SQLite session ID) bound to this Warren
+	// session.
 	AgentSessionID string `json:"agentSessionId,omitempty"`
 	// TranscriptPath is the JSONL transcript projected by the agent watcher.
 	TranscriptPath string `json:"transcriptPath,omitempty"`
@@ -206,30 +207,35 @@ func (s AgentStatus) Equal(other AgentStatus) bool {
 		s.Attention.Since.Equal(other.Attention.Since)
 }
 
-// AgentEvent is one normalized message or tool transition from a Codex or
-// Claude transcript. It is a projection of the TUI process's own JSONL log;
+// AgentEvent is one normalized message or tool transition from a Codex,
+// Claude, or OpenCode transcript. It is a projection of the provider's own log;
 // the terminal byte stream remains the source of truth for rendering.
 type AgentEvent struct {
-	Sequence   uint64      `json:"seq"`
-	Turn       uint64      `json:"turn,omitempty"`
-	ID         string      `json:"id,omitempty"`
-	Provider   string      `json:"provider"`
-	Type       string      `json:"type"`
-	Role       string      `json:"role,omitempty"`
-	Content    string      `json:"content,omitempty"`
-	Model      string      `json:"model,omitempty"`
-	StopReason string      `json:"stopReason,omitempty"`
-	ToolName   string      `json:"toolName,omitempty"`
-	ToolInput  any         `json:"toolInput,omitempty"`
-	ToolStatus string      `json:"toolStatus,omitempty"`
-	CallID     string      `json:"callId,omitempty"`
-	Output     string      `json:"output,omitempty"`
-	Files      []string    `json:"files,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	Usage      *AgentUsage `json:"usage,omitempty"`
-	DurationMs int64       `json:"durationMs,omitempty"`
-	Sidechain  bool        `json:"sidechain,omitempty"`
-	Timestamp  time.Time   `json:"timestamp,omitempty"`
+	Sequence uint64 `json:"seq"`
+	Turn     uint64 `json:"turn,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Provider string `json:"provider"`
+	Type     string `json:"type"`
+	Role     string `json:"role,omitempty"`
+	Content  string `json:"content,omitempty"`
+	// ContentDelta marks content as an append-only delta to the previous event
+	// with the same provider, type, and ID. It is used by providers such as
+	// OpenCode whose mutable parts are projected into the append-only event
+	// stream.
+	ContentDelta bool        `json:"contentDelta,omitempty"`
+	Model        string      `json:"model,omitempty"`
+	StopReason   string      `json:"stopReason,omitempty"`
+	ToolName     string      `json:"toolName,omitempty"`
+	ToolInput    any         `json:"toolInput,omitempty"`
+	ToolStatus   string      `json:"toolStatus,omitempty"`
+	CallID       string      `json:"callId,omitempty"`
+	Output       string      `json:"output,omitempty"`
+	Files        []string    `json:"files,omitempty"`
+	Error        string      `json:"error,omitempty"`
+	Usage        *AgentUsage `json:"usage,omitempty"`
+	DurationMs   int64       `json:"durationMs,omitempty"`
+	Sidechain    bool        `json:"sidechain,omitempty"`
+	Timestamp    time.Time   `json:"timestamp,omitempty"`
 }
 
 // AgentTurnStatus describes one explicit turn boundary in an agent transcript.
