@@ -750,10 +750,14 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         (() => {
             const shortcuts = [];
             const keyCodes = [];
+            const modifiers = [];
             window.addEventListener("keydown", (event) => {
                 if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
                     shortcuts.push(event.code);
                     keyCodes.push(event.keyCode);
+                    modifiers.push(
+                        `${event.code}:${event.ctrlKey ? "ctrl" : "meta"}`
+                    );
                 }
             }, true);
             const files = document.querySelector(
@@ -777,7 +781,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             const content = document.querySelector(".part.sidebar > .content");
             const titlePanel = document.querySelector(".title-panel");
             const titleGlobalActions = document.querySelector(".title-global-actions");
-            const iconMetrics = [files, search, git, markdownPreview, reload].map((control) => {
+            const iconMetrics = [files, search, git, reload].map((control) => {
                 const rect = control.getBoundingClientRect();
                 const icon = getComputedStyle(control, "::before");
                 return `${rect.width}x${rect.height}@${icon.fontSize}`;
@@ -792,6 +796,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                 searchPresent: search !== null,
                 gitPresent: git !== null,
                 markdownPreviewPresent: markdownPreview !== null,
+                markdownPreviewVisible:
+                    getComputedStyle(markdownPreview.parentElement).display !== "none",
                 reloadPresent: reload !== null,
                 controlsInHeader: [files, search, git, markdownPreview, reload].every(
                     (control) => control?.closest(".header-or-footer.header") === header
@@ -808,7 +814,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
                 contentHeight: content.getBoundingClientRect().height,
                 iconMetrics,
                 shortcuts,
-                keyCodes
+                keyCodes,
+                modifiers
             });
         })();
         """#)
@@ -822,6 +829,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(behavior["searchPresent"] as? Bool, true)
         XCTAssertEqual(behavior["gitPresent"] as? Bool, true)
         XCTAssertEqual(behavior["markdownPreviewPresent"] as? Bool, true)
+        XCTAssertEqual(behavior["markdownPreviewVisible"] as? Bool, false)
         XCTAssertEqual(behavior["reloadPresent"] as? Bool, true)
         XCTAssertEqual(behavior["controlsInHeader"] as? Bool, true)
         XCTAssertEqual(behavior["separateToolbarRow"] as? Bool, true)
@@ -833,13 +841,17 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             Set(behavior["iconMetrics"] as? [String] ?? []).count,
             1
         )
-        // WKWebView tests run on macOS, so the synthetic shortcuts resolve
-        // through metaKey (Cmd) like production.
+        // WKWebView tests run on macOS. Git uses Control because code-server's
+        // web binding explicitly maps Source Control to Ctrl+Shift+G.
         XCTAssertEqual(
             behavior["shortcuts"] as? [String],
             ["KeyE", "KeyF", "KeyG", "KeyV"]
         )
         XCTAssertEqual(behavior["keyCodes"] as? [Int], [69, 70, 71, 86])
+        XCTAssertEqual(
+            behavior["modifiers"] as? [String],
+            ["KeyE:meta", "KeyF:meta", "KeyG:ctrl", "KeyV:meta"]
+        )
         XCTAssertEqual(messageHandler.messages, ["reload"])
     }
 
@@ -854,20 +866,19 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let navigation = WarrenEmbeddedEditorTestNavigation()
         await navigation.load(#"""
         <div class="monaco-workbench">
-            <div class="part activitybar">
-                <div class="composite-bar">
-                    <ul class="actions-container">
-                        <li class="action-item">
-                            <a class="action-label codicon codicon-source-control-view-icon"
-                               aria-label="Source Control"></a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
             <div class="part sidebar">
                 <div class="header-or-footer header">
-                    <div class="monaco-action-bar">
-                        <ul class="actions-container"></ul>
+                    <div class="composite-bar-container">
+                        <div class="composite-bar">
+                            <div class="monaco-action-bar">
+                                <ul class="actions-container">
+                                    <li class="action-item">
+                                        <a class="action-label codicon codicon-source-control-view-icon"
+                                           aria-label="Source Control"></a>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="title">
@@ -931,6 +942,88 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(behavior["titleActions"] as? String, "none")
         XCTAssertEqual(behavior["changesActions"] as? String, "none")
         XCTAssertEqual(behavior["providerActions"] as? String, "none")
+    }
+
+    @MainActor
+    func testEditorChromeShowsMarkdownPreviewOnlyForMarkdownAndUsesEditorContext() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="monaco-workbench">
+            <div class="part sidebar">
+                <div class="header-or-footer header">
+                    <div class="monaco-action-bar">
+                        <ul class="actions-container"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="monaco-editor focused" data-mode-id="markdown">
+                <textarea class="inputarea"></textarea>
+            </div>
+        </div>
+        <script>
+            window.previewTargets = [];
+            document.addEventListener("keydown", (event) => {
+                if (event.code === "KeyV") {
+                    window.previewTargets.push(event.target.className);
+                }
+            }, true);
+        </script>
+        """#, in: webView)
+        try await Task.sleep(for: .milliseconds(400))
+
+        let initial = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
+            );
+            preview?.click();
+            return JSON.stringify({
+                visible: getComputedStyle(preview.parentElement).display !== "none",
+                target: window.previewTargets[0]
+            });
+        })();
+        """#)
+        let initialData = try XCTUnwrap((initial as? String)?.data(using: .utf8))
+        let initialBehavior = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: initialData) as? [String: Any]
+        )
+
+        XCTAssertEqual(initialBehavior["visible"] as? Bool, true)
+        XCTAssertEqual(initialBehavior["target"] as? String, "inputarea")
+
+        _ = try await webView.evaluateJavaScript(#"""
+        document.querySelector(".monaco-editor").setAttribute("data-mode-id", "typescript");
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+        let nonMarkdown = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
+            );
+            return getComputedStyle(preview.parentElement).display !== "none";
+        })();
+        """#)
+        XCTAssertEqual(nonMarkdown as? Bool, false)
+
+        _ = try await webView.evaluateJavaScript(#"""
+        document.querySelector(".monaco-editor").setAttribute("data-mode-id", "markdown");
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+        let markdown = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
+            );
+            return getComputedStyle(preview.parentElement).display !== "none";
+        })();
+        """#)
+        XCTAssertEqual(markdown as? Bool, true)
     }
 
     @MainActor

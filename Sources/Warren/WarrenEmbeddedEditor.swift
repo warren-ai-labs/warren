@@ -936,18 +936,23 @@ enum WarrenEmbeddedEditorChrome {
                     outline: 1px solid var(--vscode-focusBorder);
                     outline-offset: -1px;
                 }
+                .monaco-workbench .part.sidebar
+                    > .header-or-footer.header
+                    .${controlClass}-markdown-preview.${controlClass}-hidden {
+                    display: none !important;
+                }
             `;
             document.documentElement.appendChild(style);
         };
 
         // VS Code's keybinding service still reads keyCode in the browser;
-        // KeyboardEvent constructors leave it at zero. macOS web builds
-        // resolve default bindings through metaKey (Cmd), other platforms
-        // through ctrlKey. Sending both would match neither binding.
+        // KeyboardEvent constructors leave it at zero. Most macOS bindings
+        // resolve through metaKey (Cmd), while callers can override the
+        // modifier for web-only bindings that explicitly use ctrlKey.
         const usesMetaModifier = () => /mac/i.test(navigator.platform ?? "");
-        const sendShortcut = (key, code) => {
+        const sendShortcut = (key, code, preferredTarget, useMeta) => {
             const keyCode = key.toUpperCase().charCodeAt(0);
-            const isMeta = usesMetaModifier();
+            const isMeta = useMeta ?? usesMetaModifier();
             const keyboardEvent = (type) => {
                 const syntheticEvent = new KeyboardEvent(type, {
                     key,
@@ -969,27 +974,30 @@ enum WarrenEmbeddedEditorChrome {
                 });
                 return syntheticEvent;
             };
-            // Dispatch from the focused element so the event bubbles through
-            // the same path as a real keystroke. An iframe swallows events
-            // behind its document boundary, so fall back to the body.
-            const focused = document.activeElement;
+            // Dispatch from the preferred editor target or focused element so
+            // the event bubbles through the same path as a real keystroke. An
+            // iframe swallows events behind its document boundary, so fall
+            // back to the body.
+            const focused = preferredTarget ?? document.activeElement;
             const target = !focused || focused.tagName === "IFRAME"
                 ? document.body
                 : focused;
             target.dispatchEvent(keyboardEvent("keydown"));
             target.dispatchEvent(keyboardEvent("keyup"));
         };
-        const dispatchShortcut = (event, key, code) => {
+        const dispatchShortcut = (event, key, code, preferredTarget, useMeta) => {
             event.preventDefault();
             event.stopPropagation();
-            sendShortcut(key, code);
+            sendShortcut(key, code, preferredTarget, useMeta);
         };
 
         const openSourceControl = (event) => {
             event.preventDefault();
             event.stopPropagation();
             const sourceControl = document.querySelector(
-                ".part.activitybar "
+                ".part.sidebar > .header-or-footer.header "
+                    + ".action-label.codicon-source-control-view-icon, "
+                    + ".part.activitybar "
                     + ".action-label.codicon-source-control-view-icon"
             );
             if (sourceControl) {
@@ -997,9 +1005,14 @@ enum WarrenEmbeddedEditorChrome {
                 return;
             }
             // Older VS Code builds may not expose the activity bar action.
-            // Their macOS keybinding remains the compatible fallback.
-            dispatchShortcut(event, "g", "KeyG");
+            // code-server's web Source Control binding uses Control on macOS.
+            dispatchShortcut(event, "g", "KeyG", undefined, false);
         };
+
+        const markdownPreviewTarget = () => document.querySelector(
+            ".monaco-editor.focused .inputarea, "
+                + ".monaco-editor .inputarea"
+        );
 
         const makeAction = ({ id, icon, label, activate }) => {
             const item = document.createElement("li");
@@ -1044,10 +1057,18 @@ enum WarrenEmbeddedEditorChrome {
                 icon: "open-preview",
                 label: "Markdown Preview",
                 activate: (event) => {
-                    dispatchShortcut(event, "v", "KeyV");
+                    dispatchShortcut(
+                        event,
+                        "v",
+                        "KeyV",
+                        markdownPreviewTarget()
+                    );
                     // The first invocation may race the markdown extension's
                     // activation; a second press lands once it is ready.
-                    setTimeout(() => sendShortcut("v", "KeyV"), 350);
+                    setTimeout(
+                        () => sendShortcut("v", "KeyV", markdownPreviewTarget()),
+                        350
+                    );
                 }
             },
             {
@@ -1062,6 +1083,8 @@ enum WarrenEmbeddedEditorChrome {
                 }
             }
         ];
+        let previewControl;
+        let previewVisibilityObserver;
 
         const attach = () => {
             const workbench = document.querySelector(".monaco-workbench");
@@ -1081,7 +1104,38 @@ enum WarrenEmbeddedEditorChrome {
                     return;
                 }
                 syncObserver?.disconnect();
-                actions.append(...controls.map(makeAction));
+                const isMarkdown = () => {
+                    const editor = workbench.querySelector(
+                        ".monaco-editor.focused, .monaco-editor"
+                    );
+                    return editor?.getAttribute("data-mode-id") === "markdown";
+                };
+                previewControl = undefined;
+                const mountedControls = controls.map((control) => {
+                    const item = makeAction(control);
+                    if (control.id === "markdown-preview") {
+                        previewControl = item;
+                    }
+                    return item;
+                });
+                actions.append(...mountedControls);
+                const syncPreviewVisibility = () => {
+                    previewControl?.classList.toggle(
+                        `${controlClass}-hidden`,
+                        !isMarkdown()
+                    );
+                };
+                syncPreviewVisibility();
+                previewVisibilityObserver?.disconnect();
+                previewVisibilityObserver = new MutationObserver(() => {
+                    syncPreviewVisibility();
+                });
+                previewVisibilityObserver.observe(workbench, {
+                    attributes: true,
+                    attributeFilter: ["class", "data-mode-id"],
+                    childList: true,
+                    subtree: true
+                });
             };
 
             sync();
