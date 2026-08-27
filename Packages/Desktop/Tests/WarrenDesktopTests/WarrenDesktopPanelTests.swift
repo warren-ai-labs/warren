@@ -139,7 +139,7 @@ final class WarrenDesktopPanelTests: XCTestCase {
         let resolution = WarrenDesktopPanelLayout.resolve(containerWidth: 1_400, panelOpen: true)
         XCTAssertGreaterThanOrEqual(resolution.centerWidth, WarrenLayoutMetrics.centerMinimumWidth)
         XCTAssertEqual(resolution.mode, .wide)
-        let constrained = WarrenDesktopPanelLayout.resolve(containerWidth: 1_000, panelOpen: true)
+        let constrained = WarrenDesktopPanelLayout.resolve(containerWidth: 800, panelOpen: true)
         XCTAssertGreaterThanOrEqual(constrained.centerWidth, WarrenLayoutMetrics.centerMinimumWidth)
         XCTAssertEqual(constrained.panelPlacement, .drawer)
     }

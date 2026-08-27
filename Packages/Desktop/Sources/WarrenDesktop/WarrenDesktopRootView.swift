@@ -282,7 +282,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             + WarrenLayoutMetrics.paneMinimumHeight
         let framed = AnyView(shell.frame(minWidth: minimumWidth, minHeight: minimumHeight))
         let styled = framed.denSurface().warrenUnixTextEditing()
-        return styled
+        let observed = AnyView(styled
         .onChange(of: sidebarState) { newState in
             if persistenceEnabled { Self.persist(newState) }
         }
@@ -311,9 +311,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
             syncPanelContext()
         }
-        .onChange(of: navigation.selection) { _, _ in
+        .onChange(of: navigation.selection) { _ in
             syncPanelContext()
         }
+        )
+        return observed
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
         }
