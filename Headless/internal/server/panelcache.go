@@ -142,3 +142,38 @@ func (c *panelCache) remove(element *list.Element) {
 	delete(c.index, element.Value.(*panelCacheEntry).key)
 	c.list.Remove(element)
 }
+
+type panelLoad struct {
+	mu      sync.Mutex
+	pending map[string]*panelLoadCall
+}
+
+type panelLoadCall struct {
+	done  chan struct{}
+	panel api.GitPanel
+	err   error
+}
+
+func newPanelLoad() *panelLoad {
+	return &panelLoad{pending: make(map[string]*panelLoadCall)}
+}
+
+func (l *panelLoad) Do(key string, load func() (api.GitPanel, error)) (api.GitPanel, error) {
+	l.mu.Lock()
+	if call, ok := l.pending[key]; ok {
+		l.mu.Unlock()
+		<-call.done
+		return call.panel, call.err
+	}
+	call := &panelLoadCall{done: make(chan struct{})}
+	l.pending[key] = call
+	l.mu.Unlock()
+
+	call.panel, call.err = load()
+	close(call.done)
+
+	l.mu.Lock()
+	delete(l.pending, key)
+	l.mu.Unlock()
+	return call.panel, call.err
+}
