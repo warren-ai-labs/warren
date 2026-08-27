@@ -6,6 +6,23 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.10.0] - 2026-08-28
+
+> Major release: Warren upgrades to a new incompatible Ghostline runtime semantics. Existing sessions are migrated automatically via the verified handoff path. This is a super-major compatibility break from 0.9.x; downgrading without recreating sessions is not supported. This release targets arm64 Apple Silicon Macs running macOS 13 or later; a local Apple Development build may fail Gatekeeper until it is replaced by a notarized Developer ID build. Bundled gnar remains v1.7.2.
+
+### Added
+
+- Add upgraded Ghostline semantic handling for the new runtime contract.
+
+### Changed
+
+- Upgrade Ghostline to the new incompatible semantics with automatic session handoff; legacy v1 sessions are transferred without loss when the handoff is verified.
+- Refresh terminal and session coordination to align with the new Ghostline contract.
+
+### Fixed
+
+- Harden Ghostline rolling upgrades and recovery around the new semantic boundary.
+
 ## [0.9.1] - 2026-08-25
 
 > Patch release: Warren refreshes the Ghostline v1.0.0 dependency to commit

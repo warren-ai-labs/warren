@@ -118,6 +118,31 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.10.0",
+        dateISO: "2026-08-28",
+        date: "August 28, 2026",
+        title: "Warren upgrades Ghostline semantics.",
+        summary:
+          "A super-major release that upgrades to incompatible Ghostline runtime semantics with automatic session handoff. Downgrading without recreating sessions is not supported. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+        sections: [
+          {
+            title: "Added",
+            items: ["Add upgraded Ghostline semantic handling for the new runtime contract."],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Upgrade Ghostline to the new incompatible semantics with automatic session handoff; legacy v1 sessions are transferred without loss when the handoff is verified.",
+              "Refresh terminal and session coordination to align with the new Ghostline contract.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: ["Harden Ghostline rolling upgrades and recovery around the new semantic boundary."],
+          },
+        ],
+      },
+      {
         version: "0.9.1",
         dateISO: "2026-08-25",
         date: "August 25, 2026",
@@ -738,6 +763,31 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.10.0",
+        dateISO: "2026-08-28",
+        date: "2026 年 8 月 28 日",
+        title: "Warren 升级 Ghostline 语义。",
+        summary:
+          "超级重大版本：升级到不兼容的 Ghostline 运行时语义，自动迁移已有会话；不支持不重建会话的回退。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+        sections: [
+          {
+            title: "新增",
+            items: ["新增对新运行时契约的 Ghostline 语义支持。"],
+          },
+          {
+            title: "调整",
+            items: [
+              "升级到不兼容的新 Ghostline 语义，已验证 handoff 会自动迁移旧会话。",
+              "刷新终端与会话协同以对齐新的 Ghostline 契约。",
+            ],
+          },
+          {
+            title: "修复",
+            items: ["加固新语义边界附近的 Ghostline 滚动升级与恢复。"],
+          },
+        ],
+      },
       {
         version: "0.9.1",
         dateISO: "2026-08-25",
