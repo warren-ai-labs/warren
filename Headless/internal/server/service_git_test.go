@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,138 +207,51 @@ func TestGitDiffReturnsWorkingTreeDiff(t *testing.T) {
 	}
 }
 
-func TestGitPanelDeduplicatesConcurrentColdLoads(t *testing.T) {
-	repository := newRepositoryForServiceTest(t)
-	service, workspaceID := gitPanelService(t, repository)
-
-	type result struct {
-		panel api.GitPanel
-		err   error
+func TestGitMutationLockSerializesWorkspace(t *testing.T) {
+	service := &Service{}
+	unlock := service.lockGitMutation("workspace")
+	var entered atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		secondUnlock := service.lockGitMutation("workspace")
+		entered.Store(true)
+		secondUnlock()
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if entered.Load() {
+		t.Fatal("second mutation entered before the first released the workspace")
 	}
-	start := make(chan struct{})
-	results := make(chan result, 2)
-	for i := 0; i < 2; i++ {
-		go func() {
-			<-start
-			panel, err := service.GitPanel(context.Background(), workspaceID, false, false)
-			results <- result{panel: panel, err: err}
-		}()
-	}
-	close(start)
-
-	panels := make([]api.GitPanel, 0, 2)
-	for i := 0; i < 2; i++ {
-		select {
-		case got := <-results:
-			if got.err != nil {
-				t.Fatal(got.err)
-			}
-			panels = append(panels, got.panel)
-		case <-time.After(10 * time.Second):
-			t.Fatal("timed out waiting for a git panel call")
-		}
-	}
-	if panels[0].Branch != panels[1].Branch {
-		t.Fatalf("concurrent cold loads returned different panels: %q vs %q", panels[0].Branch, panels[1].Branch)
-	}
-	if loads := service.panelLoads.Load(); loads != 1 {
-		t.Fatalf("git panel loads = %d, want 1", loads)
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("second mutation did not resume after unlock")
 	}
 }
 
-func TestGitPanelColdLoadFollowerCancellationReturnsBeforeElectedLoad(t *testing.T) {
+func TestGitPanelFetchWaitsForWorkspaceMutation(t *testing.T) {
 	repository := newRepositoryForServiceTest(t)
 	service, workspaceID := gitPanelService(t, repository)
-	admit := &queueingAdmit{}
-	service.gitCoordinator = newWorkspaceGitCoordinator(admit.submit, gitCoordinatorPendingLimit, gitCoordinatorWorkspacePendingLimit, 4)
-
-	headDone := make(chan error, 1)
+	unlock := service.lockGitMutation(workspaceID)
+	done := make(chan error, 1)
 	go func() {
-		_, err := service.GitPanel(context.Background(), workspaceID, false, false)
-		headDone <- err
+		_, err := service.GitPanel(context.Background(), workspaceID, true, true)
+		done <- err
 	}()
-	headJob := admit.waitForJob(t)
-
-	followerCtx, followerCancel := context.WithCancel(context.Background())
-	followerDone := make(chan error, 1)
-	go func() {
-		_, err := service.GitPanel(followerCtx, workspaceID, false, false)
-		followerDone <- err
-	}()
-	waitForCoordinatorQueued(t, service.gitCoordinator, workspaceID, 1)
-	followerCancel()
 	select {
-	case err := <-followerDone:
-		if err == nil {
-			t.Fatal("cancelled cold-load follower returned success")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("cancelled cold-load follower did not return before the elected load")
+	case err := <-done:
+		t.Fatalf("git panel fetch completed during a workspace mutation: %v", err)
+	case <-time.After(20 * time.Millisecond):
 	}
-
-	admit.start(headJob)
+	unlock()
 	select {
-	case err := <-headDone:
+	case err := <-done:
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("elected cold load did not complete")
-	}
-	if loads := service.panelLoads.Load(); loads != 1 {
-		t.Fatalf("git panel loads = %d, want 1", loads)
-	}
-}
-
-func TestGitPanelSWRRejectedAdmissionResetsRevalidating(t *testing.T) {
-	repository := newRepositoryForServiceTest(t)
-	service, workspaceID := gitPanelService(t, repository)
-	ctx := context.Background()
-	if _, err := service.GitPanel(ctx, workspaceID, false, false); err != nil {
-		t.Fatal(err)
-	}
-	cache := service.panelCacheFor()
-	cache.mu.Lock()
-	element := cache.index[workspaceID]
-	element.Value.(*panelCacheEntry).loadedAt = time.Now().Add(-panelRevalidateAfter - time.Minute)
-	cache.mu.Unlock()
-
-	service.revalidateLane = newStaleRevalidateLane(nil, 0, 0)
-	panel, err := service.GitPanel(ctx, workspaceID, false, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if panel.Refreshing {
-		t.Fatal("expected rejected revalidation submission to keep Refreshing=false")
-	}
-	if !cache.ShouldRevalidate(workspaceID, 0) {
-		t.Fatal("expected rejected revalidation submission to reset the revalidating marker")
-	}
-}
-
-func TestGitPanelSWRRevalidationFinishesExactlyOnce(t *testing.T) {
-	repository := newRepositoryForServiceTest(t)
-	service, workspaceID := gitPanelService(t, repository)
-	ctx := context.Background()
-	if _, err := service.GitPanel(ctx, workspaceID, false, false); err != nil {
-		t.Fatal(err)
-	}
-	cache := service.panelCacheFor()
-	cache.mu.Lock()
-	element := cache.index[workspaceID]
-	element.Value.(*panelCacheEntry).loadedAt = time.Now().Add(-panelRevalidateAfter - time.Minute)
-	cache.mu.Unlock()
-
-	if !cache.ShouldRevalidate(workspaceID, panelRevalidateAfter) {
-		t.Fatal("expected stale entry to start revalidating")
-	}
-	workspace, err := findWorkspace(service.Store.Snapshot(), workspaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service.revalidatePanel(workspaceID, workspace.Path)
-	if !cache.ShouldRevalidate(workspaceID, 0) {
-		t.Fatal("expected revalidation to finish and clear the revalidating marker exactly once")
+	case <-time.After(5 * time.Second):
+		t.Fatal("git panel fetch did not resume after the mutation")
 	}
 }
 

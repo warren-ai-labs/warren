@@ -1005,8 +1005,8 @@ func (s *HTTPServer) dispatchRequest(peer *wsPeer, ctx context.Context, command 
 		}
 		return
 	}
-	if !s.controlExecutor.submit(requestJob{ctx: ctx, run: run}) {
-		_ = peer.writeError(command.ID, fmt.Errorf("request queue is busy"))
+	if err := peer.handle(ctx, command); err != nil {
+		_ = peer.writeError(command.ID, err)
 	}
 }
 
@@ -1020,12 +1020,7 @@ func isSlowMutation(method string) bool {
 }
 
 func isBackgroundRequest(method string) bool {
-	switch method {
-	case "git.panel", "git.diff", "session.subscribe":
-		return true
-	default:
-		return false
-	}
+	return method == "git.panel" || method == "git.diff"
 }
 
 // registerPeer tracks an authenticated WebSocket client so server-initiated
