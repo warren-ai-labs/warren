@@ -3278,7 +3278,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		}
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
-		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude") {
+		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode") {
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
@@ -3287,16 +3287,51 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
-		info, statErr := os.Stat(binding.TranscriptPath)
-		if statErr != nil || info.IsDir() {
-			return nil, nil
+		if binding.Provider == "opencode" {
+			// Shell overlay for OpenCode uses the same SQLite binding as dedicated
+			// sessions. The plugin writes {provider:"opencode", sessionId} with
+			// an empty transcriptPath; Host resolves the cache via the database.
+			if s.AgentFinder == nil {
+				return nil, nil
+			}
+			finder, ok := s.AgentFinder.(agent.BindingFinder)
+			if !ok {
+				return nil, nil
+			}
+			var err error
+			opencodeBinding, err = finder.FindBindingBySessionID(ctx, session.ID, workspacePath, binding.SessionID)
+			if err != nil || opencodeBinding == nil || !opencodeBinding.Valid() {
+				// Fallback: derive cache path deterministically when DB lookup
+				// races with session creation. The tailer will recover on next poll.
+				opencodeBinding = &agent.OpenCodeBinding{
+					Provider:     "opencode",
+					SessionID:    binding.SessionID,
+					Backend:      "sqlite",
+					DatabasePath: agent.OpenCodeDatabasePath(agent.OpenCodeDataRoot("")),
+					CachePath:    agent.OpenCodeCachePath(session.ID, binding.SessionID),
+				}
+				if !opencodeBinding.Valid() {
+					return nil, nil
+				}
+			}
+			if s.openCodeBindingTakenByOtherInState(*state, opencodeBinding.SessionID, session.ID) {
+				return nil, nil
+			}
+			provider = binding.Provider
+			agentSessionID = opencodeBinding.SessionID
+			transcriptPath = opencodeBinding.CachePath
+		} else {
+			info, statErr := os.Stat(binding.TranscriptPath)
+			if statErr != nil || info.IsDir() {
+				return nil, nil
+			}
+			if s.transcriptTakenByOtherInState(*state, binding.TranscriptPath, session.ID) {
+				return nil, nil
+			}
+			provider = binding.Provider
+			agentSessionID = binding.SessionID
+			transcriptPath = binding.TranscriptPath
 		}
-		if s.transcriptTakenByOtherInState(*state, binding.TranscriptPath, session.ID) {
-			return nil, nil
-		}
-		provider = binding.Provider
-		agentSessionID = binding.SessionID
-		transcriptPath = binding.TranscriptPath
 	}
 
 	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated, opencodeBinding)
@@ -3440,7 +3475,7 @@ func (s *Service) clearShellAgent(session api.Session) {
 }
 
 func (s *Service) clearShellAgentWithState(session api.Session, state *api.State) {
-	if session.Kind == "codex" || session.Kind == "claude" {
+	if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
 		return
 	}
 	s.agentsMu.Lock()
@@ -3916,7 +3951,13 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 // applyAgentState reflects the managed hook's SessionEnd state on the status
 // light: the agent CLI is gone, but the Warren session is still a shell.
 func (s *Service) applyAgentState(session api.Session) {
-	if session.Kind != "codex" && session.Kind != "claude" {
+	kind := session.Kind
+	if kind == "shell" || kind == "custom" {
+		if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil && binding.Provider != "" {
+			kind = binding.Provider
+		}
+	}
+	if kind != "codex" && kind != "claude" && kind != "opencode" {
 		return
 	}
 	state, err := agent.ReadAgentStatus(agent.StatePath(session.ID))
@@ -3930,8 +3971,12 @@ func (s *Service) applyAgentState(session api.Session) {
 			s.recordAgentStatus(session.ID, state)
 		}
 	case api.AgentActivityReady:
-		if current.Activity == api.AgentActivityExited {
+		if current.Activity == api.AgentActivityExited || current.Activity == api.AgentActivityFailed {
 			s.forceAgentStatus(session.ID, state)
+		}
+	case api.AgentActivityFailed:
+		if current.Activity != state.Activity {
+			s.recordAgentStatus(session.ID, state)
 		}
 	}
 }
