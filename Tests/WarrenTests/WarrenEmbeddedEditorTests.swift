@@ -210,6 +210,16 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertFalse(webView.isHidden)
     }
 
+    @MainActor
+    func testEmbeddedEditorWebViewStorageIsolatedPerWorkspace() {
+        let first = WarrenEmbeddedEditorWebViewStorage.makeIsolatedDataStore()
+        let second = WarrenEmbeddedEditorWebViewStorage.makeIsolatedDataStore()
+
+        XCTAssertFalse(first.isPersistent)
+        XCTAssertFalse(second.isPersistent)
+        XCTAssertFalse(first === second)
+    }
+
     func testEmbeddedNavigationPolicyNeverOpensCustomSchemes() {
         XCTAssertEqual(
             WarrenEmbeddedEditorNavigationPolicy.decision(
