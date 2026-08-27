@@ -58,3 +58,31 @@ struct WarrenDesktopChromeDivider: View {
             .frame(height: WarrenSpacing.hairline)
     }
 }
+
+/// Chrome toggle for the desktop Git panel, mirroring the web client's
+/// top-bar Git button. The active state uses the same foreground rule as the
+/// Inspector button so the two side panels read as one family.
+struct WarrenDesktopGitButton: View {
+    let isVisible: Bool
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        Button(action: action) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 13, weight: .medium))
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
+        .frame(width: 32, height: 32)
+        .contentShape(.rect)
+        .focused($isFocused)
+        .foregroundStyle(isVisible ? tokens.foreground : tokens.mutedForeground)
+        .accessibilityLabel(isVisible ? "Hide Git panel" : "Show Git panel")
+        .accessibilityHint("Toggle the workspace Git panel")
+        .accessibilityAddTraits(isVisible ? [.isSelected] : [])
+        .help(isVisible ? "Hide Git panel" : "Show Git panel")
+    }
+}

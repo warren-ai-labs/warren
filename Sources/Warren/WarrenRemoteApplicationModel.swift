@@ -2673,6 +2673,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
     }
 
+    /// Async daemon transport for the desktop Git panel. The caller owns the
+    /// wire JSON shape; this method only forwards the request so the Git
+    /// domain types can live in the shell package.
+    func gitRequest(_ method: String, params: [String: String]) async throws -> Data {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        return try await wire.request(method, params: params)
+    }
+
     private func request(
         _ method: String,
         params: [String: String] = [:],
