@@ -28,11 +28,12 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
 
         XCTAssertEqual(configuration.serverURL.absoluteString, "http://127.0.0.1:54321/")
         XCTAssertEqual(configuration.serverArguments.suffix(2), [
-            "--disable-update-check",
-            "--ignore-last-opened",
+            "--idle-timeout-seconds",
+            "900",
         ])
         XCTAssertTrue(configuration.serverArguments.contains("127.0.0.1:54321"))
         XCTAssertTrue(configuration.serverArguments.contains("none"))
+        XCTAssertTrue(configuration.serverArguments.contains("--disable-workspace-trust"))
         XCTAssertFalse(configuration.serverArguments.contains("--install-extension"))
         XCTAssertFalse(configuration.serverArguments.contains("/work/warren feature"))
         XCTAssertEqual(
@@ -46,6 +47,27 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             "golang.go",
             "rust-lang.rust-analyzer",
         ])
+    }
+
+    func testServerConfigurationUsesAnIsolatedSessionSocket() {
+        let sessionSocket = URL(fileURLWithPath: "/data/sessions/editor.sock")
+        let configuration = WarrenEmbeddedEditorConfiguration(
+            executableURL: URL(fileURLWithPath: "/opt/homebrew/bin/code-server"),
+            userDataDirectory: URL(fileURLWithPath: "/data/user"),
+            extensionsDirectory: URL(fileURLWithPath: "/data/extensions"),
+            port: 54_321,
+            sessionSocket: sessionSocket
+        )
+
+        let arguments = configuration.serverArguments
+        guard let index = arguments.firstIndex(of: "--session-socket") else {
+            return XCTFail("Expected an isolated session socket argument")
+        }
+        XCTAssertEqual(arguments[index + 1], sessionSocket.path)
+        XCTAssertEqual(
+            arguments[arguments.firstIndex(of: "--idle-timeout-seconds")! + 1],
+            String(WarrenEmbeddedEditorConfiguration.idleTimeoutSeconds)
+        )
     }
 
     func testManagedProfileMovesFileTreeRightAndPreservesUnownedSettings() {
