@@ -5,8 +5,6 @@ import WarrenObservation
 
 private enum WarrenGitPanelStyle {
     static let headerHeight: CGFloat = 36
-    static let checkoutHeightRatio: CGFloat = 0.25
-    static let pullRequestHeightRatio: CGFloat = 0.40
     static let changesHeightRatio: CGFloat = 0.38
     static let changesMaximumHeight: CGFloat = 320
     static let paneHeaderFont = Font.system(size: 12, weight: .semibold)
@@ -138,10 +136,8 @@ public struct WarrenDesktopGitPanelView: View {
                             onToggle: { model.togglePane(.checkout) }
                         )
                         if model.openPanes.contains(.checkout) {
-                            ScrollView {
-                                WarrenGitCheckoutPane(model: model)
-                            }
-                            .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.checkoutHeightRatio)
+                            WarrenGitCheckoutPane(model: model)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         if model.panel?.remote != nil {
                             WarrenGitPaneHeader(
@@ -151,10 +147,8 @@ public struct WarrenDesktopGitPanelView: View {
                                 onToggle: { model.togglePane(.pr) }
                             )
                             if model.openPanes.contains(.pr) {
-                                ScrollView {
-                                    WarrenGitPullRequestPane(model: model)
-                                }
-                                .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.pullRequestHeightRatio)
+                                WarrenGitPullRequestPane(model: model)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                         WarrenGitPaneHeader(
