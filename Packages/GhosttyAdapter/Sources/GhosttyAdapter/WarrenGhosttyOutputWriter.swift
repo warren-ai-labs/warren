@@ -116,8 +116,11 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         // Large live TUI bursts and legacy recovery frames must drain without
         // delaying input echoes. Native cold recovery bypasses this VT parser
         // entirely through restoreSnapshot(_:epoch:sequence:).
+        // Warm promotion must drain a hidden backlog within 50ms, so keep the
+        // budget large and the yield minimal; visible fast-forward is avoided
+        // by the presentation gate, not by throttling the writer.
         budgetBytes: Int = 8 * 1024 * 1024,
-        yield: Duration = .milliseconds(1)
+        yield: Duration = .microseconds(200)
     ) {
         precondition(budgetBytes > 0)
         self.inMemory = inMemory
@@ -314,10 +317,15 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             if !hasMore, exitIfDrained() {
                 return
             }
-            do {
-                try await Task.sleep(for: yield)
-            } catch {
-                return
+            // Yield only when there is more work; the 200µs quantum keeps a
+            // 14MB hidden backlog drain within ~4ms instead of seconds, while
+            // still yielding to the main thread for input and scroll.
+            if hasMore {
+                do {
+                    try await Task.sleep(for: yield)
+                } catch {
+                    return
+                }
             }
         }
     }
