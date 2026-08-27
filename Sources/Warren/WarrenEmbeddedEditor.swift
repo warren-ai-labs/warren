@@ -16,6 +16,25 @@ struct WarrenEmbeddedEditorConfiguration: Equatable, Sendable {
     let userDataDirectory: URL
     let extensionsDirectory: URL
     let port: UInt16
+    let sessionSocket: URL?
+
+    // A stopped or detached editor must eventually release its server while
+    // still leaving enough time for the prewarmed pane to be opened.
+    static let idleTimeoutSeconds = 900
+
+    init(
+        executableURL: URL,
+        userDataDirectory: URL,
+        extensionsDirectory: URL,
+        port: UInt16,
+        sessionSocket: URL? = nil
+    ) {
+        self.executableURL = executableURL
+        self.userDataDirectory = userDataDirectory
+        self.extensionsDirectory = extensionsDirectory
+        self.port = port
+        self.sessionSocket = sessionSocket
+    }
 
     var serverURL: URL {
         URL(string: "http://127.0.0.1:\(port)/")!
@@ -29,13 +48,20 @@ struct WarrenEmbeddedEditorConfiguration: Equatable, Sendable {
     }
 
     var serverArguments: [String] {
-        sharedArguments + [
+        var arguments = sharedArguments
+        if let sessionSocket {
+            arguments += ["--session-socket", sessionSocket.path]
+        }
+        arguments += [
             "--bind-addr", "127.0.0.1:\(port)",
             "--auth", "none",
             "--disable-telemetry",
             "--disable-update-check",
+            "--disable-workspace-trust",
             "--ignore-last-opened",
+            "--idle-timeout-seconds", String(Self.idleTimeoutSeconds),
         ]
+        return arguments
     }
 
     func workspaceURL(path: String) -> URL {
@@ -1439,9 +1465,15 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     @Published private(set) var activeWorkspacePath: String?
     @Published private(set) var phase: Phase = .idle
 
+    // Keep the current and most recently used workspace warm without letting
+    // workspace switching grow WebKit memory usage without a bound.
+    private static let maximumCachedWebViews = 2
     private var webViews: [String: WKWebView] = [:]
+    private var webViewOrder: [String] = []
     private var requestedWorkspacePaths: Set<String> = []
     private var process: Process?
+    private var processGroupID: pid_t?
+    private var sessionSocketURL: URL?
     private var launchTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var extensionTask: Task<Void, Never>?
@@ -1468,11 +1500,18 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         if let mouseEventMonitor {
             NSEvent.removeMonitor(mouseEventMonitor)
         }
+        launchTask?.cancel()
+        monitorTask?.cancel()
+        extensionTask?.cancel()
+        if let process {
+            Self.terminate(process: process, groupID: processGroupID)
+        }
+        Self.removeSessionSocket(at: sessionSocketURL)
     }
 
     func activate(workspacePath: String, force: Bool = false) {
         activeWorkspacePath = workspacePath
-        requestedWorkspacePaths.insert(workspacePath)
+        requestedWorkspacePaths = [workspacePath]
 
         if !force {
             switch phase {
@@ -1498,16 +1537,23 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
     }
 
-    /// Starts the shared local editor server without attaching a workspace
-    /// web view. Calling it when a workspace is selected hides the cold
-    /// start from the first time the editor pane is opened; opening the pane
-    /// afterwards only loads a page against an already running server.
-    func prewarm() {
+    /// Starts the shared local editor server and optionally loads a concealed
+    /// workspace web view before the editor pane is opened.
+    func prewarm(workspacePath: String? = nil) {
+        if let workspacePath {
+            activeWorkspacePath = workspacePath
+            requestedWorkspacePaths = [workspacePath]
+        }
         guard executableResolver(environment) != nil else { return }
         switch phase {
         case .idle, .unavailable, .failed:
             break
-        case .preparing, .starting, .ready:
+        case .preparing, .starting:
+            return
+        case .ready(let serverURL):
+            if let workspacePath {
+                ensureWebView(workspacePath: workspacePath, serverURL: serverURL)
+            }
             return
         }
         let prewarmGeneration = UUID()
@@ -1535,10 +1581,16 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         extensionTask?.cancel()
         extensionTask = nil
         clearWebViews()
-        if let process, process.isRunning {
-            process.terminate()
-        }
+        let processToStop = process
+        let processGroupToStop = processGroupID
+        let sessionSocketToRemove = sessionSocketURL
         process = nil
+        processGroupID = nil
+        sessionSocketURL = nil
+        if let processToStop {
+            Self.terminate(process: processToStop, groupID: processGroupToStop)
+        }
+        Self.removeSessionSocket(at: sessionSocketToRemove)
         activeWorkspacePath = nil
         requestedWorkspacePaths = []
         if resetPhase {
@@ -1553,6 +1605,9 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             return
         }
 
+        var launchedProcess: Process?
+        var launchedProcessGroupID: pid_t?
+        var launchedSessionSocketURL: URL?
         do {
             let port = try Self.reserveLoopbackPort()
             let configuration = WarrenEmbeddedEditorConfiguration(
@@ -1565,10 +1620,22 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                     "extensions",
                     isDirectory: true
                 ),
-                port: port
+                port: port,
+                sessionSocket: supportDirectory
+                    .appendingPathComponent("sessions", isDirectory: true)
+                    .appendingPathComponent("\(UUID().uuidString).sock")
             )
+            launchedSessionSocketURL = configuration.sessionSocket
+            sessionSocketURL = configuration.sessionSocket
             try await Self.prepare(configuration: configuration)
-            guard isCurrent(generation), !Task.isCancelled else { return }
+            guard isCurrent(generation), !Task.isCancelled else {
+                if isCurrent(generation) {
+                    let sessionSocketToRemove = sessionSocketURL
+                    sessionSocketURL = nil
+                    Self.removeSessionSocket(at: sessionSocketToRemove)
+                }
+                return
+            }
 
             phase = .starting
             let process = Process()
@@ -1580,25 +1647,49 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
+            launchedProcess = process
+            launchedProcessGroupID = Self.processGroupID(for: process.processIdentifier)
             self.process = process
+            self.processGroupID = launchedProcessGroupID
 
             try await waitUntilReady(
                 at: configuration.serverURL,
                 process: process,
                 generation: generation
             )
-            guard isCurrent(generation), !Task.isCancelled else { return }
+            guard isCurrent(generation), !Task.isCancelled else {
+                stopLaunchedProcessIfCurrent(
+                    launchedProcess,
+                    groupID: launchedProcessGroupID
+                )
+                clearSessionSocketIfCurrent(launchedSessionSocketURL)
+                return
+            }
             for path in requestedWorkspacePaths.sorted() {
                 ensureWebView(workspacePath: path, serverURL: configuration.serverURL)
             }
             phase = .ready(configuration.serverURL)
             installManagedExtensions(configuration: configuration)
-            monitor(process: process, generation: generation)
+            monitor(
+                process: process,
+                groupID: launchedProcessGroupID,
+                generation: generation
+            )
         } catch is CancellationError {
+            stopLaunchedProcessIfCurrent(
+                launchedProcess,
+                groupID: launchedProcessGroupID
+            )
+            clearSessionSocketIfCurrent(launchedSessionSocketURL)
             return
         } catch {
-            guard isCurrent(generation) else { return }
-            process = nil
+            let shouldReport = isCurrent(generation)
+            stopLaunchedProcessIfCurrent(
+                launchedProcess,
+                groupID: launchedProcessGroupID
+            )
+            clearSessionSocketIfCurrent(launchedSessionSocketURL)
+            guard shouldReport else { return }
             phase = .failed(error.localizedDescription)
         }
     }
@@ -1607,7 +1698,33 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         generation == requestGeneration
     }
 
-    private func monitor(process: Process, generation: UUID) {
+    private func stopLaunchedProcessIfCurrent(
+        _ launchedProcess: Process?,
+        groupID: pid_t?
+    ) {
+        guard let launchedProcess,
+              let currentProcess = process,
+              currentProcess === launchedProcess else { return }
+        process = nil
+        processGroupID = nil
+        let sessionSocketToRemove = sessionSocketURL
+        sessionSocketURL = nil
+        Self.terminate(process: launchedProcess, groupID: groupID)
+        Self.removeSessionSocket(at: sessionSocketToRemove)
+    }
+
+    private func clearSessionSocketIfCurrent(_ launchedSocket: URL?) {
+        guard let launchedSocket,
+              sessionSocketURL == launchedSocket else { return }
+        sessionSocketURL = nil
+        Self.removeSessionSocket(at: launchedSocket)
+    }
+
+    private func monitor(
+        process: Process,
+        groupID: pid_t?,
+        generation: UUID
+    ) {
         monitorTask?.cancel()
         monitorTask = Task { [weak self] in
             while !Task.isCancelled, process.isRunning {
@@ -1617,13 +1734,21 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                   let self,
                   self.isCurrent(generation) else { return }
             self.process = nil
+            self.processGroupID = nil
+            let sessionSocketToRemove = self.sessionSocketURL
+            self.sessionSocketURL = nil
+            Self.terminate(process: process, groupID: groupID)
+            Self.removeSessionSocket(at: sessionSocketToRemove)
             self.clearWebViews()
             self.phase = .failed("code-server stopped. Retry to reopen the editor.")
         }
     }
 
     private func ensureWebView(workspacePath: String, serverURL: URL) {
-        guard webViews[workspacePath] == nil else { return }
+        if webViews[workspacePath] != nil {
+            touchWebView(workspacePath)
+            return
+        }
         objectWillChange.send()
         webViews[workspacePath] = makeWebView(
             url: WarrenEmbeddedEditorConfiguration.workspaceURL(
@@ -1631,6 +1756,28 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                 path: workspacePath
             )
         )
+        touchWebView(workspacePath)
+        evictExcessWebViews()
+    }
+
+    private func touchWebView(_ workspacePath: String) {
+        webViewOrder.removeAll { $0 == workspacePath }
+        webViewOrder.append(workspacePath)
+    }
+
+    private func evictExcessWebViews() {
+        while webViews.count > Self.maximumCachedWebViews {
+            guard let workspacePath = webViewOrder.first(where: {
+                $0 != activeWorkspacePath && !requestedWorkspacePaths.contains($0)
+            }) ?? webViewOrder.first(where: { $0 != activeWorkspacePath }) else {
+                return
+            }
+            webViewOrder.removeAll { $0 == workspacePath }
+            guard let webView = webViews.removeValue(forKey: workspacePath) else {
+                continue
+            }
+            disposeWebView(webView)
+        }
     }
 
     private func makeWebView(url: URL) -> WKWebView {
@@ -1667,18 +1814,23 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
 
     private func clearWebViews() {
         for webView in webViews.values {
-            WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
-            webView.stopLoading()
-            webView.navigationDelegate = nil
-            webView.configuration.userContentController.removeScriptMessageHandler(
-                forName: WarrenEmbeddedEditorChrome.reloadMessageHandlerName
-            )
+            disposeWebView(webView)
         }
         webViews = [:]
+        webViewOrder = []
         if let mouseEventMonitor {
             NSEvent.removeMonitor(mouseEventMonitor)
             self.mouseEventMonitor = nil
         }
+    }
+
+    private func disposeWebView(_ webView: WKWebView) {
+        WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: WarrenEmbeddedEditorChrome.reloadMessageHandlerName
+        )
     }
 
     private func installMouseEventMonitorIfNeeded() {
@@ -1692,14 +1844,18 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     }
 
     private func handleMouseBoundary(_ event: NSEvent) {
-        let hitWebView = embeddedEditor(at: event)
+        let interactiveWebViews = webViews.values.filter {
+            $0.window != nil && !$0.isHidden
+        }
+        guard !interactiveWebViews.isEmpty else { return }
+        let hitWebView = embeddedEditor(at: event, in: interactiveWebViews)
         switch WarrenEmbeddedEditorPointerBoundary.action(for: event.type) {
         case .cancelInactiveEditors:
-            for webView in webViews.values where webView !== hitWebView {
+            for webView in interactiveWebViews where webView !== hitWebView {
                 WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
             }
         case .cancelAllAfterDispatch:
-            let affectedWebViews = hitWebView.map { [$0] } ?? Array(webViews.values)
+            let affectedWebViews = hitWebView.map { [$0] } ?? interactiveWebViews
             DispatchQueue.main.async {
                 for webView in affectedWebViews {
                     WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
@@ -1710,11 +1866,14 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
     }
 
-    private func embeddedEditor(at event: NSEvent) -> WKWebView? {
+    private func embeddedEditor(
+        at event: NSEvent,
+        in candidates: some Collection<WKWebView>
+    ) -> WKWebView? {
         guard let contentView = event.window?.contentView else { return nil }
         let point = contentView.convert(event.locationInWindow, from: nil)
         guard let hitView = contentView.hitTest(point) else { return nil }
-        return webViews.values.first { webView in
+        return candidates.first { webView in
             hitView === webView || hitView.isDescendant(of: webView)
         }
     }
@@ -1756,6 +1915,12 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                 at: configuration.extensionsDirectory,
                 withIntermediateDirectories: true
             )
+            if let sessionSocket = configuration.sessionSocket {
+                try fileManager.createDirectory(
+                    at: sessionSocket.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+            }
             try writeManagedSettings(configuration: configuration)
         }.value
     }
@@ -1843,6 +2008,87 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         } onCancel: {
             if process.isRunning {
                 process.terminate()
+            }
+        }
+    }
+
+    nonisolated private static func removeSessionSocket(at url: URL?) {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    nonisolated private static func processGroupID(for processID: pid_t) -> pid_t? {
+        guard processID > 0 else { return nil }
+        // Foundation currently launches Process instances in their own group
+        // on macOS. Keep the explicit setpgid fallback for launchers that do
+        // not, then verify the result before ever signalling the group.
+        if Darwin.getpgid(processID) == processID {
+            return processID
+        }
+        guard Darwin.setpgid(processID, processID) == 0 else { return nil }
+        return Darwin.getpgid(processID) == processID ? processID : nil
+    }
+
+    nonisolated private static func canSignalProcessGroup(
+        _ groupID: pid_t,
+        processID: pid_t?,
+        processIsRunning: Bool
+    ) -> Bool {
+        guard groupID > 1, groupID != Darwin.getpgrp() else { return false }
+        if processIsRunning,
+           let processID,
+           Darwin.getpgid(processID) != groupID {
+            return false
+        }
+        let result = Darwin.kill(-groupID, 0)
+        return result == 0 || errno == EPERM
+    }
+
+    nonisolated private static func terminate(
+        process: Process,
+        groupID: pid_t?
+    ) {
+        let processID = process.processIdentifier
+        let processIsRunning = process.isRunning
+        if let groupID,
+           canSignalProcessGroup(
+               groupID,
+               processID: processID,
+               processIsRunning: processIsRunning
+           ) {
+            _ = Darwin.kill(-groupID, SIGTERM)
+            scheduleForcedTermination(
+                process: process,
+                processID: processID,
+                groupID: groupID
+            )
+        } else if processIsRunning {
+            process.terminate()
+            scheduleForcedTermination(
+                process: process,
+                processID: processID,
+                groupID: nil
+            )
+        }
+    }
+
+    nonisolated private static func scheduleForcedTermination(
+        process: Process,
+        processID: pid_t,
+        groupID: pid_t?
+    ) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            if let groupID,
+               canSignalProcessGroup(
+                   groupID,
+                   processID: processID,
+                   processIsRunning: process.isRunning
+               ) {
+                _ = Darwin.kill(-groupID, SIGKILL)
+            } else if process.isRunning {
+                _ = Darwin.kill(processID, SIGKILL)
             }
         }
     }

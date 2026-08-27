@@ -256,9 +256,10 @@ struct WarrenCompositionRoot: View {
         }
         .task(id: selectedWorkspacePath) {
             // Warm the shared local editor server as soon as a workspace is
-            // selected so opening the editor pane skips the cold start.
-            guard selectedWorkspacePath != nil else { return }
-            embeddedEditorModel.prewarm()
+            // selected so opening the editor pane skips both the server and
+            // workbench cold starts.
+            guard let selectedWorkspacePath else { return }
+            embeddedEditorModel.prewarm(workspacePath: selectedWorkspacePath)
         }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()

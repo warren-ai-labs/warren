@@ -101,12 +101,14 @@ to its existing Terminal workflow. Install `code-server` before selecting the
 brew install code-server
 ```
 
-Warren starts the editor lazily on a random loopback-only port and stops it
-when the Editor surface closes. It uses an isolated profile under
-`~/Library/Application Support/Warren/EmbeddedEditor`. After the editor is
-ready, Warren installs `golang.go` and `rust-lang.rust-analyzer` in a background
-utility task; extension downloads never block the editor from opening. Existing
-VS Code and Cursor profiles are not read or modified.
+Warren prewarms code-server and a concealed workspace WebView after a workspace
+is selected, then reuses it when the Editor surface opens. The server listens
+on a random loopback-only port, uses an isolated profile under
+`~/Library/Application Support/Warren/EmbeddedEditor`, and is stopped as a
+process group when the local endpoint or app window goes away. After the editor
+is ready, Warren installs `golang.go` and `rust-lang.rust-analyzer` in a
+background utility task; extension downloads never block the editor from
+opening. Existing VS Code and Cursor profiles are not read or modified.
 
 The managed profile uses Warren's Ember colors and a compact editor layout:
 the File Explorer lives on the right, while the Activity Bar, title controls,
