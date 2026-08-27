@@ -9,7 +9,7 @@ private final class StubGitClient: WarrenDesktopGitClient {
     var commandMessage = "ok"
     var error: Error?
 
-    var panelCalls = 0
+    var panelCalls: [(workspaceID: String, fetch: Bool, force: Bool)] = []
     var pullCalls = 0
     var pushCalls = 0
     var checkoutCalls: [(branch: String, create: Bool)] = []
@@ -35,7 +35,7 @@ private final class StubGitClient: WarrenDesktopGitClient {
     }
 
     func panel(workspaceID: String, fetch: Bool, force: Bool) async throws -> WarrenDesktopGitPanel {
-        panelCalls += 1
+        panelCalls.append((workspaceID, fetch, force))
         try throwing()
         return panel
     }
@@ -155,7 +155,28 @@ final class WarrenDesktopGitPanelTests: XCTestCase {
         XCTAssertEqual(model.stagedChanges.count, 1)
         XCTAssertEqual(model.unstagedChanges.count, 1)
         XCTAssertEqual(model.changeCount, 2)
-        XCTAssertEqual(client.panelCalls, 1)
+        XCTAssertEqual(client.panelCalls.count, 1)
+        XCTAssertEqual(client.panelCalls.first?.workspaceID, workspaceID.description)
+        XCTAssertEqual(client.panelCalls.first?.fetch, true)
+        XCTAssertEqual(client.panelCalls.first?.force, false)
+        model.deactivate()
+    }
+
+    func testRefreshBypassesHostPanelCache() async throws {
+        let client = StubGitClient(panel: samplePanel())
+        let model = WarrenDesktopGitPanelModel(
+            client: client,
+            persistence: MemoryPersistence()
+        )
+
+        model.activate(workspaceID: WorkspaceID())
+        try await Task.sleep(for: .milliseconds(50))
+        model.refresh()
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(client.panelCalls.count, 2)
+        XCTAssertEqual(client.panelCalls.map(\.force), [false, true])
+        XCTAssertTrue(client.panelCalls.allSatisfy(\.fetch))
         model.deactivate()
     }
 

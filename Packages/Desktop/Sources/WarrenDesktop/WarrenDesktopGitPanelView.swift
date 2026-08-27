@@ -45,7 +45,7 @@ public struct WarrenDesktopGitPanelView: View {
             }
             content(tokens: tokens)
         }
-        .frame(width: WarrenLayoutMetrics.gitPanelDefaultWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(tokens.chromeSurface)
         .overlay(alignment: .leading) {
             Rectangle()
@@ -189,6 +189,11 @@ public struct WarrenDesktopGitPanelView: View {
                         }
                     }
                     .padding(.vertical, WarrenSpacing.small)
+                    .frame(
+                        width: proxy.size.width,
+                        height: proxy.size.height,
+                        alignment: .topLeading
+                    )
                 }
             }
         }
@@ -320,6 +325,7 @@ private struct WarrenGitBranchSection: View {
         }
         .padding(.horizontal, WarrenSpacing.compact)
         .padding(.vertical, WarrenSpacing.small)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func pushOrCommit() {
@@ -965,6 +971,7 @@ private struct WarrenGitPaneHeader: View {
             .background(hovered ? tokens.fillHover : .clear)
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: false, vertical: true)
         .onHover { hovered = $0 }
         .accessibilityLabel("\(title) panel")
         .accessibilityValue(isOpen ? "Expanded" : "Collapsed")

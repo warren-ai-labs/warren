@@ -102,15 +102,15 @@ public final class WarrenDesktopGitPanelModel: ObservableObject {
     // MARK: - Lifecycle
 
     /// Binds the model to a workspace, restores its saved UI, loads the panel
-    /// immediately, and starts the background poll. Calling again with the
-    /// same workspace is a no-op.
+    /// through the Host cache, and starts the background poll. Calling again
+    /// with the same workspace is a no-op.
     public func activate(workspaceID: WorkspaceID) {
         guard self.workspaceID != workspaceID else { return }
         persistCurrentUI()
         self.workspaceID = workspaceID
         resetData()
         restoreUI(workspaceID: workspaceID)
-        load(force: true)
+        load(force: false)
         startPolling()
     }
 
