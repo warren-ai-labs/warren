@@ -221,6 +221,64 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         }
     }
 
+    func testWarmPromotionDoesNotWaitForAContinuouslyGrowingQueue() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface(
+            outputRenderBudgetBytes: 128,
+            outputRenderYield: .milliseconds(4)
+        )
+        let second = makeSurface()
+        manager.insert(first)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            first.state.surface != nil
+                && first.terminalViewIsPresentable
+                && manager.isDisplayVisible(first.id)
+        }
+
+        // Seed a backlog before promotion, then keep appending while the
+        // presentation task is waiting. A moving endpoint must not turn the
+        // tab switch into an unbounded wait.
+        let writer = first.outputWriter
+        writer.enqueueRaw(Data(repeating: 0x78, count: 20_000))
+        try await waitUntil { writer.enqueuedSequence > writer.renderedSequence }
+
+        manager.insert(second)
+        submit(second.id, to: manager, host: host)
+        try await waitUntil { manager.snapshot().activeSessionID == second.id }
+
+        let producer = Task.detached {
+            for _ in 0..<200 {
+                writer.enqueueRaw(Data(repeating: 0x79, count: 128))
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        defer { producer.cancel() }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil(timeout: 5) {
+            manager.snapshot().activeSessionID == first.id
+                && manager.isDisplayVisible(first.id)
+        }
+    }
+
     func testAttachUsesMeasuredHostGeometryWhenIntentIsStale() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 1)
