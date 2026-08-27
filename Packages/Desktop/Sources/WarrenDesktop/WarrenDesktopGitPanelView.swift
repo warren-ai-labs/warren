@@ -5,6 +5,7 @@ import WarrenObservation
 
 private enum WarrenGitPanelStyle {
     static let headerHeight: CGFloat = 36
+    static let pullRequestHeightRatio: CGFloat = 0.40
     static let changesHeightRatio: CGFloat = 0.38
     static let changesMaximumHeight: CGFloat = 320
     static let paneHeaderFont = Font.system(size: 12, weight: .semibold)
@@ -147,8 +148,10 @@ public struct WarrenDesktopGitPanelView: View {
                                 onToggle: { model.togglePane(.pr) }
                             )
                             if model.openPanes.contains(.pr) {
-                                WarrenGitPullRequestPane(model: model)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                ScrollView {
+                                    WarrenGitPullRequestPane(model: model)
+                                }
+                                .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.pullRequestHeightRatio)
                             }
                         }
                         WarrenGitPaneHeader(
