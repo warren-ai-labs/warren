@@ -90,19 +90,28 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let resolvedCornerRadius = cornerRadius ?? WarrenPresentationMetrics.cornerRadius(for: role)
         let elevation = WarrenPresentationMetrics.elevation(for: role)
+        let isElevatedModal = role == .modal || role == .sheet || role == .commandSurface
         content
             .background(tokens.popoverSurface)
             .clipShape(.rect(cornerRadius: resolvedCornerRadius))
             .overlay {
                 if showsBorder {
                     RoundedRectangle(cornerRadius: resolvedCornerRadius)
-                        .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+                        .stroke(
+                            isElevatedModal ? tokens.border.opacity(0.9) : tokens.border,
+                            lineWidth: WarrenSpacing.hairline
+                        )
                 }
             }
             .shadow(
                 color: .black.opacity(elevation.opacity),
                 radius: elevation.radius,
                 y: elevation.y
+            )
+            .shadow(
+                color: isElevatedModal ? .white.opacity(0.04) : .clear,
+                radius: isElevatedModal ? 1 : 0,
+                y: isElevatedModal ? 1 : 0
             )
     }
 }

@@ -234,15 +234,24 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                             }
                         }
                     Spacer(minLength: 0)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(fullDisplayTitle, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(tokens.mutedForeground.opacity(0.72))
+                            .frame(width: 20, height: 20)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy Full Title")
+                    .accessibilityLabel("Copy Full Title")
+                    .opacity(0.9)
                 }
                 .padding(.horizontal, WarrenSpacing.medium)
                 .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
-                .background(tokens.tertiaryWash)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(tokens.chromeDivider)
-                        .frame(height: WarrenSpacing.hairline)
-                }
+                .background(tokens.tertiaryWash.opacity(0.6))
             }
 
             ZStack {

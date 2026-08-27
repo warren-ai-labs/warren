@@ -25,12 +25,14 @@ public enum WarrenMotion {
         reduceMotion: Bool
     ) -> Animation? {
         guard !reduceMotion else { return nil }
-        let duration = switch role {
-        case .feedback: feedbackDuration
-        case .stateChange: stateChangeDuration
-        case .overlay: overlayDuration
+        switch role {
+        case .feedback:
+            return .easeOut(duration: feedbackDuration)
+        case .stateChange:
+            return .easeOut(duration: stateChangeDuration)
+        case .overlay:
+            return .spring(response: 0.28, dampingFraction: 0.82, blendDuration: 0)
         }
-        return .easeOut(duration: duration)
     }
 }
 
