@@ -184,6 +184,45 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertFalse(webView.isHidden)
     }
 
+    func testEmbeddedNavigationPolicyNeverOpensCustomSchemes() {
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "http://127.0.0.1:3000/vscode-webview")!
+            ),
+            .allow
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "https://127.0.0.1:3000/vscode-webview")!
+            ),
+            .allow
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "https://example.com")!
+            ),
+            .openExternally
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "vscode-webview://preview/index.html")!
+            ),
+            .cancel
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "vscode-resource://preview/file.md")!
+            ),
+            .cancel
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorNavigationPolicy.decision(
+                for: URL(string: "mailto:someone@example.com")!
+            ),
+            .cancel
+        )
+    }
+
     @MainActor
     func testPointerBridgeInstallsBeforeTheEditorDocumentLoads() {
         let configuration = WKWebViewConfiguration()
@@ -499,7 +538,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let scripts = configuration.userContentController.userScripts
         let script = scripts.first
         let source = script?.source ?? ""
-        XCTAssertEqual(scripts.count, 1)
+        XCTAssertEqual(scripts.count, 2)
         XCTAssertEqual(script?.injectionTime, .atDocumentStart)
         XCTAssertEqual(script?.isForMainFrameOnly, true)
         XCTAssertTrue(source.contains("status.scm.0"))
@@ -547,6 +586,13 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertFalse(source.contains("status.editor.encoding"))
         XCTAssertFalse(source.contains("status.editor.indentation"))
         XCTAssertFalse(source.contains("status.host"))
+
+        let previewScript = scripts.first { !$0.isForMainFrameOnly }
+        XCTAssertEqual(previewScript?.injectionTime, .atDocumentStart)
+        XCTAssertTrue(previewScript?.source.contains("/vs/workbench/contrib/webview/browser/pre/") == true)
+        XCTAssertTrue(previewScript?.source.contains("warren-markdown-preview-dark-style") == true)
+        XCTAssertTrue(previewScript?.source.contains("color-scheme: dark") == true)
+        XCTAssertTrue(previewScript?.source.contains("--vscode-editor-background") == true)
     }
 
     @MainActor
