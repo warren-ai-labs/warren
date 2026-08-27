@@ -29,6 +29,9 @@ func SanitizeEnvironment() {
 	if term := os.Getenv("TERM"); strings.TrimSpace(term) == "" || term == "dumb" {
 		_ = os.Setenv("TERM", DefaultTerm)
 	}
+	if strings.TrimSpace(os.Getenv("COLORTERM")) == "" {
+		_ = os.Setenv("COLORTERM", "truecolor")
+	}
 }
 
 func pagerDisabled(value string) bool {
