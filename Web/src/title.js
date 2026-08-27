@@ -1,4 +1,4 @@
-export const defaultTitleTemplate = "{command} — {directoryName}";
+export const defaultTitleTemplate = "{workspace} · {branch} · {directory}";
 
 export const titlePlaceholders = {
   session: "Session name",
