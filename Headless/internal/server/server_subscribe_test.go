@@ -809,3 +809,111 @@ func subscribeForSeed(t *testing.T, connection *websocket.Conn, sessionID string
 	}
 	return anchor
 }
+
+// readOutputFrameContaining drains protocol events until an output frame for
+// sessionID carries a payload containing substr.
+func readOutputFrameContaining(t *testing.T, trace *protocolTrace, sessionID, substr string) output.DecodedFrame {
+	t.Helper()
+	for {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			t.Fatalf("timed out waiting for output containing %q on %s: %v", substr, sessionID, err)
+		}
+		if event.kind == "output" && event.output.SessionID == sessionID &&
+			bytes.Contains(event.output.Payload, []byte(substr)) {
+			return event.output
+		}
+	}
+}
+
+// TestWarmSubscriptionKeepsLiveOutputAfterControlAttach mirrors the desktop
+// tab-promotion flow on a single peer: the client subscribes (the warm path),
+// then later promotes the same tab with a control-lease-only attach
+// (output:false), exactly as WarrenRemoteApplicationModel.promoteRetainedSession
+// does. The warm subscription must keep delivering live output so the promoted
+// surface stays current in the background instead of replaying a stale tail on
+// reveal. If this fails, the daemon is silently dropping a parked tab's output
+// and the fast-forward-on-switch bug lives here.
+func TestWarmSubscriptionKeepsLiveOutputAfterControlAttach(t *testing.T) {
+	const sessionID = "warm-after-attach"
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
+
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	// All protocol reads go through one goroutine: the trace. Never read the
+	// connection directly elsewhere, or concurrent websocket reads corrupt it.
+	trace := newProtocolTrace(t, connection)
+
+	subscribeID := traceRequestID("subscribe")
+	if err := connection.WriteJSON(api.Envelope{
+		Type: "request", ID: subscribeID, Method: "session.subscribe",
+		Params: map[string]any{"id": sessionID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.kind == "text" && event.text["t"] == "response" && event.text["id"] == subscribeID {
+			if ok, _ := event.text["ok"].(bool); !ok {
+				t.Fatalf("subscribe failed: %#v", event.text["error"])
+			}
+			break
+		}
+	}
+	if got := subscribedSessionCount(t, service, sessionID); got != 1 {
+		t.Fatalf("warm subscription count = %d, want 1", got)
+	}
+
+	attachID := traceRequestID("attach")
+	if err := connection.WriteJSON(api.Envelope{
+		Type: "request", ID: attachID, Method: "session.attach",
+		Params: map[string]any{"id": sessionID, "output": "false"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.kind == "text" && event.text["t"] == "response" && event.text["id"] == attachID {
+			if ok, _ := event.text["ok"].(bool); !ok {
+				t.Fatalf("control attach failed: %#v", event.text["error"])
+			}
+			break
+		}
+	}
+
+	// Background output produced while the tab is parked/warm.
+	writeMemoryOutput(t, runtime, sessionID, "BACKGROUND-ONE\r")
+	writeMemoryOutput(t, runtime, sessionID, "BACKGROUND-TWO\r")
+
+	deadline := time.Now().Add(3 * time.Second)
+	var gotOne, gotTwo bool
+	for time.Now().Before(deadline) {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			break
+		}
+		if event.kind == "output" && event.output.SessionID == sessionID {
+			if bytes.Contains(event.output.Payload, []byte("BACKGROUND-ONE")) {
+				gotOne = true
+			}
+			if bytes.Contains(event.output.Payload, []byte("BACKGROUND-TWO")) {
+				gotTwo = true
+			}
+		}
+		if gotOne && gotTwo {
+			break
+		}
+	}
+	if !gotOne || !gotTwo {
+		t.Fatalf("warm peer missed background output after control attach: gotOne=%v gotTwo=%v (subscribedCount=%d)",
+			gotOne, gotTwo, subscribedSessionCount(t, service, sessionID))
+	}
+}
