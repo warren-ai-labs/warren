@@ -114,6 +114,11 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let lifecycle: String
         let pinned: Bool?
         let agentStatus: AgentStatus?
+        let agentTurn: AgentTurn?
+    }
+    struct AgentTurn: Decodable, Sendable, Equatable {
+        let id: UInt64
+        let status: String
     }
     struct AgentStatus: Decodable, Sendable, Equatable {
         let activity: String
@@ -300,6 +305,50 @@ struct WarrenLatestValueSignal<Value: Sendable>: Sendable {
     mutating func reset() {
         latestValue = nil
         signalPending = false
+    }
+}
+
+/// A completed Agent turn detected from the remote roster.
+///
+/// The remote model publishes this transport-neutral event. Platform clients
+/// decide whether and how to present it (for example, with a sound).
+struct WarrenAgentCompletionEvent: Equatable, Sendable {
+    let sessionID: TerminalSessionID
+    let turnID: UInt64
+}
+
+/// Converts the latest Agent turn from each roster snapshot into exactly one
+/// notification per successful completion. A first snapshot and a transcript
+/// reset are baselines, never historical notifications.
+struct WarrenAgentCompletionTracker {
+    private var initialized = false
+    private var turns: [TerminalSessionID: RemoteRoster.AgentTurn] = [:]
+
+    mutating func observe(
+        _ nextTurns: [TerminalSessionID: RemoteRoster.AgentTurn]
+    ) -> [TerminalSessionID] {
+        guard initialized else {
+            initialized = true
+            turns = nextTurns
+            return []
+        }
+
+        var completed: [TerminalSessionID] = []
+        for (sessionID, turn) in nextTurns {
+            guard turn.status == "completed" else { continue }
+            guard let previous = turns[sessionID] else {
+                completed.append(sessionID)
+                continue
+            }
+            // Turn ids restart when a transcript projection is rebound. Do
+            // not ring for the new snapshot's old terminal state.
+            guard turn.id >= previous.id else { continue }
+            if turn.id > previous.id || previous.status != "completed" {
+                completed.append(sessionID)
+            }
+        }
+        turns = nextTurns
+        return completed
     }
 }
 
@@ -949,6 +998,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var connectionIssueTask: Task<Void, Never>?
     private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
     private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
+    private var agentCompletionTracker = WarrenAgentCompletionTracker()
+    private let agentCompletionSubject = PassthroughSubject<WarrenAgentCompletionEvent, Never>()
     private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
     private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
     /// Sessions with a live daemon-side output subscription feeding their
@@ -973,6 +1024,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
     let surfaceManager: TerminalSurfaceManager
     private(set) var projectionPublicationCount: UInt64 = 0
+
+    /// Events emitted after a roster confirms a newly completed Agent turn.
+    /// The publisher does not replay old events to a newly attached client.
+    var agentCompletionEvents: AnyPublisher<WarrenAgentCompletionEvent, Never> {
+        agentCompletionSubject.eraseToAnyPublisher()
+    }
 
     init(surfaceManager: TerminalSurfaceManager = TerminalSurfaceManager()) {
         self.surfaceManager = surfaceManager
@@ -1054,6 +1111,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         currentRoster = nil
         appliedLiveTabSessionIDs.removeAll()
         agentStatusBySessionID.removeAll()
+        agentCompletionTracker = WarrenAgentCompletionTracker()
         tabOrderByWorkspaceID.removeAll()
         tabOrderByTerminalGroupID.removeAll()
         dismissedActivityBySessionID.removeAll()
@@ -3324,6 +3382,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard (workspaceID == nil) != (terminalGroupID == nil) else { return nil }
             return (value, id, workspaceID, terminalGroupID)
         }
+        let agentTurns = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap {
+            value, sessionID, _, _ in
+            value.agentTurn.map { (sessionID, $0) }
+        })
+        let completedAgentSessions = agentCompletionTracker.observe(agentTurns)
         let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
             let candidateStatus = Self.resolvedAgentStatus(
                 rosterStatus: value.agentStatus,
@@ -3464,6 +3527,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         }
         fulfillPendingTerminalOpenRequest()
+        for sessionID in completedAgentSessions {
+            guard let turn = agentTurns[sessionID] else { continue }
+            agentCompletionSubject.send(WarrenAgentCompletionEvent(
+                sessionID: sessionID,
+                turnID: turn.id
+            ))
+        }
     }
 
     /// Entry point for every navigation that makes a session visible.

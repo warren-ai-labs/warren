@@ -115,8 +115,14 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
-		if candidate.ID == "session-agent" && (candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityWorking) {
+		if candidate.ID != "session-agent" {
+			continue
+		}
+		if candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityWorking {
 			t.Fatalf("roster status = %#v, want working", candidate.AgentStatus)
+		}
+		if candidate.AgentTurn == nil || *candidate.AgentTurn != liveTurn {
+			t.Fatalf("roster turn = %#v, want %#v", candidate.AgentTurn, liveTurn)
 		}
 	}
 	if history := service.agentHistory("session-agent"); len(history) != 2 || history[1].Turn != 1 {

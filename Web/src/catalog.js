@@ -20,6 +20,7 @@ export function rosterFromMessage(message = {}) {
           agentSessionId: session.agentSessionId || "",
           transcriptPath: session.transcriptPath || "",
           agentStatus: session.agentStatus || null,
+          agentTurn: session.agentTurn || null,
           pinned: session.pinned || false,
         })),
     };

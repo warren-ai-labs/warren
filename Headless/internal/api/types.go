@@ -133,8 +133,12 @@ type Session struct {
 	// agent session. It is overlaid on roster snapshots only and is never
 	// persisted with the session record.
 	AgentStatus *AgentStatus `json:"agentStatus,omitempty"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	EndedAt     *time.Time   `json:"endedAt,omitempty"`
+	// AgentTurn is the latest explicit lifecycle boundary for an agent. Like
+	// AgentStatus, it is overlaid on roster snapshots only so clients can
+	// distinguish a completed turn from an initially-ready agent.
+	AgentTurn *AgentTurn `json:"agentTurn,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
 	// OperationID is returned by mutating session APIs for audit and safe
 	// undo. It is intentionally not persisted in the session record.
 	OperationID string `json:"operationId,omitempty"`

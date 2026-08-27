@@ -61,6 +61,13 @@ import {
 } from "./terminal.js";
 import { mergeAgentEvents } from "./agent.js";
 import { AgentView } from "./agent.jsx";
+import {
+  AgentCompletionEventChannel,
+  AgentCompletionSound,
+  AgentTurnCompletionTracker,
+  loadAgentCompletionSoundEnabled,
+  saveAgentCompletionSoundEnabled,
+} from "./notifications.js";
 const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
 import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
@@ -179,6 +186,9 @@ export default function App() {
   const [hiddenPresets, setHiddenPresets] = useState(() => loadHiddenPresets());
   const [autoOpenShell, setAutoOpenShell] = useState(false);
   const [autoStartAI, setAutoStartAI] = useState(false);
+  const [agentCompletionSoundEnabled, setAgentCompletionSoundEnabled] = useState(() => (
+    loadAgentCompletionSoundEnabled()
+  ));
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
   const [emptyOverride, setEmptyOverride] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -246,6 +256,10 @@ export default function App() {
   const navigationBeforeSettingsRef = useRef(null);
   const autoFocusOnAttachRef = useRef(true);
   const projectDragRef = useRef(null);
+  const agentTurnCompletionTrackerRef = useRef(null);
+  const agentCompletionEventsRef = useRef(null);
+  const agentCompletionSoundRef = useRef(null);
+  const agentCompletionSoundEnabledRef = useRef(agentCompletionSoundEnabled);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const orderedPresets = useMemo(() => orderedSessionPresets(presetOrder), [presetOrder]);
   const visiblePresets = useMemo(
@@ -253,6 +267,16 @@ export default function App() {
     [hiddenPresets, orderedPresets],
   );
   useKeyboardInset(mainRef);
+  if (agentTurnCompletionTrackerRef.current === null) {
+    agentTurnCompletionTrackerRef.current = new AgentTurnCompletionTracker();
+  }
+  if (agentCompletionEventsRef.current === null) {
+    agentCompletionEventsRef.current = new AgentCompletionEventChannel();
+  }
+  if (agentCompletionSoundRef.current === null) {
+    agentCompletionSoundRef.current = new AgentCompletionSound();
+  }
+  agentCompletionSoundEnabledRef.current = agentCompletionSoundEnabled;
   useEffect(() => {
     const handleKeyDown = event => {
       handleUnixTextEditingKey(event);
@@ -261,6 +285,30 @@ export default function App() {
     // readline vocabulary, while the xterm helper textarea opts out.
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, []);
+
+  useEffect(() => {
+    const armSound = () => {
+      void agentCompletionSoundRef.current?.arm();
+    };
+    window.addEventListener("pointerdown", armSound, { passive: true });
+    window.addEventListener("keydown", armSound);
+    return () => {
+      window.removeEventListener("pointerdown", armSound);
+      window.removeEventListener("keydown", armSound);
+    };
+  }, []);
+
+  useEffect(() => {
+    const channel = agentCompletionEventsRef.current;
+    if (!channel) return undefined;
+    return channel.subscribe(event => {
+      if (!agentCompletionSoundEnabledRef.current) return;
+      const pageIsFocused = document.visibilityState === "visible" && document.hasFocus();
+      if (!pageIsFocused || appStateRef.current.activeSession !== event.sessionID) {
+        void agentCompletionSoundRef.current?.play();
+      }
+    });
   }, []);
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
@@ -1144,6 +1192,7 @@ export default function App() {
     loadRemoteSettings();
     const nextCatalog = buildCatalog(rosterFromMessage(message));
     const state = appStateRef.current;
+    const completedSessions = agentTurnCompletionTrackerRef.current.observe(nextCatalog.sessions.values());
     const previousWorkspaceID = state.activeWorkspace;
     const nextWorkspaceID = resolveRestoredWorkspace(nextCatalog, state.activeWorkspace, state.activeSession);
     const nextSessionID = nextWorkspaceID
@@ -1216,6 +1265,9 @@ export default function App() {
     else if (activeTabWasRemoved) {
       cancelSubscription();
       request("session.detach");
+    }
+    for (const sessionID of completedSessions) {
+      agentCompletionEventsRef.current.emit({ sessionID });
     }
   }, [attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
@@ -1594,6 +1646,9 @@ export default function App() {
     }
     cancelSubscription(false);
     rejectPendingRequests(pendingRequestsRef.current, "Connection lost; reconnect and retry.");
+    // A reconnect's first roster is a baseline. Do not ring for work that
+    // finished while this browser was disconnected.
+    agentTurnCompletionTrackerRef.current?.reset();
     gitNeedsReloadRef.current = true;
     if (fileViewRef.current) fileDiffNeedsReloadRef.current = true;
     creatingSessionWorkspaceIDsRef.current.clear();
@@ -2444,6 +2499,16 @@ export default function App() {
     }
   }, [applyRemoteSettings, autoStartAI, request]);
 
+  const updateAgentCompletionSound = useCallback(enabled => {
+    const next = Boolean(enabled);
+    setAgentCompletionSoundEnabled(next);
+    saveAgentCompletionSoundEnabled(next);
+  }, []);
+
+  const previewAgentCompletionSound = useCallback(() => {
+    void agentCompletionSoundRef.current?.play();
+  }, []);
+
   const appendPlaceholder = useCallback(placeholder => {
     setTitleTemplate(previous => `${previous}${previous && !previous.endsWith(" ") ? " " : ""}${placeholder}`);
   }, []);
@@ -2689,6 +2754,7 @@ export default function App() {
         hiddenPresets={hiddenPresets}
         autoOpenShell={autoOpenShell}
         autoStartAI={autoStartAI}
+        agentCompletionSoundEnabled={agentCompletionSoundEnabled}
         titlePreview={titlePreview}
         placeholders={Object.entries(titlePlaceholders)}
         onClose={closeSettings}
@@ -2699,6 +2765,8 @@ export default function App() {
         onPresetVisibilityChange={updatePresetVisibility}
         onAutoOpenShellChange={updateAutoOpenShell}
         onAutoStartAIChange={updateAutoStartAI}
+        onAgentCompletionSoundChange={updateAgentCompletionSound}
+        onPreviewAgentCompletionSound={previewAgentCompletionSound}
         onMovePreset={movePreset}
         onAppendPlaceholder={appendPlaceholder}
         onRestore={restoreDefaults}
