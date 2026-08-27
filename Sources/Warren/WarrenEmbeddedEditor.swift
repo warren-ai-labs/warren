@@ -1450,6 +1450,16 @@ private final class WarrenEmbeddedEditorWKWebView: WKWebView {
 }
 
 @MainActor
+enum WarrenEmbeddedEditorWebViewStorage {
+    /// Keep each cached workspace in its own browser storage namespace. The
+    /// default WebKit store is shared by every view for this origin, which
+    /// lets VS Code's local state and HTTP cache bleed across workspaces.
+    static func makeIsolatedDataStore() -> WKWebsiteDataStore {
+        .nonPersistent()
+    }
+}
+
+@MainActor
 final class WarrenEmbeddedEditorModel: ObservableObject {
     typealias ExecutableResolver = ([String: String]) -> URL?
 
@@ -1782,7 +1792,8 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
 
     private func makeWebView(url: URL) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore =
+            WarrenEmbeddedEditorWebViewStorage.makeIsolatedDataStore()
         WarrenEmbeddedEditorPointerBridge.install(in: configuration)
         WarrenEmbeddedEditorNativeSelectionBridge.install(in: configuration)
         WarrenEmbeddedEditorChrome.install(in: configuration)
