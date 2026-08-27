@@ -309,10 +309,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             if !endpointCapabilities.canOpenExternalIDE {
                 chromePopover = nil
             }
-            syncPanelContext()
         }
-        .onChange(of: navigation.selection) { _ in
-            syncPanelContext()
+        .onChange(of: currentPanelContext) { context in
+            panelHost.sync(context: context, registry: panelRegistry)
         }
         )
         return observed
@@ -1223,18 +1222,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func restorePanelTerminalFocus() {
         terminalFocusRequested = true
-    }
-
-    private func syncPanelContext() {
-        guard panelHost.isPanelOpen else { return }
-        let presentation = makePresentation()
-        let context = panelContext(presentation)
-        guard let panelID = panelHost.activePanelID else { return }
-        if panelRegistry.isAvailable(panelID: panelID, in: context) {
-            panelRegistry.contribution(panelID: panelID)?.activate(in: context)
-        } else {
-            panelRegistry.contribution(panelID: panelID)?.deactivate()
-        }
     }
 
     private func tabIndex(from rawValue: Any?) -> Int? {

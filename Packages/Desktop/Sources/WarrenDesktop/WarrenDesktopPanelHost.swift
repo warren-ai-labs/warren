@@ -71,6 +71,20 @@ public final class WarrenDesktopPanelHost: ObservableObject {
         isPanelOpen = false
     }
 
+    public func sync(
+        context: WarrenDesktopPanelContext,
+        registry: WarrenDesktopPanelRegistry
+    ) {
+        guard isPanelOpen,
+              let activePanelID,
+              let contribution = registry.contribution(panelID: activePanelID) else { return }
+        if contribution.isAvailable(in: context) {
+            contribution.activate(in: context)
+        } else {
+            contribution.deactivate()
+        }
+    }
+
     public func toggle(panelID: String) {
         if isPanelOpen, activePanelID == panelID {
             close()

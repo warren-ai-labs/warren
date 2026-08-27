@@ -13,11 +13,13 @@ final class WarrenDesktopPanelTests: XCTestCase {
     private func contribution(
         id: String,
         available: @escaping @MainActor (WarrenDesktopPanelContext) -> Bool = { _ in true },
+        onActivate: @escaping @MainActor (WarrenDesktopPanelContext) -> Void = { _ in },
         onGeneration: @escaping @MainActor (String, UInt64) -> Void = { _, _ in }
     ) -> WarrenDesktopPanelContribution {
         WarrenDesktopPanelContribution(
             descriptor: .init(id: id, title: id),
             availability: available,
+            activate: onActivate,
             connectionGenerationWillChange: onGeneration
         )
     }
@@ -44,6 +46,31 @@ final class WarrenDesktopPanelTests: XCTestCase {
         XCTAssertEqual(host.activePanelID, "git")
         XCTAssertFalse(registry.isAvailable(panelID: "git", in: context()))
         XCTAssertEqual(host.activePanelID, "git")
+    }
+
+    func testOpenPanelSyncUsesTheNewWorkspaceContext() {
+        let firstWorkspaceID = WorkspaceID()
+        let secondWorkspaceID = WorkspaceID()
+        var activatedWorkspaceIDs: [WorkspaceID?] = []
+        let registry = WarrenDesktopPanelRegistry()
+        registry.register(contribution(
+            id: "git",
+            available: { $0.workspaceID != nil },
+            onActivate: { activatedWorkspaceIDs.append($0.workspaceID) }
+        ))
+        let host = WarrenDesktopPanelHost(defaults: nil)
+
+        XCTAssertTrue(host.open(
+            panelID: "git",
+            context: context(workspaceID: firstWorkspaceID),
+            registry: registry
+        ))
+        host.sync(
+            context: context(workspaceID: secondWorkspaceID),
+            registry: registry
+        )
+
+        XCTAssertEqual(activatedWorkspaceIDs, [firstWorkspaceID, secondWorkspaceID])
     }
 
     func testConnectionGenerationBroadcastsToInactiveContributions() {
