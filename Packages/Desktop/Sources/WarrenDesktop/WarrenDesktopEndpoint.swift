@@ -79,8 +79,8 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
 }
 
 /// Presentation-only identity for execution endpoints. Colors are assigned by
-/// the current catalog order so the top bar and endpoint picker use the same
-/// accent for each endpoint.
+/// the current catalog order so the top-bar control uses a stable accent for
+/// each endpoint.
 enum WarrenDesktopEndpointAppearance {
     static func color(
         for endpointID: String,
