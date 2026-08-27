@@ -63,7 +63,10 @@ type HTTPServer struct {
 	// Manager has its own process-operation lock, but this server-level lock also
 	// keeps an enable/test/restart from observing half-written Edge/account
 	// settings while a legacy route is changing the enabled intent.
-	tunnelMu sync.Mutex
+	tunnelMu          sync.Mutex
+	controlExecutor   *serialExecutor
+	auxiliaryExecutor *auxiliaryExecutor
+	gitCoordinator    *workspaceGitCoordinator
 }
 
 type rosterMessage struct {
@@ -85,6 +88,14 @@ func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPSer
 			},
 		},
 	}
+	server.controlExecutor = newSerialExecutor(controlRequestQueueCapacity)
+	server.auxiliaryExecutor = newAuxiliaryExecutor(auxiliaryRequestWorkerLimit, auxiliaryRequestCapacity)
+	server.gitCoordinator = newWorkspaceGitCoordinator(
+		server.auxiliaryExecutor.submit,
+		gitCoordinatorPendingLimit,
+		gitCoordinatorWorkspacePendingLimit,
+		auxiliaryRequestWorkerLimit,
+	)
 	if service != nil {
 		service.ClientsActive = func() bool { return server.peerCount() > 0 }
 	}
@@ -970,20 +981,32 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			}(command)
 			continue
 		}
-		if isBackgroundRequest(command.Method) {
-			// Git inspection can invoke network-backed fetches and filesystem
-			// scans. Keep those reads off the WebSocket reader so terminal
-			// attach, resize, and input remain responsive on the same client.
-			go func(command api.Envelope) {
-				if err := peer.handle(request.Context(), command); err != nil {
-					_ = peer.writeError(command.ID, err)
-				}
-			}(command)
-			continue
-		}
-		if err := peer.handle(request.Context(), command); err != nil {
+		s.dispatchRequest(peer, request.Context(), command)
+	}
+}
+
+func (s *HTTPServer) dispatchRequest(peer *wsPeer, ctx context.Context, command api.Envelope) {
+	run := func(runCtx context.Context) {
+		if err := peer.handle(runCtx, command); err != nil {
 			_ = peer.writeError(command.ID, err)
 		}
+	}
+	if requestLaneFor(command.Method) == requestAuxiliary {
+		workspaceID := stringParam(command.Params, "workspace")
+		req := &gitCoordinatedRequest{
+			workspaceID:    workspaceID,
+			ctx:            ctx,
+			run:            run,
+			writeRejected:  func() { _ = peer.writeError(command.ID, errGitCoordinatorBusy) },
+			writeCancelled: func() { _ = peer.writeError(command.ID, errGitCoordinatorCancelled) },
+		}
+		if workspaceID == "" || !s.gitCoordinator.submit(req) {
+			_ = peer.writeError(command.ID, errGitCoordinatorBusy)
+		}
+		return
+	}
+	if !s.controlExecutor.submit(requestJob{ctx: ctx, run: run}) {
+		_ = peer.writeError(command.ID, fmt.Errorf("request queue is busy"))
 	}
 }
 
