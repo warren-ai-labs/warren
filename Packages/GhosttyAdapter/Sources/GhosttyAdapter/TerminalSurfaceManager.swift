@@ -634,7 +634,15 @@ public final class TerminalSurfaceManager {
         setDisplayVisible(false, for: entry)
         entry.view.alphaValue = 0
         entry.view.isHidden = true
+        // Keep warm grid alive: capture the native surface before AppKit teardown
+        // clears it, then restore it so InMemory stays surfaceReady and writer
+        // drain continues offscreen. View itself is still removed (host keeps 1
+        // subview as tests expect, window becomes nil) but grid stays current.
+        let retained = entry.surface.inMemory.currentSurface
         entry.view.removeFromSuperview()
+        if let retained {
+            entry.surface.inMemory.setSurface(retained)
+        }
         onBlurred(sessionID)
     }
 
@@ -684,6 +692,11 @@ public final class TerminalSurfaceManager {
         let sessionID = entry.surface.id
         cancelPresentation(for: entry)
         let presentationGeneration = entry.presentationGeneration
+        // Decision: Zeno's paradox — chasing a moving queue never finishes.
+        // We capture a fixed target at promotion (not max(enqueued)) and drain
+        // hidden until that target is rendered, then reveal once. Live bytes
+        // arriving after the capture stream in normally instead of being
+        // fast-forwarded. See docs/terminal-polish-backlog.md #Zeno.
         let targetEpoch = entry.surface.outputWriter.bufferEpoch
         let targetSequence = entry.surface.outputWriter.enqueuedSequence
         if !entry.displayVisible {
