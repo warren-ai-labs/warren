@@ -1465,9 +1465,9 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     @Published private(set) var activeWorkspacePath: String?
     @Published private(set) var phase: Phase = .idle
 
-    // Keep the current and most recently used workspace warm without letting
-    // workspace switching grow WebKit memory usage without a bound.
-    private static let maximumCachedWebViews = 2
+    // Keep the current and two most recently used workspaces warm without
+    // letting workspace switching grow WebKit memory usage without a bound.
+    private static let maximumCachedWebViews = 3
     private var webViews: [String: WKWebView] = [:]
     private var webViewOrder: [String] = []
     private var requestedWorkspacePaths: Set<String> = []
