@@ -43,7 +43,7 @@ public struct TerminalDisplayTitleContext: Hashable, Sendable {
 public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable {
     public static let compactDirectoryMaxLength = 32
 
-    public static let defaultValue = Self(rawValue: "{command} — {directoryName}")
+    public static let defaultValue = Self(rawValue: "{workspace} · {branch} · {directory}")
 
     public static let placeholders: [(token: String, description: String)] = [
         ("{session}", "Session name"),

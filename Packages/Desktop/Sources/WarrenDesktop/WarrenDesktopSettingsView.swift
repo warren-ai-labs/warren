@@ -20,7 +20,7 @@ private extension WarrenDesktopSettingsSection {
     var detail: String {
         switch self {
         case .terminalFont: "Applied to every terminal surface."
-        case .terminalTitle: "Build a title from live Session metadata."
+        case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
         case .presets: "Choose visible presets and customize every launch command."
         case .workspaces: "How projects import worktrees and enter sessions."
@@ -395,11 +395,15 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private func terminalTitleSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Terminal title", section: .terminalTitle, tokens: tokens) {
+        settingsSection("Pane auxiliary title", section: .terminalTitle, tokens: tokens) {
+            Text("Tab owns the primary title. This template drives the auxiliary bar below the preset row (workspace · branch · directory by default).")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
             settingsInputField(
-                "Title template",
+                "Auxiliary template",
                 text: $titleTemplate,
-                placeholder: "Title template"
+                placeholder: TerminalDisplayTitleTemplate.defaultValue.rawValue
             )
             Text(preview)
                 .font(WarrenTypography.settingsSupporting)
