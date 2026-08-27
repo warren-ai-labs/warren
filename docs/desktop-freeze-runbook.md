@@ -118,7 +118,7 @@ See `docs/lessons.md` #002. Ghostty fell back to spawning `/usr/bin/open`
 when the embedder did not consume the open-url action, producing millions of
 `os-open: open stderr=` lines and throttling the whole process.
 
-Fix: vendored `libghostty-swift`; `GhosttySurface` installs an
+Fix: Warren's maintained Ghostty embedding; `GhosttySurface` installs an
 `openURLHandler` and the C action callback returns `true` when a handler is
 present. Warren owns URL validation.
 

@@ -12,10 +12,9 @@ let package = Package(
         .library(name: "GhosttyAdapter", targets: ["GhosttyAdapter"]),
     ],
     dependencies: [
-        // Vendored because the embedder must answer the Ghostty open-url
-        // action synchronously (see docs/lessons.md #002); upstream
-        // libghostty-swift is still at storage.1.0.16 and has no fix.
-        .package(path: "../Vendor/libghostty-swift"),
+        // Warren owns this narrow Swift embedding layer and consumes the
+        // GhosttyKit artifact published from abcdlsj/ghostty.
+        .package(path: "../Vendor/GhosttyEmbedding"),
         .package(path: "../Domain"),
         .package(path: "../TerminalRenderer"),
     ],
@@ -23,8 +22,8 @@ let package = Package(
         .target(
             name: "GhosttyAdapter",
             dependencies: [
-                .product(name: "GhosttyTerminal", package: "libghostty-swift"),
-                .product(name: "GhosttyKit", package: "libghostty-swift"),
+                .product(name: "GhosttyTerminal", package: "ghosttyembedding"),
+                .product(name: "GhosttyKit", package: "ghosttyembedding"),
                 .product(name: "WarrenDomain", package: "Domain"),
                 .product(name: "WarrenTerminalRenderer", package: "TerminalRenderer"),
             ]
