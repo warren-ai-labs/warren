@@ -32,6 +32,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private let endpointOptions: [WarrenDesktopEndpointOption]
     private let selectedEndpointID: String
+    private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
 
     private let actions: WarrenDesktopActions
@@ -114,6 +115,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             .init(id: "local", label: "Local", isLocal: true),
         ],
         selectedEndpointID: String = "local",
+        endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onWebStart: @escaping () -> Void = {},
         onWebTest: ((String, String, String, String) -> Void)? = nil,
@@ -152,6 +154,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             endpointCount: endpointOptions.count
         )
         self.selectedEndpointID = selectedEndpointID
+        self.endpointCapabilities = endpointCapabilities
+            ?? endpointOptions.first(where: { $0.id == selectedEndpointID })?.capabilities
+            ?? (selectedEndpointID == "local" ? .local : .remote)
         self.onSelectEndpoint = onSelectEndpoint
         self.actions = actions
         self.terminalSurface = terminalSurface
@@ -236,6 +241,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onUpdateAction: onUpdateAction,
                     deletingProjectIDs: deletingProjectIDs,
                     deletingWorkspaceIDs: deletingWorkspaceIDs,
+                    endpointCapabilities: endpointCapabilities,
                     onAction: dispatch,
                     onCommandPalette: presentCommandPalette,
                     onRequestRename: presentRename,
@@ -403,6 +409,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private var externalIDEOptions: [WarrenDesktopExternalIDEOption]? {
+        guard endpointCapabilities.canOpenExternalIDE else { return nil }
         makePresentation().workspace.map { workspace in
             externalIDEService.options(
                 for: workspace,
@@ -425,6 +432,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     WarrenDesktopWebPanel(
                         status: webStatus,
                         canControl: webStatus.canControl,
+                        canCopyLocalWebURL: endpointCapabilities.canCopyLocalWebURL,
                         onStart: {
                             onWebStart()
                             refreshWebDismissal()
@@ -629,6 +637,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         tab: presentation.tab,
                         hasProjects: !projection.groups.isEmpty,
                         connectionState: projection.connectionState,
+                        endpointCapabilities: endpointCapabilities,
                         // Superset keeps the 28pt pane toolbar in workspace
                         // mode too. It is pane chrome, not a duplicate top bar.
                         showsPaneHeader: true,
@@ -964,6 +973,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             let panel = WarrenDesktopWebPanel(
                 status: webStatus,
                 canControl: webStatus.canControl,
+                canCopyLocalWebURL: endpointCapabilities.canCopyLocalWebURL,
                 onStart: {
                     onWebStart()
                     refreshWebDismissal()

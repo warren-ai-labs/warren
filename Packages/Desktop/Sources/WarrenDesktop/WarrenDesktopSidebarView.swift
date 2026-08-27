@@ -18,6 +18,7 @@ struct WarrenDesktopSidebar: View {
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
     let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
+    let endpointCapabilities: WarrenDesktopEndpointCapabilities
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -53,6 +54,7 @@ struct WarrenDesktopSidebar: View {
                         selection: selection,
                         deletingProjectIDs: deletingProjectIDs,
                         deletingWorkspaceIDs: deletingWorkspaceIDs,
+                        endpointCapabilities: endpointCapabilities,
                         isInteractionDisabled: !projection.isConnected,
                         onAddProject: { onAction(.addProject) },
                         onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
