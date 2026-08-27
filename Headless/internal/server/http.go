@@ -64,7 +64,6 @@ type HTTPServer struct {
 	// keeps an enable/test/restart from observing half-written Edge/account
 	// settings while a legacy route is changing the enabled intent.
 	tunnelMu          sync.Mutex
-	controlExecutor   *serialExecutor
 	auxiliaryExecutor *auxiliaryExecutor
 	gitCoordinator    *workspaceGitCoordinator
 }
@@ -88,7 +87,6 @@ func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPSer
 			},
 		},
 	}
-	server.controlExecutor = newSerialExecutor(controlRequestQueueCapacity)
 	server.auxiliaryExecutor = newAuxiliaryExecutor(auxiliaryRequestWorkerLimit, auxiliaryRequestCapacity)
 	server.gitCoordinator = newWorkspaceGitCoordinator(
 		server.auxiliaryExecutor.submit,

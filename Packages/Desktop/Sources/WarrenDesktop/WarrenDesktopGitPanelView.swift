@@ -3,6 +3,17 @@ import SwiftUI
 import WarrenDesignSystem
 import WarrenObservation
 
+private enum WarrenGitPanelStyle {
+    static let headerHeight: CGFloat = 36
+    static let checkoutHeightRatio: CGFloat = 0.25
+    static let pullRequestHeightRatio: CGFloat = 0.40
+    static let changesHeightRatio: CGFloat = 0.38
+    static let changesMaximumHeight: CGFloat = 320
+    static let paneHeaderFont = Font.system(size: 12, weight: .semibold)
+    static let trackingLabelFont = Font.system(size: 11, weight: .semibold)
+    static let metadataFont = Font.system(size: 11, weight: .regular)
+}
+
 // MARK: - Panel
 
 /// Right-side Git panel mirroring the web client's `GitPanel` layout: a fixed
@@ -35,7 +46,7 @@ public struct WarrenDesktopGitPanelView: View {
             content(tokens: tokens)
         }
         .frame(width: WarrenLayoutMetrics.gitPanelDefaultWidth)
-        .background(tokens.background)
+        .background(tokens.chromeSurface)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(tokens.border)
@@ -47,8 +58,8 @@ public struct WarrenDesktopGitPanelView: View {
 
     private func header(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.compact) {
-            Text(workspaceName.isEmpty ? "Git" : workspaceName)
-                .font(WarrenTypography.paneHeader)
+            Text(panelTitle)
+                .font(WarrenTypography.navigationGroup)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityAddTraits(.isHeader)
@@ -64,7 +75,10 @@ public struct WarrenDesktopGitPanelView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             .buttonStyle(.plain)
-            .frame(width: 22, height: 22)
+            .frame(
+                width: WarrenLayoutMetrics.compactControlHeight,
+                height: WarrenLayoutMetrics.compactControlHeight
+            )
             .contentShape(.rect)
             .foregroundStyle(tokens.mutedForeground)
             .help("Close Git panel")
@@ -76,9 +90,8 @@ public struct WarrenDesktopGitPanelView: View {
                 action: onClose
             )
         }
-        .padding(.horizontal, WarrenSpacing.medium)
-        .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
-        .background(tokens.chromeSurface)
+        .padding(.horizontal, WarrenSpacing.compact)
+        .frame(height: WarrenGitPanelStyle.headerHeight)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(tokens.border)
@@ -86,19 +99,27 @@ public struct WarrenDesktopGitPanelView: View {
         }
     }
 
+    private var panelTitle: String {
+        guard let branch = model.panel?.branch, !branch.isEmpty else {
+            return workspaceName.isEmpty ? "Git" : workspaceName
+        }
+        return branch
+    }
+
     private func errorBanner(_ error: String, tokens: WarrenColorTokens) -> some View {
         Text(error)
             .font(WarrenTypography.supporting)
             .foregroundStyle(tokens.destructive)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, WarrenSpacing.medium)
-            .padding(.vertical, WarrenSpacing.small)
+            .padding(WarrenSpacing.compact)
             .background(tokens.destructive.opacity(0.08))
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(height: WarrenSpacing.hairline)
+            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+            .overlay {
+                RoundedRectangle(cornerRadius: WarrenRadius.small)
+                    .stroke(tokens.destructive, lineWidth: WarrenSpacing.hairline)
             }
+            .padding(.horizontal, WarrenSpacing.compact)
+            .padding(.top, WarrenSpacing.compact)
             .accessibilityLabel("Git error: \(error)")
     }
 
@@ -107,25 +128,33 @@ public struct WarrenDesktopGitPanelView: View {
             if model.showsLoading {
                 loadingState(tokens: tokens)
             } else {
-                ScrollView {
+                GeometryReader { proxy in
                     VStack(alignment: .leading, spacing: 0) {
                         WarrenGitBranchSection(model: model)
                         WarrenGitPaneHeader(
                             title: "Checkout",
+                            systemImage: "arrow.triangle.branch",
                             isOpen: model.openPanes.contains(.checkout),
                             onToggle: { model.togglePane(.checkout) }
                         )
                         if model.openPanes.contains(.checkout) {
-                            WarrenGitCheckoutPane(model: model)
+                            ScrollView {
+                                WarrenGitCheckoutPane(model: model)
+                            }
+                            .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.checkoutHeightRatio)
                         }
                         if model.panel?.remote != nil {
                             WarrenGitPaneHeader(
                                 title: "Pull Request",
+                                systemImage: "arrow.triangle.merge",
                                 isOpen: model.openPanes.contains(.pr),
                                 onToggle: { model.togglePane(.pr) }
                             )
                             if model.openPanes.contains(.pr) {
-                                WarrenGitPullRequestPane(model: model)
+                                ScrollView {
+                                    WarrenGitPullRequestPane(model: model)
+                                }
+                                .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.pullRequestHeightRatio)
                             }
                         }
                         WarrenGitPaneHeader(
@@ -134,15 +163,29 @@ public struct WarrenDesktopGitPanelView: View {
                             onToggle: { model.togglePane(.changes) }
                         )
                         if model.openPanes.contains(.changes) {
-                            WarrenGitChangesPane(model: model)
+                            ScrollView {
+                                WarrenGitChangesPane(model: model)
+                            }
+                            .frame(
+                                maxHeight: min(
+                                    WarrenGitPanelStyle.changesMaximumHeight,
+                                    proxy.size.height * WarrenGitPanelStyle.changesHeightRatio
+                                )
+                            )
                         }
                         WarrenGitPaneHeader(
-                            title: historyTitle,
+                            title: "History",
+                            detail: historyScope,
                             isOpen: model.openPanes.contains(.history),
                             onToggle: { model.togglePane(.history) }
                         )
                         if model.openPanes.contains(.history) {
-                            WarrenGitHistoryPane(model: model)
+                            ScrollView {
+                                WarrenGitHistoryPane(model: model)
+                            }
+                            .frame(maxHeight: .infinity)
+                        } else {
+                            Spacer(minLength: 0)
                         }
                     }
                     .padding(.vertical, WarrenSpacing.small)
@@ -152,12 +195,12 @@ public struct WarrenDesktopGitPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var historyTitle: String {
+    private var historyScope: String? {
         guard let panel = model.panel,
               panel.mainBranch != nil,
               !panel.merged,
-              panel.operation == nil else { return "History" }
-        return "History · not in \(panel.mainBranch ?? "")"
+              panel.operation == nil else { return nil }
+        return "not in \(panel.mainBranch ?? "")"
     }
 
     private func loadingState(tokens: WarrenColorTokens) -> some View {
@@ -185,32 +228,30 @@ private struct WarrenGitBranchSection: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            Text("Branch")
-                .font(WarrenTypography.sectionLabel)
-                .foregroundStyle(tokens.mutedForeground)
-                .accessibilityAddTraits(.isHeader)
-
             if let operation = model.panel?.operation, !operation.isEmpty {
                 Text("\(model.operationLabel) in progress — resolve it before pushing or pulling")
                     .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.warning)
+                    .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(WarrenSpacing.compact)
+                    .background(tokens.destructive.opacity(0.08))
+                    .clipShape(.rect(cornerRadius: WarrenRadius.xs))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: WarrenRadius.xs)
+                            .stroke(tokens.destructive.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+                    }
                     .accessibilityLabel("\(model.operationLabel) in progress")
             }
 
-            HStack(spacing: WarrenSpacing.xs) {
-                let branch = model.panel?.branch ?? ""
-                Text(branch.isEmpty ? "—" : branch)
-                    .font(WarrenTypography.navigationItem)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let upstream = model.panel?.upstream, !upstream.isEmpty {
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .accessibilityHidden(true)
+            if let upstream = model.panel?.upstream, !upstream.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.small) {
+                    Text("Tracks")
+                        .font(WarrenGitPanelStyle.trackingLabelFont)
+                        .tracking(0.4)
+                        .textCase(.uppercase)
+                        .foregroundStyle(tokens.mutedForeground.opacity(0.7))
                     Text(upstream)
-                        .font(WarrenTypography.navigationMeta)
+                        .font(WarrenTypography.code)
                         .foregroundStyle(tokens.mutedForeground)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -243,21 +284,30 @@ private struct WarrenGitBranchSection: View {
                     .accessibilityLabel("Remote \(remote)")
             }
 
-            HStack(spacing: WarrenSpacing.small) {
+            HStack(spacing: WarrenSpacing.xxs) {
                 WarrenGitActionButton(
                     label: "Refresh",
+                    systemImage: "arrow.clockwise",
+                    tint: tokens.mutedForeground,
+                    expands: true,
                     isBusy: false,
                     disabled: model.busy,
                     action: model.refresh
                 )
                 WarrenGitActionButton(
                     label: model.activeAction == .pull ? "Pulling…" : "Pull",
+                    systemImage: "arrow.down",
+                    tint: tokens.info,
+                    expands: true,
                     isBusy: model.activeAction == .pull,
                     disabled: model.busy || model.panel == nil,
                     action: model.pull
                 )
                 WarrenGitActionButton(
                     label: model.activeAction == .push ? "Pushing…" : "Push",
+                    systemImage: "arrow.up",
+                    tint: tokens.highlight,
+                    expands: true,
                     isBusy: model.activeAction == .push,
                     disabled: model.busy || model.panel == nil,
                     action: pushOrCommit
@@ -268,7 +318,7 @@ private struct WarrenGitBranchSection: View {
                 commitBox(tokens: tokens)
             }
         }
-        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.horizontal, WarrenSpacing.compact)
         .padding(.vertical, WarrenSpacing.small)
     }
 
@@ -353,20 +403,6 @@ private struct WarrenGitCheckoutPane: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            Picker("Branch", selection: $model.branchSelection) {
-                Text("Choose a branch…").tag("")
-                ForEach(model.localBranches(), id: \.self) { branch in
-                    Text(branch).tag(branch)
-                }
-                ForEach(model.remoteBranches(), id: \.self) { branch in
-                    Text("\(branch) (remote)").tag(branch)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            .disabled(model.createBranchMode || model.localBranches().isEmpty && model.remoteBranches().isEmpty)
-
             if model.createBranchMode {
                 TextField("New branch name", text: $model.newBranchName)
                     .textFieldStyle(.plain)
@@ -377,13 +413,29 @@ private struct WarrenGitCheckoutPane: View {
                     .clipShape(.rect(cornerRadius: WarrenRadius.small))
                     .onSubmit(submitCheckout)
                     .onExitCommand { model.toggleCreateMode() }
+            } else {
+                Picker("Branch", selection: $model.branchSelection) {
+                    Text("Switch to a branch…").tag("")
+                    ForEach(model.localBranches(), id: \.self) { branch in
+                        Text(branch).tag(branch)
+                    }
+                    ForEach(model.remoteBranches(), id: \.self) { branch in
+                        Text("\(branch) (remote)").tag(branch)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .disabled(model.localBranches().isEmpty && model.remoteBranches().isEmpty)
             }
 
-            HStack(spacing: WarrenSpacing.small) {
+            HStack(spacing: WarrenSpacing.xs) {
                 WarrenGitActionButton(
                     label: model.activeAction == .checkout
                         ? "Switching…"
-                        : (model.createBranchMode ? "Create" : "Checkout"),
+                        : (model.createBranchMode ? "Create branch" : "Switch branch"),
+                    tint: tokens.highlight,
+                    expands: true,
                     isBusy: model.activeAction == .checkout,
                     disabled: model.busy || (model.createBranchMode
                         ? model.newBranchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -391,15 +443,17 @@ private struct WarrenGitCheckoutPane: View {
                     action: submitCheckout
                 )
                 WarrenGitActionButton(
-                    label: model.createBranchMode ? "Existing" : "New",
+                    label: model.createBranchMode ? "Existing branch" : "New branch",
+                    tint: tokens.mutedForeground,
+                    expands: true,
                     isBusy: false,
                     disabled: model.busy,
                     action: model.toggleCreateMode
                 )
             }
         }
-        .padding(.horizontal, WarrenSpacing.medium)
-        .padding(.bottom, WarrenSpacing.medium)
+        .padding(.horizontal, WarrenSpacing.compact)
+        .padding(.bottom, WarrenSpacing.compact)
     }
 
     private func submitCheckout() {
@@ -444,6 +498,7 @@ private struct WarrenGitPullRequestPane: View {
                 } else {
                     WarrenGitActionButton(
                         label: "Create pull request",
+                        tint: tokens.highlight,
                         isBusy: false,
                         disabled: model.busy,
                         action: model.openPullRequestForm
@@ -455,8 +510,8 @@ private struct WarrenGitPullRequestPane: View {
                     .foregroundStyle(tokens.mutedForeground)
             }
         }
-        .padding(.horizontal, WarrenSpacing.medium)
-        .padding(.bottom, WarrenSpacing.medium)
+        .padding(.horizontal, WarrenSpacing.compact)
+        .padding(.bottom, WarrenSpacing.compact)
     }
 
     private func pullRequestForm(tokens: WarrenColorTokens) -> some View {
@@ -486,6 +541,7 @@ private struct WarrenGitPullRequestPane: View {
             HStack(spacing: WarrenSpacing.small) {
                 WarrenGitActionButton(
                     label: model.activeAction == .prCreate ? "Creating…" : "Create pull request",
+                    tint: tokens.highlight,
                     isBusy: model.activeAction == .prCreate,
                     disabled: model.prTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy,
                     action: submitPullRequest
@@ -515,31 +571,30 @@ private struct WarrenGitPullRequestCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             HStack(spacing: WarrenSpacing.small) {
+                Image(systemName: "arrow.triangle.merge")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(tokens.highlight)
+                    .accessibilityHidden(true)
                 if let number = pr.number {
                     Text("#\(number)")
-                        .font(WarrenTypography.paneHeader)
+                        .font(WarrenTypography.externalIDEPath)
+                        .foregroundStyle(tokens.mutedForeground)
                 }
                 if !stateLabel.isEmpty {
                     Text(stateLabel)
                         .font(WarrenTypography.badge)
                         .foregroundStyle(stateColor)
-                        .padding(.horizontal, WarrenSpacing.xs)
-                        .padding(.vertical, 2)
-                        .background(stateColor.opacity(0.12))
-                        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                        .textCase(.uppercase)
                 }
                 if pr.draft {
                     Text("Draft")
                         .font(WarrenTypography.badge)
                         .foregroundStyle(tokens.mutedForeground)
-                        .padding(.horizontal, WarrenSpacing.xs)
-                        .padding(.vertical, 2)
-                        .background(tokens.muted)
-                        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                        .textCase(.uppercase)
                 }
             }
             Text(pr.title)
-                .font(WarrenTypography.navigationItem)
+                .font(WarrenTypography.bodyEmphasis)
                 .lineLimit(2)
             if let author = pr.author {
                 let base = pr.base ?? ""
@@ -553,7 +608,7 @@ private struct WarrenGitPullRequestCard: View {
             if let body = pr.body, !body.isEmpty {
                 Text(body)
                     .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.mutedForeground)
+                    .foregroundStyle(tokens.foreground)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(8)
             }
@@ -565,14 +620,13 @@ private struct WarrenGitPullRequestCard: View {
                         .font(WarrenTypography.chromeLabel)
                 }
                 .buttonStyle(WarrenGitActionButtonStyle(tokens: tokens))
+                .foregroundStyle(tokens.info)
                 .help("Open \(urlString)")
                 .accessibilityLabel("Open pull request \(urlString)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(WarrenSpacing.small)
-        .background(tokens.muted.opacity(0.5))
-        .clipShape(.rect(cornerRadius: WarrenRadius.medium))
+        .padding(.vertical, WarrenSpacing.small)
         .accessibilityElement(children: .contain)
     }
 
@@ -601,12 +655,14 @@ private struct WarrenGitChangesPane: View {
                 let summary = WarrenDesktopGitDiffSummary.summary(of: staged)
                 HStack(spacing: WarrenSpacing.small) {
                     Text("Staged (\(staged.count))")
-                        .font(WarrenTypography.sectionLabel)
+                        .font(WarrenGitPanelStyle.paneHeaderFont)
+                        .tracking(0.5)
+                        .textCase(.uppercase)
                         .foregroundStyle(tokens.mutedForeground)
                     WarrenGitDiffCounts(added: summary.added, deleted: summary.deleted)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, WarrenSpacing.medium)
+                .padding(.horizontal, WarrenSpacing.compact)
                 .padding(.top, WarrenSpacing.xs)
                 WarrenGitChangeList(
                     changes: staged,
@@ -625,11 +681,11 @@ private struct WarrenGitChangesPane: View {
                 Text("No changes")
                     .font(WarrenTypography.supporting)
                     .foregroundStyle(tokens.mutedForeground)
-                    .padding(.horizontal, WarrenSpacing.medium)
+                    .padding(.horizontal, WarrenSpacing.compact)
                     .padding(.vertical, WarrenSpacing.small)
             }
         }
-        .padding(.bottom, WarrenSpacing.medium)
+        .padding(.bottom, WarrenSpacing.compact)
     }
 }
 
@@ -671,7 +727,9 @@ private struct WarrenGitChangeRow: View {
                 Text(WarrenDesktopGitStatusLabel.symbol(for: change.status))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(statusColor(tokens: tokens))
-                    .frame(width: 16, alignment: .center)
+                    .frame(width: 18, alignment: .center)
+                    .background(tokens.tertiaryWash)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.xs))
                     .accessibilityLabel(WarrenDesktopGitStatusLabel.label(for: change.status))
                 Text(change.path)
                     .font(WarrenTypography.supporting)
@@ -688,8 +746,8 @@ private struct WarrenGitChangeRow: View {
                 Spacer(minLength: WarrenSpacing.xs)
                 WarrenGitDiffCounts(added: change.added, deleted: change.deleted)
             }
-            .padding(.horizontal, WarrenSpacing.medium)
-            .padding(.vertical, 3)
+            .padding(.horizontal, WarrenSpacing.compact)
+            .padding(.vertical, WarrenSpacing.xxs)
             .contentShape(.rect)
             .background(isSelected ? tokens.fillSelected : (hovered ? tokens.fillHover : .clear))
             .animation(.easeOut(duration: 0.1), value: isSelected)
@@ -705,8 +763,8 @@ private struct WarrenGitChangeRow: View {
     private func statusColor(tokens: WarrenColorTokens) -> Color {
         switch change.status {
         case "D": tokens.destructive
-        case "A": tokens.success
-        case "U": tokens.warning
+        case "A", "C": tokens.success
+        case "M", "T", "U": tokens.warning
         default: tokens.info
         }
     }
@@ -729,7 +787,7 @@ private struct WarrenGitHistoryPane: View {
                     : "No commits")
                     .font(WarrenTypography.supporting)
                     .foregroundStyle(tokens.mutedForeground)
-                    .padding(.horizontal, WarrenSpacing.medium)
+                    .padding(.horizontal, WarrenSpacing.compact)
                     .padding(.vertical, WarrenSpacing.small)
             } else {
                 ForEach(commits, id: \.hash) { commit in
@@ -743,7 +801,7 @@ private struct WarrenGitHistoryPane: View {
                 }
             }
         }
-        .padding(.bottom, WarrenSpacing.medium)
+        .padding(.bottom, WarrenSpacing.compact)
     }
 }
 
@@ -760,39 +818,31 @@ private struct WarrenGitCommitRow: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
             Button(action: onToggle) {
-                HStack(spacing: WarrenSpacing.small) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .frame(width: 10)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(commit.subject)
-                            .font(WarrenTypography.supporting)
-                            .foregroundStyle(tokens.foreground)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        HStack(spacing: WarrenSpacing.xs) {
-                            Text(commit.short)
-                                .font(.system(size: 10, design: .monospaced))
-                            Text("·")
-                            Text(commit.author)
-                            Text("·")
-                            Text(WarrenDesktopGitRelativeTime.string(from: commit.time))
-                            let summary = WarrenDesktopGitDiffSummary.summary(of: commit.files)
-                            if summary.added > 0 || summary.deleted > 0 {
-                                Text("·")
-                                WarrenGitDiffCounts(added: summary.added, deleted: summary.deleted)
-                            }
-                        }
-                        .font(.system(size: 10))
-                        .foregroundStyle(tokens.mutedForeground)
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    Text(commit.subject)
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(tokens.foreground)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: WarrenSpacing.xs) {
+                        Text(commit.short)
+                            .font(WarrenTypography.externalIDEPath)
+                        Text("·")
+                        Text(commit.author)
+                        Text("·")
+                        Text(WarrenDesktopGitRelativeTime.string(from: commit.time))
+                        Spacer(minLength: WarrenSpacing.xs)
+                        let summary = WarrenDesktopGitDiffSummary.summary(of: commit.files)
+                        if summary.added > 0 || summary.deleted > 0 {
+                            WarrenGitDiffCounts(added: summary.added, deleted: summary.deleted)
+                        }
                     }
-                    Spacer(minLength: 0)
+                    .font(WarrenGitPanelStyle.metadataFont)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
                 }
-                .padding(.horizontal, WarrenSpacing.medium)
-                .padding(.vertical, 4)
+                .padding(.horizontal, WarrenSpacing.compact)
+                .padding(.vertical, WarrenSpacing.small)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -810,8 +860,13 @@ private struct WarrenGitCommitRow: View {
                         )
                     }
                 }
-                .padding(.leading, WarrenSpacing.medium)
+                .padding(.leading, WarrenSpacing.compact)
             }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(tokens.border)
+                .frame(height: WarrenSpacing.hairline)
         }
         .accessibilityElement(children: .contain)
     }
@@ -852,30 +907,60 @@ private struct WarrenGitDiffCounts: View {
 
 private struct WarrenGitPaneHeader: View {
     let title: String
+    let systemImage: String?
+    let detail: String?
     let isOpen: Bool
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var hovered = false
 
+    init(
+        title: String,
+        systemImage: String? = nil,
+        detail: String? = nil,
+        isOpen: Bool,
+        onToggle: @escaping () -> Void
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.detail = detail
+        self.isOpen = isOpen
+        self.onToggle = onToggle
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: onToggle) {
             HStack(spacing: WarrenSpacing.small) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 14, height: 14)
+                        .accessibilityHidden(true)
+                }
+                Text(title)
+                    .font(WarrenGitPanelStyle.paneHeaderFont)
+                    .tracking(0.5)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .textCase(.uppercase)
+                    .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
                 Image(systemName: isOpen ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(tokens.mutedForeground)
                     .frame(width: 10)
                     .accessibilityHidden(true)
-                Text(title)
-                    .font(WarrenTypography.paneHeader)
-                    .foregroundStyle(tokens.foreground)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, WarrenSpacing.medium)
-            .padding(.vertical, 6)
+            .padding(.horizontal, WarrenSpacing.compact)
+            .padding(.vertical, WarrenSpacing.xs)
             .contentShape(.rect)
             .background(hovered ? tokens.fillHover : .clear)
         }
@@ -888,19 +973,41 @@ private struct WarrenGitPaneHeader: View {
 
 private struct WarrenGitActionButton: View {
     let label: String
+    let systemImage: String?
+    let tint: Color?
+    let expands: Bool
     let isBusy: Bool
     let disabled: Bool
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    init(
+        label: String,
+        systemImage: String? = nil,
+        tint: Color? = nil,
+        expands: Bool = false,
+        isBusy: Bool,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) {
+        self.label = label
+        self.systemImage = systemImage
+        self.tint = tint
+        self.expands = expands
+        self.isBusy = isBusy
+        self.disabled = disabled
+        self.action = action
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Button(action: action) {
             HStack(spacing: WarrenSpacing.xs) {
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.mini)
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 12, weight: .medium))
                         .accessibilityHidden(true)
                 }
                 Text(label)
@@ -908,8 +1015,14 @@ private struct WarrenGitActionButton: View {
             }
         }
         .buttonStyle(WarrenGitActionButtonStyle(tokens: tokens))
+        .frame(maxWidth: expands ? .infinity : nil)
+        .foregroundStyle(tint ?? tokens.foreground)
+        .background(hovered ? tokens.fillHover : .clear)
+        .clipShape(.rect(cornerRadius: WarrenRadius.xs))
         .disabled(disabled)
+        .onHover { hovered = $0 }
         .help(label)
+        .accessibilityValue(isBusy ? "In progress" : "")
     }
 }
 
@@ -922,10 +1035,9 @@ private struct WarrenGitActionButtonStyle: ButtonStyle {
         configuration.label
             .font(WarrenTypography.chromeLabel)
             .padding(.horizontal, WarrenSpacing.small + 2)
-            .padding(.vertical, 3)
-            .background(configuration.isPressed ? tokens.fillSelected : tokens.muted)
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
-            .foregroundStyle(tokens.foreground)
+            .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
+            .background(configuration.isPressed ? tokens.fillSelected : .clear)
+            .clipShape(.rect(cornerRadius: WarrenRadius.xs))
             .opacity(isEnabled ? 1 : 0.42)
     }
 }

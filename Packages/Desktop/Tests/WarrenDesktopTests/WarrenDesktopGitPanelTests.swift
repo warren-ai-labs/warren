@@ -428,4 +428,22 @@ final class WarrenDesktopGitPanelTests: XCTestCase {
         XCTAssertEqual(WarrenDesktopGitStatusLabel.symbol(for: "?"), "??")
         XCTAssertEqual(WarrenDesktopGitStatusLabel.symbol(for: "A"), "A")
     }
+
+    func testPanelDecodingDefaultsOmittedWireZeroValues() throws {
+        let data = Data(
+            #"{"workspace":"workspace","branch":"main","changes":[{"path":"README.md","status":"?"}],"commits":[],"branches":[{"name":"main","remote":false}],"pullRequest":{"title":"Draft docs"}}"#.utf8
+        )
+
+        let panel = try JSONDecoder().decode(WarrenDesktopGitPanel.self, from: data)
+
+        XCTAssertEqual(panel.ahead, 0)
+        XCTAssertEqual(panel.behind, 0)
+        XCTAssertEqual(panel.aheadOfMain, 0)
+        XCTAssertFalse(panel.merged)
+        XCTAssertFalse(panel.refreshing)
+        XCTAssertEqual(panel.changes.first?.staged, false)
+        XCTAssertEqual(panel.changes.first?.added, 0)
+        XCTAssertEqual(panel.changes.first?.deleted, 0)
+        XCTAssertFalse(try XCTUnwrap(panel.pullRequest).draft)
+    }
 }

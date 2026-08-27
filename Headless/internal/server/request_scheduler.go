@@ -6,7 +6,6 @@ import (
 )
 
 const (
-	controlRequestQueueCapacity = 64
 	auxiliaryRequestWorkerLimit = 4
 	auxiliaryRequestCapacity    = 32
 )
@@ -57,126 +56,6 @@ const (
 	executorStopping
 	executorStopped
 )
-
-type serialExecutor struct {
-	mu            sync.Mutex
-	state         executorState
-	queue         []requestJob
-	queueCapacity int
-	outstanding   int
-	wake          chan struct{}
-	done          chan struct{}
-}
-
-func newSerialExecutor(queueCapacity int) *serialExecutor {
-	if queueCapacity < 1 {
-		panic("serial executor queue capacity must be positive")
-	}
-	executor := &serialExecutor{
-		queueCapacity: queueCapacity,
-		wake:          make(chan struct{}, 1),
-		done:          make(chan struct{}),
-	}
-	go executor.run()
-	return executor
-}
-
-func (e *serialExecutor) submit(job requestJob) bool {
-	e.mu.Lock()
-	if e.state != executorOpen || len(e.queue) == e.queueCapacity {
-		e.mu.Unlock()
-		return false
-	}
-	e.queue = append(e.queue, job)
-	e.outstanding++
-	e.mu.Unlock()
-	e.signal()
-	return true
-}
-
-func (e *serialExecutor) stop() {
-	e.mu.Lock()
-	if e.state != executorOpen {
-		e.mu.Unlock()
-		return
-	}
-	e.state = executorStopping
-	queued := e.queue
-	e.queue = nil
-	e.mu.Unlock()
-
-	for _, job := range queued {
-		e.finish(job, requestCancelled)
-	}
-	e.mu.Lock()
-	e.markStoppedLocked()
-	e.mu.Unlock()
-	e.signal()
-}
-
-func (e *serialExecutor) wait(ctx context.Context) error {
-	select {
-	case <-e.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (e *serialExecutor) run() {
-	for {
-		e.mu.Lock()
-		if e.state != executorOpen {
-			e.mu.Unlock()
-			return
-		}
-		if len(e.queue) == 0 {
-			e.mu.Unlock()
-			<-e.wake
-			continue
-		}
-		job := e.queue[0]
-		e.queue = e.queue[1:]
-		e.mu.Unlock()
-
-		ctx := job.ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		if ctx.Err() != nil {
-			e.finish(job, requestCancelled)
-			continue
-		}
-		if job.run != nil {
-			job.run(ctx)
-		}
-		e.finish(job, requestRan)
-	}
-}
-
-func (e *serialExecutor) finish(job requestJob, outcome requestTerminal) {
-	if job.terminal != nil {
-		job.terminal(outcome)
-	}
-	e.mu.Lock()
-	e.outstanding--
-	e.markStoppedLocked()
-	e.mu.Unlock()
-}
-
-func (e *serialExecutor) markStoppedLocked() {
-	if e.state == executorStopping && e.outstanding == 0 {
-		e.state = executorStopped
-		close(e.done)
-	}
-}
-
-func (e *serialExecutor) signal() {
-	select {
-	case e.wake <- struct{}{}:
-	default:
-	}
-}
 
 type auxiliaryExecutor struct {
 	mu            sync.Mutex
