@@ -10,7 +10,7 @@ import WarrenObservation
 /// History panes.
 public struct WarrenDesktopGitPanelView: View {
     let workspaceName: String
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
     let onClose: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -178,7 +178,7 @@ public struct WarrenDesktopGitPanelView: View {
 // MARK: - Branch section
 
 private struct WarrenGitBranchSection: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -346,7 +346,7 @@ private struct WarrenGitBranchSection: View {
 // MARK: - Checkout pane
 
 private struct WarrenGitCheckoutPane: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -416,7 +416,7 @@ private struct WarrenGitCheckoutPane: View {
 // MARK: - Pull Request pane
 
 private struct WarrenGitPullRequestPane: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -588,7 +588,7 @@ private struct WarrenGitPullRequestCard: View {
 // MARK: - Changes pane
 
 private struct WarrenGitChangesPane: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -715,7 +715,7 @@ private struct WarrenGitChangeRow: View {
 // MARK: - History pane
 
 private struct WarrenGitHistoryPane: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -936,7 +936,7 @@ private struct WarrenGitActionButtonStyle: ButtonStyle {
 /// The terminal stays mounted underneath; the composition root overlays this
 /// view while a file is selected.
 public struct WarrenDesktopGitDiffView: View {
-    @Bindable var model: WarrenDesktopGitPanelModel
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 

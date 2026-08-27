@@ -1,18 +1,17 @@
 import CoreGraphics
 import Foundation
-import Observation
+import Combine
 import WarrenDesignSystem
 import WarrenDomain
 
 @MainActor
-@Observable
-public final class WarrenDesktopPanelHost {
-    public private(set) var activePanelID: String?
-    public private(set) var isPanelOpen = false
+public final class WarrenDesktopPanelHost: ObservableObject {
+    @Published public private(set) var activePanelID: String?
+    @Published public private(set) var isPanelOpen = false
     public var isOpen: Bool { isPanelOpen }
     /// The requested presentation width. The actual width is resolved against
     /// the measured container at render time and is never persisted.
-    public private(set) var rightPanelWidth: CGFloat
+    @Published public private(set) var rightPanelWidth: CGFloat
 
     private let defaults: UserDefaults?
 

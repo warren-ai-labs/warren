@@ -33,7 +33,7 @@ public final class WarrenDesktopGitPanelModule {
             return AnyView(WarrenDesktopGitPanelView(
                 workspaceName: context.workspaceName,
                 model: model,
-                onClose: onClose
+                onClose: { onClose.call() }
             ))
         },
         centerDetail: { [weak model] _ in

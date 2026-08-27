@@ -1,6 +1,14 @@
 import SwiftUI
 import WarrenDomain
 
+@MainActor
+public final class WarrenDesktopTerminalFocusOwnership {
+    public private(set) var ownsFocus = false
+    public init() {}
+    public func terminalDidFocus() { ownsFocus = true }
+    public func terminalDidBlur() { ownsFocus = false }
+}
+
 /// The intentionally small context shared by every desktop Panel module.
 public struct WarrenDesktopPanelContext: Hashable, Sendable {
     public let endpointID: String
@@ -27,6 +35,17 @@ public struct WarrenDesktopPanelDescriptor: Identifiable, Hashable, Sendable {
     }
 }
 
+@MainActor
+public final class WarrenDesktopPanelCloseAction {
+    private let handler: () -> Void
+
+    public init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    public func call() { handler() }
+}
+
 /// A module owns its lifecycle and transport-facing invalidation callback;
 /// the registry only coordinates those boundaries and never owns module data.
 @MainActor
@@ -35,7 +54,8 @@ public final class WarrenDesktopPanelContribution {
     public typealias Activation = @MainActor (WarrenDesktopPanelContext) -> Void
     public typealias Lifecycle = @MainActor () -> Void
     public typealias ContentBuilder = @MainActor (WarrenDesktopPanelContext) -> AnyView
-    public typealias ContentBuilderWithClose = @MainActor (WarrenDesktopPanelContext, () -> Void) -> AnyView
+    public typealias DetailBuilder = @MainActor (WarrenDesktopPanelContext) -> AnyView?
+    public typealias ContentBuilderWithClose = @MainActor (WarrenDesktopPanelContext, WarrenDesktopPanelCloseAction) -> AnyView
     public typealias ConnectionGenerationCallback = @MainActor (String, UInt64) -> Void
 
     public let descriptor: WarrenDesktopPanelDescriptor
@@ -46,7 +66,7 @@ public final class WarrenDesktopPanelContribution {
     private let closeDetailHandler: Lifecycle
     private let rightContentHandler: ContentBuilder
     private let rightContentWithCloseHandler: ContentBuilderWithClose?
-    private let centerDetailHandler: ContentBuilder?
+    private let centerDetailHandler: DetailBuilder?
     private let connectionGenerationHandler: ConnectionGenerationCallback
 
     public init(
@@ -58,7 +78,7 @@ public final class WarrenDesktopPanelContribution {
         closeDetail: @escaping Lifecycle = {},
         rightContent: @escaping ContentBuilder = { _ in AnyView(EmptyView()) },
         rightContentWithClose: ContentBuilderWithClose? = nil,
-        centerDetail: ContentBuilder? = nil,
+        centerDetail: DetailBuilder? = nil,
         connectionGenerationWillChange: @escaping ConnectionGenerationCallback = { _, _ in }
     ) {
         self.descriptor = descriptor
@@ -121,7 +141,7 @@ public final class WarrenDesktopPanelContribution {
 
     public func rightContent(
         in context: WarrenDesktopPanelContext,
-        onClose: @escaping () -> Void
+        onClose: WarrenDesktopPanelCloseAction
     ) -> AnyView {
         rightContentWithCloseHandler?(context, onClose) ?? rightContentHandler(context)
     }

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Observation
 import WarrenDomain
 
@@ -7,8 +8,7 @@ import WarrenDomain
 /// expanded commits, commit and pull request forms, the open file diff).
 /// The view layer only reads this model and forwards user intents to it.
 @MainActor
-@Observable
-public final class WarrenDesktopGitPanelModel {
+public final class WarrenDesktopGitPanelModel: ObservableObject {
     public enum Action: String, Sendable {
         case pull
         case push
@@ -53,29 +53,29 @@ public final class WarrenDesktopGitPanelModel {
     private static let pollInterval: Duration = .seconds(5 * 60)
     private static let backgroundNoticeDuration: Duration = .seconds(2)
 
-    public private(set) var panel: WarrenDesktopGitPanel?
-    public private(set) var isRefreshing = false
-    public private(set) var errorMessage: String?
-    public private(set) var activeAction: Action?
-    public private(set) var backgroundNotice = false
+    @Published public private(set) var panel: WarrenDesktopGitPanel?
+    @Published public private(set) var isRefreshing = false
+    @Published public private(set) var errorMessage: String?
+    @Published public private(set) var activeAction: Action?
+    @Published public private(set) var backgroundNotice = false
 
-    public private(set) var openPanes: Set<Pane>
-    public private(set) var expandedCommits: Set<String>
-    public private(set) var selectedKey: String?
-    public var branchSelection: String
-    public private(set) var branchTouched: Bool
-    public var newBranchName = ""
-    public private(set) var createBranchMode = false
-    public private(set) var commitOpen = false
-    public var commitMessage = ""
-    public private(set) var prOpen = false
-    public var prTitle = ""
-    public var prBody = ""
+    @Published public private(set) var openPanes: Set<Pane>
+    @Published public private(set) var expandedCommits: Set<String>
+    @Published public private(set) var selectedKey: String?
+    @Published public var branchSelection: String
+    @Published public private(set) var branchTouched: Bool
+    @Published public var newBranchName = ""
+    @Published public private(set) var createBranchMode = false
+    @Published public private(set) var commitOpen = false
+    @Published public var commitMessage = ""
+    @Published public private(set) var prOpen = false
+    @Published public var prTitle = ""
+    @Published public var prBody = ""
 
-    public private(set) var fileView: FileView?
-    public private(set) var fileDiff = FileDiffState()
-    public var diffViewTab: DiffViewTab
-    public var diffStyle: DiffStyle
+    @Published public private(set) var fileView: FileView?
+    @Published public private(set) var fileDiff = FileDiffState()
+    @Published public var diffViewTab: DiffViewTab
+    @Published public var diffStyle: DiffStyle
 
     private let client: any WarrenDesktopGitClient
     private let persistence: any WarrenDesktopGitPanelPersistence
