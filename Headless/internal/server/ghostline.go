@@ -48,8 +48,29 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 		return err
 	}
 	if strings.TrimSpace(command) != "" {
-		// Give the login shell a beat to start, then type the command.
-		time.Sleep(400 * time.Millisecond)
+		// Wait for the login shell to become ready instead of a fixed sleep.
+		// CLI path can tolerate a bit more latency, so use a generous
+		// deadline and coarser poll to avoid hammering Ghostline.
+		deadline := time.Now().Add(1500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if status, err := session.Status(ctx); err == nil && status.Alive {
+				break
+			}
+			select {
+			case <-time.After(50 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// Small grace for the shell prompt to appear before typing.
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		if err := session.WriteInput(ctx, []byte(command+"\r")); err != nil {
 			return fmt.Errorf("type session command: %w", err)
 		}
