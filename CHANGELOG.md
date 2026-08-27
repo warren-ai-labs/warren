@@ -6,6 +6,16 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.10.1] - 2026-08-28
+
+> Patch release: fixes codex Working blink color/visibility and the OpenCode bind plugin payload format.
+
+### Fixed
+
+- Prevent the codex Working blink from appearing black in shell overlays by skipping Ghostty draws when the terminal view is not presentable.
+- Align direct codex Working color with shell sessions by defaulting COLORTERM to truecolor for ghostline children.
+- Correct the OpenCode bind plugin to use PluginModule and real newlines for bind/state payloads.
+
 ## [0.10.0] - 2026-08-28
 
 > Major release: Warren upgrades to a new incompatible Ghostline runtime semantics. Existing sessions are migrated automatically via the verified handoff path. This is a super-major compatibility break from 0.9.x; downgrading without recreating sessions is not supported. This release targets arm64 Apple Silicon Macs running macOS 13 or later; a local Apple Development build may fail Gatekeeper until it is replaced by a notarized Developer ID build. Bundled gnar remains v1.7.2.

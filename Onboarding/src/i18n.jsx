@@ -118,6 +118,23 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.10.1",
+        dateISO: "2026-08-28",
+        date: "August 28, 2026",
+        title: "Warren fixes codex Working blink and OpenCode bind.",
+        summary: "A patch release that fixes codex Working blink color/visibility and the OpenCode bind plugin payload format.",
+        sections: [
+          {
+            title: "Fixed",
+            items: [
+              "Prevent the codex Working blink from appearing black in shell overlays by skipping Ghostty draws when the terminal view is not presentable.",
+              "Align direct codex Working color with shell sessions by defaulting COLORTERM to truecolor for ghostline children.",
+              "Correct the OpenCode bind plugin to use PluginModule and real newlines for bind/state payloads.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.10.0",
         dateISO: "2026-08-28",
         date: "August 28, 2026",
@@ -763,6 +780,23 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.10.1",
+        dateISO: "2026-08-28",
+        date: "2026 年 8 月 28 日",
+        title: "Warren 修复 codex 闪烁与 OpenCode 绑定。",
+        summary: "修复版本：修复 codex Working 闪烁颜色/可见性与 OpenCode 绑定插件负载格式。",
+        sections: [
+          {
+            title: "修复",
+            items: [
+              "避免在终端视图不可呈现时绘制 Ghostty 帧，防止 shell overlay 中 codex Working 闪烁变黑。",
+              "为 ghostline 子进程默认设置 COLORTERM=truecolor，使直连 codex Working 颜色与 shell 会话一致。",
+              "修正 OpenCode 绑定插件使用 PluginModule 并写入真实换行符。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.10.0",
         dateISO: "2026-08-28",
