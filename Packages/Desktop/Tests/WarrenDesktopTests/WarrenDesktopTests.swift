@@ -163,6 +163,34 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertNotEqual(localColor, remoteColor)
     }
 
+    func testEndpointOptionsDefaultCapabilitiesFollowEndpointOwnership() {
+        let local = WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true)
+        let remote = WarrenDesktopEndpointOption(id: "vps", label: "VPS")
+
+        XCTAssertEqual(local.capabilities, .local)
+        XCTAssertEqual(remote.capabilities, .remote)
+    }
+
+    func testEndpointCapabilitiesCanBeCustomizedForHostProvidedIntegrations() {
+        let hostEditor = WarrenDesktopEndpointCapabilities(
+            canAddProject: false,
+            canImportSuperset: false,
+            canUseEmbeddedEditor: true,
+            canOpenExternalIDE: true,
+            canCopyLocalWebURL: false
+        )
+        let endpoint = WarrenDesktopEndpointOption(
+            id: "vps",
+            label: "VPS",
+            capabilities: hostEditor
+        )
+
+        XCTAssertEqual(endpoint.capabilities, hostEditor)
+        XCTAssertTrue(endpoint.capabilities.canUseEmbeddedEditor)
+        XCTAssertTrue(endpoint.capabilities.canOpenExternalIDE)
+        XCTAssertFalse(endpoint.capabilities.canAddProject)
+    }
+
     func testEmbeddedEditorKeepsIDEControlAvailableWithoutExternalApplications() {
         XCTAssertTrue(
             WarrenDesktopWorkspaceTabTrailingControl.available(
@@ -515,6 +543,39 @@ final class WarrenDesktopTests: XCTestCase {
                 + WarrenLayoutMetrics.paneHeaderHeight
                 + WarrenLayoutMetrics.paneMinimumHeight
         )
+    }
+
+    func testRemoteEndpointHidesLocalOnboardingAndEditorControls() {
+        let projection = WarrenDesktopProjection(
+            host: Host(name: "Remote"),
+            groups: [],
+            connectionState: .attached
+        )
+        let recorder = WarrenSemanticRecorder()
+        let root = WarrenDesktopRoot(
+            projection: projection,
+            endpointOptions: [
+                WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true),
+                WarrenDesktopEndpointOption(id: "remote", label: "Remote"),
+            ],
+            selectedEndpointID: "remote",
+            embeddedEditorAvailable: true,
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let nodeIDs = Set(recorder.snapshot().nodes.map(\.id))
+        XCTAssertFalse(nodeIDs.contains("onboarding.add-project"))
+        XCTAssertFalse(nodeIDs.contains("onboarding.import-superset"))
+        XCTAssertFalse(nodeIDs.contains("workspace-ide.open"))
     }
 
     func testEmbeddedEditorUsesAClosableLocalTabAndStaysMountedBehindSessions() throws {

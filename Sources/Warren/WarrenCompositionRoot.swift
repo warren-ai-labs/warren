@@ -118,7 +118,7 @@ struct WarrenCompositionRoot: View {
             onSetAutoOpenShell: { remoteModel.setAutoOpenShell($0) },
             autoStartAI: remoteModel.autoStartAI,
             onSetAutoStartAI: { remoteModel.setAutoStartAI($0) },
-            embeddedEditorAvailable: selectedEndpointID == "local",
+            embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
                     workspace: workspace,
@@ -178,6 +178,7 @@ struct WarrenCompositionRoot: View {
         )
         .modifier(WarrenProjectFileDialogLabels())
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
+            guard selectedEndpointCapabilities.canCopyLocalWebURL else { return }
             remoteModel.copyLocalWebURL()
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenAppCommand.openTerminal)) { note in
@@ -250,6 +251,7 @@ struct WarrenCompositionRoot: View {
             hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
             restoreEndpointSelection()
+            publishEndpointCapabilities()
             await monitorEndpointConfiguration()
         }
         .task(id: selectedWorkspacePath) {
@@ -260,6 +262,13 @@ struct WarrenCompositionRoot: View {
         }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()
+            if !selectedEndpointCapabilities.canAddProject {
+                isProjectImporterPresented = false
+            }
+            if !selectedEndpointCapabilities.canImportSuperset {
+                supersetImportPreview = nil
+            }
+            publishEndpointCapabilities()
             connectSelectedEndpoint()
         }
         .onDisappear {
@@ -337,20 +346,12 @@ struct WarrenCompositionRoot: View {
 
     private func handle(_ action: WarrenDesktopAction) {
         if action == .addProject {
-            if isLocalEndpoint {
+            if selectedEndpointCapabilities.canAddProject {
                 isProjectImporterPresented = true
-            } else {
-                remoteModel.report(NSError(domain: "WarrenRemote", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Remote projects must use remote paths; add them from the remote CLI.",
-                ]))
             }
         } else if action == .importSuperset {
-            if isLocalEndpoint {
+            if selectedEndpointCapabilities.canImportSuperset {
                 beginSupersetImport()
-            } else {
-                remoteModel.report(NSError(domain: "WarrenRemote", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "Superset import must run on the machine hosting the daemon.",
-                ]))
             }
         } else if case .requestNewWorkspace(let projectID) = action {
             workspaceCreatorProjectID = projectID
@@ -446,6 +447,18 @@ struct WarrenCompositionRoot: View {
 
     private var isLocalEndpoint: Bool { selectedEndpointID == "local" }
 
+    private var selectedEndpointCapabilities: WarrenDesktopEndpointCapabilities {
+        endpointOptions.first(where: { $0.id == selectedEndpointID })?.capabilities
+            ?? (isLocalEndpoint ? .local : .remote)
+    }
+
+    private func publishEndpointCapabilities() {
+        NotificationCenter.default.post(
+            name: WarrenDesktopEndpointCapabilitiesNotification.didChange,
+            object: selectedEndpointCapabilities
+        )
+    }
+
     /// Path of the workspace the sidebar currently points at, used to warm
     /// the embedded editor before its pane is ever opened.
     private var selectedWorkspacePath: String? {
@@ -534,7 +547,8 @@ struct WarrenCompositionRoot: View {
     }
 
     private func beginSupersetImport() {
-        guard !isSupersetImporting else { return }
+        guard selectedEndpointCapabilities.canImportSuperset,
+              !isSupersetImporting else { return }
         setSupersetImporting(true)
         Task { @MainActor in
             do {

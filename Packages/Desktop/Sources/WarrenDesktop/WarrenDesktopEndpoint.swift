@@ -47,6 +47,15 @@ public struct WarrenDesktopEndpointCapabilities: Hashable, Sendable {
     )
 }
 
+/// Notification emitted by the application shell when the selected endpoint
+/// changes. AppKit-owned menus can mirror the same capability boundary as the
+/// SwiftUI workspace without depending on the root view's private state.
+public enum WarrenDesktopEndpointCapabilitiesNotification {
+    public static let didChange = Notification.Name(
+        "WarrenDesktopEndpointCapabilities.didChange"
+    )
+}
+
 public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
     public let id: String
     public let label: String

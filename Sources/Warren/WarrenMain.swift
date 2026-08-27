@@ -100,11 +100,31 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var updateInstallTask: Task<Void, Never>?
     private var cliInstallTask: Task<Void, Never>?
     private var updateNotificationObserver: NSObjectProtocol?
+    private var endpointCapabilitiesObserver: NSObjectProtocol?
+    private weak var copyLocalWebURLMenuItem: NSMenuItem?
+    private weak var copyLocalWebURLSeparator: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchDaemonMenuBar()
         presentMainWindowIfNeeded()
         NSApp.mainMenu = buildMainMenu(target: self)
+        applyEndpointCapabilities(
+            (UserDefaults.standard.string(forKey: "executionEndpoint") ?? "local") == "local"
+                ? .local
+                : .remote
+        )
+        endpointCapabilitiesObserver = NotificationCenter.default.addObserver(
+            forName: WarrenDesktopEndpointCapabilitiesNotification.didChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let capabilities = notification.object as? WarrenDesktopEndpointCapabilities else {
+                return
+            }
+            Task { @MainActor in
+                self?.applyEndpointCapabilities(capabilities)
+            }
+        }
         updateNotificationObserver = NotificationCenter.default.addObserver(
             forName: WarrenUpdateNotification.installRequested,
             object: nil,
@@ -150,6 +170,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         cliInstallTask?.cancel()
         if let updateNotificationObserver {
             NotificationCenter.default.removeObserver(updateNotificationObserver)
+        }
+        if let endpointCapabilitiesObserver {
+            NotificationCenter.default.removeObserver(endpointCapabilitiesObserver)
         }
     }
 
@@ -418,6 +441,12 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         return menuItem.action != #selector(postCommand(_:))
     }
 
+    private func applyEndpointCapabilities(_ capabilities: WarrenDesktopEndpointCapabilities) {
+        let isVisible = capabilities.canCopyLocalWebURL
+        copyLocalWebURLMenuItem?.isHidden = !isVisible
+        copyLocalWebURLSeparator?.isHidden = !isVisible
+    }
+
     @objc private func toggleFullScreen(_ sender: NSMenuItem) {
         window?.toggleFullScreen(nil)
     }
@@ -619,7 +648,10 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             keyEquivalent: ""
         )
         copyWebURL.target = target
-        webMenu.addItem(.separator())
+        copyLocalWebURLMenuItem = copyWebURL
+        let copyWebURLSeparator = NSMenuItem.separator()
+        webMenu.addItem(copyWebURLSeparator)
+        copyLocalWebURLSeparator = copyWebURLSeparator
         let startCloudflare = webMenu.addItem(
             withTitle: "Start Cloudflare Tunnel",
             action: #selector(WarrenAppDelegate.startCloudflareWebAccess(_:)),
