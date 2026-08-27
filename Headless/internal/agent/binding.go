@@ -136,7 +136,10 @@ func ReadBinding(path string) (*Binding, error) {
 	if err := json.Unmarshal(data, &binding); err != nil {
 		return nil, nil
 	}
-	if binding.SessionID == "" || binding.TranscriptPath == "" {
+	if binding.SessionID == "" {
+		return nil, nil
+	}
+	if binding.Provider != "opencode" && binding.TranscriptPath == "" {
 		return nil, nil
 	}
 	return &binding, nil
