@@ -1,22 +1,242 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
 )
 
+type traceEvent struct {
+	kind   string
+	text   map[string]any
+	output output.DecodedFrame
+	atomic output.DecodedAtomicState
+}
+
+type protocolTrace struct {
+	connection *websocket.Conn
+	events     chan traceEvent
+	history    []traceEvent
+}
+
+func newProtocolTrace(t *testing.T, connection *websocket.Conn) *protocolTrace {
+	t.Helper()
+	trace := &protocolTrace{connection: connection, events: make(chan traceEvent, 4096)}
+	go func() {
+		for {
+			kind, data, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			if kind == websocket.BinaryMessage {
+				if frame, decodeErr := output.DecodeOutput(data); decodeErr == nil {
+					trace.events <- traceEvent{kind: "output", output: frame}
+					continue
+				}
+				if state, decodeErr := output.DecodeAtomicState(data); decodeErr == nil {
+					trace.events <- traceEvent{kind: "atomic", atomic: state}
+					continue
+				}
+				trace.events <- traceEvent{kind: "malformed"}
+				continue
+			}
+			var message map[string]any
+			if json.Unmarshal(data, &message) == nil {
+				trace.events <- traceEvent{kind: "text", text: message}
+			}
+		}
+	}()
+	return trace
+}
+
+func (trace *protocolTrace) next(timeout time.Duration) (traceEvent, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case event := <-trace.events:
+		trace.history = append(trace.history, event)
+		return event, nil
+	case <-timer.C:
+		return traceEvent{}, fmt.Errorf("timed out waiting for protocol event")
+	}
+}
+
+func traceRequestID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+}
+
+func subscribeTrace(t *testing.T, trace *protocolTrace, sessionID string) output.DecodedAtomicState {
+	t.Helper()
+	requestID := traceRequestID("subscribe")
+	if err := trace.connection.WriteJSON(api.Envelope{
+		Type: "request", ID: requestID, Method: "session.subscribe",
+		Params: map[string]any{"id": sessionID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var atomicState output.DecodedAtomicState
+	gotAtomic := false
+	gotSynced := false
+	for !gotSynced {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event.kind {
+		case "atomic":
+			if event.atomic.SessionID == sessionID {
+				atomicState = event.atomic
+				gotAtomic = true
+			}
+		case "text":
+			if event.text["t"] == "response" && event.text["id"] == requestID {
+				if ok, _ := event.text["ok"].(bool); !ok {
+					t.Fatalf("subscribe failed: %#v", event.text["error"])
+				}
+			}
+			if event.text["t"] == "synced" && event.text["session"] == sessionID {
+				gotSynced = true
+			}
+		}
+	}
+	if !gotAtomic {
+		t.Fatalf("subscribe %s completed without an atomic state", sessionID)
+	}
+	return atomicState
+}
+
+func unsubscribeTrace(t *testing.T, trace *protocolTrace, sessionID string) {
+	t.Helper()
+	requestID := traceRequestID("unsubscribe")
+	if err := trace.connection.WriteJSON(api.Envelope{
+		Type: "request", ID: requestID, Method: "session.unsubscribe",
+		Params: map[string]any{"id": sessionID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, err := trace.next(3 * time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.kind != "text" || event.text["t"] != "response" || event.text["id"] != requestID {
+			continue
+		}
+		if ok, _ := event.text["ok"].(bool); !ok {
+			t.Fatalf("unsubscribe failed: %#v", event.text["error"])
+		}
+		return
+	}
+}
+
+func validateProtocolTrace(t *testing.T, trace *protocolTrace, final []byte, sessionID string) {
+	t.Helper()
+	var (
+		haveSnapshot bool
+		epoch        uint64
+		sequence     uint64
+		lastEpoch    uint64
+		lastSequence uint64
+		latest       []byte
+	)
+	for index, event := range trace.history {
+		switch event.kind {
+		case "malformed":
+			t.Fatalf("peer received malformed binary frame at event %d", index)
+		case "atomic":
+			state := event.atomic
+			if state.SessionID != sessionID {
+				continue
+			}
+			if haveSnapshot && (state.Epoch < lastEpoch || (state.Epoch == lastEpoch && state.Sequence < lastSequence)) {
+				t.Fatalf("snapshot anchor regressed: previous=%d:%d current=%d:%d", lastEpoch, lastSequence, state.Epoch, state.Sequence)
+			}
+			if int(state.Sequence) != len(state.Payload) || state.Sequence > uint64(len(final)) {
+				t.Fatalf("snapshot anchor/payload mismatch: anchor=%d:%d payload=%d final=%d", state.Epoch, state.Sequence, len(state.Payload), len(final))
+			}
+			if !bytes.Equal(state.Payload, final[:state.Sequence]) {
+				t.Fatalf("snapshot payload differs from the retained output at %d:%d", state.Epoch, state.Sequence)
+			}
+			haveSnapshot = true
+			epoch = state.Epoch
+			sequence = state.Sequence
+			lastEpoch = state.Epoch
+			lastSequence = state.Sequence
+			latest = append(latest[:0], state.Payload...)
+		case "output":
+			frame := event.output
+			if frame.SessionID != sessionID {
+				continue
+			}
+			if !haveSnapshot {
+				t.Fatalf("output arrived before the first snapshot: %#v", frame)
+			}
+			if frame.Epoch != epoch || frame.Sequence != sequence {
+				t.Fatalf("output anchor is not contiguous: want=%d:%d got=%d:%d", epoch, sequence, frame.Epoch, frame.Sequence)
+			}
+			end := frame.Sequence + uint64(len(frame.Payload))
+			if end > uint64(len(final)) || !bytes.Equal(frame.Payload, final[frame.Sequence:end]) {
+				t.Fatalf("output payload differs at %d:%d (%d bytes)", frame.Epoch, frame.Sequence, len(frame.Payload))
+			}
+			sequence = end
+			lastEpoch = frame.Epoch
+			lastSequence = sequence
+			latest = append(latest, frame.Payload...)
+		case "text":
+			if event.text["t"] != "synced" || event.text["session"] != sessionID {
+				continue
+			}
+			syncedEpoch, epochOK := event.text["epoch"].(float64)
+			syncedSequence, sequenceOK := event.text["sequence"].(float64)
+			if !epochOK || !sequenceOK || uint64(syncedEpoch) != epoch || uint64(syncedSequence) != lastSnapshotSequence(trace.history, index, sessionID) {
+				t.Fatalf("synced marker does not match the latest snapshot: %#v", event.text)
+			}
+		}
+	}
+	if !haveSnapshot {
+		t.Fatal("peer received no atomic snapshot")
+	}
+	if !bytes.Equal(latest, final) {
+		t.Fatalf("latest snapshot plus live tail differs from final output: got=%d want=%d", len(latest), len(final))
+	}
+}
+
+func lastSnapshotSequence(history []traceEvent, before int, sessionID string) uint64 {
+	for index := before - 1; index >= 0; index-- {
+		if history[index].kind == "atomic" && history[index].atomic.SessionID == sessionID {
+			return history[index].atomic.Sequence
+		}
+	}
+	return ^uint64(0)
+}
+
+type blockingAtomicStateRuntime struct {
+	*memoryOutputRuntime
+	started     chan struct{}
+	startedOnce sync.Once
+}
+
+func (runtime *blockingAtomicStateRuntime) AtomicState(ctx context.Context, name string) (ghostline.AtomicState, error) {
+	runtime.startedOnce.Do(func() { close(runtime.started) })
+	<-ctx.Done()
+	return ghostline.AtomicState{}, ctx.Err()
+}
+
 // snapshotResizes returns a copy of the recorded runtime resizes so tests
 // can assert on them without racing the runtime mutex.
-func (runtime *spoolRuntime) snapshotResizes() []recordedResize {
+func (runtime *memoryOutputRuntime) snapshotResizes() []recordedResize {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	return append([]recordedResize(nil), runtime.resizes...)
@@ -48,22 +268,24 @@ func newStateWithSessions(t *testing.T, sessions ...string) *store.Store {
 	return state
 }
 
-// newSpoolServiceWithSessions seeds one running session per given ID with a
-// matching spool runtime entry, which is enough for subscribe tests to
+// newMemoryOutputServiceWithSessions seeds one running session per given ID
+// with matching in-memory output, which is enough for subscribe tests to
 // exercise several terminals over a single socket.
-func newSpoolServiceWithSessions(t *testing.T, sessions ...string) (*Service, *spoolRuntime, *httptest.Server) {
+func newMemoryOutputServiceWithSessions(t *testing.T, sessions ...string) (*Service, *memoryOutputRuntime, *httptest.Server) {
 	t.Helper()
 	state := newStateWithSessions(t, sessions...)
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	for _, session := range sessions {
 		if err := runtime.Create(context.Background(), session, t.TempDir(), "", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	service := &Service{Store: state, Runtime: runtime}
-	runtime.mu.Lock()
-	runtime.onInput = service.recordOutput
-	runtime.mu.Unlock()
+	// memoryOutputRuntime.Input already appends bytes to its cursor source and
+	// wakes every reader. Installing Service.recordOutput as an additional
+	// callback would append each input twice, making recovery tests observe
+	// duplicate output that no real Ghostline reader produces.
+	t.Cleanup(service.Shutdown)
 	for _, session := range sessions {
 		if current, ok := service.Session(session); ok {
 			if _, err := service.ensureOutput(context.Background(), current); err != nil {
@@ -79,7 +301,7 @@ func newSpoolServiceWithSessions(t *testing.T, sessions ...string) (*Service, *s
 	return service, runtime, server
 }
 
-func writeSpool(t *testing.T, runtime *spoolRuntime, name, data string) {
+func writeMemoryOutput(t *testing.T, runtime *memoryOutputRuntime, name, data string) {
 	t.Helper()
 	if err := runtime.Input(context.Background(), name, []byte(data)); err != nil {
 		t.Fatal(err)
@@ -113,24 +335,24 @@ func subscribedSessionCount(t *testing.T, service *Service, sessionID string) in
 func TestSubscribeFeedsMultipleSessionsIndependently(t *testing.T) {
 	const firstSession = "subscribe-first"
 	const secondSession = "subscribe-second"
-	service, runtime, httpServer := newSpoolServiceWithSessions(t, firstSession, secondSession)
-	writeSpool(t, runtime, firstSession, "one\r\n")
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, firstSession, secondSession)
+	writeMemoryOutput(t, runtime, firstSession, "one\r\n")
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
 	subscribeForSeed(t, connection, firstSession)
-	writeSpool(t, runtime, secondSession, "two\r\n")
+	writeMemoryOutput(t, runtime, secondSession, "two\r\n")
 	subscribeForSeed(t, connection, secondSession)
 
-	writeSpool(t, runtime, firstSession, "live-one\r")
+	writeMemoryOutput(t, runtime, firstSession, "live-one\r")
 	waitForRingUpper(t, service, firstSession, uint64(len("one\r\nlive-one\r")))
 	frame := readBinaryFrame(t, connection)
 	if frame.SessionID != firstSession || string(frame.Payload) != "live-one\r" {
 		t.Fatalf("first live frame = %#v", frame)
 	}
 
-	writeSpool(t, runtime, secondSession, "live-two\r")
+	writeMemoryOutput(t, runtime, secondSession, "live-two\r")
 	frame = readBinaryFrame(t, connection)
 	if frame.SessionID != secondSession || string(frame.Payload) != "live-two\r" {
 		t.Fatalf("second live frame = %#v", frame)
@@ -145,20 +367,20 @@ func TestSubscribeFeedsMultipleSessionsIndependently(t *testing.T) {
 		t.Fatalf("second session peers = %d, want 0", got)
 	}
 
-	writeSpool(t, runtime, firstSession, "still-one\r")
+	writeMemoryOutput(t, runtime, firstSession, "still-one\r")
 	frame = readBinaryFrame(t, connection)
 	if frame.SessionID != firstSession || string(frame.Payload) != "still-one\r" {
 		t.Fatalf("first session lost its subscription: %#v", frame)
 	}
 
-	writeSpool(t, runtime, secondSession, "quiet-two\r")
+	writeMemoryOutput(t, runtime, secondSession, "quiet-two\r")
 	expectNoBinaryFrame(t, connection)
 }
 
 func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 	const sessionID = "subscribe-passive"
-	service, runtime, httpServer := newSpoolServiceWithSessions(t, sessionID)
-	writeSpool(t, runtime, sessionID, "seed\r\n")
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
@@ -179,9 +401,50 @@ func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 	}
 }
 
+func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
+	const sessionID = "subscribe-explicit-focus"
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	// A hidden Web page subscribes without claiming the shared runtime. The
+	// explicit session id on focus is the only authority it needs to promote
+	// this already-registered output stream after returning to the foreground.
+	subscribeForSeed(t, connection, sessionID)
+	if service.hasFocusedPeer(sessionID) {
+		t.Fatal("passive subscription unexpectedly claimed focus")
+	}
+
+	focused := requestResult[map[string]bool](t, connection, "session.focus", map[string]any{
+		"id": sessionID, "focused": true, "cols": 121, "rows": 41,
+	})
+	if !focused["focused"] || !focused["resized"] {
+		t.Fatalf("explicit focus result = %#v, want focused and resized", focused)
+	}
+	resizes := runtime.snapshotResizes()
+	if len(resizes) != 1 || resizes[0] != (recordedResize{columns: 121, rows: 41}) {
+		t.Fatalf("explicit focus resizes = %#v", resizes)
+	}
+
+	// Blurring releases only the control lease; the output subscription stays
+	// alive so a later focus promotion does not require replaying the state.
+	unfocused := requestResult[map[string]bool](t, connection, "session.focus", map[string]any{
+		"id": sessionID, "focused": false,
+	})
+	if unfocused["focused"] {
+		t.Fatalf("explicit blur result = %#v", unfocused)
+	}
+	requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
+		"cols": 122, "rows": 42,
+	})
+	if got := len(runtime.snapshotResizes()); got != 1 {
+		t.Fatalf("resize after explicit blur mutated runtime: %d calls", got)
+	}
+}
+
 func TestClaimingSubscribeResizesBeforeRecovery(t *testing.T) {
 	const sessionID = "subscribe-claim"
-	service, runtime, httpServer := newSpoolServiceWithSessions(t, sessionID)
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
@@ -202,8 +465,8 @@ func TestClaimingSubscribeResizesBeforeRecovery(t *testing.T) {
 
 func TestControlOnlyAttachSwapsLeaseWithoutOutputWork(t *testing.T) {
 	const sessionID = "control-only"
-	service, runtime, httpServer := newSpoolServiceWithSessions(t, sessionID)
-	writeSpool(t, runtime, sessionID, "seed\r\n")
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
@@ -231,14 +494,14 @@ func TestControlOnlyAttachSwapsLeaseWithoutOutputWork(t *testing.T) {
 	}
 	// Final read on this connection: no snapshot, replay, or live output may
 	// leak from a control-only attach.
-	writeSpool(t, runtime, sessionID, "leak\r")
+	writeMemoryOutput(t, runtime, sessionID, "leak\r")
 	expectNoBinaryFrame(t, connection)
 }
 
 func TestLegacyAttachKeepsSingleSubscriptionSemantics(t *testing.T) {
 	const firstSession = "legacy-first"
 	const secondSession = "legacy-second"
-	service, runtime, httpServer := newSpoolServiceWithSessions(t, firstSession, secondSession)
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, firstSession, secondSession)
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
@@ -258,14 +521,14 @@ func TestLegacyAttachKeepsSingleSubscriptionSemantics(t *testing.T) {
 		t.Fatalf("legacy switch left %d subscriptions on the old session", got)
 	}
 
-	writeSpool(t, runtime, firstSession, "quiet\r")
+	writeMemoryOutput(t, runtime, firstSession, "quiet\r")
 	expectNoBinaryFrame(t, connection)
 }
 
 func TestPeerCloseCleansEverySubscription(t *testing.T) {
 	const firstSession = "close-first"
 	const secondSession = "close-second"
-	service, _, httpServer := newSpoolServiceWithSessions(t, firstSession, secondSession)
+	service, _, httpServer := newMemoryOutputServiceWithSessions(t, firstSession, secondSession)
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{"id": firstSession})
@@ -281,6 +544,226 @@ func TestPeerCloseCleansEverySubscription(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("closing the socket left subscriptions behind")
+}
+
+func TestUnsubscribeCancelsBlockedSubscriptionBeforeReturning(t *testing.T) {
+	const sessionID = "unsubscribe-blocked"
+	state := newStateWithSessions(t, sessionID)
+	runtime := &blockingAtomicStateRuntime{
+		memoryOutputRuntime: newMemoryOutputRuntime(t),
+		started:             make(chan struct{}),
+	}
+	if err := runtime.Create(context.Background(), sessionID, t.TempDir(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		Store:          state,
+		Runtime:        runtime,
+		DefaultRuntime: "ghostline",
+		CommandTimeout: 2 * time.Second,
+	}
+	defer service.Shutdown()
+	handler := NewHTTPServer(service, "secret", nil)
+	httpServer := httptest.NewServer(handler.Handler())
+	defer httpServer.Close()
+
+	connection := openAuthenticatedConnectionWithStateFormat(
+		t,
+		httpServer.URL,
+		"/v1/ws",
+		nil,
+		ghostline.AtomicStateFormat,
+	)
+	defer connection.Close()
+
+	subscribeID := "subscribe-blocked"
+	if err := connection.WriteJSON(api.Envelope{
+		Type: "request", ID: subscribeID, Method: "session.subscribe",
+		Params: map[string]any{"id": sessionID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runtime.started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked atomic state was not reached")
+	}
+
+	unsubscribeID := "unsubscribe-blocked"
+	started := time.Now()
+	if err := connection.WriteJSON(api.Envelope{
+		Type: "request", ID: unsubscribeID, Method: "session.unsubscribe",
+		Params: map[string]any{"id": sessionID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	responses := map[string]bool{}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for len(responses) < 2 {
+		kind, data, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatalf("read cancellation responses: %v (responses=%v)", err, responses)
+		}
+		if kind != websocket.TextMessage {
+			continue
+		}
+		var response api.Response
+		if json.Unmarshal(data, &response) != nil || response.Type != "response" {
+			continue
+		}
+		if response.ID == subscribeID {
+			// Protocol 2 acknowledges the subscription before replay so input
+			// remains responsive. Cancellation may therefore produce a later
+			// best-effort error for the same id; the unsubscribe boundary is the
+			// authoritative completion signal for this test.
+			responses[subscribeID] = true
+		} else if response.ID == unsubscribeID {
+			if !response.OK {
+				t.Fatalf("unsubscribe failed: %s", response.Error)
+			}
+			responses[unsubscribeID] = true
+		}
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("unsubscribe waited too long for blocked subscribe: %v", elapsed)
+	}
+	if got := subscribedSessionCount(t, service, sessionID); got != 0 {
+		t.Fatalf("blocked unsubscribe left %d peer subscriptions", got)
+	}
+
+	handler.peersMu.Lock()
+	peers := make([]*wsPeer, 0, len(handler.peers))
+	for peer := range handler.peers {
+		peers = append(peers, peer)
+	}
+	handler.peersMu.Unlock()
+	for _, peer := range peers {
+		peer.subscriptionMu.Lock()
+		pending := len(peer.pendingSubscriptions)
+		peer.subscriptionMu.Unlock()
+		if pending != 0 {
+			t.Fatalf("pending subscriptions after unsubscribe = %d", pending)
+		}
+	}
+}
+
+func TestMultiplePeersKeepOrderedOutputAcrossRepeatedReanchors(t *testing.T) {
+	const sessionID = "reanchor-stress"
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
+
+	connections := make([]*websocket.Conn, 0, 3)
+	traces := make([]*protocolTrace, 0, 3)
+	for index := 0; index < 3; index++ {
+		connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+		connections = append(connections, connection)
+		traces = append(traces, newProtocolTrace(t, connection))
+	}
+	defer func() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	}()
+
+	for _, trace := range traces {
+		subscribeTrace(t, trace, sessionID)
+	}
+	if got := subscribedSessionCount(t, service, sessionID); got != 3 {
+		t.Fatalf("initial peer subscriptions = %d, want 3", got)
+	}
+
+	// Keep the runtime producing output while two peers repeatedly cross the
+	// recovery boundary. The third peer is disconnected mid-stream to prove a
+	// per-peer teardown does not disturb the remaining readers.
+	writerErr := make(chan error, 1)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for index := 0; index < 240; index++ {
+			marker := []byte(fmt.Sprintf("marker-%03d\r\n", index))
+			if err := runtime.Input(context.Background(), sessionID, marker); err != nil {
+				writerErr <- err
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	for round := 0; round < 12; round++ {
+		if round == 2 {
+			_ = connections[2].Close()
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) && subscribedSessionCount(t, service, sessionID) > 2 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if got := subscribedSessionCount(t, service, sessionID); got != 2 {
+				t.Fatalf("disconnecting one peer left %d subscriptions, want 2", got)
+			}
+		}
+		trace := traces[round%2]
+		unsubscribeTrace(t, trace, sessionID)
+		subscribeTrace(t, trace, sessionID)
+	}
+	<-writerDone
+	select {
+	case err := <-writerErr:
+		t.Fatal(err)
+	default:
+	}
+
+	final, err := runtime.Capture(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The direct Ghostline readers are asynchronous. Drain each surviving
+	// peer until its latest snapshot plus live tail reaches the final cursor.
+	for _, trace := range traces[:2] {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if traceContainsFinalOutput(trace, final, sessionID) {
+				break
+			}
+			_, nextErr := trace.next(50 * time.Millisecond)
+			if nextErr != nil {
+				continue
+			}
+		}
+		if !traceContainsFinalOutput(trace, final, sessionID) {
+			t.Fatalf("peer did not drain to final cursor (%d bytes)", len(final))
+		}
+		validateProtocolTrace(t, trace, final, sessionID)
+	}
+
+	if resizes := runtime.snapshotResizes(); len(resizes) != 0 {
+		t.Fatalf("passive peers changed shared runtime size: %#v", resizes)
+	}
+}
+
+func traceContainsFinalOutput(trace *protocolTrace, final []byte, sessionID string) bool {
+	var (
+		haveSnapshot bool
+		sequence     uint64
+		latest       []byte
+	)
+	for _, event := range trace.history {
+		switch event.kind {
+		case "atomic":
+			if event.atomic.SessionID != sessionID {
+				continue
+			}
+			haveSnapshot = true
+			sequence = event.atomic.Sequence
+			latest = append(latest[:0], event.atomic.Payload...)
+		case "output":
+			if !haveSnapshot || event.output.SessionID != sessionID || event.output.Sequence != sequence {
+				continue
+			}
+			sequence += uint64(len(event.output.Payload))
+			latest = append(latest, event.output.Payload...)
+		}
+	}
+	return haveSnapshot && sequence == uint64(len(final)) && bytes.Equal(latest, final)
 }
 
 // subscribeForSeed subscribes to a fresh session, consumes the reanchor

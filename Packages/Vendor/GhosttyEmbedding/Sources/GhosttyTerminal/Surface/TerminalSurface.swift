@@ -234,7 +234,12 @@ public final class TerminalSurface {
 
     // MARK: - Size Query
 
-    func size() -> TerminalGridMetrics? {
+    /// Returns the current terminal grid measured by Ghostty.
+    ///
+    /// The metric is intentionally exposed as renderer data rather than a
+    /// Warren-specific recovery type so hosts can align their runtime
+    /// viewport before installing an atomic terminal state.
+    public func size() -> TerminalGridMetrics? {
         guard let s = surface else {
             TerminalDebugLog.log(.metrics, "surface size query ignored: missing surface")
             return nil

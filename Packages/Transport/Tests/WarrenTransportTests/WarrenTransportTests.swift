@@ -48,6 +48,24 @@ final class WarrenWireCodecTests: XCTestCase {
         XCTAssertEqual(try codec.decodeFrame(wire), .output(decoded))
     }
 
+    func testAtomicStateRoundTripRemainsDistinctFromOutput() throws {
+        let codec = WarrenWireCodec()
+        let payload = Data("GHOSTSNP-state".utf8)
+        let header = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 11,
+            sequence: 4096,
+            format: "ghostty-vt-snapshot-v1",
+            payloadLength: payload.count
+        ))
+        let wire = try codec.encodeAtomicState(header: header, payload: payload)
+        let decoded = try codec.decodeAtomicStateFrame(wire)
+        XCTAssertEqual(decoded.header, header)
+        XCTAssertEqual(decoded.payload, payload)
+        XCTAssertEqual(try codec.decodeFrame(wire), .atomicState(decoded))
+        XCTAssertThrowsError(try codec.decodeOutputFrame(wire))
+    }
+
     func testExactLimitsAreAcceptedAndOneBeyondIsRejected() throws {
         let payload = [UInt8](repeating: 4, count: 8)
         let frameHeader = header(payloadLength: payload.count)
@@ -64,6 +82,57 @@ final class WarrenWireCodecTests: XCTestCase {
         XCTAssertThrowsError(try WarrenWireCodec(maxHeader: Int(headerLength) - 1).decodeOutputFrame(binary))
         XCTAssertNoThrow(try WarrenWireCodec(maxPayload: payload.count).decodeOutputFrame(binary))
         XCTAssertThrowsError(try WarrenWireCodec(maxPayload: payload.count - 1).decodeOutputFrame(binary))
+    }
+
+    func testAtomicStateUsesTheSharedSixtyFourMiBLimit() throws {
+        let codec = WarrenWireCodec()
+        let format = "ghostline-vt-replay-v1"
+
+        let aboveOrdinaryOutput = Data(
+            repeating: 0x41,
+            count: WarrenWireCodec.defaultMaxPayload + 1
+        )
+        let aboveOutputHeader = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 1,
+            sequence: 0,
+            format: format,
+            payloadLength: aboveOrdinaryOutput.count
+        ))
+        XCTAssertNoThrow(try codec.encodeAtomicState(
+            header: aboveOutputHeader,
+            payload: aboveOrdinaryOutput
+        ))
+
+        let atAtomicLimit = Data(
+            repeating: 0x42,
+            count: WarrenWireCodec.defaultMaxAtomicStatePayload
+        )
+        let atLimitHeader = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 1,
+            sequence: 0,
+            format: format,
+            payloadLength: atAtomicLimit.count
+        ))
+        let wire = try codec.encodeAtomicState(header: atLimitHeader, payload: atAtomicLimit)
+        XCTAssertEqual(try codec.decodeAtomicStateFrame(wire).payload.count, atAtomicLimit.count)
+
+        let aboveAtomicLimit = Data(
+            repeating: 0x43,
+            count: WarrenWireCodec.defaultMaxAtomicStatePayload + 1
+        )
+        let aboveLimitHeader = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 1,
+            sequence: 0,
+            format: format,
+            payloadLength: aboveAtomicLimit.count
+        ))
+        XCTAssertThrowsError(try codec.encodeAtomicState(
+            header: aboveLimitHeader,
+            payload: aboveAtomicLimit
+        ))
     }
 
     func testBinaryErrorMatrixRejectsMalformedEnvelope() throws {
@@ -163,6 +232,49 @@ final class WarrenWireCodecTests: XCTestCase {
                 .headerTooLarge(actual: Int(UInt32.max), limit: WarrenWireCodec.defaultMaxHeader)
             )
         }
+
+        let atomicHeader = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 2,
+            sequence: 3,
+            format: "ghostline-vt-replay-v1",
+            payloadLength: 1
+        ))
+        let atomicWire = try WarrenWireCodec().encodeAtomicState(
+            header: atomicHeader,
+            payload: Data([7])
+        )
+        let mismatchedAtomicHeader = try XCTUnwrap(BinaryAtomicStateFrameHeader(
+            sessionID: sessionID,
+            epoch: 2,
+            sequence: 3,
+            format: "ghostline-vt-replay-v1",
+            payloadLength: 2
+        ))
+        let atomicHeaderMismatch = makeEnvelope(
+            direction: BinaryFrameDirection.hostToClient.rawValue,
+            kind: BinaryFrameKind.atomicState.rawValue,
+            header: Array(try JSONEncoder().encode(mismatchedAtomicHeader)),
+            payloadLength: 1,
+            payload: [7]
+        )
+        XCTAssertThrowsError(try WarrenWireCodec().decodeAtomicStateFrame(atomicHeaderMismatch))
+
+        var wrongDirection = atomicWire
+        wrongDirection[5] = BinaryFrameDirection.clientToHost.rawValue
+        XCTAssertThrowsError(try WarrenWireCodec().decodeAtomicStateFrame(wrongDirection))
+
+        let invalidFormatJSON = Array(
+            "{\"sessionID\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"epoch\":2,\"sequence\":3,\"format\":\"\",\"payloadLength\":1}".utf8
+        )
+        let invalidFormat = makeEnvelope(
+            direction: BinaryFrameDirection.hostToClient.rawValue,
+            kind: BinaryFrameKind.atomicState.rawValue,
+            header: invalidFormatJSON,
+            payloadLength: 1,
+            payload: [7]
+        )
+        XCTAssertThrowsError(try WarrenWireCodec().decodeAtomicStateFrame(invalidFormat))
     }
 
     func testFuzzishMutationsNeverCrashAndPayloadLengthIsChecked() throws {

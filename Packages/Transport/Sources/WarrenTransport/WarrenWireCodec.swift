@@ -6,11 +6,12 @@ import WarrenProtocol
 public enum WarrenDecodedBinaryMessage: Hashable, Sendable {
     case input(WarrenDecodedInputFrame)
     case output(WarrenDecodedOutputFrame)
+    case atomicState(WarrenDecodedAtomicStateFrame)
 
     public var direction: BinaryFrameDirection {
         switch self {
         case .input: return .clientToHost
-        case .output: return .hostToClient
+        case .output, .atomicState: return .hostToClient
         }
     }
 
@@ -18,6 +19,7 @@ public enum WarrenDecodedBinaryMessage: Hashable, Sendable {
         switch self {
         case .input: return .input
         case .output: return .output
+        case .atomicState: return .atomicState
         }
     }
 }
@@ -45,6 +47,17 @@ public struct WarrenDecodedOutputFrame: Hashable, Sendable {
     }
 }
 
+/// A Client-readable opaque terminal-emulator snapshot.
+public struct WarrenDecodedAtomicStateFrame: Hashable, Sendable {
+    public let header: BinaryAtomicStateFrameHeader
+    public let payload: Data
+
+    public init(header: BinaryAtomicStateFrameHeader, payload: Data) {
+        self.header = header
+        self.payload = payload
+    }
+}
+
 /// Encodes control JSON and the bounded binary terminal envelope.
 public struct WarrenWireCodec: Sendable {
     public static let binaryMagic: [UInt8] = [0x44, 0x45, 0x4E, 0x42] // DENB
@@ -52,19 +65,23 @@ public struct WarrenWireCodec: Sendable {
     public static let defaultMaxControl = 64 * 1024
     public static let defaultMaxHeader = 16 * 1024
     public static let defaultMaxPayload = 8 * 1024 * 1024
+    public static let defaultMaxAtomicStatePayload = 64 * 1024 * 1024
 
     public let maxControl: Int
     public let maxHeader: Int
     public let maxPayload: Int
+    public let maxAtomicStatePayload: Int
 
     public init(
         maxControl: Int = WarrenWireCodec.defaultMaxControl,
         maxHeader: Int = WarrenWireCodec.defaultMaxHeader,
-        maxPayload: Int = WarrenWireCodec.defaultMaxPayload
+        maxPayload: Int = WarrenWireCodec.defaultMaxPayload,
+        maxAtomicStatePayload: Int = WarrenWireCodec.defaultMaxAtomicStatePayload
     ) {
         self.maxControl = max(0, maxControl)
         self.maxHeader = max(0, maxHeader)
         self.maxPayload = max(0, maxPayload)
+        self.maxAtomicStatePayload = max(0, maxAtomicStatePayload)
     }
 
     public func encodeControl(_ message: ClientControlMessage) throws -> [UInt8] {
@@ -91,6 +108,8 @@ public struct WarrenWireCodec: Sendable {
             return .input(try decodeInputHeader(envelope))
         case .output:
             return .output(try decodeOutputHeader(envelope))
+        case .atomicState:
+            return .atomicState(try decodeAtomicStateHeader(envelope))
         }
     }
 

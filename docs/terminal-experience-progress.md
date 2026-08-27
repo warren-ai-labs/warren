@@ -1,6 +1,6 @@
 # Terminal Experience Progress
 
-Status: implementation review complete; release readiness is not established
+Status: implementation review complete; release-readiness verification in progress
 Date: 2026-08-27
 Branch: `feat/persistent-warm-runtime`
 HEAD: `b0bd4d8 refactor: own the Ghostty embedding dependency`
@@ -21,9 +21,10 @@ The core architecture and the main native macOS path are implemented:
   a native Ghostty snapshot is unavailable.
 
 The branch is now in integration and release-closure work, not at the start of
-the feature. It cannot yet be called release-ready because protocol rollout is
-a hard cutover, Web has two lifecycle/size gaps, GUI acceptance is incomplete,
-and the checkout is dirty and behind `main`.
+the feature. Protocol 2 is an intentional hard cutover with an explicit
+minimum-client error, Web subscription cleanup and payload limits are covered,
+and deterministic multi-peer recovery tests are in place. Real GUI/device
+acceptance and final branch/worktree review remain before calling it released.
 
 ## Intended user-visible behavior
 
@@ -38,8 +39,11 @@ and the checkout is dirty and behind `main`.
 
 ## Repository snapshot
 
-- `main...HEAD`: 10 commits only on `main`, 18 commits only on this branch.
-- Working tree: 56 changed paths, including 54 modifications and 2 deletions.
+- `main...HEAD`: re-check immediately before release; this checkout contains
+  uncommitted work from the feature series.
+- Working tree: feature implementation and verification changes span Headless,
+  Protocol, Transport, GhosttyAdapter, the macOS model, Web, Onboarding, and
+  documentation.
 - The changes span Headless, Protocol, Transport, GhosttyAdapter, the macOS
   application model, Web, Onboarding, scripts, and terminal documentation.
 - Recent commits form a coherent sequence around Ghostline-only runtime
@@ -90,11 +94,12 @@ Covered by tests:
   payloads, and a two-peer test preventing duplicate output around a snapshot
   captured while the runtime is producing bytes.
 
-Remaining Headless concern: there is no explicit stress test proving the full
-global `epoch + sequence` invariant across several peers and repeated
-reanchors. The implementation pauses the shared reader while taking the
-snapshot and reads the ring boundary atomically, but this boundary still needs
-that stress/consistency test before it is considered fully closed.
+The deterministic `TestMultiplePeersKeepOrderedOutputAcrossRepeatedReanchors`
+scenario exercises three peers, continuous output, repeated unsubscribe/
+subscribe reanchors, one peer disconnect, monotonic anchors, exact snapshot
+prefixes, and complete live tails. `TestUnsubscribeCancelsBlockedSubscriptionBeforeReturning`
+also proves that a blocked recovery is cancellable and leaves no pending
+subscription behind.
 
 ### Protocol and binary frames
 
@@ -119,8 +124,10 @@ Evidence: `Headless/internal/api/types.go`,
 
 Compatibility is intentionally not transparent: protocol 1 and clients that
 do not advertise a state format are rejected. A coordinated rollout policy or
-an explicit minimum-client requirement is still needed for deployed
-Desktop/Web/mobile versions.
+an explicit minimum-client requirement is the rollout policy: deployed
+Desktop/Web/mobile clients must speak protocol 2 and negotiate at least one
+terminal-state format. The server rejects older or incomplete handshakes
+before exposing roster data.
 
 ### macOS Ghostty surface lifecycle
 
@@ -202,25 +209,19 @@ surface client:
   resize is debounced and focus-gated. This is a correct cold recovery path,
   not persistent native warm promotion.
 
-Two Web issues remain open:
-
-1. The tab-change path starts a new `session.subscribe` but has no matching
-   `session.unsubscribe` for the previous session. Headless permits one peer to
-   subscribe to multiple sessions, so an old subscription may continue to
-   consume output and eventually waste queue/reader resources. The next fix
-   should explicitly unsubscribe before switching (or prove an equivalent
-   lifecycle cleanup).
-2. `Web/src/wire.js` still rejects payloads above 8 MiB, while a legal atomic
-   state may be up to 64 MiB. An 8--64 MiB snapshot accepted by Host/Desktop can
-   therefore be rejected by Web. No large-payload end-to-end test currently
-   covers this mismatch.
+Web now tracks one subscription generation, cancels the previous session
+before switching, drops stale callbacks and frames, and clears recovery state
+on reconnect/dispose/deletion. Ordinary output remains capped at 8 MiB while
+atomic state uses the shared 64 MiB limit; Web's decoder and tests enforce the
+same distinction. Passive subscriptions can explicitly reclaim focus after a
+background handoff without changing runtime geometry until focus is granted.
 
 `Onboarding/src/TerminalDemo.jsx` is a fake-host Ghostty WASM interaction demo,
 not a real remote terminal client. Its copy now describes Ghostline-only
 runtime and explicitly distinguishes the real Web client (xterm.js). Onboarding
-unit tests pass; its production build is currently blocked because this
-checkout has no installed `vite` package (`node_modules` is absent), which is
-an environment/setup gap rather than a reported source compilation error.
+unit tests and its production build pass after `npm ci` in the self-contained
+`Onboarding/` package. The README records the Node.js 22+/npm prerequisite and
+keeps `node_modules/` out of version control.
 
 ### Tests and verification
 
@@ -228,28 +229,28 @@ Passing checks recorded for this checkout:
 
 - root Swift package: 73 tests;
 - GhosttyAdapter: 34 tests;
-- Protocol: 7 tests;
-- Transport: 14 tests;
+- Protocol: 8 tests;
+- Transport: 15 tests;
 - StateStore: 24 tests;
-- Web: 135 tests and Vite build;
+- Web: 137 tests and Vite build;
 - Onboarding: 3 tests;
 - `go test ./Headless/...`;
-- `go test -race -count=1 ./Headless/internal/server` (passed in 56.488s);
+- `go test -race -count=1 ./Headless/internal/server`;
 - cloudflared fake-tunnel unit tests;
 - `git diff --check`.
 
-The Onboarding Vite build is the only recorded build failure, and it is due to
-the missing local dependency described above. No current GhosttyAdapter test
-failure is known.
+The Onboarding production build also passes after `npm ci`; no current
+automated build failure is known. Full Go runs include an existing,
+timing-sensitive temporary-directory rename test, so that case is rerun in
+isolation when it reports a cleanup race.
 
 ## Review by release-readiness dimension
 
 Business intrusiveness:
 
 - The runtime is now Ghostline-only and protocol 2 is a hard cutover. This is
-  an intentional product/runtime change, but it changes compatibility and
-  requires a coordinated client/daemon rollout or a documented minimum-client
-  version.
+  an intentional product/runtime change; the documented minimum-client policy
+  requires protocol 2 plus a negotiated terminal-state format.
 
 Interaction impact:
 
@@ -267,14 +268,15 @@ Performance impact:
   rings and per-peer queues.
 - Snapshot installation bypasses the ANSI parser on native Ghostty and keeps
   live output off the main actor.
-- Web stale subscriptions and the payload-limit mismatch are unresolved
-  resource/latency risks; they need measurement after lifecycle cleanup.
+- Web subscription generations cancel stale recovery work before replacement;
+  ordinary output and atomic-state payloads use the same 8 MiB/64 MiB limits
+  as the Host and Swift transport. The remaining performance question is real
+  GUI measurement under sustained output, not an outstanding protocol gap.
 
 Out-of-the-box usability:
 
-- The checked-in Swift, Go, and Web test/build paths pass. A fresh Onboarding
-  build still needs dependency installation, which is not currently encoded in
-  this checkout's runnable state.
+- The checked-in Swift, Go, Web, and Onboarding paths pass after documented
+  lockfile installs (`npm ci` in each self-contained JavaScript package).
 
 Functional coupling:
 
@@ -286,23 +288,18 @@ Functional coupling:
 
 ## Remaining work before calling this release-ready
 
-1. Add a multi-peer, repeated-reanchor stress test for the global
-   `epoch + sequence` invariant.
-2. Fix or formally close Web unsubscribe lifecycle and align Web's atomic-state
-   payload limit with the negotiated 64 MiB protocol limit (with large-payload
-   tests).
-3. Document and validate the protocol-2 rollout/minimum-client policy.
-4. Run real macOS GUI acceptance across the interaction matrix above.
-5. Make the Onboarding build prerequisite reproducible/documented, then rerun
-   the production build.
-6. Reconcile the dirty worktree and branch divergence before release review;
-   this progress document intentionally does not stage or submit the unrelated
-   feature changes.
+1. Run real macOS GUI/device acceptance across the interaction matrix above:
+   first cold entry, zero viewport, recovery resize, first input, warm
+   promotion, and stale recovery after rapid tab switching.
+2. Reconcile the dirty worktree and branch divergence before release review;
+   this progress document records the feature checkout but does not decide
+   which unrelated historical changes should be published.
 
 ## Current conclusion
 
 The new terminal experience is substantially implemented and its native main
 path is covered by focused tests. The work is best described as **core path
-complete, integration and release closure pending**. The two concrete Web
-resource/size gaps, hard protocol cutover, missing GUI acceptance, and dirty
-branch state are the blockers to a release-ready claim.
+complete, integration and release closure pending**. Automated protocol,
+Web-lifecycle, payload-limit, multi-peer, and Onboarding checks are closed;
+real GUI acceptance and final dirty-branch review remain before a
+release-ready claim.

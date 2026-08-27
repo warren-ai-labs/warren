@@ -10,8 +10,8 @@ import WarrenTerminalRenderer
 /// One Ghostty terminal surface backed by Warren's Host output stream.
 ///
 /// The terminal process itself remains owned by the Host; Ghostty only
-/// renders the PTY byte stream and forwards input/resize back to Warren. This is
-/// the same in-memory shape Termio uses for its companion/status architecture.
+/// renders the PTY byte stream and forwards input/resize back to Warren through
+/// Ghostty's host-managed embedding contract.
 @MainActor
 public final class GhosttySurface: Identifiable {
     /// Matches the 1.12 line-height used by the Web terminal while keeping
@@ -129,6 +129,15 @@ public final class GhosttySurface: Identifiable {
         outputWriter.receive(payload)
     }
 
+    @discardableResult
+    public func restoreSnapshot(
+        _ payload: Data,
+        epoch: UInt64,
+        sequence: UInt64
+    ) -> Bool {
+        outputWriter.restoreSnapshot(payload, epoch: epoch, sequence: sequence)
+    }
+
     /// Requests an immediate Ghostty display tick. The first reanchor
     /// snapshot can be written before the surface's display loop has painted
     /// anything; an explicit tick renders it without waiting for the next
@@ -208,7 +217,26 @@ public final class GhosttySurface: Identifiable {
     }
 
     public var terminalSurfaceIsReady: Bool {
-        state.surface?.rawValue != nil
+        state.surface?.rawValue != nil && inMemory.isSurfaceReady
+    }
+
+    /// A recovery snapshot can only be installed once Ghostty owns a native
+    /// surface and has reported a positive grid.  The native pointer appears
+    /// a few instructions before the host-managed session finishes flushing
+    /// pre-surface bytes, so callers must use this stronger predicate instead
+    /// of checking `state.surface` alone.
+    public var terminalViewportIsValid: Bool {
+        guard let size = state.surface?.size() else { return false }
+        return size.columns > 0 && size.rows > 0
+    }
+
+    /// Reads the native grid directly instead of the asynchronously published
+    /// `TerminalViewState.surfaceSize`.  The latter deliberately hops through
+    /// the main actor to stay SwiftUI-safe and can lag one turn behind a fresh
+    /// surface; recovery needs the dimensions Ghostty is using right now.
+    public var terminalSize: TerminalSize? {
+        guard let size = state.surface?.size() else { return nil }
+        return TerminalSize(columns: Int(size.columns), rows: Int(size.rows))
     }
 
     public var terminalViewDescription: String {
@@ -251,7 +279,7 @@ public final class GhosttySurface: Identifiable {
             // memory grows (see docs/decisions/2026-08-17-warm-surface-memory.md).
             builder.withCustom("scrollback-compression", "false")
             // Ghostty's macOS app doubles precise trackpad deltas before they
-            // reach the C API; libghostty-swift forwards raw pixels instead.
+            // reach the C API; Warren's embedding forwards raw pixels instead.
             // Compensate in the core so scroll pacing matches standalone
             // Ghostty instead of feeling half-speed and slightly choppy.
             builder.withCustom("mouse-scroll-multiplier", "precision:2")

@@ -111,9 +111,11 @@ func TestRosterDeltaStreamUsesInitialRevisionAndChangedEntities(t *testing.T) {
 	}
 	defer connection.Close()
 	if err := connection.WriteJSON(api.Envelope{
-		Type:         "auth",
-		Token:        "secret",
-		Capabilities: []string{"roster-delta"},
+		Type:                 "auth",
+		Token:                "secret",
+		Version:              api.Version,
+		Capabilities:         []string{"roster-delta"},
+		TerminalStateFormats: []string{terminalStateFormatANSI},
 	}); err != nil {
 		t.Fatal(err)
 	}

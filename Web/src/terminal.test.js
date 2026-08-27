@@ -16,17 +16,24 @@ test("terminalSize accepts only a positive integer grid", () => {
   assert.equal(terminalSize(null), null);
 });
 
-test("attach subscribes without claiming shared terminal focus", () => {
+test("attach requests an atomic subscription with the measured viewport", () => {
   assert.deepEqual(
     attachTerminalMessage("session-1", { cols: 96, rows: 31 }),
     {
-      method: "session.attach",
-      params: { id: "session-1", focused: false, cols: 96, rows: 31 },
+      method: "session.subscribe",
+      params: { id: "session-1", claim: true, cols: 96, rows: 31 },
     },
   );
   assert.deepEqual(
     attachTerminalMessage("session-1", { cols: 0, rows: 31 }),
-    { method: "session.attach", params: { id: "session-1", focused: false } },
+    { method: "session.subscribe", params: { id: "session-1", claim: true } },
+  );
+  assert.deepEqual(
+    attachTerminalMessage("session-1", { cols: 96, rows: 31 }, null, false),
+    {
+      method: "session.subscribe",
+      params: { id: "session-1", claim: false, cols: 96, rows: 31 },
+    },
   );
 });
 

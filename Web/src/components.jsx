@@ -715,7 +715,7 @@ export function PresetBar({ presets, onCreateSession }) {
 export function EmptyTerminal({
   activeWorkspace,
   activeSession,
-  attachedSession,
+  terminalReadySession,
   tabCount,
   projectCount,
   override,
@@ -726,7 +726,7 @@ export function EmptyTerminal({
 
   if (override) {
     content = override.loading ? <Loading message={override.message} /> : <span>{override.message}</span>;
-  } else if (activeSession && attachedSession === activeSession) {
+  } else if (activeSession && terminalReadySession === activeSession) {
     hidden = true;
     content = null;
   } else if (activeSession) {
