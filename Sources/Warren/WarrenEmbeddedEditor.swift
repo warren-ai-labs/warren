@@ -196,7 +196,7 @@ enum WarrenEmbeddedEditorProfile {
             "go.toolsManagement.checkForUpdates": "off",
             "security.workspace.trust.enabled": false,
             "scm.graph.pageOnScroll": false,
-            "scm.graph.pageSize": 6,
+            "scm.graph.pageSize": 20,
             "telemetry.telemetryLevel": "off",
             "update.showReleaseNotes": false,
             "window.commandCenter": false,

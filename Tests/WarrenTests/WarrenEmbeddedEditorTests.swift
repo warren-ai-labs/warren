@@ -77,7 +77,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(settings["git.showCommitInput"] as? Bool, true)
         XCTAssertEqual(settings["git.untrackedChanges"] as? String, "mixed")
         XCTAssertEqual(settings["scm.graph.pageOnScroll"] as? Bool, false)
-        XCTAssertEqual(settings["scm.graph.pageSize"] as? Int, 6)
+        XCTAssertEqual(settings["scm.graph.pageSize"] as? Int, 20)
         XCTAssertEqual(settings["go.showWelcome"] as? Bool, false)
         XCTAssertEqual(settings["go.survey.prompt"] as? Bool, false)
         XCTAssertEqual(settings["go.toolsManagement.checkForUpdates"] as? String, "off")
