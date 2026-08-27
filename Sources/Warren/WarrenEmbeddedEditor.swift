@@ -1211,6 +1211,73 @@ enum WarrenEmbeddedEditorChrome {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: WarrenEmbeddedEditorPreviewTheme.source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        ))
+    }
+}
+
+enum WarrenEmbeddedEditorPreviewTheme {
+    static let source = #"""
+    (() => {
+        const previewPath = "/vs/workbench/contrib/webview/browser/pre/";
+        if (!window.location.href.includes(previewPath)) {
+            return;
+        }
+
+        const install = () => {
+            if (!document.documentElement) {
+                return false;
+            }
+            if (document.getElementById("warren-markdown-preview-dark-style")) {
+                return true;
+            }
+            const style = document.createElement("style");
+            style.id = "warren-markdown-preview-dark-style";
+            style.textContent = `
+                :root,
+                html,
+                body {
+                    color-scheme: dark !important;
+                }
+                html,
+                body {
+                    background-color: var(--vscode-editor-background, #151110) !important;
+                    color: var(--vscode-editor-foreground, #eae8e6) !important;
+                }
+            `;
+            document.documentElement.appendChild(style);
+            return true;
+        };
+
+        if (!install()) {
+            window.addEventListener("DOMContentLoaded", install, { once: true });
+        }
+    })();
+    """#
+}
+
+enum WarrenEmbeddedEditorNavigationDecision: Equatable {
+    case allow
+    case openExternally
+    case cancel
+}
+
+enum WarrenEmbeddedEditorNavigationPolicy {
+    static func decision(for destination: URL) -> WarrenEmbeddedEditorNavigationDecision {
+        guard let scheme = destination.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            // vscode-webview:// and vscode-resource:// are handled by the
+            // embedded editor. Never hand custom schemes to macOS, otherwise
+            // NSWorkspace may show an application chooser.
+            return .cancel
+        }
+        if destination.host == "127.0.0.1" {
+            return .allow
+        }
+        return .openExternally
     }
 }
 
@@ -1274,10 +1341,13 @@ private final class WarrenEmbeddedEditorNavigationDelegate:
             decisionHandler(.cancel)
             return
         }
-        if destination.host == "127.0.0.1" {
+        switch WarrenEmbeddedEditorNavigationPolicy.decision(for: destination) {
+        case .allow:
             decisionHandler(.allow)
-        } else {
+        case .openExternally:
             NSWorkspace.shared.open(destination)
+            decisionHandler(.cancel)
+        case .cancel:
             decisionHandler(.cancel)
         }
     }
