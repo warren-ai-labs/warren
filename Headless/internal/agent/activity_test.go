@@ -138,6 +138,25 @@ func TestActivityTrackerIgnoresSidechains(t *testing.T) {
 	}
 }
 
+func TestActivityTrackerCompletesWhenBoundaryIsOnToolOutput(t *testing.T) {
+	tracker := NewActivityTracker()
+	tracker.Observe(api.AgentEvent{Type: "user"})
+	tracker.Observe(api.AgentEvent{Type: "tool_call", CallID: "call-1"})
+	tracker.Observe(api.AgentEvent{
+		Type:       "tool_output",
+		CallID:     "call-1",
+		ToolStatus: "success",
+		StopReason: "stop",
+	})
+	if got := tracker.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("tool-boundary activity = %q, want ready", got)
+	}
+	turns := tracker.DrainTurns()
+	if len(turns) != 2 || turns[0] != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) || turns[1] != (api.AgentTurn{ID: 1, Status: api.AgentTurnCompleted}) {
+		t.Fatalf("tool-boundary turns = %#v, want started then completed", turns)
+	}
+}
+
 func TestParserDrivesCodexActivity(t *testing.T) {
 	parser := newParser("codex")
 
