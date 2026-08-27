@@ -1010,7 +1010,9 @@ enum WarrenEmbeddedEditorChrome {
         };
 
         const markdownPreviewTarget = () => document.querySelector(
-            ".monaco-editor.focused .inputarea, "
+            ".monaco-editor.focused .native-edit-context, "
+                + ".monaco-editor .native-edit-context, "
+                + ".monaco-editor.focused .inputarea, "
                 + ".monaco-editor .inputarea"
         );
 
@@ -1108,7 +1110,20 @@ enum WarrenEmbeddedEditorChrome {
                     const editor = workbench.querySelector(
                         ".monaco-editor.focused, .monaco-editor"
                     );
-                    return editor?.getAttribute("data-mode-id") === "markdown";
+                    if (editor?.getAttribute("data-mode-id")) {
+                        return editor.getAttribute("data-mode-id") === "markdown";
+                    }
+                    // VS Code 1.112 replaced Monaco's data-mode-id with the
+                    // stable status bar language item and native edit context.
+                    // Read the item rather than guessing from the file name so
+                    // untitled and extensionless Markdown documents work too.
+                    const mode = workbench.querySelector(
+                        '[id="status.editor.mode"]'
+                    );
+                    const modeName = mode?.getAttribute("aria-label")
+                        ?? mode?.textContent
+                        ?? "";
+                    return /^\s*markdown\s*$/i.test(modeName);
                 };
                 previewControl = undefined;
                 const mountedControls = controls.map((control) => {
@@ -1132,7 +1147,7 @@ enum WarrenEmbeddedEditorChrome {
                 });
                 previewVisibilityObserver.observe(workbench, {
                     attributes: true,
-                    attributeFilter: ["class", "data-mode-id"],
+                    attributeFilter: ["aria-label", "class", "data-mode-id"],
                     childList: true,
                     subtree: true
                 });
