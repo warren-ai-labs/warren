@@ -723,67 +723,56 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         isAddingSession: Bool,
         detail: AnyView?
     ) -> some View {
-        ZStack {
-            VStack(spacing: 0) {
-                if contentMode == .terminal {
-                    WarrenDesktopPresetBar(
-                        workspace: presentation.workspace,
-                        terminalGroup: presentation.terminalGroup,
-                        isBusy: isAddingSession,
-                        onLaunch: { request in launchSession(request, in: presentation) }
-                    )
-                }
-                ZStack {
-                    WarrenDesktopWorkspaceContent(
-                        workspace: presentation.contentWorkspace,
-                        terminalGroup: presentation.contentTerminalGroup,
-                        tab: presentation.tab,
-                        hasProjects: !projection.groups.isEmpty,
-                        connectionState: projection.connectionState,
-                        endpointCapabilities: endpointCapabilities,
-                        // Superset keeps the 28pt pane toolbar in workspace
-                        // mode too. It is pane chrome, not a duplicate top bar.
-                        showsPaneHeader: true,
-                        session: presentation.session,
-                        hostName: projection.host.name,
-                        titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
-                        terminalFont: TerminalFontPreference(family: terminalFontFamily, size: terminalFontSize),
-                        wantsTerminalFocus: terminalFocusRequested
-                            && contentMode == .terminal
-                            && !commandPalettePresented
-                            && !settingsPresented
-                            && detail == nil,
-                        onAddProject: { dispatch(.addProject) },
-                        onImportSuperset: { dispatch(.importSuperset) },
-                        terminalSurface: terminalSurface
-                    )
-                    .opacity(contentMode == .terminal ? 1 : 0)
-                    .allowsHitTesting(contentMode == .terminal && detail == nil)
-                    .accessibilityHidden(contentMode != .terminal || detail != nil)
-
-                    if let workspace = presentation.workspace,
-                       workspaceContentModes[workspace.id] != nil,
-                       embeddedEditorAvailable {
-                        WarrenDesktopEmbeddedEditorPane(
-                            workspace: workspace,
-                            surface: editorSurface(workspace)
-                        )
-                        .opacity(contentMode == .editor ? 1 : 0)
-                        .allowsHitTesting(contentMode == .editor && detail == nil)
-                        .accessibilityHidden(contentMode != .editor || detail != nil)
-                    }
-                }
+        VStack(spacing: 0) {
+            if contentMode == .terminal {
+                WarrenDesktopPresetBar(
+                    workspace: presentation.workspace,
+                    terminalGroup: presentation.terminalGroup,
+                    isBusy: isAddingSession,
+                    onLaunch: { request in launchSession(request, in: presentation) }
+                )
             }
-            .opacity(detail == nil ? 1 : 0)
-            .allowsHitTesting(detail == nil)
-            .accessibilityHidden(detail != nil)
+            ZStack {
+                WarrenDesktopWorkspaceContent(
+                    workspace: presentation.contentWorkspace,
+                    terminalGroup: presentation.contentTerminalGroup,
+                    tab: presentation.tab,
+                    hasProjects: !projection.groups.isEmpty,
+                    connectionState: projection.connectionState,
+                    endpointCapabilities: endpointCapabilities,
+                    showsPaneHeader: true,
+                    session: presentation.session,
+                    hostName: projection.host.name,
+                    titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
+                    terminalFont: TerminalFontPreference(family: terminalFontFamily, size: terminalFontSize),
+                    wantsTerminalFocus: terminalFocusRequested
+                        && contentMode == .terminal
+                        && !commandPalettePresented
+                        && !settingsPresented
+                        && detail == nil,
+                    detail: detail,
+                    onAddProject: { dispatch(.addProject) },
+                    onImportSuperset: { dispatch(.importSuperset) },
+                    terminalSurface: terminalSurface
+                )
+                .opacity(contentMode == .terminal || detail != nil ? 1 : 0)
+                .allowsHitTesting(contentMode == .terminal || detail != nil)
+                .accessibilityHidden(contentMode != .terminal && detail == nil)
 
-            if let detail {
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .windowBackgroundColor))
+                if let workspace = presentation.workspace,
+                   workspaceContentModes[workspace.id] != nil,
+                   embeddedEditorAvailable {
+                    WarrenDesktopEmbeddedEditorPane(
+                        workspace: workspace,
+                        surface: editorSurface(workspace)
+                    )
+                    .opacity(contentMode == .editor && detail == nil ? 1 : 0)
+                    .allowsHitTesting(contentMode == .editor && detail == nil)
+                    .accessibilityHidden(contentMode != .editor || detail != nil)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: detail != nil) { isPresented in
             terminalFocusRequested = !isPresented
         }

@@ -435,6 +435,32 @@ final class WarrenDesktopGitPanelTests: XCTestCase {
         XCTAssertEqual(lines[7].newLine, 2)
     }
 
+    func testSplitDiffPairsReplacementLinesAndOmitsMetadata() {
+        let diff = """
+        diff --git a/a.txt b/a.txt
+        index 123..456 100644
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -1,3 +1,3 @@
+         context
+        -old one
+        -old two
+        +new one
+        +new two
+        """
+
+        let rows = WarrenGitSplitRow.make(from: WarrenDesktopGitDiffParser.parse(diff))
+
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(rows[0].fullWidth?.kind, .hunk)
+        XCTAssertEqual(rows[1].old?.kind, .context)
+        XCTAssertEqual(rows[1].new?.kind, .context)
+        XCTAssertEqual(rows[2].old?.text, "old one")
+        XCTAssertEqual(rows[2].new?.text, "new one")
+        XCTAssertEqual(rows[3].old?.text, "old two")
+        XCTAssertEqual(rows[3].new?.text, "new two")
+    }
+
     func testRelativeTimeAndStatusLabels() {
         XCTAssertEqual(WarrenDesktopGitRelativeTime.string(from: ""), "")
         XCTAssertEqual(

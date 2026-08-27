@@ -18,6 +18,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let titleTemplate: TerminalDisplayTitleTemplate
     let terminalFont: TerminalFontPreference
     let wantsTerminalFocus: Bool
+    let detail: AnyView?
     let onAddProject: () -> Void
     let onImportSuperset: () -> Void
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
@@ -47,6 +48,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 hostName: hostName,
                 titleTemplate: titleTemplate,
                 showsPaneHeader: showsPaneHeader,
+                detail: detail,
                 terminalSurface: terminalSurface(
                     WarrenDesktopTerminalContext(
                         workspace: workspace,
@@ -71,6 +73,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 hostName: hostName,
                 titleTemplate: titleTemplate,
                 showsPaneHeader: showsPaneHeader,
+                detail: detail,
                 terminalSurface: terminalSurface(
                     WarrenDesktopTerminalContext(
                         terminalGroup: terminalGroup,
@@ -210,6 +213,7 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     let hostName: String
     let titleTemplate: TerminalDisplayTitleTemplate
     let showsPaneHeader: Bool
+    let detail: AnyView?
     let terminalSurface: TerminalSurface
 
     @Environment(\.colorScheme) private var colorScheme
@@ -299,6 +303,15 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(WarrenSpacing.compact)
                     .background(tokens.background)
+                    .opacity(detail == nil ? 1 : 0)
+                    .allowsHitTesting(detail == nil)
+                    .accessibilityHidden(detail != nil)
+
+                if let detail {
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(tokens.background)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

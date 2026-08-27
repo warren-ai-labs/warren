@@ -1048,9 +1048,16 @@ private struct WarrenGitActionButtonStyle: ButtonStyle {
 
 // MARK: - File diff viewer
 
+private enum WarrenGitDiffMetrics {
+    static let lineNumberWidth: CGFloat = 44
+    static let indicatorWidth: CGFloat = 18
+    static let lineHeight: CGFloat = 18
+    static let codeFont = Font.system(size: 12, design: .monospaced)
+    static let lineNumberFont = Font.system(size: 11, design: .monospaced)
+}
+
 /// Full-area file diff viewer, replicating the web client's `FileDiffView`.
-/// The terminal stays mounted underneath; the composition root overlays this
-/// view while a file is selected.
+/// The terminal stays mounted underneath while this view replaces its surface.
 public struct WarrenDesktopGitDiffView: View {
     @ObservedObject var model: WarrenDesktopGitPanelModel
 
@@ -1087,12 +1094,11 @@ public struct WarrenDesktopGitDiffView: View {
                 .accessibilityLabel("File \(model.fileView?.path ?? "")")
             if model.fileView?.staged == true {
                 Text("staged")
-                    .font(WarrenTypography.badge)
-                    .foregroundStyle(tokens.info)
-                    .padding(.horizontal, WarrenSpacing.xs)
-                    .padding(.vertical, 2)
-                    .background(tokens.info.opacity(0.12))
-                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .background(tokens.tertiaryWash)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.xs))
             }
             if let commit = model.fileView?.commit {
                 Text(commit)
@@ -1105,15 +1111,18 @@ public struct WarrenDesktopGitDiffView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             .buttonStyle(.plain)
-            .frame(width: 22, height: 22)
+            .frame(
+                width: WarrenLayoutMetrics.compactControlHeight,
+                height: WarrenLayoutMetrics.compactControlHeight
+            )
             .contentShape(.rect)
             .foregroundStyle(tokens.mutedForeground)
             .help("Close file diff")
             .accessibilityLabel("Close file diff")
         }
-        .padding(.horizontal, WarrenSpacing.medium)
-        .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
-        .background(tokens.chromeSurface)
+        .padding(.horizontal, WarrenSpacing.large)
+        .padding(.vertical, WarrenSpacing.compact)
+        .background(tokens.background)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(tokens.border)
@@ -1123,7 +1132,7 @@ public struct WarrenDesktopGitDiffView: View {
 
     private func tabs(tokens: WarrenColorTokens) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: WarrenSpacing.small) {
+            HStack(spacing: WarrenSpacing.xxs) {
                 WarrenGitDiffTab(
                     title: "Diff",
                     isSelected: model.diffViewTab == .diff,
@@ -1137,8 +1146,18 @@ public struct WarrenDesktopGitDiffView: View {
                     action: { model.diffViewTab = .file }
                 )
                 Spacer(minLength: 0)
+            }
+            .padding(.horizontal, WarrenSpacing.large)
+            .padding(.top, WarrenSpacing.xs)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(tokens.border)
+                    .frame(height: WarrenSpacing.hairline)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
                 if model.diffViewTab == .diff {
-                    HStack(spacing: 2) {
+                    HStack(spacing: WarrenSpacing.medium) {
                         WarrenGitDiffStyleButton(
                             title: "Highlight",
                             isSelected: model.diffStyle == .split,
@@ -1152,23 +1171,22 @@ public struct WarrenDesktopGitDiffView: View {
                             action: { model.diffStyle = .unified }
                         )
                     }
-                    .padding(2)
-                    .background(tokens.muted)
-                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                }
-            }
-            .padding(.horizontal, WarrenSpacing.medium)
-            .frame(height: 32)
+                    .padding(.horizontal, WarrenSpacing.large)
+                    .padding(.top, WarrenSpacing.medium)
 
-            Group {
-                if model.diffViewTab == .diff {
-                    if model.diffStyle == .unified {
-                        WarrenGitUnifiedDiffView(diff: model.fileDiff.diff)
-                    } else {
-                        WarrenGitSplitDiffView(diff: model.fileDiff.diff)
+                    Group {
+                        if model.diffStyle == .unified {
+                            WarrenGitUnifiedDiffView(diff: model.fileDiff.diff)
+                        } else {
+                            WarrenGitSplitDiffView(diff: model.fileDiff.diff)
+                        }
                     }
+                    .padding(.horizontal, WarrenSpacing.large)
+                    .padding(.vertical, WarrenSpacing.medium)
                 } else {
                     WarrenGitFileContentView(content: model.fileDiff.content)
+                        .padding(.horizontal, WarrenSpacing.large)
+                        .padding(.vertical, WarrenSpacing.medium)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1177,19 +1195,12 @@ public struct WarrenDesktopGitDiffView: View {
     }
 
     private func emptyState(_ message: String, tokens: WarrenColorTokens, isError: Bool = false) -> some View {
-        VStack(spacing: WarrenSpacing.standard) {
-            if !isError {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityHidden(true)
-            }
-            Text(message)
-                .font(WarrenTypography.supporting)
-                .foregroundStyle(isError ? tokens.destructive : tokens.mutedForeground)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, WarrenSpacing.large)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text(message)
+            .font(WarrenTypography.supporting)
+            .foregroundStyle(isError ? tokens.destructive : tokens.mutedForeground)
+            .padding(WarrenSpacing.large)
+            .background(isError ? tokens.destructive.opacity(0.08) : .clear)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
     }
@@ -1204,12 +1215,15 @@ private struct WarrenGitDiffTab: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(WarrenTypography.chromeLabel)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                .padding(.horizontal, WarrenSpacing.small + 2)
-                .padding(.vertical, 3)
-                .background(isSelected ? tokens.muted : .clear)
-                .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                .padding(.horizontal, WarrenSpacing.medium)
+                .padding(.vertical, WarrenSpacing.xs)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(isSelected ? tokens.highlight : .clear)
+                        .frame(height: 2)
+                }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -1227,12 +1241,8 @@ private struct WarrenGitDiffStyleButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(WarrenTypography.chromeLabel)
-                .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                .padding(.horizontal, WarrenSpacing.small)
-                .padding(.vertical, 2)
-                .background(isSelected ? tokens.ring : .clear)
-                .clipShape(.rect(cornerRadius: WarrenRadius.small - 1))
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? tokens.highlight : tokens.mutedForeground)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title) diff layout")
@@ -1249,44 +1259,69 @@ private struct WarrenGitUnifiedDiffView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let lines = WarrenDesktopGitDiffParser.parse(diff)
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    HStack(spacing: 0) {
-                        lineNumber(line.oldLine, tokens: tokens, width: 40)
-                        lineNumber(line.newLine, tokens: tokens, width: 40)
-                        Text(line.text.isEmpty ? " " : line.text)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(foreground(for: line.kind, tokens: tokens))
-                            .lineLimit(1)
-                            .textSelection(.enabled)
+        let lines = WarrenDesktopGitDiffParser.parse(diff).filter { $0.kind != .meta }
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        HStack(spacing: 0) {
+                            lineNumber(line.oldLine, tokens: tokens)
+                            lineNumber(line.newLine, tokens: tokens)
+                            indicator(for: line.kind, tokens: tokens)
+                            Text(line.text.isEmpty ? " " : line.text)
+                                .font(WarrenGitDiffMetrics.codeFont)
+                                .foregroundStyle(foreground(for: line.kind, tokens: tokens))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.trailing, WarrenSpacing.compact)
+                                .textSelection(.enabled)
+                        }
+                        .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
+                        .background(background(for: line.kind, tokens: tokens))
                     }
-                    .background(background(for: line.kind, tokens: tokens))
                 }
+                .padding(.vertical, WarrenSpacing.xs)
             }
-            .padding(.vertical, WarrenSpacing.xs)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
     }
 
-    private func lineNumber(_ number: Int?, tokens: WarrenColorTokens, width: CGFloat) -> some View {
+    private func lineNumber(_ number: Int?, tokens: WarrenColorTokens) -> some View {
         Text(number.map(String.init) ?? "")
-            .font(.system(size: 10, design: .monospaced))
+            .font(WarrenGitDiffMetrics.lineNumberFont)
             .foregroundStyle(tokens.mutedForeground.opacity(0.7))
-            .frame(width: width, alignment: .trailing)
-            .padding(.horizontal, WarrenSpacing.xs)
+            .frame(width: WarrenGitDiffMetrics.lineNumberWidth, alignment: .trailing)
+            .padding(.trailing, WarrenSpacing.xs)
+            .accessibilityHidden(true)
+    }
+
+    private func indicator(for kind: WarrenDesktopGitDiffLineKind, tokens: WarrenColorTokens) -> some View {
+        let value: String
+        let color: Color
+        switch kind {
+        case .add:
+            value = "+"
+            color = tokens.success
+        case .del:
+            value = "-"
+            color = tokens.destructive
+        case .hunk, .meta, .context:
+            value = ""
+            color = tokens.mutedForeground
+        }
+        return Text(value)
+            .font(WarrenGitDiffMetrics.codeFont)
+            .foregroundStyle(color)
+            .frame(width: WarrenGitDiffMetrics.indicatorWidth)
             .accessibilityHidden(true)
     }
 
     private func foreground(for kind: WarrenDesktopGitDiffLineKind, tokens: WarrenColorTokens) -> Color {
         switch kind {
-        case .add: tokens.success
-        case .del: tokens.destructive
+        case .add, .del, .context: tokens.foreground
         case .hunk: tokens.info
         case .meta: tokens.mutedForeground
-        case .context: tokens.foreground
         }
     }
 
@@ -1307,75 +1342,165 @@ private struct WarrenGitSplitDiffView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let lines = WarrenDesktopGitDiffParser.parse(diff)
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    HStack(spacing: 0) {
-                        side(
-                            number: line.kind == .del || line.kind == .context ? line.oldLine : nil,
-                            text: line.kind == .add ? "" : line.text,
-                            kind: line.kind,
-                            tokens: tokens,
-                            isOld: true
-                        )
-                        side(
-                            number: line.kind == .add || line.kind == .context ? line.newLine : nil,
-                            text: line.kind == .del ? "" : line.text,
-                            kind: line.kind,
-                            tokens: tokens,
-                            isOld: false
-                        )
+        let rows = WarrenGitSplitRow.make(from: WarrenDesktopGitDiffParser.parse(diff))
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        if let fullWidth = row.fullWidth {
+                            fullWidthRow(fullWidth, tokens: tokens, viewportWidth: proxy.size.width)
+                        } else {
+                            HStack(spacing: 0) {
+                                side(
+                                    line: row.old,
+                                    tokens: tokens,
+                                    isOld: true,
+                                    minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2
+                                )
+                                Rectangle()
+                                    .fill(tokens.border)
+                                    .frame(width: WarrenSpacing.hairline)
+                                side(
+                                    line: row.new,
+                                    tokens: tokens,
+                                    isOld: false,
+                                    minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2
+                                )
+                            }
+                            .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
+                        }
                     }
-                    .background(splitBackground(for: line.kind, tokens: tokens))
                 }
+                .padding(.vertical, WarrenSpacing.xs)
             }
-            .padding(.vertical, WarrenSpacing.xs)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
     }
 
     private func side(
-        number: Int?,
-        text: String,
-        kind: WarrenDesktopGitDiffLineKind,
+        line: WarrenDesktopGitDiffLine?,
         tokens: WarrenColorTokens,
-        isOld: Bool
+        isOld: Bool,
+        minimumWidth: CGFloat
     ) -> some View {
         HStack(spacing: 0) {
-            Text(number.map(String.init) ?? "")
-                .font(.system(size: 10, design: .monospaced))
+            Text(lineNumber(for: line, isOld: isOld))
+                .font(WarrenGitDiffMetrics.lineNumberFont)
                 .foregroundStyle(tokens.mutedForeground.opacity(0.7))
-                .frame(width: 40, alignment: .trailing)
-                .padding(.horizontal, WarrenSpacing.xs)
+                .frame(width: WarrenGitDiffMetrics.lineNumberWidth, alignment: .trailing)
+                .padding(.trailing, WarrenSpacing.xs)
                 .accessibilityHidden(true)
-            Text(text.isEmpty ? " " : text)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(splitForeground(for: kind, tokens: tokens))
+            Text(indicator(for: line, isOld: isOld))
+                .font(WarrenGitDiffMetrics.codeFont)
+                .foregroundStyle(indicatorColor(for: line, tokens: tokens))
+                .frame(width: WarrenGitDiffMetrics.indicatorWidth)
+                .accessibilityHidden(true)
+            Text(line?.text.isEmpty == false ? line?.text ?? "" : " ")
+                .font(WarrenGitDiffMetrics.codeFont)
+                .foregroundStyle(tokens.foreground)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.trailing, WarrenSpacing.compact)
                 .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isOld ? tokens.destructive.opacity(0.06) : tokens.success.opacity(0.06), ignoresSafeAreaEdges: [])
+        .frame(minWidth: minimumWidth, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
+        .background(sideBackground(for: line, tokens: tokens, isOld: isOld))
     }
 
-    private func splitForeground(for kind: WarrenDesktopGitDiffLineKind, tokens: WarrenColorTokens) -> Color {
-        switch kind {
+    private func fullWidthRow(
+        _ line: WarrenDesktopGitDiffLine,
+        tokens: WarrenColorTokens,
+        viewportWidth: CGFloat
+    ) -> some View {
+        Text(line.text.isEmpty ? " " : line.text)
+            .font(WarrenGitDiffMetrics.codeFont)
+            .foregroundStyle(line.kind == .hunk ? tokens.info : tokens.mutedForeground)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.leading, WarrenGitDiffMetrics.lineNumberWidth + WarrenGitDiffMetrics.indicatorWidth)
+            .padding(.trailing, WarrenSpacing.compact)
+            .frame(minWidth: viewportWidth, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
+            .background(line.kind == .hunk ? tokens.info.opacity(0.10) : tokens.muted.opacity(0.4))
+            .textSelection(.enabled)
+    }
+
+    private func lineNumber(for line: WarrenDesktopGitDiffLine?, isOld: Bool) -> String {
+        let number = isOld ? line?.oldLine : line?.newLine
+        return number.map(String.init) ?? ""
+    }
+
+    private func indicator(for line: WarrenDesktopGitDiffLine?, isOld: Bool) -> String {
+        guard let line else { return "" }
+        if isOld, line.kind == .del { return "-" }
+        if !isOld, line.kind == .add { return "+" }
+        return ""
+    }
+
+    private func indicatorColor(for line: WarrenDesktopGitDiffLine?, tokens: WarrenColorTokens) -> Color {
+        switch line?.kind {
         case .add: tokens.success
         case .del: tokens.destructive
-        case .hunk: tokens.info
-        case .meta: tokens.mutedForeground
-        case .context: tokens.foreground
+        default: tokens.mutedForeground
         }
     }
 
-    private func splitBackground(for kind: WarrenDesktopGitDiffLineKind, tokens: WarrenColorTokens) -> Color {
-        switch kind {
-        case .hunk: tokens.info.opacity(0.10)
-        case .meta: tokens.muted.opacity(0.4)
-        default: .clear
+    private func sideBackground(
+        for line: WarrenDesktopGitDiffLine?,
+        tokens: WarrenColorTokens,
+        isOld: Bool
+    ) -> Color {
+        if isOld, line?.kind == .del {
+            return tokens.destructive.opacity(0.12)
         }
+        if !isOld, line?.kind == .add {
+            return tokens.success.opacity(0.12)
+        }
+        return .clear
+    }
+}
+
+struct WarrenGitSplitRow {
+    let old: WarrenDesktopGitDiffLine?
+    let new: WarrenDesktopGitDiffLine?
+    let fullWidth: WarrenDesktopGitDiffLine?
+
+    static func make(from lines: [WarrenDesktopGitDiffLine]) -> [Self] {
+        let visibleLines = lines.filter { $0.kind != .meta }
+        var rows: [Self] = []
+        var index = 0
+        while index < visibleLines.count {
+            let line = visibleLines[index]
+            if line.kind == .del {
+                var deletions: [WarrenDesktopGitDiffLine] = []
+                var additions: [WarrenDesktopGitDiffLine] = []
+                while index < visibleLines.count, visibleLines[index].kind == .del {
+                    deletions.append(visibleLines[index])
+                    index += 1
+                }
+                while index < visibleLines.count, visibleLines[index].kind == .add {
+                    additions.append(visibleLines[index])
+                    index += 1
+                }
+                for offset in 0..<max(deletions.count, additions.count) {
+                    rows.append(Self(
+                        old: offset < deletions.count ? deletions[offset] : nil,
+                        new: offset < additions.count ? additions[offset] : nil,
+                        fullWidth: nil
+                    ))
+                }
+                continue
+            }
+            if line.kind == .add {
+                rows.append(Self(old: nil, new: line, fullWidth: nil))
+            } else if line.kind == .hunk || line.kind == .meta {
+                rows.append(Self(old: nil, new: nil, fullWidth: line))
+            } else {
+                rows.append(Self(old: line, new: line, fullWidth: nil))
+            }
+            index += 1
+        }
+        return rows
     }
 }
 
@@ -1387,25 +1512,30 @@ private struct WarrenGitFileContentView: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         let lines = content.components(separatedBy: "\n")
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                    HStack(spacing: 0) {
-                        Text("\(index + 1)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(tokens.mutedForeground.opacity(0.7))
-                            .frame(width: 44, alignment: .trailing)
-                            .padding(.horizontal, WarrenSpacing.xs)
-                            .accessibilityHidden(true)
-                        Text(line.isEmpty ? " " : line)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(tokens.foreground)
-                            .lineLimit(1)
-                            .textSelection(.enabled)
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        HStack(spacing: 0) {
+                            Text("\(index + 1)")
+                                .font(WarrenGitDiffMetrics.lineNumberFont)
+                                .foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                                .frame(width: WarrenGitDiffMetrics.lineNumberWidth, alignment: .trailing)
+                                .padding(.trailing, WarrenSpacing.xs)
+                                .accessibilityHidden(true)
+                            Text(line.isEmpty ? " " : line)
+                                .font(WarrenGitDiffMetrics.codeFont)
+                                .foregroundStyle(tokens.foreground)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, WarrenSpacing.compact)
+                                .textSelection(.enabled)
+                        }
+                        .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
                     }
                 }
+                .padding(.vertical, WarrenSpacing.xs)
             }
-            .padding(.vertical, WarrenSpacing.xs)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
