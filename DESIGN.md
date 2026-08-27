@@ -407,6 +407,7 @@ Behavior requirements:
 - The MVP does not expose its loopback listener through Public Access, Relay, or `warren-headless`. Remote Workspace editing requires a later Host-owned service with Warren authentication instead of a client-local path assumption.
 - In Terminal Group mode, `Command+T` creates a shell in the captured Group; in Workspace mode it preserves the existing Workspace target.
 - The Tab add button sits right after the last Tab; with no Tabs it sits at the start position.
+- The workspace Tab bar trailing controls have a locked priority: `External IDE → Execution Server → Public Access → Notifications → Settings`. `Execution Server` is only visible when more than one endpoint exists and occupies the second slot; `Settings` stays in the overflow (`⋯`) unless all visible controls fit without overflow. The Preset bar uses a `light` weight intentionally so it remains subordinate to Tabs and Terminal.
 - Icons that are meaningless, actionless, or redundant are not shown.
 - Typography, density, spacing, hierarchy, and hover/selected states use the Superset macOS Desktop as the phase-one visual baseline; the terminal itself uses monospace fonts and Ghostty theme capabilities.
 - Every interactive element must have a stable Accessibility Identifier, Role, Label, Value, and an executable Action.

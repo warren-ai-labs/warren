@@ -423,8 +423,11 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
     case settings
 
     public static let maximumExternalButtonCount = 5
-    /// Keep the original high-signal chrome visible; Settings remains in More
-    /// while endpoint switching is added automatically when it is meaningful.
+    /// Locked priority for the workspace trailing chrome: IDE → Endpoint →
+    /// Web → Notifications → Settings. Endpoint occupies the second slot only
+    /// when multiple execution servers exist; Settings stays in overflow (`⋯`)
+    /// unless the visible set fits without overflow. This order is the product
+    /// contract for both macOS and Web.
     public static let defaultExternalControls: [Self] = [
         .externalIDE,
         .web,
@@ -440,9 +443,11 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         )
     }
 
-    /// Expose endpoint switching automatically when more than one execution
-    /// server is available. A single endpoint keeps the compact default chrome
-    /// and remains reachable through the existing overflow configuration.
+    /// Resolve the explicit priority for the current endpoint count. The locked
+    /// order is IDE → Endpoint → Web → Notifications → Settings; Endpoint is
+    /// only exposed when more than one execution server exists. It is inserted
+    /// at priority slot 2 (index 1) so the resolved array is already sorted
+    /// for `layout(direct:overflow:)`.
     public static func controlsForEndpointCount(
         _ controls: [Self],
         endpointCount: Int
