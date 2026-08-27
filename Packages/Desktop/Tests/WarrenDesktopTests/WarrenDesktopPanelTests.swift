@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import XCTest
 @testable import WarrenDesktop
@@ -71,6 +72,28 @@ final class WarrenDesktopPanelTests: XCTestCase {
         )
 
         XCTAssertEqual(activatedWorkspaceIDs, [firstWorkspaceID, secondWorkspaceID])
+    }
+
+    func testActiveContributionDetailChangesInvalidatePanelHost() {
+        let detailChanges = PassthroughSubject<Void, Never>()
+        let registry = WarrenDesktopPanelRegistry()
+        registry.register(WarrenDesktopPanelContribution(
+            descriptor: .init(id: "git", title: "Git"),
+            centerDetailChanges: detailChanges.eraseToAnyPublisher()
+        ))
+        let host = WarrenDesktopPanelHost(defaults: nil)
+        XCTAssertTrue(host.open(
+            panelID: "git",
+            context: context(),
+            registry: registry
+        ))
+        var invalidations = 0
+        let observation = host.objectWillChange.sink { invalidations += 1 }
+
+        detailChanges.send()
+
+        XCTAssertEqual(invalidations, 1)
+        withExtendedLifetime(observation) {}
     }
 
     func testConnectionGenerationBroadcastsToInactiveContributions() {

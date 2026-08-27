@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @MainActor
@@ -40,6 +41,11 @@ public final class WarrenDesktopGitPanelModule {
             guard let model, model.fileView != nil else { return nil }
             return AnyView(WarrenDesktopGitDiffView(model: model))
         },
+        centerDetailChanges: model.$fileView
+            .removeDuplicates()
+            .dropFirst()
+            .map { _ in () }
+            .eraseToAnyPublisher(),
         connectionGenerationWillChange: { [weak model] endpointID, generation in
             model?.connectionWillChange(endpointID: endpointID, generation: generation)
         }

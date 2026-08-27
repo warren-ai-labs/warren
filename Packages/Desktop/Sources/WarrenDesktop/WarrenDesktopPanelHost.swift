@@ -14,6 +14,8 @@ public final class WarrenDesktopPanelHost: ObservableObject {
     @Published public private(set) var rightPanelWidth: CGFloat
 
     private let defaults: UserDefaults?
+    private weak var detailChangesContribution: WarrenDesktopPanelContribution?
+    private var detailChangesCancellable: AnyCancellable?
 
     public init(
         activePanelID: String? = nil,
@@ -32,6 +34,9 @@ public final class WarrenDesktopPanelHost: ObservableObject {
     }
 
     public func open(panelID: String) {
+        if panelID != activePanelID {
+            stopObservingDetailChanges()
+        }
         activePanelID = panelID
         isPanelOpen = true
     }
@@ -44,6 +49,7 @@ public final class WarrenDesktopPanelHost: ObservableObject {
     ) -> Bool {
         guard let contribution = registry.contribution(panelID: panelID),
               contribution.isAvailable(in: context) else {
+            stopObservingDetailChanges()
             activePanelID = panelID
             isPanelOpen = false
             return false
@@ -54,11 +60,13 @@ public final class WarrenDesktopPanelHost: ObservableObject {
         }
         activePanelID = panelID
         isPanelOpen = true
+        observeDetailChanges(from: contribution)
         contribution.activate(in: context)
         return true
     }
 
     public func close() {
+        stopObservingDetailChanges()
         isPanelOpen = false
     }
 
@@ -68,6 +76,7 @@ public final class WarrenDesktopPanelHost: ObservableObject {
             contribution.closeDetail()
             contribution.deactivate()
         }
+        stopObservingDetailChanges()
         isPanelOpen = false
     }
 
@@ -78,6 +87,7 @@ public final class WarrenDesktopPanelHost: ObservableObject {
         guard isPanelOpen,
               let activePanelID,
               let contribution = registry.contribution(panelID: activePanelID) else { return }
+        observeDetailChanges(from: contribution)
         if contribution.isAvailable(in: context) {
             contribution.activate(in: context)
         } else {
@@ -94,6 +104,9 @@ public final class WarrenDesktopPanelHost: ObservableObject {
     }
 
     public func setActivePanelID(_ panelID: String?) {
+        if panelID != activePanelID {
+            stopObservingDetailChanges()
+        }
         activePanelID = panelID
     }
 
@@ -111,5 +124,20 @@ public final class WarrenDesktopPanelHost: ObservableObject {
             requestedWidth: rightPanelWidth,
             containerCap: containerCap
         )
+    }
+
+    private func observeDetailChanges(from contribution: WarrenDesktopPanelContribution) {
+        guard detailChangesContribution !== contribution else { return }
+        stopObservingDetailChanges()
+        detailChangesContribution = contribution
+        detailChangesCancellable = contribution.centerDetailChanges.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+
+    private func stopObservingDetailChanges() {
+        detailChangesCancellable?.cancel()
+        detailChangesCancellable = nil
+        detailChangesContribution = nil
     }
 }

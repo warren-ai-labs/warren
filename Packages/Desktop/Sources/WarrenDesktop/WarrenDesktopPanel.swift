@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import WarrenDomain
 
@@ -67,6 +68,7 @@ public final class WarrenDesktopPanelContribution {
     private let rightContentHandler: ContentBuilder
     private let rightContentWithCloseHandler: ContentBuilderWithClose?
     private let centerDetailHandler: DetailBuilder?
+    let centerDetailChanges: AnyPublisher<Void, Never>
     private let connectionGenerationHandler: ConnectionGenerationCallback
 
     public init(
@@ -79,6 +81,7 @@ public final class WarrenDesktopPanelContribution {
         rightContent: @escaping ContentBuilder = { _ in AnyView(EmptyView()) },
         rightContentWithClose: ContentBuilderWithClose? = nil,
         centerDetail: DetailBuilder? = nil,
+        centerDetailChanges: AnyPublisher<Void, Never> = Empty().eraseToAnyPublisher(),
         connectionGenerationWillChange: @escaping ConnectionGenerationCallback = { _, _ in }
     ) {
         self.descriptor = descriptor
@@ -90,6 +93,7 @@ public final class WarrenDesktopPanelContribution {
         self.rightContentHandler = rightContent
         self.rightContentWithCloseHandler = rightContentWithClose
         self.centerDetailHandler = centerDetail
+        self.centerDetailChanges = centerDetailChanges
         self.connectionGenerationHandler = connectionGenerationWillChange
     }
 
