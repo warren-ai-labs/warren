@@ -70,6 +70,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "opencode",
+            title: "OpenCode",
+            subtitle: "Launch the OpenCode CLI in this project",
+            symbolName: "shippingbox",
+            createButtonTitle: "Start OpenCode",
+            request: .opencode,
+            isPinned: true
+        ),
+        Self(
             id: "custom",
             title: "Custom Command",
             subtitle: "Run any command line, agent or development server",
@@ -172,6 +181,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "claude": "Claude"
         case "codex": "Codex"
         case "trae": "Trae"
+        case "opencode": "OpenCode"
         default: title
         }
     }
@@ -182,13 +192,14 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "claude": "preset-claude"
         case "codex": "preset-codex"
         case "trae": "preset-trae"
+        case "opencode": "preset-opencode"
         default: nil
         }
     }
 
     public var isAI: Bool {
         switch request.kind {
-        case .claude, .codex, .trae: true
+        case .claude, .codex, .trae, .opencode: true
         case .shell, .custom: false
         }
     }
@@ -212,6 +223,7 @@ extension TerminalSessionKind {
         case .claude: "sparkles"
         case .codex: "curlybraces"
         case .trae: "sparkle.magnifyingglass"
+        case .opencode: "shippingbox"
         case .custom: "hammer"
         }
     }

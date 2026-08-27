@@ -323,7 +323,7 @@ func TestFinderPicksNewestMatchingCodex(t *testing.T) {
 		`{"timestamp":"2026-08-16T11:10:00Z","type":"session_meta","payload":{"id":"other","cwd":"/elsewhere"}}`)
 
 	finder := DefaultFinder{CodexRoot: root}
-	path, err := finder.Find(context.Background(), "codex", "/work/warren", time.Time{})
+	path, err := finder.Find(context.Background(), "test-session", "codex", "/work/warren", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestFinderMatchesCodexTranscriptEvenWhenFileIsLarge(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	found, err := (DefaultFinder{CodexRoot: root}).Find(context.Background(), "codex", "/work/warren", time.Time{})
+	found, err := (DefaultFinder{CodexRoot: root}).Find(context.Background(), "test-session", "codex", "/work/warren", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestFinderSkipsSymlinkTranscripts(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	found, err := (DefaultFinder{CodexRoot: root}).Find(context.Background(), "codex", "/work/warren", time.Time{})
+	found, err := (DefaultFinder{CodexRoot: root}).Find(context.Background(), "test-session", "codex", "/work/warren", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestFinderIgnoresTranscriptsBeforeSessionStart(t *testing.T) {
 	writeLines(t, path, `{"timestamp":"2026-08-16T10:00:00Z","type":"session_meta","payload":{"id":"old","cwd":"/work/warren"}}`)
 	finder := DefaultFinder{CodexRoot: root}
 	future := time.Now().Add(time.Hour)
-	found, err := finder.Find(context.Background(), "codex", "/work/warren", future)
+	found, err := finder.Find(context.Background(), "test-session", "codex", "/work/warren", future)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestFinderMatchesClaudeCwd(t *testing.T) {
 	)
 
 	finder := DefaultFinder{ClaudeRoot: root}
-	found, err := finder.Find(context.Background(), "claude", "/work/warren", time.Time{})
+	found, err := finder.Find(context.Background(), "test-session", "claude", "/work/warren", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

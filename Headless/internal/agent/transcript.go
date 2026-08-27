@@ -32,28 +32,33 @@ const (
 	maxHistory        = 2000
 )
 
-// Finder locates the transcript file for a running Codex or Claude session.
-// A missing file is not an error: the CLI may not be installed, may not have
-// written a transcript yet, or may be running a version with a different
-// layout. Callers retry until the file appears.
+// Finder locates the transcript file for a running Codex, Claude Code or
+// OpenCode session. A missing file is not an error: the CLI may not be
+// installed, may not have written a transcript yet, or may be running a
+// version with a different layout. Callers retry until the file appears.
 type Finder interface {
-	Find(ctx context.Context, kind, workspacePath string, after time.Time) (string, error)
+	Find(ctx context.Context, sessionID, kind, workspacePath string, after time.Time) (string, error)
 }
 
-// DefaultFinder implements Finder for the stock Codex and Claude Code layouts.
+// DefaultFinder implements Finder for the stock Codex, Claude Code and
+// OpenCode layouts.
 type DefaultFinder struct {
 	// CodexRoot is the Codex sessions directory (default ~/.codex/sessions).
 	CodexRoot string
 	// ClaudeRoot is the Claude Code projects directory (default ~/.claude/projects).
 	ClaudeRoot string
+	// OpenCodeRoot overrides the OpenCode storage directory when set.
+	OpenCodeRoot string
 }
 
-func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, after time.Time) (string, error) {
+func (f DefaultFinder) Find(ctx context.Context, sessionID, kind, workspacePath string, after time.Time) (string, error) {
 	switch kind {
 	case "codex":
 		return f.findCodex(ctx, workspacePath, after)
 	case "claude":
 		return f.findClaude(ctx, workspacePath, after)
+	case "opencode":
+		return f.findOpencode(ctx, sessionID, workspacePath, after)
 	default:
 		return "", nil
 	}
@@ -85,6 +90,32 @@ func (f DefaultFinder) findClaude(ctx context.Context, workspacePath string, aft
 		}
 		return claudeTranscriptMatchesCwd(path, workspacePath)
 	})
+}
+
+// findOpencode locates the newest OpenCode session JSON for the workspace and
+// returns the path of a Warren-managed JSONL cache file. The cache is written
+// by a long-lived tailer (see StartOpenCodeTailer) that mirrors OpenCode's
+// file-based session store into the single-file shape the transcript Watcher
+// consumes. When no matching session exists yet the function returns an empty
+// path so the caller retries on its next reconcile tick.
+func (f DefaultFinder) findOpencode(ctx context.Context, sessionID, workspacePath string, after time.Time) (string, error) {
+	root := OpenCodeStorageRoot(f.OpenCodeRoot)
+	if root == "" {
+		return "", nil
+	}
+	sessionDir := filepath.Join(root, "session")
+	if info, err := os.Lstat(sessionDir); err != nil || !info.IsDir() {
+		return "", nil
+	}
+	path, err := findNewestOpenCodeSession(ctx, root, workspacePath, after)
+	if err != nil || path == "" {
+		return "", err
+	}
+	cacheDir := filepath.Join(os.TempDir(), "warren-opencode")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, sessionID+".jsonl"), nil
 }
 
 type fileCandidate struct {
@@ -560,6 +591,8 @@ func (p *parser) parseLine(line []byte) []api.AgentEvent {
 		return p.parseCodex(line)
 	case "claude":
 		return p.parseClaude(line)
+	case "opencode":
+		return p.parseOpenCode(line)
 	default:
 		return nil
 	}
@@ -906,7 +939,7 @@ func normalizeToolStatus(status string) string {
 	switch status {
 	case "completed":
 		return "success"
-	case "failed":
+	case "failed", "error":
 		return "error"
 	case "interrupted", "cancelled":
 		return "interrupted"

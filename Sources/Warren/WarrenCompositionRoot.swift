@@ -44,6 +44,8 @@ struct WarrenCompositionRoot: View {
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
+    @AppStorage(WarrenPreferenceKey.presetCommandOpencode)
+    private var opencodeCommand = "opencode"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
@@ -393,6 +395,7 @@ struct WarrenCompositionRoot: View {
         case "claude": claudeCommand
         case "codex": codexCommand
         case "trae": traeCommand
+        case "opencode": opencodeCommand
         default: ""
         }
     }

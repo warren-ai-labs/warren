@@ -77,6 +77,8 @@ struct WarrenDesktopSettingsView: View {
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
+    @AppStorage(WarrenPreferenceKey.presetCommandOpencode)
+    private var opencodeCommand = "opencode"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
@@ -563,6 +565,8 @@ struct WarrenDesktopSettingsView: View {
             )
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
+        case .opencode:
+            WarrenInputField("OpenCode", text: $opencodeCommand, placeholder: "opencode")
         case .custom:
             EmptyView()
         }

@@ -1132,16 +1132,16 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testBuiltInPresetsMapToExplicitLaunchRequests() {
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex", "trae"])
+        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex", "trae", "opencode"])
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.map(\.presetBarTitle),
-            ["Shell", "Claude", "Codex", "Trae"]
+            ["Shell", "Claude", "Codex", "Trae", "OpenCode"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.compactMap(\.presetBarIconName),
-            ["preset-shell", "preset-claude", "preset-codex", "preset-trae"]
+            ["preset-shell", "preset-claude", "preset-codex", "preset-trae", "preset-opencode"]
         )
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.request), [.shell, .claude, .codex, .trae])
+        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.request), [.shell, .claude, .codex, .trae, .opencode])
         XCTAssertNil(TerminalSessionLaunchRequest.shell.command)
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.command, "claude")
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.title, "Claude Code")
@@ -1150,6 +1150,8 @@ final class WarrenDesktopTests: XCTestCase {
             "codex --dangerously-bypass-hook-trust"
         )
         XCTAssertEqual(TerminalSessionLaunchRequest.trae.command, "trae-cli interactive")
+        XCTAssertEqual(TerminalSessionLaunchRequest.opencode.command, "opencode")
+        XCTAssertEqual(TerminalSessionLaunchRequest.opencode.title, "OpenCode")
         XCTAssertEqual(WarrenDesktopSessionPreset.firstAI?.id, "claude")
         XCTAssertEqual(
             WarrenDesktopSessionPreset.firstAI?
@@ -1161,15 +1163,15 @@ final class WarrenDesktopTests: XCTestCase {
     func testPresetOrderNormalizesPersistedIdentifiers() {
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder("codex,shell,codex,future"),
-            ["codex", "shell", "claude", "trae"]
+            ["codex", "shell", "claude", "trae", "opencode"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder(""),
-            ["shell", "claude", "codex", "trae"]
+            ["shell", "claude", "codex", "trae", "opencode"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrderRawValue("codex,shell,codex,future"),
-            "codex,shell,claude,trae"
+            "codex,shell,claude,trae,opencode"
         )
     }
 
@@ -1178,7 +1180,7 @@ final class WarrenDesktopTests: XCTestCase {
 
         XCTAssertEqual(
             WarrenDesktopSessionPreset.orderedPinned(by: order).map(\.id),
-            ["shell", "codex", "claude", "trae"]
+            ["shell", "codex", "claude", "trae", "opencode"]
         )
         XCTAssertEqual(WarrenDesktopSessionPreset.firstAI(orderedBy: order)?.id, "codex")
     }
@@ -1190,7 +1192,7 @@ final class WarrenDesktopTests: XCTestCase {
                 by: WarrenDesktopSessionPreset.defaultOrderRawValue,
                 hidden: WarrenDesktopSessionPreset.defaultHiddenRawValue
             ).map(\.id),
-            ["shell", "claude", "codex"]
+            ["shell", "claude", "codex", "opencode"]
         )
 
         let onlyTraeVisible = WarrenDesktopSessionPreset.pinned

@@ -328,6 +328,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case claude
     case codex
     case trae
+    case opencode
     case custom
 
     public var displayName: String {
@@ -336,6 +337,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .claude: "Claude Code"
         case .codex: "Codex"
         case .trae: "Trae Agent"
+        case .opencode: "OpenCode"
         case .custom: "Custom"
         }
     }
@@ -439,6 +441,11 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
         kind: .trae,
         command: "trae-cli interactive",
         title: "Trae Agent"
+    )
+    public static let opencode = Self(
+        kind: .opencode,
+        command: "opencode",
+        title: "OpenCode"
     )
 
     public func identified(by requestID: UUID = UUID()) -> Self {

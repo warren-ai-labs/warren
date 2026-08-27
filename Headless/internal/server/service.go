@@ -175,9 +175,12 @@ type outputSession struct {
 type agentSession struct {
 	mu      sync.Mutex
 	watcher *agent.Watcher
-	events  []api.AgentEvent
-	status  api.AgentStatus
-	turn    api.AgentTurn
+	// tailer mirrors an OpenCode session store into the cached JSONL the
+	// watcher tails. It is nil for providers that write their own transcript.
+	tailer *agent.OpenCodeTailer
+	events []api.AgentEvent
+	status api.AgentStatus
+	turn   api.AgentTurn
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -417,6 +420,9 @@ func (s *Service) Shutdown() {
 	for _, agentSession := range agents {
 		if agentSession.watcher != nil {
 			agentSession.watcher.Close()
+		}
+		if agentSession.tailer != nil {
+			agentSession.tailer.Close()
 		}
 	}
 }
@@ -711,7 +717,7 @@ func (s *Service) RosterVersion(ctx context.Context) (api.State, uint64) {
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
-		} else if session.Kind == "codex" || session.Kind == "claude" {
+		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 	}
@@ -2163,7 +2169,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	}
 	customTitle := strings.TrimSpace(title)
 	defaultTitle := map[string]string{
-		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "trae": "Trae",
+		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "trae": "Trae", "opencode": "OpenCode",
 	}[kind]
 	if defaultTitle == "" {
 		fields := strings.Fields(command)
@@ -2778,7 +2784,7 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 // is best-effort: no transcript yet, an unknown CLI layout, or a missing CLI
 // must never make the terminal session fail.
 func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentSession, error) {
-	dedicated := session.Kind == "codex" || session.Kind == "claude"
+	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
 		return nil, nil
@@ -2823,7 +2829,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 			if transcriptPath != "" && entry.watcher.Path() != transcriptPath {
 				// Re-bind to the CLI's new transcript; startAgentWatcher
 				// resets the stale projection before switching files.
-				entry = s.startAgentWatcher(session.ID, provider, transcriptPath, false)
+				entry = s.startAgentWatcher(session.ID, provider, transcriptPath, false, workspacePath, session.CreatedAt)
 				s.persistAgentMeta(session.ID, agentSessionID, transcriptPath)
 				return entry, nil
 			}
@@ -2837,7 +2843,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 		s.agentsMu.Unlock()
 
 		if transcriptPath == "" {
-			found, err := s.AgentFinder.Find(ctx, session.Kind, workspacePath, session.CreatedAt)
+			found, err := s.AgentFinder.Find(ctx, session.ID, session.Kind, workspacePath, session.CreatedAt)
 			if err != nil || found == "" || s.transcriptTakenByOther(found, session.ID) {
 				// Keep the placeholder so reconcile retries at its next tick
 				// instead of re-running discovery concurrently from every caller.
@@ -2868,7 +2874,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 		transcriptPath = binding.TranscriptPath
 	}
 
-	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated)
+	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated, workspacePath, session.CreatedAt)
 	s.persistAgentMeta(session.ID, agentSessionID, transcriptPath)
 	return entry, nil
 }
@@ -2876,7 +2882,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 // startAgentWatcher starts (or reuses) the transcript watcher for one
 // session. For shell overlays the ready state is seeded immediately so the
 // roster shows a live agent even before the first transcript event arrives.
-func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, seedReady bool) *agentSession {
+func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, seedReady bool, workspacePath string, after time.Time) *agentSession {
 	s.lazyInit()
 	s.agentsMu.Lock()
 	existing := s.agents[sessionID]
@@ -2897,6 +2903,10 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	if rebinding {
 		closing = existing.watcher
 		existing.watcher = nil
+		if existing.tailer != nil {
+			existing.tailer.Close()
+			existing.tailer = nil
+		}
 		existing.mu.Lock()
 		existing.events = nil
 		existing.status = api.AgentStatus{}
@@ -2910,6 +2920,9 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	if existing == nil {
 		existing = &agentSession{}
 		s.agents[sessionID] = existing
+	}
+	if provider == "opencode" && existing.tailer == nil {
+		existing.tailer = agent.StartOpenCodeTailer(transcriptPath, workspacePath, after)
 	}
 	if seedReady {
 		existing.mu.Lock()
@@ -3359,6 +3372,9 @@ func (s *Service) stopAgent(sessionID string) {
 	s.agentsMu.Unlock()
 	if entry != nil && entry.watcher != nil {
 		entry.watcher.Close()
+	}
+	if entry != nil && entry.tailer != nil {
+		entry.tailer.Close()
 	}
 }
 
