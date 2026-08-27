@@ -53,6 +53,15 @@ private struct WarrenInteractiveBody: View {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .stroke(state == .focused ? tokens.focusRing : .clear, lineWidth: state == .focused ? 1 : 0)
             }
+            .overlay(alignment: .leading) {
+                if state == .selected {
+                    Rectangle()
+                        .fill(tokens.highlight.opacity(0.85))
+                        .frame(width: 2)
+                        .clipShape(.rect(cornerRadius: 1))
+                        .padding(.vertical, 4)
+                }
+            }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: state)
             .onHover { hovered = $0 }
     }
