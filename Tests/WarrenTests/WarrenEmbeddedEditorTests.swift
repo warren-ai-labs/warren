@@ -1027,6 +1027,79 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testEditorChromeSupportsCurrentVSCodeMarkdownEditorDOM() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="monaco-workbench">
+            <div class="part sidebar">
+                <div class="header-or-footer header">
+                    <div class="monaco-action-bar">
+                        <ul class="actions-container"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="part statusbar">
+                <div class="statusbar-item" id="status.editor.mode"
+                     aria-label="Markdown">Markdown</div>
+            </div>
+            <div class="monaco-editor">
+                <div class="native-edit-context" role="textbox" tabindex="0"></div>
+            </div>
+        </div>
+        <script>
+            window.previewTargets = [];
+            document.addEventListener("keydown", (event) => {
+                if (event.code === "KeyV") {
+                    window.previewTargets.push(event.target.className);
+                }
+            }, true);
+        </script>
+        """#, in: webView)
+        try await Task.sleep(for: .milliseconds(400))
+
+        let result = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
+            );
+            preview?.click();
+            return JSON.stringify({
+                visible: getComputedStyle(preview.parentElement).display !== "none",
+                target: window.previewTargets[0]
+            });
+        })();
+        """#)
+        let data = try XCTUnwrap((result as? String)?.data(using: .utf8))
+        let behavior = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(behavior["visible"] as? Bool, true)
+        XCTAssertEqual(behavior["target"] as? String, "native-edit-context")
+
+        _ = try await webView.evaluateJavaScript(#"""
+        document.querySelector("#status\\.editor\\.mode")
+            .setAttribute("aria-label", "TypeScript");
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+        let nonMarkdown = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(
+                ".warren-sidebar-control-markdown-preview .action-label"
+            );
+            return getComputedStyle(preview.parentElement).display !== "none";
+        })();
+        """#)
+        XCTAssertEqual(nonMarkdown as? Bool, false)
+    }
+
+    @MainActor
     func testEditorChromeOpensHistoryChangesAsFilesInsteadOfDiffs() async throws {
         let configuration = WKWebViewConfiguration()
         WarrenEmbeddedEditorChrome.install(in: configuration)
