@@ -43,7 +43,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
 
     // MARK: - Surface Lifecycle
 
-    func setSurface(_ surface: ghostty_surface_t?) {
+    public func setSurface(_ surface: ghostty_surface_t?) {
         terminalCallLock.lock()
         defer { terminalCallLock.unlock() }
         var pending: Data?
@@ -104,7 +104,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         TerminalDebugLog.log(.lifecycle, "in-memory session surface=nil matched")
     }
 
-    var currentSurface: ghostty_surface_t? {
+    public var currentSurface: ghostty_surface_t? {
         lock.lock()
         defer { lock.unlock() }
         return surface

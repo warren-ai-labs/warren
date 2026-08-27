@@ -121,6 +121,56 @@ final class GhosttyAdapterTests: XCTestCase {
     }
 
     @MainActor
+    func testOccludedSurfaceKeepsGridCurrentWhileBackgroundOutputDrains() async throws {
+        let recorder = LockedInputRecorder()
+        let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
+        defer { window.orderOut(nil) }
+
+        surface.outputWriter.enqueue(epoch: 1, sequence: 0, payload: Data("BEFORE-occlusion".utf8))
+        for _ in 0..<100 where surface.renderedSequence < 15 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let before = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(
+            before.contains("BEFORE-occlusion"),
+            "precondition: grid should be current while visible: \(before)"
+        )
+
+        // Mimic a parked/warm surface: hide pixels and stop the display link,
+        // without tearing the native surface down (this is what
+        // TerminalSurfaceManager demote/promote does — it keeps the Ghostty
+        // surface alive).
+        view.setSurfaceVisible(false)
+
+        surface.outputWriter.enqueue(epoch: 1, sequence: 15, payload: Data("WHILE-HIDDEN".utf8))
+        for _ in 0..<100 where surface.inMemory.readViewportText()?.contains("WHILE-HIDDEN") != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let afterOccluded = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(
+            afterOccluded.contains("HIDDEN"),
+            "occluded surface must keep its grid current from background output: \(afterOccluded)"
+        )
+
+        // Harder case: fully detach the view from the window, exactly like a
+        // warm park. The surface is retained, only the AppKit view leaves the
+        // hierarchy.
+        view.removeFromSuperview()
+
+        surface.outputWriter.enqueue(epoch: 1, sequence: 26, payload: Data("AFTER-DETACH".utf8))
+        for _ in 0..<100 where surface.inMemory.readViewportText()?.contains("AFTER-DETACH") != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let afterDetach = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(
+            afterDetach.contains("DETACH"),
+            "detached (parked) surface must keep its grid current from background output: \(afterDetach)"
+        )
+
+        surface.outputWriter.shutdown()
+    }
+
+    @MainActor
     func testCellHeightAdjustmentMatchesWebTerminalLineHeight() {
         let surface = GhosttySurface(
             id: TerminalSessionID(),
