@@ -280,9 +280,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             + WarrenLayoutMetrics.presetBarHeight
             + WarrenLayoutMetrics.paneHeaderHeight
             + WarrenLayoutMetrics.paneMinimumHeight
-        return shell.frame(minWidth: minimumWidth, minHeight: minimumHeight)
-        .denSurface()
-        .warrenUnixTextEditing()
+        let framed = AnyView(shell.frame(minWidth: minimumWidth, minHeight: minimumHeight))
+        let styled = framed.denSurface().warrenUnixTextEditing()
+        return styled
         .onChange(of: sidebarState) { newState in
             if persistenceEnabled { Self.persist(newState) }
         }
