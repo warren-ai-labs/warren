@@ -39,6 +39,12 @@ public enum WarrenLayoutMetrics {
     public static let paneHeaderHeight: CGFloat = 28
     public static let paneMinimumWidth: CGFloat = 260
     public static let paneMinimumHeight: CGFloat = 160
+    /// Shared right Panel Host sizing. Individual modules do not choose their
+    /// own width so the shell can preserve a stable Center minimum.
+    public static let panelDefaultWidth: CGFloat = 340
+    public static let panelMinimumWidth: CGFloat = 240
+    public static let panelMaximumWidth: CGFloat = 640
+    public static let centerMinimumWidth: CGFloat = 600
 
     // Sidebar row geometry from DashboardSidebar's Tailwind classes.
     public static let sidebarProjectRowHeight: CGFloat = 32

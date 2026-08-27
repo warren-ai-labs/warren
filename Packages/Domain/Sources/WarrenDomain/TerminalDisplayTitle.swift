@@ -157,6 +157,7 @@ public enum WarrenPreferenceKey {
     public static let presetCommandTrae = "terminal.presetCommand.trae"
     public static let sessionPresetOrder = "terminal.presetOrder"
     public static let hiddenSessionPresets = "terminal.hiddenPresets"
+<<<<<<< HEAD
     public static let noticeMuted = "notifications.muted"
     public static let embeddedEditorDefaultIDE = "editor.openByDefault"
     public static let agentCompletionSoundEnabled = "notifications.agentCompletionSoundEnabled"
@@ -165,6 +166,7 @@ public enum WarrenPreferenceKey {
     public static let publicAccessEnabled = "web.gnarSharingEnabled"
     @available(*, deprecated, message: "Use publicAccessEnabled for Public Access.")
     public static let gnarSharingEnabled = publicAccessEnabled
+    public static let rightPanelWidth = "desktop.rightPanelWidth"
 }
 
 /// User-facing terminal typography shared by renderer adapters.
