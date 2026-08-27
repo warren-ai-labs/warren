@@ -12,6 +12,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: "cpu"
         case .presets: "hammer"
         case .workspaces: "arrow.triangle.branch"
+        case .notifications: "bell"
         case .externalIDEs: "macwindow"
         case .publicAccess: "globe"
         }
@@ -24,6 +25,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
         case .presets: "Choose visible presets and customize every launch command."
         case .workspaces: "How projects import worktrees and enter sessions."
+        case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
         case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
         }
@@ -36,13 +38,14 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
+        case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
         }
     }
 
     var isTerminalSection: Bool {
-        self != .publicAccess
+        self != .notifications && self != .publicAccess
     }
 }
 
@@ -85,6 +88,8 @@ struct WarrenDesktopSettingsView: View {
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
     private var embeddedEditorDefaultIDE = false
+    @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
+    private var agentCompletionSoundEnabled = true
     @State private var publicAccessEdgeURL = ""
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
@@ -182,7 +187,10 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private func navigationPanel(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let terminalSections = visibleSections.filter(\.isTerminalSection)
+        let notificationSections = visibleSections.filter { $0 == .notifications }
+        let webSections = visibleSections.filter { $0 == .publicAccess }
+        return VStack(alignment: .leading, spacing: 0) {
             Button(action: onBack) {
                 HStack(spacing: WarrenSpacing.small) {
                     Image(systemName: "arrow.left")
@@ -210,13 +218,24 @@ struct WarrenDesktopSettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                    groupLabel("Terminal", tokens: tokens)
-                    ForEach(visibleSections.filter(\.isTerminalSection)) { section in
+                    if !terminalSections.isEmpty {
+                        groupLabel("Terminal", tokens: tokens)
+                    }
+                    ForEach(terminalSections) { section in
                         navigationItem(section, tokens: tokens)
                     }
 
-                    groupLabel("Web", tokens: tokens)
-                    ForEach(visibleSections.filter { !$0.isTerminalSection }) { section in
+                    if !notificationSections.isEmpty {
+                        groupLabel("Notifications", tokens: tokens)
+                    }
+                    ForEach(notificationSections) { section in
+                        navigationItem(section, tokens: tokens)
+                    }
+
+                    if !webSections.isEmpty {
+                        groupLabel("Web", tokens: tokens)
+                    }
+                    ForEach(webSections) { section in
                         navigationItem(section, tokens: tokens)
                     }
 
@@ -330,6 +349,8 @@ struct WarrenDesktopSettingsView: View {
                     presetsSection(tokens: tokens)
                 case .workspaces:
                     workspacesSection(tokens: tokens)
+                case .notifications:
+                    notificationsSection(tokens: tokens)
                 case .externalIDEs:
                     externalIDEsSection(tokens: tokens)
                 case .publicAccess:
@@ -623,6 +644,28 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func notificationsSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Agent completion sound", section: .notifications, tokens: tokens) {
+            Toggle("Play a sound when an Agent completes", isOn: $agentCompletionSoundEnabled)
+                .toggleStyle(.switch)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityIdentifier("settings.notifications.agent-completion-sound")
+            Text(
+                "Warren plays one short system sound for a successful Agent turn in a background pane. "
+                    + "Failed and aborted turns stay silent, as does the Agent currently visible in an active window."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+            Button("Play test sound") {
+                WarrenDesktopNotificationSound.playAgentCompletionSoundIfEnabled()
+            }
+            .buttonStyle(.bordered)
+            .disabled(!agentCompletionSoundEnabled)
+            .accessibilityIdentifier("settings.notifications.play-test-sound")
         }
     }
 

@@ -10,6 +10,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case terminalRuntime = "Terminal runtime"
     case presets = "Presets"
     case workspaces = "Workspaces"
+    case notifications = "Notifications"
     case externalIDEs = "External IDEs"
     case publicAccess = "Public Access"
 
@@ -22,6 +23,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .terminalRuntime: "terminal-runtime"
         case .presets: "presets"
         case .workspaces: "workspaces"
+        case .notifications: "notifications"
         case .externalIDEs: "external-ides"
         case .publicAccess: "public-access"
         }
@@ -34,6 +36,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "terminal-runtime", "runtime": self = .terminalRuntime
         case "presets": self = .presets
         case "workspaces", "workspace": self = .workspaces
+        case "notifications", "notification": self = .notifications
         case "external-ides", "external-ide", "ides": self = .externalIDEs
         case "public-access", "publicaccess", "public": self = .publicAccess
         default: return nil

@@ -369,6 +369,31 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertNil(updated.applying(try XCTUnwrap(staleMessage.delta)))
     }
 
+    func testRemoteRosterDecodesAgentTurn() throws {
+        let roster = try JSONDecoder().decode(
+            RemoteRoster.self,
+            from: Data("""
+            {
+              "host": {"id": "11111111-1111-4111-8111-111111111111", "name": "Mac"},
+              "projects": [],
+              "workspaces": [],
+              "terminalGroups": [],
+              "sessions": [
+                {
+                  "id": "22222222-2222-4222-8222-222222222222",
+                  "title": "Codex",
+                  "kind": "codex",
+                  "lifecycle": "running",
+                  "agentTurn": {"id": 8, "status": "completed"}
+                }
+              ]
+            }
+            """.utf8)
+        )
+
+        XCTAssertEqual(roster.sessions[0].agentTurn, .init(id: 8, status: "completed"))
+    }
+
     func testReconnectDelayBacksOffExponentiallyAndCapsAtThirtySeconds() {
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 0), 500)
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 1), 1_000)
@@ -496,6 +521,40 @@ final class WarrenRemoteModelTests: XCTestCase {
             )?.activity,
             .working
         )
+    }
+
+    func testAgentCompletionTrackerSeedsInitialRosterAndEmitsEachCompletionOnce() {
+        let sessionID = TerminalSessionID()
+        var tracker = WarrenAgentCompletionTracker()
+
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 4, status: "completed"),
+        ]), [])
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 5, status: "started"),
+        ]), [])
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 5, status: "completed"),
+        ]), [sessionID])
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 5, status: "completed"),
+        ]), [])
+    }
+
+    func testAgentCompletionTrackerIgnoresFailedAndReboundTurns() {
+        let sessionID = TerminalSessionID()
+        var tracker = WarrenAgentCompletionTracker()
+        _ = tracker.observe([sessionID: .init(id: 5, status: "completed")])
+
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 6, status: "failed"),
+        ]), [])
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 1, status: "completed"),
+        ]), [])
+        XCTAssertEqual(tracker.observe([
+            sessionID: .init(id: 2, status: "completed"),
+        ]), [sessionID])
     }
 
     func testLiveActivityFillsMissingRosterActivity() {

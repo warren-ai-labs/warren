@@ -752,6 +752,9 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
+		if turn := s.agentTurn(session.ID); turn.ID > 0 {
+			session.AgentTurn = &turn
+		}
 	}
 	if elapsed := time.Since(startedAt); elapsed >= slowRosterThreshold {
 		s.logInfo(

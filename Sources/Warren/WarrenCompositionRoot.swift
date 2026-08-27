@@ -183,6 +183,9 @@ struct WarrenCompositionRoot: View {
             guard selectedEndpointCapabilities.canCopyLocalWebURL else { return }
             remoteModel.copyLocalWebURL()
         }
+        .onReceive(remoteModel.agentCompletionEvents) { event in
+            handleAgentCompletion(event)
+        }
         .onReceive(NotificationCenter.default.publisher(for: WarrenAppCommand.openTerminal)) { note in
             guard let request = note.object as? WarrenTerminalOpenRequest else { return }
             remoteModel.openTerminal(request)
@@ -477,6 +480,14 @@ struct WarrenCompositionRoot: View {
     }
     private var activeNavigation: WarrenDesktopNavigationState {
         remoteModel.navigation
+    }
+
+    private func handleAgentCompletion(_ event: WarrenAgentCompletionEvent) {
+        let selectedSessionID = activeNavigation.selectedTabID.flatMap { tabID in
+            activeProjection.tabs.first(where: { $0.id == tabID })?.sessionID
+        }
+        guard !NSApp.isActive || selectedSessionID != event.sessionID else { return }
+        WarrenDesktopNotificationSound.playAgentCompletionSoundIfEnabled()
     }
 
     private func selectEndpoint(_ id: String) {

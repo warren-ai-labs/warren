@@ -1152,6 +1152,7 @@ export function SettingsPage({
   hiddenPresets = [],
   autoOpenShell,
   autoStartAI,
+  agentCompletionSoundEnabled,
   titlePreview,
   placeholders,
   onClose,
@@ -1162,6 +1163,8 @@ export function SettingsPage({
   onPresetVisibilityChange,
   onAutoOpenShellChange,
   onAutoStartAIChange,
+  onAgentCompletionSoundChange,
+  onPreviewAgentCompletionSound,
   onMovePreset,
   onAppendPlaceholder,
   onRestore,
@@ -1194,6 +1197,12 @@ export function SettingsPage({
       description: "Control project import and workspace entry defaults.",
       keywords: ["workspace", "project", "git", "worktree", "import", "shell", "open"],
     },
+    {
+      id: "notifications",
+      label: "Notifications",
+      description: "Choose how Warren alerts you when an Agent completes.",
+      keywords: ["notification", "sound", "audio", "chime", "agent", "complete", "background"],
+    },
   ], []);
 
   const needle = searchQuery.trim().toLowerCase();
@@ -1204,6 +1213,8 @@ export function SettingsPage({
         .some(value => String(value).toLowerCase().includes(needle)),
     );
   }, [needle, sections]);
+  const terminalSections = visibleSections.filter(section => section.id !== "notifications");
+  const notificationSections = visibleSections.filter(section => section.id === "notifications");
 
   useEffect(() => {
     if (!open) setSearchQuery("");
@@ -1248,8 +1259,8 @@ export function SettingsPage({
           )}
         </div>
         <div className="settings-nav-scroll">
-          <div className="settings-nav-label">Terminal</div>
-          {visibleSections.map(section => (
+          {terminalSections.length > 0 && <div className="settings-nav-label">Terminal</div>}
+          {terminalSections.map(section => (
             <button
               type="button"
               className={`settings-nav-item${activeSection === section.id ? " active" : ""}`}
@@ -1267,6 +1278,23 @@ export function SettingsPage({
               <span>{section.label}</span>
             </button>
           ))}
+          {notificationSections.length > 0 && (
+            <>
+              <div className="settings-nav-label">Notifications</div>
+              {notificationSections.map(section => (
+                <button
+                  type="button"
+                  className={`settings-nav-item${activeSection === section.id ? " active" : ""}`}
+                  aria-current={activeSection === section.id ? "true" : undefined}
+                  key={section.id}
+                  onClick={() => setActiveSection(section.id)}
+                >
+                  <BellIcon />
+                  <span>{section.label}</span>
+                </button>
+              ))}
+            </>
+          )}
           {!visibleSections.length && <div className="settings-nav-empty">No settings match your search</div>}
         </div>
       </nav>
@@ -1394,6 +1422,35 @@ export function SettingsPage({
                   </label>
                 </div>
               </section>
+            ) : activeSection === "notifications" ? (
+              <section className="settings-section">
+                <header className="settings-page-heading">
+                  <h2>Agent completion sound</h2>
+                  <p>Hear a short chime when a background Agent finishes successfully.</p>
+                </header>
+                <div className="settings-options">
+                  <label className="settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={agentCompletionSoundEnabled}
+                      onChange={event => onAgentCompletionSoundChange(event.target.checked)}
+                    />
+                    <span>
+                      <strong>Play a sound when an Agent completes</strong>
+                      <small>Warren stays silent for failed and aborted turns, and for the Agent you are actively viewing.</small>
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    className="settings-test-sound"
+                    disabled={!agentCompletionSoundEnabled}
+                    onClick={onPreviewAgentCompletionSound}
+                  >
+                    Play test sound
+                  </button>
+                  <p className="settings-note">Your browser must allow audio after an interaction. The chime uses the system output volume.</p>
+                </div>
+              </section>
             ) : (
               <section className="settings-section">
                 <header className="settings-page-heading">
@@ -1428,6 +1485,14 @@ function PresetIcon() {
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
       <path d="M2 4.5h8v1H2v-1zm0 3h8v1H2v-1zm0 3h5v1H2v-1zm10.2-4.2l1.8 1.7-1.8 1.7-.7-.7 1.1-1-1.1-1 .7-.7z" fill="currentColor"/>
+    </svg>
+  );
+}
+
+function BellIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M8 1.8a3.2 3.2 0 0 0-3.2 3.2v2.1c0 .9-.25 1.77-.72 2.53L3.2 11h9.6l-.88-1.37a4.7 4.7 0 0 1-.72-2.53V5A3.2 3.2 0 0 0 8 1.8Zm-1.35 10.5a1.4 1.4 0 0 0 2.7 0h-2.7Z" fill="currentColor" />
     </svg>
   );
 }
