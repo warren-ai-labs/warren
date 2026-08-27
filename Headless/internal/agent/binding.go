@@ -398,19 +398,19 @@ export const WarrenBindPlugin: Plugin = async () => {
         const cwd: string = props.info?.directory || (props.directory as string) || process.env.WARREN_WORKSPACE_PATH || ""
         // Verify marker so a stale manual install does not shadow the managed one
         // (marker: warren-agent-bind-v1)
-        const payload = JSON.stringify({ provider: kind, sessionId: sid, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\\n"
+        const payload = JSON.stringify({ provider: kind, sessionId: sid, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\n"
         try { atomicWrite(bindFile, payload) } catch {}
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\\n") } catch {}
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\n") } catch {}
       } else if (t === "session.error") {
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "failed", attention: { kind: "warning", reason: "error", since: new Date().toISOString() } } }) + "\\n") } catch {}
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "failed", attention: { kind: "warning", reason: "error", since: new Date().toISOString() } } }) + "\n") } catch {}
       } else if (t === "session.idle") {
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\\n") } catch {}
+        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\n") } catch {}
       }
     },
     "permission.ask": async (_perm: any, out: any) => {
       const stateFile = process.env.WARREN_STATE_FILE
       if (!stateFile) return
-      try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "blocked", attention: { kind: "approval", reason: "permission", since: new Date().toISOString() } } }) + "\\n") } catch {}
+      try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "blocked", attention: { kind: "approval", reason: "permission", since: new Date().toISOString() } } }) + "\n") } catch {}
       if (out) out.status = "ask"
     },
   }
