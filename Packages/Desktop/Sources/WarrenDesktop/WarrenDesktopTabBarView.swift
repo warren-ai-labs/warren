@@ -725,22 +725,13 @@ private struct WarrenDesktopEndpointControl: View {
             )
         } ?? tokens.mutedForeground
         Button(action: onPresent) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "server.rack")
-                    .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                    .padding(.top, 2)
-                    .padding(.trailing, 2)
-                    .foregroundStyle(endpointColor)
-                    .accessibilityHidden(true)
-                WarrenStatusIndicator(
-                    color: statusColor(presentation.tone, tokens: tokens),
-                    isActive: presentation.isActive,
-                    size: 6,
-                    accessibilityLabel: presentation.label
-                )
-                    .accessibilityHidden(true)
-            }
-            .frame(width: 28, height: 28)
+            Image(systemName: "server.rack")
+                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
+                .padding(.top, 2)
+                .padding(.trailing, 2)
+                .foregroundStyle(endpointColor)
+                .accessibilityHidden(true)
+                .frame(width: 28, height: 28)
         }
         .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
         .frame(width: 28, height: 28)
@@ -750,18 +741,6 @@ private struct WarrenDesktopEndpointControl: View {
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel("Execution server: \(selectedEndpoint?.label ?? "Server")")
         .accessibilityHint("\(presentation.label). Click for details.")
-    }
-
-    private func statusColor(
-        _ tone: WarrenDesktopConnectionTone,
-        tokens: WarrenColorTokens
-    ) -> Color {
-        switch tone {
-        case .success: tokens.success
-        case .info: tokens.info
-        case .warning: tokens.warning
-        case .destructive: tokens.destructive
-        }
     }
 
 }
