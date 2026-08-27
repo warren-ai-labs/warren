@@ -48,7 +48,12 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 		return nil, fmt.Errorf("connect %s: %w", endpoint, err)
 	}
 	client := &Client{connection: connection}
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: token, Version: api.Version}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{
+		Type:                 "auth",
+		Token:                token,
+		Version:              api.Version,
+		TerminalStateFormats: []string{terminalStateFormatANSI},
+	}); err != nil {
 		connection.Close()
 		return nil, err
 	}
@@ -65,6 +70,8 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 	}
 	return client, nil
 }
+
+const terminalStateFormatANSI = "ghostline-vt-replay-v1"
 
 func (c *Client) Close() error { return c.connection.Close() }
 
@@ -148,9 +155,16 @@ func (c *Client) ReadOutput(ctx context.Context, onOutput func([]byte) bool) err
 			return err
 		}
 		if typeID == websocket.BinaryMessage {
-			payload := data
+			var payload []byte
 			if frame, err := output.DecodeOutput(data); err == nil {
 				payload = frame.Payload
+			} else if state, stateErr := output.DecodeAtomicState(data); stateErr == nil {
+				if state.Format != terminalStateFormatANSI {
+					return fmt.Errorf("unsupported terminal state format %q", state.Format)
+				}
+				payload = state.Payload
+			} else {
+				return fmt.Errorf("decode terminal binary frame: %w", err)
 			}
 			if onOutput(payload) {
 				return nil

@@ -23,8 +23,16 @@ browser also keeps the last successful response locally for offline fallback.
 
 ## Local development
 
+Prerequisites:
+
+- Node.js 22 or newer (the checked-in lockfile declares this engine range)
+- npm 10 or newer
+
+Install from the lockfile before running a production build. `node_modules/`
+is intentionally not committed:
+
 ```sh
-npm install
+npm ci
 npm run dev        # Vite HMR at http://localhost:5173
 ```
 

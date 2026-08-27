@@ -190,8 +190,19 @@ func (r *GhostlineRuntime) Checkpoint(ctx context.Context, name string) (ghostli
 	return session.Checkpoint(ctx)
 }
 
+// AtomicState captures Ghostty's native terminal state together with the
+// first output cursor not represented by it. Warren treats the payload as an
+// opaque runtime artifact and forwards its advertised format unchanged.
+func (r *GhostlineRuntime) AtomicState(ctx context.Context, name string) (ghostline.AtomicState, error) {
+	session, err := r.session(ctx, name)
+	if err != nil {
+		return ghostline.AtomicState{}, fmt.Errorf("ghostline session %s: %w", name, err)
+	}
+	return session.AtomicState(ctx)
+}
+
 // OpenOutput creates one caller-owned v1 reader from an opaque cursor.
-func (r *GhostlineRuntime) OpenOutput(ctx context.Context, name string, cursor ghostline.Cursor) (*ghostline.OutputReader, error) {
+func (r *GhostlineRuntime) OpenOutput(ctx context.Context, name string, cursor ghostline.Cursor) (CursorOutputReader, error) {
 	session, err := r.session(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("ghostline session %s: %w", name, err)

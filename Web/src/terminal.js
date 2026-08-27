@@ -7,16 +7,14 @@ export function terminalSize(terminal) {
   return { cols, rows };
 }
 
-export function attachTerminalMessage(session, terminal, anchor = null) {
-  // Attaching subscribes to output only. The focused terminal claims the
-  // shared PTY geometry through session.focus after it actually receives UI
-  // focus, so a background browser cannot resize a desktop session.
+export function attachTerminalMessage(session, terminal, anchor = null, claimControl = true) {
+  // Protocol 2 subscriptions carry the measured viewport and claim control
+  // before the Host captures its atomic terminal state. There is no legacy
+  // attach/replay fallback: every new Web/mobile client starts at a snapshot
+  // boundary.
   const size = terminalSize(terminal);
-  const params = { id: session, focused: false };
+  const params = { id: session, claim: claimControl };
   if (size) {
-    // A passive attach still carries the viewer's viewport size. The server
-    // resizes the shared runtime with it when nobody owns focus, which lets
-    // a mobile viewer reflow the shell before the first tap.
     params.cols = size.cols;
     params.rows = size.rows;
   }
@@ -24,7 +22,7 @@ export function attachTerminalMessage(session, terminal, anchor = null) {
     params.epoch = anchor.epoch;
     params.sequence = anchor.sequence;
   }
-  return { method: "session.attach", params };
+  return { method: "session.subscribe", params };
 }
 
 export function fitTerminalToHost(fitAddon, host) {

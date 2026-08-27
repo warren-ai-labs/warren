@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
@@ -908,10 +909,23 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	s.registerPeer(peer)
-	if envelope.Version != "" && !compatibleProtocolVersion(envelope.Version, api.Version) {
+	// Protocol 2 changes terminal recovery from a replayable byte stream to an
+	// atomically installable terminal state.  A missing version is therefore not
+	// an older-but-compatible client: it is an unauthenticated protocol shape
+	// that must be rejected before any roster or session data is exposed.
+	if envelope.Version != api.Version {
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: fmt.Sprintf(
 			"incompatible protocol version: client=%s server=%s", envelope.Version, api.Version,
 		)})
+		return
+	}
+	peer.terminalStateFormat = selectTerminalStateFormat(envelope.TerminalStateFormats)
+	if peer.terminalStateFormat == "" {
+		_ = peer.writeJSON(api.Response{
+			Type:  "error",
+			OK:    false,
+			Error: "upgrade required: client does not support a compatible atomic terminal state format",
+		})
 		return
 	}
 	_ = connection.SetReadDeadline(time.Time{})
@@ -1069,6 +1083,19 @@ func supportsRosterDeltas(capabilities []string) bool {
 	return false
 }
 
+const terminalStateFormatANSI = "ghostline-vt-replay-v1"
+
+func selectTerminalStateFormat(formats []string) string {
+	for _, preferred := range []string{ghostline.AtomicStateFormat, terminalStateFormatANSI} {
+		for _, format := range formats {
+			if format == preferred {
+				return preferred
+			}
+		}
+	}
+	return ""
+}
+
 func (s *HTTPServer) authorized(value string) bool {
 	return value != "" && subtle.ConstantTimeCompare([]byte(value), []byte(s.Token)) == 1
 }
@@ -1098,7 +1125,23 @@ type wsPeer struct {
 	outputs        map[string]struct{}
 	controlSession string
 	agentSession   string
-	rosterCancel   context.CancelFunc
+	// terminalStateFormat is negotiated once during protocol-2 authentication.
+	// Every client must install its selected format behind a presentation gate.
+	terminalStateFormat string
+	rosterCancel        context.CancelFunc
+	// session.subscribe is intentionally handled in a background goroutine so
+	// a slow Ghostline checkpoint cannot block unrelated control requests. Keep
+	// one cancellable operation per session so an unsubscribe (or replacement
+	// subscribe) can wait for the old recovery to finish before its response is
+	// acknowledged to the client.
+	subscriptionMu       sync.Mutex
+	pendingSubscriptions map[string]*pendingSubscription
+}
+
+type pendingSubscription struct {
+	cancel   context.CancelFunc
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 func (p *wsPeer) logInfo(message string, args ...any) {
@@ -1118,10 +1161,66 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 	return peer
 }
 
+// beginPendingSubscription installs a cancellable marker for one session. A
+// replacement subscribe waits for the previous operation with the same ID so
+// its attached/atomic-state/synced frames cannot be emitted after the new
+// subscription has been acknowledged.
+func (p *wsPeer) beginPendingSubscription(parent context.Context, sessionID string) (context.Context, func()) {
+	subscriptionContext, cancel := context.WithCancel(parent)
+	pending := &pendingSubscription{cancel: cancel, done: make(chan struct{})}
+	p.subscriptionMu.Lock()
+	if p.pendingSubscriptions == nil {
+		p.pendingSubscriptions = make(map[string]*pendingSubscription)
+	}
+	previous := p.pendingSubscriptions[sessionID]
+	p.pendingSubscriptions[sessionID] = pending
+	p.subscriptionMu.Unlock()
+	if previous != nil {
+		previous.cancel()
+		<-previous.done
+	}
+
+	finish := func() {
+		p.subscriptionMu.Lock()
+		if p.pendingSubscriptions[sessionID] == pending {
+			delete(p.pendingSubscriptions, sessionID)
+		}
+		pending.doneOnce.Do(func() { close(pending.done) })
+		p.subscriptionMu.Unlock()
+	}
+	return subscriptionContext, finish
+}
+
+// cancelPendingSubscription stops and joins an in-flight subscription before
+// the caller detaches its output stream. Joining is what makes unsubscribe a
+// usable lifecycle boundary for clients that switch sessions quickly.
+func (p *wsPeer) cancelPendingSubscription(sessionID string) {
+	p.subscriptionMu.Lock()
+	pending := p.pendingSubscriptions[sessionID]
+	p.subscriptionMu.Unlock()
+	if pending == nil {
+		return
+	}
+	pending.cancel()
+	<-pending.done
+}
+
+// cancelAllPendingSubscriptions invalidates background subscriptions during a
+// peer teardown. Teardown must not wait here: a failing writer can be the same
+// goroutine that is about to finish the pending operation.
+func (p *wsPeer) cancelAllPendingSubscriptions() {
+	p.subscriptionMu.Lock()
+	for _, pending := range p.pendingSubscriptions {
+		pending.cancel()
+	}
+	p.subscriptionMu.Unlock()
+}
+
 func (p *wsPeer) close() {
 	p.enqueueMu.Lock()
 	sessionIDs, agentSessionID := p.closeLocked()
 	p.enqueueMu.Unlock()
+	p.cancelAllPendingSubscriptions()
 	for _, sessionID := range sessionIDs {
 		p.server.Service.detachPeer(p, sessionID)
 	}
@@ -1162,6 +1261,7 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		// retained tail from the ring.
 		sessionIDs, agentSessionID := p.closeLocked()
 		p.enqueueMu.Unlock()
+		p.cancelAllPendingSubscriptions()
 		for _, sessionID := range sessionIDs {
 			p.server.Service.detachPeer(p, sessionID)
 		}
@@ -1239,6 +1339,22 @@ func (p *wsPeer) writeBinary(data []byte) error {
 
 func (p *wsPeer) enqueueBinary(data []byte) bool {
 	return p.enqueue(outboundMessage{kind: websocket.BinaryMessage, data: data})
+}
+
+func (p *wsPeer) enqueueAtomicState(
+	sessionID string,
+	epoch, sequence uint64,
+	format string,
+	payload []byte,
+) error {
+	encoded, err := output.EncodeAtomicState(sessionID, epoch, sequence, format, payload)
+	if err != nil {
+		return err
+	}
+	if !p.enqueueBinary(encoded) {
+		return errors.New("outbound queue overflow during atomic recovery")
+	}
+	return nil
 }
 
 func (p *wsPeer) enqueueAttached(sessionID string, epoch, sequence uint64, reanchor bool) error {
@@ -1832,6 +1948,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		p.logInfo("attach: prepared", "session", id)
+		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
+			p.server.Service.reservePeerCursorOutput(p, session.ID)
+		}
 		// Register before claiming focus so a disconnect cannot leave a stale
 		// focus owner behind while the initial snapshot is being prepared.
 		p.server.Service.registerPeer(session.ID, p)
@@ -1886,6 +2005,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		// endpoints can observe the same terminal without fighting over its
 		// shared runtime size.
 		id := stringParam(params, "id")
+		subscriptionContext, finishSubscription := p.beginPendingSubscription(ctx, id)
+		defer finishSubscription()
+		ctx = subscriptionContext
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		session, ok := p.server.Service.Session(id)
 		if !ok {
 			return fmt.Errorf("session not found: %s", id)
@@ -1913,6 +2038,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
+		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
+			p.server.Service.reservePeerCursorOutput(p, session.ID)
+		}
+		if err := ctx.Err(); err != nil {
+			lock.Unlock()
+			resume()
+			p.server.Service.detachPeer(p, session.ID)
+			return err
+		}
 		p.server.Service.registerPeer(session.ID, p)
 		if claimControl {
 			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified); focusErr != nil {
@@ -1922,6 +2056,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 				return focusErr
 			}
 			p.claimControl(session)
+		}
+		if err := ctx.Err(); err != nil {
+			lock.Unlock()
+			resume()
+			p.detach()
+			return err
 		}
 		// Passive subscribers never mutate the shared runtime. A selected
 		// desktop attach may explicitly claim control; in that case the resize
@@ -1947,10 +2087,32 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return nil
 	case "session.unsubscribe":
 		id := stringParam(params, "id")
+		p.cancelPendingSubscription(id)
 		p.server.Service.detachPeer(p, id)
+		if p.attachedSessionID() == id {
+			p.detach()
+		}
 		return p.writeResult(command.ID, map[string]bool{"unsubscribed": true})
 	case "session.focus":
-		if p.attached == nil {
+		attached, ok := p.attachedSession()
+		requestedSessionID := stringParam(params, "id")
+		if requestedSessionID != "" {
+			// Web can subscribe passively while hidden, so it has no attached
+			// control pointer yet. Allow an explicit focus target only when this
+			// peer already owns an output subscription for that session; a random
+			// id must never become an input or resize lease.
+			if attached.ID != requestedSessionID || !ok {
+				session, found := p.server.Service.Session(requestedSessionID)
+				if !found {
+					return fmt.Errorf("session not found: %s", requestedSessionID)
+				}
+				if !p.hasOutput(requestedSessionID) {
+					return fmt.Errorf("session is not subscribed: %s", requestedSessionID)
+				}
+				attached, ok = session, true
+			}
+		}
+		if !ok {
 			return fmt.Errorf("no attached session")
 		}
 		focused, specified, err := optionalBoolParam(params, "focused")
@@ -1967,7 +2129,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		isFocused, resized, err := p.server.Service.focusPeer(
 			ctx,
 			p,
-			*p.attached,
+			attached,
 			focused,
 			columns,
 			rows,
@@ -1975,6 +2137,16 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		)
 		if err != nil {
 			return err
+		}
+		if focused {
+			if isFocused {
+				// Keep the target attached for subsequent focus/resize/input
+				// requests. This is a control-lease promotion, not a new output
+				// subscription.
+				p.claimControl(attached)
+			}
+		} else {
+			p.releaseControl(attached.ID)
 		}
 		return p.writeResult(command.ID, map[string]bool{
 			"focused": isFocused,
@@ -1991,7 +2163,8 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"sent": true})
 	case "session.resize":
-		if p.attached == nil {
+		attached, ok := p.attachedSession()
+		if !ok {
 			return fmt.Errorf("no attached session")
 		}
 		columns := intParam(params, "cols")
@@ -1999,7 +2172,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if columns <= 0 || rows <= 0 {
 			return fmt.Errorf("invalid terminal size")
 		}
-		resized, err := p.server.Service.resizeFocused(ctx, p, *p.attached, columns, rows)
+		resized, err := p.server.Service.resizeFocused(ctx, p, attached, columns, rows)
 		if err != nil {
 			return err
 		}
@@ -2059,18 +2232,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	}
 }
 
-func (p *wsPeer) requireControl() error {
-	if p.attached == nil {
-		return fmt.Errorf("no attached session")
-	}
-	if p.controlSession != p.attached.ID {
-		return fmt.Errorf("control lease required")
-	}
-	return nil
-}
-
 func (p *wsPeer) input(ctx context.Context, data []byte) error {
-	if err := p.requireControl(); err != nil {
+	attached, err := p.controlledSession()
+	if err != nil {
 		return err
 	}
 	payload := data
@@ -2079,15 +2243,15 @@ func (p *wsPeer) input(ctx context.Context, data []byte) error {
 		if err != nil {
 			return err
 		}
-		if metadata.SessionID != "" && metadata.SessionID != p.attached.ID {
+		if metadata.SessionID != "" && metadata.SessionID != attached.ID {
 			return fmt.Errorf("input session mismatch")
 		}
 		payload = decoded
 	}
-	if err := p.server.Service.runtimeFor(*p.attached).Input(ctx, p.attached.Runtime, payload); err != nil {
+	if err := p.server.Service.runtimeFor(attached).Input(ctx, attached.Runtime, payload); err != nil {
 		return err
 	}
-	p.server.Service.PingOutput(p.attached.ID)
+	p.server.Service.PingOutput(attached.ID)
 	return nil
 }
 
@@ -2098,8 +2262,10 @@ func (p *wsPeer) input(ctx context.Context, data []byte) error {
 // keeping one output subscription per retained warm surface.
 func (p *wsPeer) attach(session api.Session) {
 	p.detach()
+	p.enqueueMu.Lock()
 	p.attached = &session
 	p.controlSession = session.ID
+	p.enqueueMu.Unlock()
 }
 
 // claimControl swaps the control lease without touching output
@@ -2140,11 +2306,43 @@ func (p *wsPeer) subscribeAgent(sessionID string) error {
 }
 
 func (p *wsPeer) detach() {
-	if p.attached != nil {
-		p.server.Service.detachPeer(p, p.attached.ID)
-	}
+	p.enqueueMu.Lock()
+	attached := p.attached
 	p.attached = nil
 	p.controlSession = ""
+	p.enqueueMu.Unlock()
+	if attached != nil {
+		p.server.Service.detachPeer(p, attached.ID)
+	}
+}
+
+func (p *wsPeer) attachedSession() (api.Session, bool) {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	if p.attached == nil {
+		return api.Session{}, false
+	}
+	return *p.attached, true
+}
+
+func (p *wsPeer) attachedSessionID() string {
+	session, ok := p.attachedSession()
+	if !ok {
+		return ""
+	}
+	return session.ID
+}
+
+func (p *wsPeer) controlledSession() (api.Session, error) {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	if p.attached == nil {
+		return api.Session{}, fmt.Errorf("no attached session")
+	}
+	if p.controlSession != p.attached.ID {
+		return api.Session{}, fmt.Errorf("control lease required")
+	}
+	return *p.attached, nil
 }
 
 func (p *wsPeer) addOutput(sessionID string) {
@@ -2159,6 +2357,24 @@ func (p *wsPeer) addOutput(sessionID string) {
 func (p *wsPeer) removeOutput(sessionID string) {
 	p.enqueueMu.Lock()
 	delete(p.outputs, sessionID)
+	p.enqueueMu.Unlock()
+}
+
+func (p *wsPeer) hasOutput(sessionID string) bool {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	_, ok := p.outputs[sessionID]
+	return ok
+}
+
+// releaseControl keeps the output subscription alive while dropping the
+// control lease. A later explicit session.focus can promote the same target
+// again without replaying the terminal state.
+func (p *wsPeer) releaseControl(sessionID string) {
+	p.enqueueMu.Lock()
+	if p.attached != nil && p.attached.ID == sessionID {
+		p.controlSession = ""
+	}
 	p.enqueueMu.Unlock()
 }
 

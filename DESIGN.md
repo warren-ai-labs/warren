@@ -16,7 +16,7 @@ The system must keep stable boundaries for a future iOS native client, Session s
 
 1. Sessions belong to Hosts, Tabs belong to Windows, Runtimes belong to Sessions. An open Tab holds one Session; closing the Tab also ends that Session and its Runtime.
 2. Workspaces and Terminal Groups are the isolation boundaries for terminal Tabs; Workspaces remain the isolation boundary for Git-aware async commands.
-3. tmux is a replaceable Runtime Adapter, not a product domain model.
+3. Ghostline is the sole terminal Runtime; the Runtime boundary remains replaceable without becoming a product domain model.
 4. In Warren v1, an open Tab corresponds to one Warren Terminal Session; closing a Tab explicitly terminates that Session's Runtime. Switching Workspaces or quitting the Client does not additionally terminate Tabs/Sessions that are still retained in the client layout.
 5. Only Close Tab or an explicit Terminate Session ends a Runtime; switching Workspaces, detaching, and quitting the Client never end a still-running Session.
 6. The UI only displays projections and sends typed intents; it never directly manipulates the Runtime, the daemon store, or the Ghostty lifecycle.
@@ -41,7 +41,7 @@ The system must keep stable boundaries for a future iOS native client, Session s
 
 **Terminal Session**: interactive terminal context on a Host. It belongs to exactly one Session Scope and is accessed through an open Tab; closing the Tab ends the Session. Sessions still running when the Client quits can be kept by the Host and restored after restart.
 
-**Runtime Binding**: persistent mapping from a Terminal Session to its concrete runtime implementation. In phase one, one Warren Session maps to one runtime process: a ghostline PTY by default, or a tmux session when the alternative runtime is selected.
+**Runtime Binding**: persistent mapping from a Terminal Session to its Ghostline PTY. The binding is recovery metadata, not a second terminal resource.
 
 ### 3.2 Clients
 
@@ -130,7 +130,7 @@ Terminal Session
 12. App initialization must not auto-create shell, Codex, or Claude Sessions.
 13. Selecting a Workspace with no Tabs may idempotently create its default Shell Tab; selecting an empty Terminal Group does not start a process until the user creates a Terminal.
 14. The app allows only one foreground Client Instance; repeated launches activate the existing instance and then exit.
-15. Quitting the app must end the Client process but must not kill created Runtime sessions (ghostline PTYs or tmux sessions).
+15. Quitting the app must end the Client process but must not kill created Ghostline PTYs.
 16. Import must not modify Superset data, Git repositories, worktrees, or runtimes.
 17. A Host always has at least one Terminal Group when a standalone Session is created; the first ordered Group is the default.
 18. Deleting a Terminal Group must not silently terminate its running Sessions; Sessions must be moved to another Group or explicitly terminated.
@@ -149,10 +149,10 @@ warren-headless
   ├── Session Service
   ├── Import Service
   ├── JSON Host Store
-  └── Terminal Runtime → ghostline / tmux Adapter
+  └── Terminal Runtime → Ghostline Adapter
 ```
 
-Dependencies may only point inward to protocol and domain values. SwiftUI, Ghostty, ghostline, tmux, the Superset schema, and WebSocket are edge adapters.
+Dependencies may only point inward to protocol and domain values. SwiftUI, Ghostty, Ghostline, the Superset schema, and WebSocket are edge adapters.
 
 ### 6.1 Future Extension Boundaries
 
@@ -166,7 +166,7 @@ Local IPC / Direct WebSocket / Relay Transport
 warren-headless daemon
 ```
 
-The macOS Client uses a versioned WebSocket API for both Local and Server. `warren-headless` is the deployment form of a Host, owning an independent resource tree and ghostline/tmux runtime. Switching endpoints only replaces the client projection and renderer; it does not migrate or terminate resources on the other Host.
+The macOS Client uses a versioned WebSocket API for both Local and Server. `warren-headless` is the deployment form of a Host, owning an independent resource tree and Ghostline runtime. Switching endpoints only replaces the client projection and renderer; it does not migrate or terminate resources on the other Host.
 
 SSH only bootstraps the remote daemon and forwards a loopback port. Once `warren ssh` establishes reachability, Desktop and CLI continue over the same WebSocket API; Git, Runtime, and resource semantics must not be encoded into the SSH transport.
 
@@ -215,9 +215,9 @@ Default files under `~/.warren/`:
 ├── config.json       # CLI/Desktop endpoint list and current endpoint
 ├── settings.json     # daemon settings such as defaultRuntime, optional gnarEdge override, and gnarAccount
 ├── token             # authentication token
-├── output/           # per-session raw PTY spools
+├── output/           # Ghostline-owned durable output history
 ├── worktrees/        # Git worktrees created by Warren
-├── ghostline.sock    # ghostline server socket (when ghostline runtime is used)
+├── ghostline.sock    # detached Ghostline server socket
 └── tls/              # LAN HTTPS local CA and certificates
 ```
 
@@ -229,8 +229,7 @@ Minimal data set in `state.json`:
 - Host identity and display name.
 - Projects, Workspaces, Terminal Groups, and their sidebar order.
 - Terminal Sessions with lifecycle and output position (`epoch`/`sequence`).
-- Runtime Bindings with adapter (`ghostline` or `tmux`), runtime identifier,
-  and recovery metadata.
+- Runtime Bindings with the Ghostline runtime identifier and recovery metadata.
 - Superset Import Receipts and request receipts for idempotency.
 
 Client window layout and Tabs are device-local presentation state, not Host
@@ -289,10 +288,8 @@ On failure the whole transaction rolls back, leaving no half-imported data or Re
 
 ### 9.1 Mapping
 
-One Terminal Session maps to one runtime process. The default ghostline
-runtime owns one PTY per Session; the tmux alternative maps one Session to one
-uniquely named tmux session and uses only its first pane. Runtime
-windows/panes are never exposed as UI domain objects.
+One Terminal Session maps to one Ghostline PTY. Runtime implementation details
+are never exposed as UI domain objects.
 
 Runtime identifiers are derived from the Warren Session ID, never from user
 titles, branches, or paths, so renaming or character escaping cannot affect
@@ -304,40 +301,38 @@ identity.
 CreateSession(sessionScope, launchSpec, requestID)
 → validate Workspace or Terminal Group and request idempotency
 → subscribe to Runtime output
-→ create Runtime (ghostline PTY, or detached tmux session)
+→ create the Ghostline PTY
 → resolve Group home or Workspace path, then set working directory, TERM, size, and shell environment
-→ install the output spool
+→ start the cursor output subscription
 → persist Session and Runtime Binding
 → return resource events
 → Client Layout creates and activates the Tab
 ```
 
-The interactive shell starts directly as the foreground process of the PTY or
-tmux pane. Preset commands must not simulate keystrokes after a fixed sleep;
+The interactive shell starts directly as the foreground process of the PTY.
+Preset commands must not simulate keystrokes after a fixed sleep;
 the Runtime must provide a reliable way to start commands and preserve a full
 interactive TTY.
 
 ### 9.3 Input
 
-ghostline writes input bytes to the PTY verbatim. The tmux runtime uses
-`load-buffer` and `paste-buffer -d` with a unique buffer, serialized per
-Session for ordering. Special keys and signals use explicit operations;
-control actions such as `Ctrl-C` are never encoded as ordinary business
-strings.
+Ghostline writes input bytes to the PTY verbatim. Special keys and signals use
+explicit operations; control actions such as `Ctrl-C` are never encoded as
+ordinary business strings.
 
 Any input must validate the Attachment, Input Lease, and Session lifecycle. Input failure must not break the connection or the app globally.
 
 ### 9.4 Output and Color
 
-The Runtime writes raw PTY bytes to a per-Session spool (ghostline writes its
-own spool; tmux uses `pipe-pane`). The Host does not strip ANSI, OSC, Unicode,
-or control sequences; Ghostty and xterm parse and render them on the client
-side, so colors from Codex, Claude, shells, and TUIs are preserved.
+Ghostline exposes raw PTY bytes through a durable cursor stream. The Host does
+not strip ANSI, OSC, Unicode, or control sequences; Ghostty and xterm parse and
+render them on the client side, so colors from Codex, Claude, shells, and TUIs
+are preserved.
 
 Output goes to both:
 
 - a bounded in-memory ring: low-latency broadcast and short-term recovery;
-- a per-Session persistent log: recovery after Host/app restart and long-running tasks.
+- Ghostline-owned durable output history: cursor continuation after Host restart.
 
 Every byte position is identified by `epoch + sequence`. On reconnect, a client requests its last Recovery Anchor; the Host sends catch-up bytes or reanchors, never silently skipping gaps.
 
@@ -351,19 +346,17 @@ Resize uses one worker per Session with latest-wins semantics; after a Surface b
 
 - Close Tab: terminate the Runtime, record the Session as ended, then remove the local Tab and Surface; ended Sessions cannot be reopened, only a new Tab/Session can be created.
 - Detach: disconnect one Attachment without ending the Session.
-- Terminate Session: ask the Runtime to end the ghostline PTY or tmux session
+- Terminate Session: ask the Runtime to end the Ghostline PTY
   and record ended state.
 - Quit Client: stop UI, connections, and observation tasks; the Runtime keeps
   running.
 - Relaunch: the daemon restores resources, and the Runtime Adapter detects and
-  adopts live ghostline PTYs or tmux sessions; missing Runtimes are marked
+  adopts live Ghostline PTYs; missing Runtimes are marked
   ended and must not stay stuck in connecting.
 
-The Runtime uses a single lifecycle watcher. For tmux it runs one
-`list-sessions` per round and compares against all managed Sessions; the
-ghostline server tracks its own PTYs. There are no per-Session polling
-processes. Transient command failures do not produce ended events. The watcher
-must stop when no managed Sessions remain.
+The detached Ghostline server owns PTY lifecycle. The daemon reconciles its
+Session records against Ghostline without per-Session polling processes.
+Transient probe failures do not produce ended events.
 
 ## 10. macOS Interaction Design
 
@@ -561,9 +554,9 @@ Failure reports must identify the last successful invariant, the first violating
 - Multi-person sharing and permission UI.
 - Automation scheduler.
 - Native split Pane layouts inside a client Tab; the intended boundary and
-  current tmux workaround are recorded in
+  historical nested-terminal workaround are recorded in
   [RFC 0008](docs/rfc/0008-native-tab-splits.md), which is Deferred.
-- Runtime multi-window/pane to UI Pane mapping (tmux alternative).
+- Runtime multi-window/pane to UI Pane mapping.
 - Cross-device real-time Client Layout sync.
 - CRDT.
 

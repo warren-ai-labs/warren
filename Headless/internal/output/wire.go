@@ -21,9 +21,14 @@ const (
 
 	KindInput  = byte(1)
 	KindOutput = byte(2)
+	// KindAtomicState carries one opaque terminal-emulator snapshot. It is a
+	// distinct kind so clients can never feed snapshot bytes through their VT
+	// output parser by mistake.
+	KindAtomicState = byte(3)
 
-	MaxHeader  = 16 * 1024
-	MaxPayload = 8 * 1024 * 1024
+	MaxHeader             = 16 * 1024
+	MaxPayload            = 8 * 1024 * 1024
+	MaxAtomicStatePayload = 64 * 1024 * 1024
 )
 
 var binaryPrefixLength = len(BinaryMagic) + 1 + 1 + 1 + 4 + 4
@@ -43,6 +48,14 @@ type inputHeader struct {
 	Sequence      uint64 `json:"sequence,omitempty"`
 }
 
+type atomicStateHeader struct {
+	SessionID     string `json:"sessionID"`
+	Epoch         uint64 `json:"epoch"`
+	Sequence      uint64 `json:"sequence"`
+	Format        string `json:"format"`
+	PayloadLength int    `json:"payloadLength"`
+}
+
 type InputMetadata struct {
 	Version       string
 	SessionID     string
@@ -60,9 +73,22 @@ func EncodeOutput(sessionID string, epoch, sequence uint64, payload []byte) ([]b
 	}, payload)
 }
 
+func EncodeAtomicState(sessionID string, epoch, sequence uint64, format string, payload []byte) ([]byte, error) {
+	if format == "" {
+		return nil, fmt.Errorf("atomic state format is required")
+	}
+	return encodeEnvelope(DirectionHostToClient, KindAtomicState, atomicStateHeader{
+		SessionID:     sessionID,
+		Epoch:         epoch,
+		Sequence:      sequence,
+		Format:        format,
+		PayloadLength: len(payload),
+	}, payload)
+}
+
 func EncodeInput(metadata InputMetadata, payload []byte) ([]byte, error) {
 	if metadata.Version == "" {
-		metadata.Version = "1.0"
+		metadata.Version = "2.0"
 	}
 	return encodeEnvelope(DirectionClientToHost, KindInput, inputHeader{
 		Version:       metadata.Version,
@@ -74,8 +100,12 @@ func EncodeInput(metadata InputMetadata, payload []byte) ([]byte, error) {
 }
 
 func encodeEnvelope(direction, kind byte, header any, payload []byte) ([]byte, error) {
-	if len(payload) > MaxPayload {
-		return nil, fmt.Errorf("binary payload too large: %d > %d", len(payload), MaxPayload)
+	maxPayload := MaxPayload
+	if kind == KindAtomicState {
+		maxPayload = MaxAtomicStatePayload
+	}
+	if len(payload) > maxPayload {
+		return nil, fmt.Errorf("binary payload too large: %d > %d", len(payload), maxPayload)
 	}
 	headerBytes, err := json.Marshal(header)
 	if err != nil {
@@ -104,6 +134,14 @@ type DecodedFrame struct {
 	Payload   []byte
 }
 
+type DecodedAtomicState struct {
+	SessionID string
+	Epoch     uint64
+	Sequence  uint64
+	Format    string
+	Payload   []byte
+}
+
 // DecodeOutput parses one Host-to-Client output envelope. The returned
 // payload is a copy, so the input buffer can be reused.
 func DecodeOutput(data []byte) (DecodedFrame, error) {
@@ -125,6 +163,33 @@ func DecodeOutput(data []byte) (DecodedFrame, error) {
 		SessionID: header.SessionID,
 		Epoch:     header.Epoch,
 		Sequence:  header.Sequence,
+		Payload:   append([]byte(nil), payload...),
+	}, nil
+}
+
+func DecodeAtomicState(data []byte) (DecodedAtomicState, error) {
+	direction, kind, headerBytes, payload, err := parseEnvelope(data)
+	if err != nil {
+		return DecodedAtomicState{}, err
+	}
+	if direction != DirectionHostToClient || kind != KindAtomicState {
+		return DecodedAtomicState{}, fmt.Errorf("not a host-to-client atomic state frame")
+	}
+	var header atomicStateHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return DecodedAtomicState{}, fmt.Errorf("decode atomic state header: %w", err)
+	}
+	if header.Format == "" {
+		return DecodedAtomicState{}, fmt.Errorf("atomic state format is required")
+	}
+	if header.PayloadLength != len(payload) {
+		return DecodedAtomicState{}, fmt.Errorf("atomic state payload length mismatch: header=%d actual=%d", header.PayloadLength, len(payload))
+	}
+	return DecodedAtomicState{
+		SessionID: header.SessionID,
+		Epoch:     header.Epoch,
+		Sequence:  header.Sequence,
+		Format:    header.Format,
 		Payload:   append([]byte(nil), payload...),
 	}, nil
 }
@@ -167,7 +232,7 @@ func parseEnvelope(data []byte) (direction, kind byte, headerBytes, payload []by
 	direction = data[offset+1]
 	kind = data[offset+2]
 	if (direction == DirectionClientToHost && kind != KindInput) ||
-		(direction == DirectionHostToClient && kind != KindOutput) {
+		(direction == DirectionHostToClient && kind != KindOutput && kind != KindAtomicState) {
 		return 0, 0, nil, nil, fmt.Errorf("binary kind/direction mismatch")
 	}
 	headerLength := int(binary.BigEndian.Uint32(data[offset+3 : offset+7]))
@@ -175,7 +240,11 @@ func parseEnvelope(data []byte) (direction, kind byte, headerBytes, payload []by
 	if headerLength > MaxHeader {
 		return 0, 0, nil, nil, fmt.Errorf("binary header too large: %d", headerLength)
 	}
-	if payloadLength > MaxPayload {
+	maxPayload := MaxPayload
+	if kind == KindAtomicState {
+		maxPayload = MaxAtomicStatePayload
+	}
+	if payloadLength > maxPayload {
 		return 0, 0, nil, nil, fmt.Errorf("binary payload too large: %d", payloadLength)
 	}
 	payloadOffset := offset + 11

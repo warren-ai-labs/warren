@@ -153,8 +153,72 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertFalse(manager.isDisplayVisible(surface.id))
 
         manager.endRecovery(for: surface.id)
-        XCTAssertTrue(manager.isDisplayVisible(surface.id))
+        // Ending the protocol recovery gate schedules the final present, but
+        // keeps the display occluded until the writer has caught up.
+        XCTAssertFalse(manager.isDisplayVisible(surface.id))
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
         try await waitUntil { !(surface.mountedTerminalView?.isHidden ?? true) }
+    }
+
+    func testWarmPromotionHoldsDisplayUntilQueuedOutputIsRendered() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface(
+            outputRenderBudgetBytes: 256,
+            outputRenderYield: .milliseconds(2)
+        )
+        let second = makeSurface()
+        manager.insert(first)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            first.state.surface != nil
+                && first.terminalViewIsPresentable
+                && manager.isDisplayVisible(first.id)
+        }
+
+        // Build a deliberate warm-surface backlog. The old promotion path
+        // revealed the view immediately and made these bytes visibly stream
+        // past at render speed instead of showing one settled frame.
+        first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 500_000))
+        try await waitUntil {
+            first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
+        }
+
+        manager.insert(second)
+        submit(second.id, to: manager, host: host)
+        try await waitUntil { manager.snapshot().activeSessionID == second.id }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            manager.snapshot().activeSessionID == first.id
+                && first.terminalViewIsPresentable
+                && first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
+        }
+        XCTAssertFalse(
+            manager.isDisplayVisible(first.id),
+            "warm promotion must keep the display hidden while queued output drains"
+        )
+
+        try await waitUntil(timeout: 12) {
+            manager.isDisplayVisible(first.id)
+                && first.outputWriter.renderedSequence >= first.outputWriter.enqueuedSequence
+        }
     }
 
     func testAttachUsesMeasuredHostGeometryWhenIntentIsStale() async throws {
@@ -343,16 +407,18 @@ final class TerminalSurfaceManagerTests: XCTestCase {
 
         submit(first.id, to: manager, host: host)
         try await waitUntil {
-            first.state.surface != nil && first.terminalViewIsPresentable
+            first.state.surface != nil
+                && first.terminalViewIsPresentable
+                && manager.isDisplayVisible(first.id)
         }
         let raw = try XCTUnwrap(first.state.surface?.rawValue)
 
         first.receive(makeLines(start: 0, count: 2000))
-        try await Task.sleep(for: .milliseconds(200))
-        _ = "scroll_to_row:1000".withCString { pointer in
-            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_row:1000".utf8.count))
+        try await waitForViewport(on: first, containing: "line-1999")
+        _ = "scroll_to_top".withCString { pointer in
+            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_top".utf8.count))
         }
-        try await waitForViewport(on: first, containing: "line-1000")
+        try await waitForViewport(on: first, containing: "line-0000")
         let pinned = try viewportText(on: first)
         XCTAssertFalse(pinned.contains("line-1999"), "pinned viewport must not already be at bottom")
 
@@ -367,7 +433,7 @@ final class TerminalSurfaceManagerTests: XCTestCase {
 
         // A normal warm reattach must keep the pinned viewport where it was.
         let reattached = try viewportText(on: first)
-        XCTAssertTrue(reattached.contains("line-1000"), "normal reattach must preserve scroll position")
+        XCTAssertTrue(reattached.contains("line-0000"), "normal reattach must preserve scroll position")
         XCTAssertFalse(reattached.contains("line-1999"), "normal reattach must not jump to live bottom")
     }
 
@@ -395,16 +461,18 @@ final class TerminalSurfaceManagerTests: XCTestCase {
 
         submit(first.id, to: manager, host: host)
         try await waitUntil {
-            first.state.surface != nil && first.terminalViewIsPresentable
+            first.state.surface != nil
+                && first.terminalViewIsPresentable
+                && manager.isDisplayVisible(first.id)
         }
         let raw = try XCTUnwrap(first.state.surface?.rawValue)
 
         first.receive(makeLines(start: 0, count: 2000))
-        try await Task.sleep(for: .milliseconds(200))
-        _ = "scroll_to_row:1000".withCString { pointer in
-            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_row:1000".utf8.count))
+        try await waitForViewport(on: first, containing: "line-1999")
+        _ = "scroll_to_top".withCString { pointer in
+            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_top".utf8.count))
         }
-        try await waitForViewport(on: first, containing: "line-1000")
+        try await waitForViewport(on: first, containing: "line-0000")
         let pinned = try viewportText(on: first)
         XCTAssertFalse(pinned.contains("line-1999"), "pinned viewport must not already be at bottom")
 
@@ -414,22 +482,16 @@ final class TerminalSurfaceManagerTests: XCTestCase {
 
         // While warm, the viewport moves away from the anchor captured at
         // demotion; reattach must detect the mismatch and resync to bottom.
-        _ = "scroll_to_row:500".withCString { pointer in
-            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_row:500".utf8.count))
+        _ = "scroll_to_bottom".withCString { pointer in
+            ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_bottom".utf8.count))
         }
-        try await Task.sleep(for: .milliseconds(200))
+        try await waitForViewport(on: first, containing: "line-1999")
 
         submit(first.id, to: manager, host: host)
         try await waitUntil {
             manager.snapshot().activeSessionID == first.id && first.terminalViewIsPresentable
         }
-        do {
-            try await waitForViewport(on: first, containing: "line-1999")
-        } catch {
-            let text = try viewportText(on: first)
-            print("REATTACHED_VIEWPORT=\(text.prefix(300))")
-            throw error
-        }
+        try await waitForViewport(on: first, containing: "line-1999")
     }
 
     private func makeLines(start: Int, count: Int) -> Data {
@@ -488,11 +550,16 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         throw Timeout()
     }
 
-    private func makeSurface() -> GhosttySurface {
+    private func makeSurface(
+        outputRenderBudgetBytes: Int = 8 * 1024 * 1024,
+        outputRenderYield: Duration = .milliseconds(1)
+    ) -> GhosttySurface {
         GhosttySurface(
             id: TerminalSessionID(),
             attachmentID: TerminalAttachmentID(),
             workingDirectory: "/tmp",
+            outputRenderBudgetBytes: outputRenderBudgetBytes,
+            outputRenderYield: outputRenderYield,
             onInput: { _ in },
             onResize: { _, _ in }
         )

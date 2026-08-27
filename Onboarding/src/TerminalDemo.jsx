@@ -129,7 +129,7 @@ export default function TerminalDemo() {
             `${dim}ID            SCOPE       STATUS     RUNTIME${reset}`,
             `sess_9f2c     warren/dev  ${green}running${reset}    ghostline`,
             `sess_71ab     docs        ${green}running${reset}    ghostline`,
-            `sess_03de     terminal    ${yellow}detached${reset}  tmux`,
+            `sess_03de     terminal    ${yellow}detached${reset}  ghostline`,
             `${dim}3 sessions retained by host${reset}`,
           ].join("\r\n") + "\r\n",
         );
