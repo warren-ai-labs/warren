@@ -94,6 +94,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    /// Serializes native state installation with the final current-epoch
+    /// check and Ghostty write. A stale drain can therefore only complete
+    /// before the snapshot swap, never append covered bytes after it.
+    private let terminalFeedLock = NSLock()
     private let inMemory: InMemoryTerminalSession
     private let ansiObserver: TerminalANSIObserver
     private let budgetBytes: Int
@@ -109,8 +113,14 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     init(
         inMemory: InMemoryTerminalSession,
         ansiObserver: TerminalANSIObserver,
-        budgetBytes: Int = 128 * 1024,
-        yield: Duration = .milliseconds(8)
+        // Large live TUI bursts and legacy recovery frames must drain without
+        // delaying input echoes. Native cold recovery bypasses this VT parser
+        // entirely through restoreSnapshot(_:epoch:sequence:).
+        // Warm promotion must drain a hidden backlog within 50ms, so keep the
+        // budget large and the yield minimal; visible fast-forward is avoided
+        // by the presentation gate, not by throttling the writer.
+        budgetBytes: Int = 8 * 1024 * 1024,
+        yield: Duration = .microseconds(200)
     ) {
         precondition(budgetBytes > 0)
         self.inMemory = inMemory
@@ -145,9 +155,31 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// Drops pending bytes and restarts the recovery anchor. Safe to call
     /// while a feed is in flight; the next enqueue starts a fresh drain.
     public func reset(epoch: UInt64, sequence: UInt64) {
+        terminalFeedLock.withLock {
+            lock.withLock {
+                buffer.reset(epoch: epoch, sequence: sequence)
+            }
+        }
+    }
+
+    /// Installs one native Ghostty state and advances the writer to its
+    /// browser-facing recovery boundary. Queued historical bytes are dropped
+    /// only after Ghostty accepts the snapshot.
+    @discardableResult
+    public func restoreSnapshot(
+        _ data: Data,
+        epoch: UInt64,
+        sequence: UInt64
+    ) -> Bool {
+        terminalFeedLock.lock()
+        defer { terminalFeedLock.unlock() }
+        guard inMemory.restoreSnapshot(data) else { return false }
         lock.withLock {
             buffer.reset(epoch: epoch, sequence: sequence)
+            latestRenderedEpoch = epoch
+            latestRenderedSequence = sequence
         }
+        return true
     }
 
     /// Records that Ghostty has consumed bytes through `sequence` for `epoch`.
@@ -181,8 +213,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// Writes bytes into Ghostty synchronously (used by tests and initial
     /// snapshots where ordering with in-flight feed work is not a concern).
     public func receive(_ payload: Data) {
-        ansiObserver.receive(payload)
-        inMemory.receive(payload)
+        terminalFeedLock.withLock {
+            ansiObserver.receive(payload)
+            inMemory.receive(payload)
+        }
     }
 
     /// Cancels the background feed and drops pending bytes.
@@ -255,16 +289,20 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             // deadlock against a drain blocked inside Ghostty. The in-memory
             // session also never holds its own lock across Ghostty, so a
             // teardown on the main thread cannot wait behind this call.
-            let isCurrentEpoch = lock.withLock { buffer.epoch == slice.epoch }
-            guard isCurrentEpoch else {
+            let writeResult = terminalFeedLock.withLock { () -> (isCurrent: Bool, received: Bool) in
+                guard lock.withLock({ buffer.epoch == slice.epoch }) else {
+                    return (false, false)
+                }
+                ansiObserver.receive(slice.payload)
+                return (true, inMemory.receive(slice.payload))
+            }
+            guard writeResult.isCurrent else {
                 // A reanchor reset the stream while this slice was in flight;
                 // it is stale and must not be rendered.
                 heldSlice = nil
                 continue
             }
-
-            ansiObserver.receive(slice.payload)
-            guard inMemory.receive(slice.payload) else {
+            guard writeResult.received else {
                 try? await Task.sleep(for: yield)
                 continue
             }
@@ -279,10 +317,15 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             if !hasMore, exitIfDrained() {
                 return
             }
-            do {
-                try await Task.sleep(for: yield)
-            } catch {
-                return
+            // Yield only when there is more work; the 200µs quantum keeps a
+            // 14MB hidden backlog drain within ~4ms instead of seconds, while
+            // still yielding to the main thread for input and scroll.
+            if hasMore {
+                do {
+                    try await Task.sleep(for: yield)
+                } catch {
+                    return
+                }
             }
         }
     }

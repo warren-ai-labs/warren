@@ -286,9 +286,9 @@ final class WarrenStateStoreTests: XCTestCase {
             workingDirectory: "/tmp/warren",
             terminalSize: try XCTUnwrap(TerminalSize(columns: 120, rows: 40)),
             runtimeAdoptionDescriptor: RuntimeAdoptionDescriptor(
-                runtime: "tmux",
+                runtime: "ghostline",
                 identifier: "warren-main",
-                metadata: ["window": "0"]
+                metadata: [:]
             ),
             agentSessionID: "codex-thread-123"
         )
@@ -550,9 +550,9 @@ final class WarrenStateStoreTests: XCTestCase {
             workingDirectory: "/tmp/warren",
             terminalSize: try XCTUnwrap(TerminalSize(columns: 120, rows: 40)),
             runtimeAdoptionDescriptor: RuntimeAdoptionDescriptor(
-                runtime: "tmux",
+                runtime: "ghostline",
                 identifier: "warren-main-\(UUID().uuidString)",
-                metadata: ["window": "0"]
+                metadata: [:]
             ),
             kind: .codex,
             title: "Codex"

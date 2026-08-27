@@ -339,9 +339,15 @@ private enum RemoteWireEvent: Sendable {
     case roster
     case rosterDelta(RemoteRoster.Delta)
     case agent(sessionID: TerminalSessionID, status: AgentStatus)
-    case output(Data)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
-    case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool)
+    case atomicState(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        format: String,
+        payload: Data
+    )
+    case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool, synced: Bool)
     case maintenance(message: String?)
     case disconnected(String)
 }
@@ -363,6 +369,13 @@ private enum WarrenRemoteErrorInfoKey {
 struct TerminalOutputAnchor: Equatable, Sendable {
     let epoch: UInt64
     let sequence: UInt64
+}
+
+private struct PendingAtomicRecovery: Sendable {
+    let epoch: UInt64
+    let sequence: UInt64
+    let format: String
+    let payload: Data
 }
 
 enum WarrenRemoteTabOrdering {
@@ -401,21 +414,21 @@ enum WarrenRemoteTabOrdering {
     }
 }
 
-/// Parameters shared by the desktop attach path and its protocol tests. The
-/// viewport is optional for compatibility with older clients, but a valid
-/// viewport is always sent when Ghostty has produced one.
+/// Parameters shared by the desktop terminal protocol and its tests.
 enum WarrenRemoteTerminalProtocol {
-    static func attachParameters(
+    /// Parameters for a session output subscription. Passive subscribers do
+    /// not claim focus; a selected cold attach opts into a control claim so
+    /// the measured viewport is applied before the atomic checkpoint.
+    static func subscribeParameters(
         sessionID: TerminalSessionID,
         size: TerminalSize?,
-        anchor: TerminalOutputAnchor? = nil
+        anchor: TerminalOutputAnchor? = nil,
+        claimControl: Bool = false
     ) -> [String: String] {
-        // Attach subscribes to output only and must not claim focus. The
-        // viewport is still sent so a daemon with no focus owner can resize
-        // the shared runtime before its reanchor snapshot: without this, the
-        // snapshot is captured at the session's last width and soft-wrapped
-        // history replays into Ghostty at the wrong wrap points.
-        var params = ["id": sessionID.description, "focused": "false"]
+        var params = ["id": sessionID.description]
+        if claimControl {
+            params["claim"] = "true"
+        }
         if let size {
             params["cols"] = String(size.columns)
             params["rows"] = String(size.rows)
@@ -425,6 +438,13 @@ enum WarrenRemoteTerminalProtocol {
             params["sequence"] = String(anchor.sequence)
         }
         return params
+    }
+
+    /// Parameters for swapping the control lease without any output work.
+    /// Tab promotion sends this instead of a replay-carrying attach so an
+    /// ordinary switch performs zero recovery on the daemon.
+    static func controlClaimParameters(sessionID: TerminalSessionID) -> [String: String] {
+        ["id": sessionID.description, "output": "false"]
     }
 
     static func shouldAttach(
@@ -442,7 +462,7 @@ private actor WarrenRemoteWire {
     /// URLSession's default maximumMessageSize (1 MiB) rejects the daemon's
     /// largest legal frames (terminal output up to 8 MiB plus agent batches);
     /// raising it is required for those messages to survive the transport.
-    private static let maximumWebSocketMessageBytes = 64 * 1024 * 1024
+    private static let maximumWebSocketMessageBytes = 128 * 1024 * 1024
     private static let connectTimeout: Duration = .seconds(10)
     private static let requestTimeout: Duration = .seconds(15)
     private let configuration: WarrenRemoteEndpointConfiguration
@@ -485,8 +505,9 @@ private actor WarrenRemoteWire {
                 try await socket.send(.string(Self.json([
                     "t": "auth",
                     "token": token,
-                    "version": "1.0",
+                    "version": "2.0",
                     "capabilities": ["roster-delta"],
+                    "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
                 ])))
             }
             group.addTask {
@@ -636,22 +657,27 @@ private actor WarrenRemoteWire {
 
     private func emitOutput(_ data: Data) async -> Bool {
         let bytes = [UInt8](data)
-        if let frame = try? WarrenWireCodec().decodeOutputFrame(bytes) {
-            return await emitChunks(frame)
+        if let frame = try? WarrenWireCodec().decodeFrame(bytes) {
+            switch frame {
+            case .output(let output):
+                return await emitChunks(output)
+            case .atomicState(let state):
+                return await eventBuffer.send(.atomicState(
+                    sessionID: state.header.sessionID,
+                    epoch: state.header.epoch,
+                    sequence: state.header.sequence,
+                    format: state.header.format,
+                    payload: state.payload
+                ))
+            case .input:
+                return await eventBuffer.send(.disconnected(
+                    "The daemon sent a client-input frame; reconnecting."
+                ))
+            }
         }
-        switch WarrenOutputDecoder.decode(data) {
-        case .payload(let payload):
-            return await emitChunks(payload)
-        case .legacyRaw:
-            return await emitChunks(data)
-        case .undecodableEnvelope:
-            // The daemon speaks the DENB envelope but this frame cannot be
-            // decoded. Rendering it would print binary garbage into Ghostty;
-            // drop the connection so the remote model reconnects cleanly.
-            return await eventBuffer.send(.disconnected(
-                "The daemon sent an undecodable terminal frame; reconnecting."
-            ))
-        }
+        return await eventBuffer.send(.disconnected(
+            "The daemon sent an undecodable terminal frame; reconnecting."
+        ))
     }
 
     private func emitChunks(_ frame: WarrenDecodedOutputFrame) async -> Bool {
@@ -668,19 +694,6 @@ private actor WarrenRemoteWire {
                 sequence: frame.header.sequence + UInt64(offset),
                 payload: chunk
             )) else { return false }
-            offset = end
-        }
-        return true
-    }
-
-    private func emitChunks(_ data: Data) async -> Bool {
-        var offset = 0
-        while offset < data.count {
-            let end = min(offset + Self.outputChunkBytes, data.count)
-            let chunk = offset == 0 && end == data.count
-                ? data
-                : Data(data[offset..<end])
-            guard await eventBuffer.send(.output(chunk)) else { return false }
             offset = end
         }
         return true
@@ -721,10 +734,10 @@ private actor WarrenRemoteWire {
         } else if type == "welcome" {
             let version = object["version"] as? String ?? "unknown"
             daemonProtocolVersion = version
-            guard Self.compatibleProtocolVersion(version, with: "1.0") else {
+            guard Self.compatibleProtocolVersion(version, with: "2.0") else {
                 return await eventBuffer.send(.disconnected(
                     "Warren Desktop is incompatible with the daemon protocol "
-                        + "(desktop=1.0, daemon=\(version)); update both together."
+                        + "(desktop=2.0, daemon=\(version)); update both together."
                 ))
             }
         } else if type == "agent.status",
@@ -744,11 +757,17 @@ private actor WarrenRemoteWire {
                   let sequence = (object["sequence"] as? NSNumber)?.uint64Value else {
                 return true
             }
+            // The daemon distinguishes snapshot resets (reanchor=true) from
+            // incremental recovery prefixes (reanchor=false) on every
+            // attached message. Only a true reset may divert frames into the
+            // staging buffer that shields the visible surface.
+            let reanchor = (object["reanchor"] as? Bool) ?? (type == "attached")
             return await eventBuffer.send(.anchor(
                 sessionID: sessionID,
                 epoch: epoch,
                 sequence: sequence,
-                reanchor: type == "attached"
+                reanchor: type == "synced" ? false : reanchor,
+                synced: type == "synced"
             ))
         } else if type == "error" {
             return await eventBuffer.send(.disconnected(
@@ -814,7 +833,7 @@ private enum WarrenRemoteDiagnostics {
             "selectedSession: \(selectedSessionID?.description ?? "none")",
             "attachedSession: \(attachedSessionID?.description ?? "none")",
             "focusedSession: \(focusedSessionID?.description ?? "none")",
-            "clientProtocol: 1.0",
+            "clientProtocol: 2.0",
             "daemonProtocol: \(daemonProtocol)",
             "appVersion: \(appVersion())",
             "os: \(ProcessInfo.processInfo.operatingSystemVersionString)",
@@ -932,6 +951,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
     private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
     private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
+    /// Sessions with a live daemon-side output subscription feeding their
+    /// retained surface. One entry per warm/active surface; background
+    /// frames keep these surfaces current so tab promotion stays local.
+    private var outputSubscriptions: Set<TerminalSessionID> = []
+    /// Atomic states accepted by Ghostty but not yet released by the matching
+    /// synced marker. The anchor prevents a late marker from an older attach
+    /// generation from exposing a newly replaced surface.
+    private var installedAtomicStateAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
+    /// Atomic payloads that arrived during the tiny native-surface creation
+    /// window. They remain opaque and invisible until the surface reports a
+    /// valid viewport; a transient restore failure must never tear down the
+    /// whole WebSocket and strand the user on a black pane.
+    private var pendingAtomicRecoveries: [TerminalSessionID: PendingAtomicRecovery] = [:]
+    private var pendingSyncedAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
+    private var recoveryRetryTasks: [TerminalSessionID: Task<Void, Never>] = [:]
+    private var recoveryRetryGenerations: [TerminalSessionID: UInt64] = [:]
+    private var failedAtomicRecoverySessions: Set<TerminalSessionID> = []
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
@@ -958,6 +994,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard let self else { return }
             self.outputAnchors.removeValue(forKey: sessionID)
             self.suppressFramedAnchorUpdates.remove(sessionID)
+            self.installedAtomicStateAnchors.removeValue(forKey: sessionID)
+            self.clearAtomicRecoveryState(for: sessionID)
+            self.failedAtomicRecoverySessions.remove(sessionID)
+            self.unsubscribeFromOutput(sessionID)
         }
         guard endpointConfiguration != configuration || eventTask == nil else {
             // The root view's `.task` can restart on window transitions such
@@ -1107,6 +1147,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         attachGeneration &+= 1
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
+        outputSubscriptions.removeAll()
+        installedAtomicStateAnchors.removeAll()
+        cancelAllAtomicRecoveryRetries()
+        pendingAtomicRecoveries.removeAll()
+        pendingSyncedAnchors.removeAll()
+        failedAtomicRecoverySessions.removeAll()
         cancelResizeRequests()
         focusTask?.cancel()
         focusTask = nil
@@ -1118,12 +1164,53 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         appliedLiveTabSessionIDs.removeAll()
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
+        outputSubscriptions.removeAll()
+        installedAtomicStateAnchors.removeAll()
+        cancelAllAtomicRecoveryRetries()
+        pendingAtomicRecoveries.removeAll()
+        pendingSyncedAnchors.removeAll()
+        failedAtomicRecoverySessions.removeAll()
     }
 
     private func removeMountedSurface(sessionID: TerminalSessionID) {
         surfaceManager.remove(sessionID)
         outputAnchors.removeValue(forKey: sessionID)
         suppressFramedAnchorUpdates.remove(sessionID)
+        installedAtomicStateAnchors.removeValue(forKey: sessionID)
+        clearAtomicRecoveryState(for: sessionID)
+        failedAtomicRecoverySessions.remove(sessionID)
+        outputSubscriptions.remove(sessionID)
+    }
+
+    private func clearAtomicRecoveryState(for sessionID: TerminalSessionID) {
+        pendingAtomicRecoveries.removeValue(forKey: sessionID)
+        pendingSyncedAnchors.removeValue(forKey: sessionID)
+        recoveryRetryGenerations[sessionID, default: 0] &+= 1
+        recoveryRetryTasks.removeValue(forKey: sessionID)?.cancel()
+    }
+
+    private func cancelAllAtomicRecoveryRetries() {
+        for task in recoveryRetryTasks.values {
+            task.cancel()
+        }
+        recoveryRetryTasks.removeAll()
+        for sessionID in recoveryRetryGenerations.keys {
+            recoveryRetryGenerations[sessionID, default: 0] &+= 1
+        }
+    }
+
+    /// Best-effort daemon-side unsubscribe for a disposed surface. The
+    /// daemon also cleans up when the session exits or the socket drops, so
+    /// failures are deliberately ignored.
+    private func unsubscribeFromOutput(_ sessionID: TerminalSessionID) {
+        guard wire != nil else { return }
+        guard outputSubscriptions.remove(sessionID) != nil else { return }
+        Task { [weak self] in
+            _ = try? await self?.wire?.request(
+                "session.unsubscribe",
+                params: ["id": sessionID.description]
+            )
+        }
     }
 
     private func clearMaintenance() {
@@ -1297,7 +1384,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -1333,7 +1420,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -1456,7 +1543,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     in: projection
                 )
             )
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
             return
         }
 
@@ -1491,7 +1578,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         if projection.tabs(in: workspace.id).isEmpty {
             createSession(workspaceID: workspace.id, request: .shell)
         } else {
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         }
     }
 
@@ -2197,7 +2284,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
         switch action {
         case .selectProject, .selectWorkspace, .openWorkspace, .selectTerminalGroup, .selectTab, .restoreNavigation:
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .openSession(let id):
             selectSession(id)
         case .deleteSession(let id):
@@ -2209,7 +2296,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // Close selects the replacement tab before the daemon confirms the
             // delete. Attach it immediately so the pane does not fall back to
             // the "Connecting…" placeholder while the roster catches up.
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .closeOtherTabs(let tabID):
             let tabs: [ClientTab]
             if let workspaceID = projection.workspaceID(forTabID: tabID) {
@@ -2222,7 +2309,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             for tab in tabs where tab.id != tabID {
                 if let id = tab.sessionID { closeSession(id) }
             }
-            Task { await attachSelectedSession() }
+            Task { await presentSelectedSession() }
         case .closeAllTabs:
             for tab in selectedContextTabs {
                 if let id = tab.sessionID { closeSession(id) }
@@ -2378,10 +2465,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     func focus(sessionID: TerminalSessionID, size: TerminalSize?) {
         guard selectedSessionID == sessionID else { return }
-        let measuredSize = size ?? surfaceManager
-            .surface(for: sessionID)?
-            .state.surfaceSize
-            .flatMap { TerminalSize(columns: Int($0.columns), rows: Int($0.rows)) }
+        let measuredSize = size ?? surfaceManager.surface(for: sessionID)?.terminalSize
         guard attachedSessionID == sessionID else {
             pendingFocusSessionID = sessionID
             pendingFocusSize = measuredSize
@@ -2629,7 +2713,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.attachSelectedSession()
+                await self.presentSelectedSession()
             } catch {
                 self?.present(error)
             }
@@ -2790,6 +2874,169 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    private func failAtomicRecovery(
+        sessionID: TerminalSessionID,
+        reason: String,
+        closeWire: Bool = true
+    ) {
+        TerminalDiagnostics.log("atomic_recovery_failed", [
+            "session": sessionID.description,
+            "reason": reason,
+        ])
+        clearAtomicRecoveryState(for: sessionID)
+        installedAtomicStateAnchors.removeValue(forKey: sessionID)
+        failedAtomicRecoverySessions.insert(sessionID)
+        guard closeWire else { return }
+        Task { [wire] in await wire?.close() }
+    }
+
+    private func scheduleAtomicRecoveryRetry(for sessionID: TerminalSessionID) {
+        recoveryRetryTasks[sessionID]?.cancel()
+        let generation = recoveryRetryGenerations[sessionID, default: 0] &+ 1
+        recoveryRetryGenerations[sessionID] = generation
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.recoveryRetryGenerations[sessionID] == generation {
+                    self.recoveryRetryTasks.removeValue(forKey: sessionID)
+                }
+            }
+
+            while !Task.isCancelled,
+                  self.recoveryRetryGenerations[sessionID] == generation {
+                guard let pending = self.pendingAtomicRecoveries[sessionID] else {
+                    return
+                }
+                guard self.surfaceManager.prepareForRecovery(sessionID) else {
+                    do {
+                        try await Task.sleep(for: .milliseconds(16))
+                    } catch {
+                        return
+                    }
+                    continue
+                }
+                guard self.surfaceManager.isReadyForRecovery(sessionID) else {
+                    do {
+                        try await Task.sleep(for: .milliseconds(16))
+                    } catch {
+                        return
+                    }
+                    continue
+                }
+
+                let restored = self.surfaceManager.restoreSnapshot(
+                    pending.payload,
+                    for: sessionID,
+                    epoch: pending.epoch,
+                    sequence: pending.sequence
+                )
+                guard restored else {
+                    // At this point all lifecycle prerequisites are true, so
+                    // a second failure means the Ghostline payload itself is
+                    // invalid rather than a cold-mount race. Reconnect the
+                    // transport and let the daemon produce a fresh boundary.
+                    self.failAtomicRecovery(
+                        sessionID: sessionID,
+                        reason: "native snapshot rejected after surface became ready"
+                    )
+                    return
+                }
+
+                let anchor = TerminalOutputAnchor(
+                    epoch: pending.epoch,
+                    sequence: pending.sequence
+                )
+                self.pendingAtomicRecoveries.removeValue(forKey: sessionID)
+                self.installedAtomicStateAnchors[sessionID] = anchor
+                TerminalDiagnostics.log("atomic_recovery_installed", [
+                    "session": sessionID.description,
+                    "epoch": String(pending.epoch),
+                    "sequence": String(pending.sequence),
+                    "bytes": String(pending.payload.count),
+                    "retry": "true",
+                ])
+                self.finishAtomicRecoveryIfSynced(sessionID: sessionID, anchor: anchor)
+                return
+            }
+        }
+        recoveryRetryTasks[sessionID] = task
+    }
+
+    private func installAtomicRecovery(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        format: String,
+        payload: Data
+    ) -> Bool {
+        guard format == "ghostty-vt-snapshot-v1" else {
+            failAtomicRecovery(
+                sessionID: sessionID,
+                reason: "unsupported format \(format)"
+            )
+            return false
+        }
+        guard surfaceManager.restoreSnapshot(
+            payload,
+            for: sessionID,
+            epoch: epoch,
+            sequence: sequence
+        ) else {
+            pendingAtomicRecoveries[sessionID] = PendingAtomicRecovery(
+                epoch: epoch,
+                sequence: sequence,
+                format: format,
+                payload: payload
+            )
+            if surfaceManager.surface(for: sessionID) != nil {
+                surfaceManager.beginRecovery(for: sessionID)
+            }
+            TerminalDiagnostics.log("atomic_recovery_deferred", [
+                "session": sessionID.description,
+                "epoch": String(epoch),
+                "sequence": String(sequence),
+                "bytes": String(payload.count),
+                "surfaceReady": surfaceManager.isReadyForRecovery(sessionID) ? "true" : "false",
+            ])
+            scheduleAtomicRecoveryRetry(for: sessionID)
+            return false
+        }
+        let anchor = TerminalOutputAnchor(epoch: epoch, sequence: sequence)
+        pendingAtomicRecoveries.removeValue(forKey: sessionID)
+        installedAtomicStateAnchors[sessionID] = anchor
+        TerminalDiagnostics.log("atomic_recovery_installed", [
+            "session": sessionID.description,
+            "epoch": String(epoch),
+            "sequence": String(sequence),
+            "bytes": String(payload.count),
+        ])
+        finishAtomicRecoveryIfSynced(sessionID: sessionID, anchor: anchor)
+        return true
+    }
+
+    @discardableResult
+    private func finishAtomicRecoveryIfSynced(
+        sessionID: TerminalSessionID,
+        anchor: TerminalOutputAnchor
+    ) -> Bool {
+        guard let synced = pendingSyncedAnchors.removeValue(forKey: sessionID) else {
+            return false
+        }
+        guard synced == anchor else {
+            failAtomicRecovery(
+                sessionID: sessionID,
+                reason: "synced marker did not match delayed snapshot"
+            )
+            return false
+        }
+        installedAtomicStateAnchors.removeValue(forKey: sessionID)
+        surfaceManager.endRecovery(for: sessionID)
+        if selectedSessionID == sessionID {
+            initialRefreshPending = false
+        }
+        return true
+    }
+
     private func consume(_ event: RemoteWireEvent) async {
         switch event {
         case .roster:
@@ -2851,8 +3098,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.clearMaintenance()
             }
-        case .output(let data):
-            await feedOutput(data)
         case .framedOutput(let sessionID, let epoch, let sequence, let payload):
             if !suppressFramedAnchorUpdates.contains(sessionID) {
                 let endSequence = sequence + UInt64(payload.count)
@@ -2871,12 +3116,85 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     )
                 }
             }
-            await feedOutput(payload, sessionID: sessionID)
-        case .anchor(let sessionID, let epoch, let sequence, let reanchor):
-            if reanchor {
+            await feedOutput(
+                payload,
+                sessionID: sessionID,
+                epoch: epoch,
+                sequence: sequence
+            )
+        case .atomicState(let sessionID, let epoch, let sequence, let format, let payload):
+            _ = installAtomicRecovery(
+                sessionID: sessionID,
+                epoch: epoch,
+                sequence: sequence,
+                format: format,
+                payload: payload
+            )
+        case .anchor(let sessionID, let epoch, let sequence, let reanchor, let synced):
+            TerminalDiagnostics.log("recovery_anchor", [
+                "session": sessionID.description,
+                "reanchor": reanchor ? "true" : "false",
+                "epoch": String(epoch),
+                "sequence": String(sequence),
+                "surface": surfaceManager.surface(for: sessionID) != nil ? "retained" : "absent",
+            ])
+            if !synced {
+                failedAtomicRecoverySessions.remove(sessionID)
+                clearAtomicRecoveryState(for: sessionID)
+                installedAtomicStateAnchors.removeValue(forKey: sessionID)
                 suppressFramedAnchorUpdates.insert(sessionID)
+                if surfaceManager.surface(for: sessionID) != nil {
+                    surfaceManager.beginRecovery(for: sessionID)
+                    TerminalDiagnostics.log("recovery_stage_start", [
+                        "session": sessionID.description,
+                        "mode": "atomic",
+                    ])
+                }
             } else {
                 suppressFramedAnchorUpdates.remove(sessionID)
+                guard !failedAtomicRecoverySessions.contains(sessionID) else {
+                    TerminalDiagnostics.log("atomic_recovery_marker_ignored", [
+                        "session": sessionID.description,
+                        "epoch": String(epoch),
+                        "sequence": String(sequence),
+                    ])
+                    return
+                }
+                let syncedAnchor = TerminalOutputAnchor(epoch: epoch, sequence: sequence)
+                if let pending = pendingAtomicRecoveries[sessionID] {
+                    // A direct reader may emit the synced marker before the
+                    // native surface has finished attaching. Keep both
+                    // pieces until the retry installs the matching snapshot;
+                    // presenting now would reveal an empty/black surface.
+                    guard pending.epoch == epoch, pending.sequence == sequence else {
+                        failAtomicRecovery(
+                            sessionID: sessionID,
+                            reason: "synced marker did not match pending snapshot"
+                        )
+                        return
+                    }
+                    pendingSyncedAnchors[sessionID] = syncedAnchor
+                    scheduleAtomicRecoveryRetry(for: sessionID)
+                    return
+                }
+                guard let installedAnchor = installedAtomicStateAnchors.removeValue(forKey: sessionID) else {
+                    failAtomicRecovery(
+                        sessionID: sessionID,
+                        reason: "recovery marker arrived without an installed snapshot"
+                    )
+                    return
+                }
+                if installedAnchor != syncedAnchor {
+                    TerminalDiagnostics.log("atomic_recovery_marker_mismatch", [
+                        "session": sessionID.description,
+                        "installed": "\(installedAnchor.epoch):\(installedAnchor.sequence)",
+                        "synced": "\(epoch):\(sequence)",
+                    ])
+                    failAtomicRecovery(sessionID: sessionID, reason: "synced marker did not match installed snapshot")
+                    return
+                }
+                surfaceManager.endRecovery(for: sessionID)
+                if selectedSessionID == sessionID { initialRefreshPending = false }
             }
             if let current = outputAnchors[sessionID] {
                 if epoch > current.epoch
@@ -2899,12 +3217,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private func feedOutput(_ data: Data, sessionID: TerminalSessionID? = nil) async {
+    private func feedOutput(
+        _ data: Data,
+        sessionID: TerminalSessionID? = nil,
+        epoch: UInt64? = nil,
+        sequence: UInt64? = nil
+    ) async {
         guard !data.isEmpty,
               let targetSessionID = sessionID ?? selectedSessionID,
-              targetSessionID == selectedSessionID,
               surfaceManager.surface(for: targetSessionID) != nil else { return }
-        let nudge = initialRefreshPending
+        let nudge = initialRefreshPending && targetSessionID == selectedSessionID
         if nudge {
             TerminalDiagnostics.log("feed_output", [
                 "session": targetSessionID.description,
@@ -2918,7 +3240,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 "nudge": "false",
             ])
         }
-        surfaceManager.enqueueRawOutput(data, for: targetSessionID)
+        if let epoch, let sequence {
+            surfaceManager.enqueueOutput(
+                data,
+                for: targetSessionID,
+                epoch: epoch,
+                sequence: sequence
+            )
+        } else {
+            surfaceManager.enqueueRawOutput(data, for: targetSessionID)
+        }
         if nudge {
             initialRefreshPending = false
             surfaceManager.requestPresent(targetSessionID)
@@ -3129,10 +3460,80 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // this explicit attach, the tab bar appears populated while the
             // pane remains empty until the user clicks the tab.
             Task { @MainActor [weak self] in
-                await self?.attachSelectedSession()
+                await self?.presentSelectedSession()
             }
         }
         fulfillPendingTerminalOpenRequest()
+    }
+
+    /// Entry point for every navigation that makes a session visible.
+    ///
+    /// A retained surface with a live output subscription is promoted
+    /// locally: its grid already holds the current screen, so presentation
+    /// is a reparent plus a control-lease swap and performs zero replay,
+    /// snapshot, or clear. Everything else takes the cold seeding path.
+    private func presentSelectedSession() async {
+        guard let tabID = navigation.selectedTabID,
+              let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        if surfaceManager.surface(for: sessionID) != nil,
+           outputSubscriptions.contains(sessionID) {
+            await promoteRetainedSession(sessionID)
+            return
+        }
+        await attachSelectedSession()
+    }
+
+    /// Promotes an already-current retained surface without touching the
+    /// terminal byte stream. The daemon-side work is one control-lease swap;
+    /// the pixels on screen are the live surface itself, not a replay.
+    private func promoteRetainedSession(_ sessionID: TerminalSessionID) async {
+        guard let wire else { return }
+        if selectedSessionID != sessionID {
+            pendingFocusSessionID = nil
+            pendingFocusSize = nil
+            pendingFocusResizeSize = nil
+            cancelResizeRequests()
+        }
+        inputRouter.prepare(for: sessionID)
+        selectedSessionID = sessionID
+        TerminalDiagnostics.log("tab_promote_local", [
+            "session": sessionID.description,
+        ])
+        do {
+            _ = try await wire.request(
+                "session.attach",
+                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
+            )
+        } catch {
+            // The control swap can fail when the session exited between the
+            // last roster and this switch. Re-seed through the cold path so
+            // the pane converges instead of silently losing input.
+            if selectedSessionID == sessionID {
+                await attachSelectedSession()
+            }
+            return
+        }
+        guard selectedSessionID == sessionID else { return }
+        attachedSessionID = sessionID
+        TerminalDiagnostics.log("promote_complete", [
+            "session": sessionID.description,
+        ])
+        surfaceManager.requestPresent(sessionID)
+        inputRouter.activate(for: sessionID) { [wire] data in
+            await wire.sendInput(data)
+        }
+        let measuredSize = surfaceManager.surface(for: sessionID)?.terminalSize
+        guard pendingFocusSessionID == sessionID else { return }
+        // Mirror the legacy attach flow: focus ownership is claimed only when
+        // the surface actually gained keyboard focus (the manager reports it
+        // through onFocused, which parks the request here while the control
+        // swap was still in flight). An unfocused window switching tabs must
+        // not steal resize authority from another endpoint viewing the same
+        // terminal.
+        let pendingSize = pendingFocusSize ?? measuredSize
+        pendingFocusSessionID = nil
+        pendingFocusSize = nil
+        sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
     }
 
     private func attachSelectedSession() async {
@@ -3142,7 +3543,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               let wire else { return }
 
         // Mount before awaiting the attach response. The daemon may legally
-        // produce the first tmux snapshot immediately after it accepts the
+        // produce the first recovery snapshot immediately after it accepts the
         // attach request; feeding that snapshot into an already-created surface
         // prevents the initial prompt from disappearing in the network race.
         let existingSurface = surfaceManager.surface(for: sessionID)
@@ -3193,41 +3594,61 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 onInput: { data in inputBridge.send(data) },
                 onResize: { [weak self] columns, rows in Task { @MainActor in self?.resize(columns: columns, rows: rows) } }
             )
-            surfaceManager.insert(surface)
+            surfaceManager.insert(surface, recoveryGated: true)
         }
         selectedSessionID = sessionID
+        // Keep the newly mounted surface in a neutral placeholder state until
+        // the daemon's recovery stream reaches its synced marker.
+        surfaceManager.beginRecovery(for: sessionID)
 
-        // SwiftUI/AppKit reports the actual Ghostty grid only after the
-        // surface has entered a measured pane. Waiting here makes the very
-        // first tmux snapshot use the same rows/columns as the pixels on
-        // screen, instead of briefly capturing the tmux default 120x36 grid.
-        // Keep a bounded fallback so a renderer that cannot obtain metrics
-        // still attaches and can converge through its later resize callback.
-        let size = await waitForSurfaceSize(surface, generation: generation)
+        // The roster can select a tab before SwiftUI has committed the
+        // terminal host (notably after a daemon/app restart). Do not ask the
+        // daemon for a checkpoint while the surface is still inactive, while
+        // its native surface is missing, or while its grid is zero-sized. In
+        // each of those states the only correct visible result is the neutral
+        // placeholder; sending the snapshot request early is what used to
+        // produce a permanent black pane until the user resized it.
+        guard let size = await waitForSurfaceReady(
+            sessionID,
+            surface: surface,
+            generation: generation
+        ) else { return }
         TerminalDiagnostics.log("attach_size", [
             "session": sessionID.description,
-            "size": size.map { "\($0.columns)x\($0.rows)" } ?? "nil",
+            "size": "\(size.columns)x\(size.rows)",
         ])
         guard generation == attachGeneration,
               selectedSessionID == sessionID,
               surfaceManager.surface(for: sessionID) === surface else { return }
         do {
             initialRefreshPending = true
-            _ = try await wire.request(
-                "session.attach",
-                params: WarrenRemoteTerminalProtocol.attachParameters(
-                    sessionID: sessionID,
-                    size: size,
-                    anchor: outputAnchors[sessionID]
-                )
+            // Only a view that is actually focused in the key window may
+            // claim the shared runtime geometry before the checkpoint. A
+            // background endpoint still receives an atomic state, but its
+            // measured size is intentionally not allowed to trigger SIGWINCH
+            // in another client's TUI.
+            let claimControl = surfaceManager.ownsTerminalFocus(sessionID)
+            try await seedSessionSubscription(
+                sessionID: sessionID,
+                size: claimControl ? size : nil,
+                claimControl: claimControl
             )
             guard generation == attachGeneration,
                   selectedSessionID == sessionID else { return }
+            // The subscription carries no input authority. Swap the control
+            // lease separately so typing and focus ownership follow the
+            // visible tab.
+            _ = try await wire.request(
+                "session.attach",
+                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
+            )
+            guard generation == attachGeneration,
+                  selectedSessionID == sessionID else { return }
+            outputSubscriptions.insert(sessionID)
             attachedSessionID = sessionID
             TerminalDiagnostics.log("attach_complete", [
                 "session": sessionID.description,
             ])
-            surfaceManager.requestPresent(sessionID)
             inputRouter.activate(for: sessionID) { [wire] data in
                 await wire.sendInput(data)
             }
@@ -3239,10 +3660,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         } catch {
             if generation == attachGeneration, selectedSessionID == sessionID {
+                TerminalDiagnostics.log("attach_failed", [
+                    "session": sessionID.description,
+                    "error": String(describing: error),
+                    "generation": String(generation),
+                ])
                 selectedSessionID = nil
                 attachedSessionID = nil
                 focusedSessionID = nil
                 inputRouter.discard(for: sessionID)
+                surfaceManager.endRecovery(for: sessionID)
                 removeMountedSurface(sessionID: sessionID)
                 // Only a failure for the currently selected session belongs in
                 // the notice center. A stale attach can be cancelled by a
@@ -3253,17 +3680,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private func waitForSurfaceSize(
-        _ surface: GhosttySurface,
+    private func waitForSurfaceReady(
+        _ sessionID: TerminalSessionID,
+        surface: GhosttySurface,
         generation: UInt64
     ) async -> TerminalSize? {
-        for _ in 0..<60 {
+        var loggedWaiting = false
+        while true {
             guard generation == attachGeneration else { return nil }
-            if let metrics = surface.state.surfaceSize,
-               let size = TerminalSize(
-                   columns: Int(metrics.columns),
-                   rows: Int(metrics.rows)
-               ) {
+            guard selectedSessionID == sessionID,
+                  surfaceManager.surface(for: sessionID) === surface else { return nil }
+            _ = surfaceManager.prepareForRecovery(sessionID)
+            guard surfaceManager.isReadyForRecovery(sessionID) else {
+                if !loggedWaiting {
+                    loggedWaiting = true
+                    TerminalDiagnostics.log("attach_waiting_for_surface", [
+                        "session": sessionID.description,
+                        "surface": surface.terminalSurfaceIsReady ? "ready" : "missing",
+                        "viewport": surface.terminalViewportIsValid ? "valid" : "pending",
+                    ])
+                }
+                do {
+                    try await Task.sleep(for: .milliseconds(16))
+                } catch {
+                    return nil
+                }
+                continue
+            }
+            if let size = surface.terminalSize {
                 return size
             }
             do {
@@ -3272,7 +3716,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 return nil
             }
         }
-        return nil
+    }
+
+    /// Subscribes the daemon-side output stream for one session without
+    /// claiming focus or input authority. Protocol 2 has no attach fallback:
+    /// an older daemon is an explicit connection error.
+    private func seedSessionSubscription(
+        sessionID: TerminalSessionID,
+        size: TerminalSize?,
+        claimControl: Bool
+    ) async throws {
+        guard let wire else { throw URLError(.networkConnectionLost) }
+        _ = try await wire.request(
+            "session.subscribe",
+            params: WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: size,
+                anchor: outputAnchors[sessionID],
+                claimControl: claimControl
+            )
+        )
     }
 
     private func selectSession(_ id: TerminalSessionID) {
@@ -3290,7 +3753,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 in: projection
             )
         )
-        Task { await attachSelectedSession() }
+        Task { await presentSelectedSession() }
     }
 
     private func moveTab(_ tabID: String, before destinationTabID: String?) {

@@ -130,48 +130,100 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertEqual(model.projectionPublicationCount, 1)
     }
 
-    func testRemoteAttachParametersCarryViewportWithoutClaimingFocus() throws {
+    func testRemoteSubscribeParametersCarryViewportAndClaimControl() throws {
         let sessionID = TerminalSessionID()
         let size = try XCTUnwrap(TerminalSize(columns: 117, rows: 38))
 
         XCTAssertEqual(
-            WarrenRemoteTerminalProtocol.attachParameters(sessionID: sessionID, size: size),
+            WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: size,
+                claimControl: true
+            ),
             [
                 "id": sessionID.description,
-                "focused": "false",
+                "claim": "true",
                 "cols": "117",
                 "rows": "38",
             ]
         )
     }
 
-    func testRemoteAttachParametersRemainExplicitlyPassiveWithoutGrid() {
+    func testRemoteSubscribeParametersRemainExplicitlyPassiveWithoutGrid() {
         let sessionID = TerminalSessionID()
 
         XCTAssertEqual(
-            WarrenRemoteTerminalProtocol.attachParameters(sessionID: sessionID, size: nil),
-            ["id": sessionID.description, "focused": "false"]
+            WarrenRemoteTerminalProtocol.subscribeParameters(sessionID: sessionID, size: nil),
+            ["id": sessionID.description]
         )
     }
 
-    func testRemoteAttachParametersIncludeRecoveryAnchorWhenKnown() throws {
+    func testRemoteSubscribeParametersIncludeRecoveryAnchorWhenKnown() throws {
         let sessionID = TerminalSessionID()
-        let size = try XCTUnwrap(TerminalSize(columns: 117, rows: 38))
         let anchor = TerminalOutputAnchor(epoch: 3, sequence: 4096)
 
         XCTAssertEqual(
-            WarrenRemoteTerminalProtocol.attachParameters(
+            WarrenRemoteTerminalProtocol.subscribeParameters(
                 sessionID: sessionID,
-                size: size,
+                size: nil,
                 anchor: anchor
             ),
             [
                 "id": sessionID.description,
-                "focused": "false",
-                "cols": "117",
-                "rows": "38",
                 "epoch": "3",
                 "sequence": "4096",
+            ]
+        )
+    }
+
+    func testSubscribeParametersCarryAnchorWithoutFocusClaim() throws {
+        let sessionID = TerminalSessionID()
+
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(sessionID: sessionID, size: nil),
+            ["id": sessionID.description]
+        )
+
+        let anchor = TerminalOutputAnchor(epoch: 7, sequence: 8192)
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: nil,
+                anchor: anchor
+            ),
+            [
+                "id": sessionID.description,
+                "epoch": "7",
+                "sequence": "8192",
+            ]
+        )
+    }
+
+    func testSubscribeParametersCanClaimMeasuredViewport() {
+        let sessionID = TerminalSessionID()
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.subscribeParameters(
+                sessionID: sessionID,
+                size: TerminalSize(columns: 120, rows: 40),
+                claimControl: true
+            ),
+            [
+                "id": sessionID.description,
+                "claim": "true",
+                "cols": "120",
+                "rows": "40",
+            ]
+        )
+    }
+
+    func testControlClaimParametersDisableOutputWork() {
+        let sessionID = TerminalSessionID()
+
+        XCTAssertEqual(
+            WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID),
+            [
+                "id": sessionID.description,
+                "output": "false",
             ]
         )
     }
@@ -384,7 +436,7 @@ final class WarrenRemoteModelTests: XCTestCase {
         ))
         XCTAssertFalse(WarrenRemoteApplicationModel.isSessionAlreadyClosed(
             NSError(domain: "WarrenRemote", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "tmux kill failed",
+                NSLocalizedDescriptionKey: "ghostline kill failed",
             ]),
             sessionID: sessionID
         ))

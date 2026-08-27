@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
@@ -22,6 +23,7 @@ import (
 type memoryRuntime struct {
 	mu       sync.Mutex
 	sessions map[string][]byte
+	readers  map[string]map[*memoryCursorReader]struct{}
 }
 
 func newMemoryRuntime(t *testing.T) *memoryRuntime {
@@ -46,10 +48,11 @@ type recordedResize struct {
 
 type recordingRuntime struct {
 	memoryRuntime
-	events      []string
-	resizes     []recordedResize
-	captureSeen chan struct{}
-	captureOnce sync.Once
+	events         []string
+	resizes        []recordedResize
+	captureSeen    chan struct{}
+	captureOnce    sync.Once
+	checkpointCall int
 }
 
 func (runtime *recordingRuntime) Resize(_ context.Context, _ string, columns, rows int) error {
@@ -66,6 +69,25 @@ func (runtime *recordingRuntime) Capture(ctx context.Context, name string) ([]by
 	runtime.mu.Unlock()
 	runtime.captureOnce.Do(func() { close(runtime.captureSeen) })
 	return runtime.memoryRuntime.Capture(ctx, name)
+}
+
+func (runtime *recordingRuntime) Checkpoint(ctx context.Context, name string) (ghostline.Checkpoint, error) {
+	checkpoint, err := runtime.memoryRuntime.Checkpoint(ctx, name)
+	if err != nil {
+		return ghostline.Checkpoint{}, err
+	}
+	runtime.mu.Lock()
+	runtime.checkpointCall++
+	// ensureOutput takes an internal cursor checkpoint before attach. The
+	// user-visible recovery checkpoint is the second boundary; signal that
+	// checkpoint regardless of whether the peer is focused (passive recovery
+	// deliberately performs no resize).
+	if runtime.checkpointCall == 2 {
+		runtime.events = append(runtime.events, "capture")
+		runtime.captureOnce.Do(func() { close(runtime.captureSeen) })
+	}
+	runtime.mu.Unlock()
+	return checkpoint, nil
 }
 
 func (runtime *recordingRuntime) snapshotOrder() ([]string, []recordedResize) {
@@ -121,6 +143,9 @@ func (m *memoryRuntime) Create(_ context.Context, name, _, _ string, _ []string)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[name] = []byte("ready\n")
+	if m.readers == nil {
+		m.readers = map[string]map[*memoryCursorReader]struct{}{}
+	}
 	return nil
 }
 func (m *memoryRuntime) Exists(_ context.Context, name string) bool {
@@ -136,15 +161,30 @@ func (m *memoryRuntime) Capture(_ context.Context, name string) ([]byte, error) 
 }
 func (m *memoryRuntime) Input(_ context.Context, name string, data []byte) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.sessions[name] = append(m.sessions[name], data...)
+	readers := make([]*memoryCursorReader, 0, len(m.readers[name]))
+	for reader := range m.readers[name] {
+		readers = append(readers, reader)
+	}
+	m.mu.Unlock()
+	for _, reader := range readers {
+		reader.notifyNewData()
+	}
 	return nil
 }
 func (m *memoryRuntime) Resize(context.Context, string, int, int) error { return nil }
 func (m *memoryRuntime) Kill(_ context.Context, name string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	delete(m.sessions, name)
+	readers := make([]*memoryCursorReader, 0, len(m.readers[name]))
+	for reader := range m.readers[name] {
+		readers = append(readers, reader)
+	}
+	delete(m.readers, name)
+	m.mu.Unlock()
+	for _, reader := range readers {
+		reader.closeFromRuntime()
+	}
 	return nil
 }
 
@@ -169,7 +209,7 @@ type workspaceBlockingCreateRuntime struct {
 	memoryRuntime
 	blockedDirectory string
 	createStarted    chan struct{}
-	releaseCreate   chan struct{}
+	releaseCreate    chan struct{}
 	startOnce        sync.Once
 }
 
@@ -210,7 +250,12 @@ func TestWebSocketAuthenticationAndResourceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{
+		Type:                 "auth",
+		Token:                "secret",
+		Version:              api.Version,
+		TerminalStateFormats: []string{terminalStateFormatANSI},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any
@@ -453,7 +498,7 @@ func TestWorkspaceSessionCreationDoesNotSerializeOtherWorkspaces(t *testing.T) {
 		memoryRuntime:    memoryRuntime{sessions: map[string][]byte{}},
 		blockedDirectory: workspaceAPath,
 		createStarted:    make(chan struct{}),
-		releaseCreate:   make(chan struct{}),
+		releaseCreate:    make(chan struct{}),
 	}
 	service := &Service{Store: state, Runtime: runtime}
 
@@ -755,6 +800,54 @@ func TestRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestRejectsProtocolOneAndClientsWithoutAtomicTerminalState(t *testing.T) {
+	t.Parallel()
+	state, _ := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	httpServer := httptest.NewServer(NewHTTPServer(
+		&Service{Store: state, Runtime: &memoryRuntime{sessions: map[string][]byte{}}},
+		"secret",
+		slog.Default(),
+	).Handler())
+	defer httpServer.Close()
+	endpoint := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/ws"
+
+	for name, auth := range map[string]api.Envelope{
+		"protocol one": {
+			Type:                 "auth",
+			Token:                "secret",
+			Version:              "1.0",
+			TerminalStateFormats: []string{terminalStateFormatANSI},
+		},
+		"missing state format": {
+			Type:    "auth",
+			Token:   "secret",
+			Version: api.Version,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			if err := connection.WriteJSON(auth); err != nil {
+				t.Fatal(err)
+			}
+			var response api.Response
+			if err := connection.ReadJSON(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Type != "error" || response.OK {
+				t.Fatalf("response = %#v, want protocol rejection", response)
+			}
+			if !strings.Contains(response.Error, "incompatible protocol") &&
+				!strings.Contains(response.Error, "upgrade required") {
+				t.Fatalf("error = %q, want explicit upgrade rejection", response.Error)
+			}
+		})
+	}
+}
+
 func TestRenameAndPinResources(t *testing.T) {
 	t.Parallel()
 	state, session := testSession(t)
@@ -886,7 +979,7 @@ func TestDesktopAttachResizesBeforeFirstSnapshot(t *testing.T) {
 	assertResizePrecedesCapture(t, runtime, 88, 27)
 }
 
-func TestPassiveAttachResizesBeforeSnapshotWhenNoFocusOwner(t *testing.T) {
+func TestPassiveAttachSeedsSnapshotWithoutResizingSharedRuntime(t *testing.T) {
 	state, session := testSession(t)
 	runtime := &recordingRuntime{
 		memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("prompt")}},
@@ -897,11 +990,17 @@ func TestPassiveAttachResizesBeforeSnapshotWhenNoFocusOwner(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
+	// A passive attach carries the viewer's viewport but must never mutate
+	// the shared runtime: a pre-snapshot resize would SIGWINCH the child and
+	// its redraw bytes would race (and be skipped by) the snapshot capture,
+	// leaving full-screen TUIs repainting regions no client ever received.
 	_ = requestResultBeforeBinary[api.Session](t, connection, "session.attach", map[string]any{
 		"id": session.ID, "focused": false, "cols": "88", "rows": "27",
 	})
 	waitForCapture(t, runtime.captureSeen)
-	assertResizePrecedesCapture(t, runtime, 88, 27)
+	if _, resizes := runtime.snapshotOrder(); len(resizes) != 0 {
+		t.Fatalf("passive attach resized the shared runtime: %#v", resizes)
+	}
 }
 
 func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
@@ -1014,13 +1113,42 @@ func testSession(t *testing.T) (*store.Store, api.Session) {
 func sessionIDForTest() string { return store.NewID() }
 
 func openAuthenticatedConnection(t *testing.T, serverURL, path string) *websocket.Conn {
+	return openAuthenticatedConnectionWithCapabilities(t, serverURL, path, nil)
+}
+
+func openAuthenticatedConnectionWithCapabilities(
+	t *testing.T,
+	serverURL, path string,
+	capabilities []string,
+) *websocket.Conn {
+	return openAuthenticatedConnectionWithStateFormat(
+		t,
+		serverURL,
+		path,
+		capabilities,
+		terminalStateFormatANSI,
+	)
+}
+
+func openAuthenticatedConnectionWithStateFormat(
+	t *testing.T,
+	serverURL, path string,
+	capabilities []string,
+	stateFormat string,
+) *websocket.Conn {
 	t.Helper()
 	endpoint := "ws" + strings.TrimPrefix(serverURL, "http") + path
 	connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{
+		Type:                 "auth",
+		Token:                "secret",
+		Version:              api.Version,
+		Capabilities:         capabilities,
+		TerminalStateFormats: []string{stateFormat},
+	}); err != nil {
 		connection.Close()
 		t.Fatal(err)
 	}
@@ -1327,17 +1455,16 @@ func TestRosterProjectionIgnoresObserverCancellation(t *testing.T) {
 	}
 }
 
-func TestRosterProjectionDoesNotProbeEndedLegacySessions(t *testing.T) {
+func TestRosterProjectionDoesNotProbeEndedSessions(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ghostlineRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
-	tmuxRuntime := &listingRuntime{memoryRuntime: memoryRuntime{sessions: map[string][]byte{}}}
 	service := &Service{
 		Store:          state,
 		Runtime:        ghostlineRuntime,
-		Runtimes:       map[string]Runtime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime},
+		Runtimes:       map[string]Runtime{"ghostline": ghostlineRuntime},
 		DefaultRuntime: "ghostline",
 	}
 	endedAt := time.Now().UTC()
@@ -1356,9 +1483,7 @@ func TestRosterProjectionDoesNotProbeEndedLegacySessions(t *testing.T) {
 			t.Fatalf("legacy session projection changed: %#v", roster.Sessions[0])
 		}
 	}
-	for kind, runtime := range map[string]*listingRuntime{"ghostline": ghostlineRuntime, "tmux": tmuxRuntime} {
-		if lists, exists := runtime.probeCounts(); lists != 0 || exists != 0 {
-			t.Fatalf("%s probes for ended legacy session: lists=%d exists=%d", kind, lists, exists)
-		}
+	if lists, exists := ghostlineRuntime.probeCounts(); lists != 0 || exists != 0 {
+		t.Fatalf("probes for ended session: lists=%d exists=%d", lists, exists)
 	}
 }

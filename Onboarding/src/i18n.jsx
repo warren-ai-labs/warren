@@ -97,7 +97,7 @@ const messages = {
     "architecture.runtime": "Runtime",
     "architecture.clientLine": "macOS app · Web/PWA · CLI",
     "architecture.hostLine": "warren-headless",
-    "architecture.runtimeLine": "ghostline / tmux",
+    "architecture.runtimeLine": "Ghostline",
     "architecture.note": "SSH, Tailscale and Cloudflare Tunnel only get you there. They are not the product model.",
     "principle.quote":
       "Closing a tab is the only way to end a session. Quitting, switching workspaces, losing Wi-Fi — that's just walking away.",
@@ -719,7 +719,7 @@ const messages = {
     "architecture.runtime": "运行时",
     "architecture.clientLine": "macOS 应用 · Web/PWA · CLI",
     "architecture.hostLine": "warren-headless",
-    "architecture.runtimeLine": "ghostline / tmux",
+    "architecture.runtimeLine": "Ghostline",
     "architecture.note": "SSH、Tailscale 和 Cloudflare Tunnel 只负责把你带到那里，不属于产品模型。",
     "principle.quote":
       "关闭 Tab 是结束会话的唯一方式。退出、切换工作区、Wi-Fi 断了——那只是离开而已。",

@@ -81,7 +81,7 @@ One click on a file path rendered by an agent TUI
 
 1. Ghostty detects the link and calls `Surface.processLinks` -> `openUrl`
    (`src/Surface.zig`).
-2. The embedded apprt (libghostty-swift 1.0.16) does not consume the action:
+2. The previous embedded apprt did not consume the action:
    its C action callback always returns `false`, so Ghostty believes the
    embedder did not handle it.
 3. Ghostty falls back to `internal_os.open` and spawns `/usr/bin/open`, then
@@ -104,10 +104,9 @@ Warren owns the open semantics instead of letting Ghostty fall back:
   scheme (`http`, `https`, `mailto`, `tel`, `file`) or existing absolute
   paths are opened, via `NSWorkspace`; missing paths and empty targets are
   silently ignored.
-- Make the vendored libghostty-swift action callback return `true` when the
+- Make Warren's maintained Ghostty embedding callback return `true` when the
   embedder installed an open-url handler, so Ghostty never spawns
-  `/usr/bin/open`. Upstream has no fix (libghostty-swift main is still
-  storage.1.0.16), hence the vendor.
+  `/usr/bin/open`.
 
 ### Debugging notes
 

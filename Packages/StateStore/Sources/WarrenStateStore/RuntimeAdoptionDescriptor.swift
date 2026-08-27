@@ -1,7 +1,7 @@
 /// The information a Host can use to find an already-running runtime session.
 ///
 /// This is intentionally an opaque adapter descriptor.  The state store does
-/// not know whether the runtime is tmux, a local PTY, or another adapter.
+/// not know which concrete runtime adapter owns the process.
 public struct RuntimeAdoptionDescriptor: Codable, Hashable, Sendable {
     public let runtime: String
     public let identifier: String

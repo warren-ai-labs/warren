@@ -26,6 +26,14 @@ extension WarrenWireCodec {
         let sequence: UInt64?
     }
 
+    struct RawAtomicStateHeader: Decodable {
+        let sessionID: TerminalSessionID
+        let epoch: UInt64
+        let sequence: UInt64
+        let format: String
+        let payloadLength: Int
+    }
+
     func parseEnvelope(_ bytes: [UInt8]) throws -> ParsedEnvelope {
         guard bytes.count >= Self.binaryPrefixLength else {
             throw WarrenWireCodecError.truncatedFrame
@@ -55,8 +63,9 @@ extension WarrenWireCodec {
         guard headerLength <= maxHeader else {
             throw WarrenWireCodecError.headerTooLarge(actual: headerLength, limit: maxHeader)
         }
-        guard payloadLength <= maxPayload else {
-            throw WarrenWireCodecError.payloadTooLarge(actual: payloadLength, limit: maxPayload)
+        let payloadLimit = kind == .atomicState ? maxAtomicStatePayload : maxPayload
+        guard payloadLength <= payloadLimit else {
+            throw WarrenWireCodecError.payloadTooLarge(actual: payloadLength, limit: payloadLimit)
         }
 
         let (payloadOffset, headerOverflow) = Self.binaryPrefixLength.addingReportingOverflow(headerLength)

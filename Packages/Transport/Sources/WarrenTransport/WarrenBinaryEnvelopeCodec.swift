@@ -30,6 +30,20 @@ extension WarrenWireCodec {
         )
     }
 
+    /// Encodes one Host-to-Client native terminal state. This deliberately
+    /// uses a separate binary kind from PTY output.
+    public func encodeAtomicState(
+        header: BinaryAtomicStateFrameHeader,
+        payload: Data
+    ) throws -> [UInt8] {
+        try encodeEnvelope(
+            kind: .atomicState,
+            header: header,
+            payload: Array(payload),
+            headerPayloadLength: header.payloadLength
+        )
+    }
+
     public func decodeOutputFrame(_ bytes: [UInt8]) throws -> WarrenDecodedOutputFrame {
         let envelope = try parseEnvelope(bytes)
         guard envelope.direction == .hostToClient else {
@@ -64,6 +78,23 @@ extension WarrenWireCodec {
         return try decodeInputHeader(envelope)
     }
 
+    public func decodeAtomicStateFrame(_ bytes: [UInt8]) throws -> WarrenDecodedAtomicStateFrame {
+        let envelope = try parseEnvelope(bytes)
+        guard envelope.direction == .hostToClient else {
+            throw WarrenWireCodecError.invalidDirection(
+                expected: .hostToClient,
+                received: envelope.direction
+            )
+        }
+        guard envelope.kind == .atomicState else {
+            throw WarrenWireCodecError.kindDirectionMismatch(
+                kind: envelope.kind,
+                direction: envelope.direction
+            )
+        }
+        return try decodeAtomicStateHeader(envelope)
+    }
+
     private func encodeEnvelope<Header: Encodable>(
         kind: BinaryFrameKind,
         header: Header,
@@ -79,8 +110,9 @@ extension WarrenWireCodec {
                 actual: payload.count
             )
         }
-        guard payload.count <= maxPayload else {
-            throw WarrenWireCodecError.payloadTooLarge(actual: payload.count, limit: maxPayload)
+        let payloadLimit = kind == .atomicState ? maxAtomicStatePayload : maxPayload
+        guard payload.count <= payloadLimit else {
+            throw WarrenWireCodecError.payloadTooLarge(actual: payload.count, limit: payloadLimit)
         }
         guard payload.count <= UInt32.max else {
             throw WarrenWireCodecError.integerOverflow
@@ -178,6 +210,40 @@ extension WarrenWireCodec {
             throw WarrenWireCodecError.negativePayloadLength
         }
         return WarrenDecodedInputFrame(metadata: metadata, payload: envelope.payload)
+    }
+
+    func decodeAtomicStateHeader(_ envelope: ParsedEnvelope) throws -> WarrenDecodedAtomicStateFrame {
+        let raw: RawAtomicStateHeader
+        do {
+            raw = try JSONDecoder().decode(RawAtomicStateHeader.self, from: Data(envelope.headerBytes))
+        } catch {
+            throw WarrenWireCodecError.invalidHeaderJSON
+        }
+        guard raw.payloadLength >= 0 else {
+            throw WarrenWireCodecError.negativePayloadLength
+        }
+        guard raw.payloadLength <= maxAtomicStatePayload else {
+            throw WarrenWireCodecError.payloadTooLarge(
+                actual: raw.payloadLength,
+                limit: maxAtomicStatePayload
+            )
+        }
+        guard raw.payloadLength == envelope.payloadLength else {
+            throw WarrenWireCodecError.payloadLengthMismatch(
+                expected: raw.payloadLength,
+                actual: envelope.payloadLength
+            )
+        }
+        guard let header = BinaryAtomicStateFrameHeader(
+            sessionID: raw.sessionID,
+            epoch: raw.epoch,
+            sequence: raw.sequence,
+            format: raw.format,
+            payloadLength: raw.payloadLength
+        ) else {
+            throw WarrenWireCodecError.invalidHeaderJSON
+        }
+        return WarrenDecodedAtomicStateFrame(header: header, payload: envelope.payload)
     }
 
 }

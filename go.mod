@@ -4,7 +4,7 @@ go 1.25.0
 
 require github.com/gorilla/websocket v1.5.3
 
-require github.com/abcdlsj/ghostline v1.0.0
+require github.com/abcdlsj/ghostline v1.1.0
 
 require (
 	github.com/creack/pty v1.1.24 // indirect
