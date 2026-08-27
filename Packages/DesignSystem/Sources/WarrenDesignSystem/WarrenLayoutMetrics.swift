@@ -42,6 +42,8 @@ public enum WarrenLayoutMetrics {
     /// Shared right Panel Host sizing. Individual modules do not choose their
     /// own width so the shell can preserve a stable Center minimum.
     public static let panelDefaultWidth: CGFloat = 340
+    /// Backwards-compatible name for the Git module's preferred width.
+    public static let gitPanelDefaultWidth: CGFloat = panelDefaultWidth
     public static let panelMinimumWidth: CGFloat = 240
     public static let panelMaximumWidth: CGFloat = 640
     public static let centerMinimumWidth: CGFloat = 600

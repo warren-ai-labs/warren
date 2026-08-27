@@ -35,6 +35,7 @@ public final class WarrenDesktopPanelContribution {
     public typealias Activation = @MainActor (WarrenDesktopPanelContext) -> Void
     public typealias Lifecycle = @MainActor () -> Void
     public typealias ContentBuilder = @MainActor (WarrenDesktopPanelContext) -> AnyView
+    public typealias ContentBuilderWithClose = @MainActor (WarrenDesktopPanelContext, () -> Void) -> AnyView
     public typealias ConnectionGenerationCallback = @MainActor (String, UInt64) -> Void
 
     public let descriptor: WarrenDesktopPanelDescriptor
@@ -44,6 +45,7 @@ public final class WarrenDesktopPanelContribution {
     private let refreshHandler: Lifecycle
     private let closeDetailHandler: Lifecycle
     private let rightContentHandler: ContentBuilder
+    private let rightContentWithCloseHandler: ContentBuilderWithClose?
     private let centerDetailHandler: ContentBuilder?
     private let connectionGenerationHandler: ConnectionGenerationCallback
 
@@ -55,6 +57,7 @@ public final class WarrenDesktopPanelContribution {
         refresh: @escaping Lifecycle = {},
         closeDetail: @escaping Lifecycle = {},
         rightContent: @escaping ContentBuilder = { _ in AnyView(EmptyView()) },
+        rightContentWithClose: ContentBuilderWithClose? = nil,
         centerDetail: ContentBuilder? = nil,
         connectionGenerationWillChange: @escaping ConnectionGenerationCallback = { _, _ in }
     ) {
@@ -65,6 +68,7 @@ public final class WarrenDesktopPanelContribution {
         self.refreshHandler = refresh
         self.closeDetailHandler = closeDetail
         self.rightContentHandler = rightContent
+        self.rightContentWithCloseHandler = rightContentWithClose
         self.centerDetailHandler = centerDetail
         self.connectionGenerationHandler = connectionGenerationWillChange
     }
@@ -113,6 +117,13 @@ public final class WarrenDesktopPanelContribution {
 
     public func rightContent(in context: WarrenDesktopPanelContext) -> AnyView {
         rightContentHandler(context)
+    }
+
+    public func rightContent(
+        in context: WarrenDesktopPanelContext,
+        onClose: @escaping () -> Void
+    ) -> AnyView {
+        rightContentWithCloseHandler?(context, onClose) ?? rightContentHandler(context)
     }
 
     public func rightPanelContent(in context: WarrenDesktopPanelContext) -> AnyView {

@@ -25,14 +25,14 @@ final class WarrenDesktopPanelTests: XCTestCase {
     func testRegistryKeepsStableIDsAndWorkspaceAvailability() {
         let registry = WarrenDesktopPanelRegistry()
         let first = contribution(id: "git", available: { $0.workspaceID != nil })
-        let second = contribution(id: "inspector")
+        let second = contribution(id: "other")
         XCTAssertEqual(registry.register(first), "git")
-        XCTAssertEqual(registry.register(second), "inspector")
-        XCTAssertEqual(registry.panelIDs, ["git", "inspector"])
-        XCTAssertEqual(registry.availablePanelIDs(in: context()), ["inspector"])
-        XCTAssertEqual(registry.availablePanelIDs(in: context(workspaceID: WorkspaceID())), ["git", "inspector"])
+        XCTAssertEqual(registry.register(second), "other")
+        XCTAssertEqual(registry.panelIDs, ["git", "other"])
+        XCTAssertEqual(registry.availablePanelIDs(in: context()), ["other"])
+        XCTAssertEqual(registry.availablePanelIDs(in: context(workspaceID: WorkspaceID())), ["git", "other"])
         XCTAssertEqual(registry.register(contribution(id: "git")), "git")
-        XCTAssertEqual(registry.panelIDs, ["git", "inspector"])
+        XCTAssertEqual(registry.panelIDs, ["git", "other"])
     }
 
     func testActiveIDIsRetainedWhenContributionBecomesUnavailable() {
@@ -105,15 +105,15 @@ final class WarrenDesktopPanelTests: XCTestCase {
         )
     }
 
-    func testInspectorShrinksToUltraNarrowContainerWithoutOverflow() {
+    func testPanelShrinksToUltraNarrowContainerWithoutOverflow() {
         let width = WarrenDesktopPanelLayout.resolvedWidth(
-            requestedWidth: WarrenLayoutMetrics.inspectorDefaultWidth,
+            requestedWidth: WarrenLayoutMetrics.panelDefaultWidth,
             containerCap: 180,
-            minimum: WarrenLayoutMetrics.inspectorMinimumWidth,
-            maximum: WarrenLayoutMetrics.inspectorMaximumWidth
+            minimum: WarrenLayoutMetrics.panelMinimumWidth,
+            maximum: WarrenLayoutMetrics.panelMaximumWidth
         )
         XCTAssertEqual(width, 180)
-        XCTAssertLessThan(width, WarrenLayoutMetrics.inspectorMinimumWidth)
+        XCTAssertLessThan(width, WarrenLayoutMetrics.panelMinimumWidth)
     }
 
     func testHostPersistsOneSharedRequestedWidth() {
@@ -127,40 +127,26 @@ final class WarrenDesktopPanelTests: XCTestCase {
     }
 
     func testLayoutModesAndExactThresholds() {
-        let side = WarrenDesktopPanelLayout.sideBySideThreshold(inspectorOpen: true, panelOpen: true)
-        let constrained = WarrenDesktopPanelLayout.constrainedThreshold(inspectorOpen: true)
-        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: side, inspectorOpen: true, panelOpen: true), .wide)
-        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: side - 1, inspectorOpen: true, panelOpen: true), .constrained)
-        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: constrained, inspectorOpen: true, panelOpen: true), .constrained)
-        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: constrained - 1, inspectorOpen: true, panelOpen: true), .ultraNarrow)
+        let side = WarrenDesktopPanelLayout.sideBySideThreshold()
+        let constrained = WarrenLayoutMetrics.centerMinimumWidth
+        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: side, panelOpen: true), .wide)
+        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: side - 1, panelOpen: true), .constrained)
+        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: constrained, panelOpen: true), .constrained)
+        XCTAssertEqual(WarrenDesktopPanelLayout.mode(containerWidth: constrained - 1, panelOpen: true), .ultraNarrow)
     }
 
     func testCenterMinimumIsPreservedWhenContainerCanSatisfyIt() {
-        let resolution = WarrenDesktopPanelLayout.resolve(containerWidth: 1_400, inspectorOpen: true, panelOpen: true)
+        let resolution = WarrenDesktopPanelLayout.resolve(containerWidth: 1_400, panelOpen: true)
         XCTAssertGreaterThanOrEqual(resolution.centerWidth, WarrenLayoutMetrics.centerMinimumWidth)
         XCTAssertEqual(resolution.mode, .wide)
-        let constrained = WarrenDesktopPanelLayout.resolve(containerWidth: 1_000, inspectorOpen: true, panelOpen: true)
+        let constrained = WarrenDesktopPanelLayout.resolve(containerWidth: 1_000, panelOpen: true)
         XCTAssertGreaterThanOrEqual(constrained.centerWidth, WarrenLayoutMetrics.centerMinimumWidth)
         XCTAssertEqual(constrained.panelPlacement, .drawer)
     }
 
-    func testUltraNarrowOverlayUsesLastOpenedIntent() {
-        let inspectorLast = WarrenDesktopPanelLayout.resolve(
-            containerWidth: 500,
-            inspectorOpen: true,
-            panelOpen: true,
-            lastOpened: .inspector
-        )
-        XCTAssertEqual(inspectorLast.inspectorPlacement, .overlay)
-        XCTAssertEqual(inspectorLast.panelPlacement, .none)
-
-        let panelLast = WarrenDesktopPanelLayout.resolve(
-            containerWidth: 500,
-            inspectorOpen: true,
-            panelOpen: true,
-            lastOpened: .panel
-        )
-        XCTAssertEqual(panelLast.inspectorPlacement, .none)
-        XCTAssertEqual(panelLast.panelPlacement, .overlay)
+    func testUltraNarrowUsesPanelOverlay() {
+        let resolution = WarrenDesktopPanelLayout.resolve(containerWidth: 500, panelOpen: true)
+        XCTAssertEqual(resolution.mode, .ultraNarrow)
+        XCTAssertEqual(resolution.panelPlacement, .overlay)
     }
 }

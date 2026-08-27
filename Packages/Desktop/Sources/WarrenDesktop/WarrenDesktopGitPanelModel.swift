@@ -122,6 +122,12 @@ public final class WarrenDesktopGitPanelModel {
         resetData()
     }
 
+    public func connectionWillChange(endpointID: String, generation: UInt64) {
+        loadGeneration &+= 1
+        diffGeneration &+= 1
+        isRefreshing = false
+    }
+
     // MARK: - Data loading
 
     public func refresh() {
