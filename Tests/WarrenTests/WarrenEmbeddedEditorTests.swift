@@ -70,8 +70,12 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             settings["extensions.showRecommendationsOnlyOnDemand"] as? Bool,
             true
         )
+        XCTAssertEqual(settings["git.autoRepositoryDetection"] as? String, "openEditors")
+        XCTAssertEqual(settings["git.detectWorktrees"] as? Bool, false)
         XCTAssertEqual(settings["git.openDiffOnClick"] as? Bool, false)
         XCTAssertEqual(settings["git.showInlineOpenFileAction"] as? Bool, true)
+        XCTAssertEqual(settings["git.showCommitInput"] as? Bool, true)
+        XCTAssertEqual(settings["git.untrackedChanges"] as? String, "mixed")
         XCTAssertEqual(settings["scm.graph.pageOnScroll"] as? Bool, false)
         XCTAssertEqual(settings["scm.graph.pageSize"] as? Int, 6)
         XCTAssertEqual(settings["go.showWelcome"] as? Bool, false)

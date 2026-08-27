@@ -182,8 +182,15 @@ enum WarrenEmbeddedEditorProfile {
             "extensions.autoUpdate": false,
             "extensions.ignoreRecommendations": true,
             "extensions.showRecommendationsOnlyOnDemand": true,
+            // The embedded editor is scoped to the selected workspace. Keep
+            // Git from discovering sibling repositories or worktrees, while
+            // still allowing repositories opened by an editor to be tracked.
+            "git.autoRepositoryDetection": "openEditors",
+            "git.detectWorktrees": false,
             "git.openDiffOnClick": false,
             "git.showInlineOpenFileAction": true,
+            "git.showCommitInput": true,
+            "git.untrackedChanges": "mixed",
             "go.showWelcome": false,
             "go.survey.prompt": false,
             "go.toolsManagement.checkForUpdates": "off",
