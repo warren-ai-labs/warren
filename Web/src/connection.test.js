@@ -51,7 +51,13 @@ test("connection authenticates and forwards messages", () => {
   assert.equal(socket.binaryType, "arraybuffer");
   assert.equal(connection.request("session.attach", { id: "session-1" }), null);
   socket.open();
-  assert.deepEqual(socket.sent, ['{"t":"auth","token":"secret","version":"1.0"}']);
+  assert.deepEqual(JSON.parse(socket.sent[0]), {
+    t: "auth",
+    token: "secret",
+    version: "2.0",
+    capabilities: ["roster-delta"],
+    terminalStateFormats: ["ghostline-vt-replay-v1"],
+  });
   socket.onmessage({ data: "roster" });
   assert.deepEqual(messages, ["roster"]);
   assert.match(connection.request("session.detach"), /^web-/);

@@ -17,7 +17,7 @@ installed_daemon_executable_path="$install_path/Contents/MacOS/warren-headless"
 pids_for_path() {
     local executable="$1"
     # Match only argument-less invocations (exactly `pid executable`), so the
-    # daemon's ghostline child (started with --ghostline-serve and friends)
+    # separate Ghostline serve process (started with --ghostline-serve)
     # is never matched or killed.
     # WARNING: never loosen this filter. The ghostline serve process owns the
     # PTY sessions and is designed to survive installs, restarts and updates;
@@ -128,8 +128,9 @@ if is_menubar_running; then
 fi
 
 # The daemon is deliberately independent during normal Desktop shutdown, but
-# an app update must replace its executable too. tmux sessions survive SIGTERM
-# and the new menu-bar process will start the freshly installed daemon.
+# an app update must replace its executable too. Ghostline PTYs remain owned by
+# the separate serve process, and the new menu-bar process starts the freshly
+# installed control-plane daemon.
 # Only the control-plane daemon may be terminated here. The ghostline serve
 # process (warren-headless --ghostline-serve ...) is a separate long-lived
 # session owner and must NEVER be killed during install/restart/update; the

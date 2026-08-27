@@ -12,8 +12,8 @@ instead.
 
 ## 1. Preserve the evidence first
 
-Do not restart Warren or delete `~/.warren` until the logs and the output spool
-have been copied. A small evidence bundle is usually enough:
+Do not restart Warren or delete `~/.warren` until the logs and an independent
+CLI read have been captured. A small evidence bundle is usually enough:
 
 ```sh
 stamp=$(date +%Y%m%d-%H%M%S)
@@ -42,8 +42,7 @@ The important locations are:
 | --- | --- | --- |
 | `~/Library/Logs/Warren/terminal-diagnostics.log` | Desktop terminal lifecycle and presentation milestones | Direct file writes, not `os_log`; rotates to `.log.1` at 2 MiB |
 | `~/.warren/headless.log` | Headless daemon start/stop, restore, tunnel, and error events | Rotates to `.log.1` at 5 MiB |
-| `~/.warren/ghostline.log` | ghostline adoption/upgrade diagnostics when the ghostline runtime is used | Keep the current file and any existing archive |
-| `~/.warren/output/<runtime>.out` | Raw PTY bytes for a session | May be compacted or archived by the runtime; do not remove it |
+| `~/.warren/ghostline.log` | Ghostline adoption, cursor, and upgrade diagnostics | Keep the current file and any existing archive |
 
 The diagnostics file is intentionally independent of the unified log. A busy
 `logd` or a throttled `os_log` stream must not be mistaken for an empty
@@ -77,46 +76,32 @@ Interpret the result before investigating individual rendering calls:
 | Observation | Initial conclusion | Next check |
 | --- | --- | --- |
 | CLI reads the expected text while the desktop pane is black | Host, session, and output path are probably healthy; suspect desktop/Ghostty presentation or view lifecycle | Inspect `terminal-diagnostics.log` around the last switch/attach |
-| CLI cannot read new text, but the raw spool is still growing | Bytes reach the runtime but are not reaching the client; suspect spool watcher, attach, or stream recovery | Inspect headless and ghostline logs, then compare epochs/sequences |
-| CLI and spool both stop at the same point | Suspect the PTY process, runtime, or session itself rather than drawing | Check runtime/process state and the session's last command |
-| Only tmux colored blocks or soft-wrapped history look wrong | Known tmux snapshot/BCE replay limitation, not proof of lost PTY bytes | See [lesson #001](lessons.md#001---tmux-snapshot-replay-misaligns-tui-color-blocks-and-why-ghostline-exists) |
+| CLI cannot read new text and Ghostline reports no cursor progress | Suspect the PTY process or Runtime rather than drawing | Inspect headless and Ghostline logs and the session's foreground process |
+| CLI reads live text but cold desktop recovery fails | The cursor stream is healthy; suspect atomic-state negotiation, install, or presentation | Correlate `atomic_recovery_*`, `recovery_anchor`, and `present_*` events |
 
-For a remote endpoint, the spool and daemon logs live on that Host. Run the
-filesystem checks there; the CLI result alone cannot prove that a local spool
-file exists.
+For a remote endpoint, daemon and Ghostline logs live on that Host. Run log
+checks there; a local file does not describe the remote Runtime.
 
-## 3. Check the raw spool
+## 3. Check the recovery boundary
 
-Find the session's `runtime` value in the JSON returned by `session list`, then
-inspect the corresponding file on the Host:
+Headless logs the selected branch and anchor for every attach. Keep these
+events together with the Ghostline cursor diagnostics:
 
 ```sh
-runtime='RUNTIME_FROM_SESSION_JSON'
-spool="$HOME/.warren/output/$runtime.out"
-
-stat -f '%Sm %z bytes' -t '%Y-%m-%d %H:%M:%S' "$spool"
-rg -a --fixed-strings 'A_KNOWN_MARKER' "$spool"
+rg 'recovery|cursor|atomic.state|checkpoint' \
+  ~/.warren/headless.log ~/.warren/ghostline.log | tail -150
 ```
 
-To tell a stalled file from a quiet one, sample its size twice:
+For a cold desktop attach, the expected order is measured focused resize,
+`attached`, one atomic-state binary frame (`ghostty-vt-snapshot-v1` for
+Desktop or `ghostline-vt-replay-v1` for Web/mobile/CLI), matching `synced`,
+then live cursor output. A passive subscriber must not resize the Runtime.
+Protocol 2 clients negotiate the format during authentication; there is no
+implicit protocol-1 replay path.
 
-```sh
-stat -f '%z' "$spool"
-sleep 2
-stat -f '%z' "$spool"
-```
-
-Raw PTY output includes carriage returns, alternate-screen control sequences,
-cursor movement, and erase commands. Use a byte view only when text searches
-are inconclusive:
-
-```sh
-od -An -tx1 -c "$spool" | tail -80
-```
-
-Do not interpret a changed `epoch` as byte loss by itself. An epoch change
-means the Host reanchored after compaction or snapshot recovery; compare the
-epoch first, then compare the sequence within that epoch.
+Do not interpret a changed `epoch` as byte loss by itself. Compare the full
+`epoch + sequence` anchor and confirm that the atomic-state frame and `synced`
+marker carry the same boundary.
 
 ## 4. Read desktop presentation diagnostics
 
@@ -125,7 +110,7 @@ events that describe the attach and draw path:
 
 ```sh
 diagnostics=~/Library/Logs/Warren/terminal-diagnostics.log
-rg '"event":"(workspace_switch|terminal_tab_switch|terminal_view_appear|select_session|attach_start|attach_size|attach_complete|feed_output|present_now|present_stall_suspected|present_complete|present_wait_extended|activation_resync|roster_apply|resize_request|viewport_sync)"' \
+rg '"event":"(workspace_switch|terminal_tab_switch|terminal_view_appear|select_session|attach_start|attach_size|attach_complete|atomic_recovery_installed|atomic_recovery_failed|recovery_anchor|feed_output|present_now|present_stall_suspected|present_complete|present_wait_extended|activation_resync|roster_apply|resize_request|viewport_sync)"' \
   "$diagnostics" | tail -150
 ```
 
@@ -135,10 +120,11 @@ Use the events as a sequence rather than treating one line as a root cause:
 | --- | --- |
 | `workspace_switch`, `terminal_tab_switch`, `terminal_view_appear`, `select_session` | The user/navigation transition that may have mounted or replaced a terminal view |
 | `attach_start` → `attach_size` → `attach_complete` | Whether the selected session completed the client attach and which grid size was used |
+| `recovery_anchor` → `atomic_recovery_installed` → matching `recovery_anchor` with `synced=true` | The native state was installed behind the recovery gate and reached its atomic presentation boundary |
 | `feed_output` | Output was accepted by the selected desktop surface; correlate its `session` and `bytes` with the incident window |
 | `present_now` with `surfaceReady`, `viewAttached`, `viewHidden`, `viewVisible` | Whether a draw was attempted and whether the native view was actually able to show it |
 | `present_stall_suspected` with `reason` | A draw happened while the view was absent, unattached, hidden, or not visible; this strongly favors a lifecycle/presentation issue |
-| `present_complete` | The delayed attach presentation reached a ready surface and presentable view |
+| `present_complete` | Recovery reached a ready surface and presentable view; `targetEpoch` must be non-nil on a cold atomic attach |
 | `present_wait_extended` | The first 2-second present window passed but the presentation task is still waiting; this is diagnostic only and no longer means the attempt was abandoned |
 | `activation_resync` | A warm surface reattach detected that the viewport did not return to its pre-demotion anchor (captured at `demote`) and forced a live-bottom resync plus immediate draw; its absence means the reattach kept the user's scroll position |
 | `roster_apply` | Roster processing and retained-surface count; repeated events indicate churn but do not prove that a changed projection was published |
@@ -159,8 +145,8 @@ The most useful patterns are:
   this is a desktop lifecycle/presentation stall. The presentation task keeps
   waiting past the diagnostic marker, so compare the event with later
   `present_complete` events before concluding the pane is lost. If both the
-  rendered and target sequences are behind, continue with the Host/spool
-  checks.
+  rendered and target sequences are behind, continue with the Host/Ghostline
+  recovery-boundary checks.
 - A warm tab shows only recent history until the window is resized: this is
   the scrollback-compression lazy-restore path. Warren disables idle
   compression and resyncs a reattached viewport only when its pre-demotion
@@ -173,9 +159,8 @@ The most useful patterns are:
   to false indicate a surface lifecycle/ownership race. This is the failure
   documented in [lesson #003](lessons.md#003---black-terminal-pane-after-empty-workspace---populated-workspace),
   not evidence that the PTY stopped producing bytes.
-- A new `epoch` with a lower sequence is a normal reanchor boundary. Do not
-  call it missing text until the raw spool and the new snapshot have been
-  compared.
+- A new `epoch` with a lower sequence is a normal reanchor boundary. Verify the
+  snapshot and `synced` anchors before calling it missing text.
 
 ## 5. Reproduce with verbose diagnostics
 
@@ -215,9 +200,9 @@ daemon is running. A successful CLI/Web attach after a GUI restart confirms
 that the session survived.
 
 Do not delete `~/.warren/output`, `~/.warren/state.json`, or the diagnostic
-logs while investigating. Restart the daemon or runtime only when the CLI and
-spool evidence points to a Host-side failure; record that restart as part of
-the incident because it changes the evidence.
+logs while investigating. Restart only the control-plane daemon when the CLI
+and logs point to a Host-side failure. Never stop the separate Ghostline serve
+process during diagnosis; doing so ends the PTYs and destroys the evidence.
 
 ## 7. Incident handoff checklist
 
@@ -227,7 +212,7 @@ Attach the following to a bug or investigation:
 - session ID and runtime name;
 - whether the app remained interactive, and the last action (workspace switch,
   tab switch, attach, resize, or command output);
-- the CLI result and the raw spool mtime/size/marker result;
+- the CLI read result and the recovery/cursor log boundary;
 - the relevant `terminal-diagnostics.log` lines, including the preceding
   switch/attach events and the following present/timeout events;
 - `headless.log` and `ghostline.log` lines from the same time window;
@@ -237,10 +222,9 @@ Attach the following to a bug or investigation:
 
 - [Desktop freeze runbook](desktop-freeze-runbook.md) — app-wide hangs and
   spinner/deadlock symptoms
-- [Engineering lessons](lessons.md) — known tmux/BCE and terminal lifecycle
-  incidents
-- [Headless architecture](headless-architecture.md) — spool, ring, epoch, and
-  snapshot recovery semantics
-- [Runtime comparison](runtime.md) — ghostline versus tmux behavior
+- [Engineering lessons](lessons.md) — historical terminal and lifecycle incidents
+- [Headless architecture](headless-architecture.md) — cursor, ring, epoch, and
+  atomic-state recovery semantics
+- [Terminal runtime](runtime.md) — current Ghostline-only behavior
 - [One-way desktop rendering RFC](rfc/0002-one-way-desktop-rendering.md) —
   terminal surface lifecycle architecture

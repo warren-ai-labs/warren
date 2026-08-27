@@ -9,7 +9,7 @@ final class WarrenProtocolTests: XCTestCase {
     private let attachmentID = TerminalAttachmentID(rawValue: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!)
 
     func testClientMessagesRoundTripAndCarryVersion() throws {
-        let version = ProtocolVersion(major: 1, minor: 7)
+        let version = ProtocolVersion(major: 2, minor: 7)
         let messages: [ClientControlMessage] = [
             .attach(AttachRequest(version: version, sessionID: sessionID, clientID: clientID)),
             .resize(ResizeRequest(version: version, sessionID: sessionID, attachmentID: attachmentID, size: TerminalSize(columns: 120, rows: 40)!)),
@@ -126,5 +126,11 @@ final class WarrenProtocolTests: XCTestCase {
         XCTAssertFalse(local.canDecode(ProtocolVersion(major: 2, minor: 4)))
         XCTAssertFalse(local.canDecode(ProtocolVersion(major: 1, minor: 99)))
         XCTAssertFalse(ProtocolVersion(major: 2, minor: 0).canDecode(local))
+    }
+
+    func testCurrentProtocolVersionIsProtocolTwo() {
+        XCTAssertEqual(ProtocolVersion.current, ProtocolVersion(major: 2, minor: 0))
+        XCTAssertTrue(ProtocolVersion.current.canDecode(ProtocolVersion(major: 2, minor: 0)))
+        XCTAssertFalse(ProtocolVersion.current.canDecode(ProtocolVersion(major: 1, minor: 0)))
     }
 }

@@ -24,7 +24,7 @@ func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
 	}
 
 	state := newStateWithSession(t, "session-shell", "runtime-shell")
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), "runtime-shell", directory, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestEnsureAgentClearsShellBindingOnExit(t *testing.T) {
 	}
 
 	state := newStateWithSession(t, "session-shell", "runtime-shell")
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), "runtime-shell", directory, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestEnsureAgentClearsShellBindingOnExit(t *testing.T) {
 
 func TestPlainShellSessionHasNoAgentActivity(t *testing.T) {
 	state := newStateWithSession(t, "session-shell", "runtime-shell")
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), "runtime-shell", t.TempDir(), "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestShellOverlayResetsReadyAfterExitOnSameTranscript(t *testing.T) {
 	}
 
 	state := newStateWithSession(t, "session-shell", "runtime-shell")
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), "runtime-shell", directory, "", nil); err != nil {
 		t.Fatal(err)
 	}

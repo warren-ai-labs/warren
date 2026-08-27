@@ -36,7 +36,7 @@ func TestGitPanelDoesNotBlockFollowupRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret", Version: api.Version, TerminalStateFormats: []string{terminalStateFormatANSI}}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any
@@ -101,7 +101,7 @@ func TestGitPanelOverWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret", Version: api.Version, TerminalStateFormats: []string{terminalStateFormatANSI}}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any
@@ -143,7 +143,7 @@ func TestGitCheckoutErrorOverWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret", Version: api.Version, TerminalStateFormats: []string{terminalStateFormatANSI}}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any
@@ -178,7 +178,7 @@ func TestGitDiffOverWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret", Version: api.Version, TerminalStateFormats: []string{terminalStateFormatANSI}}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any
@@ -223,7 +223,7 @@ func TestGitCreatePullRequestRequiresTitleOverWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret"}); err != nil {
+	if err := connection.WriteJSON(api.Envelope{Type: "auth", Token: "secret", Version: api.Version, TerminalStateFormats: []string{terminalStateFormatANSI}}); err != nil {
 		t.Fatal(err)
 	}
 	var welcome map[string]any

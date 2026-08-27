@@ -4,9 +4,17 @@ const DIRECTION_CLIENT_TO_HOST = 1;
 const DIRECTION_HOST_TO_CLIENT = 2;
 const KIND_INPUT = 1;
 const KIND_OUTPUT = 2;
+const KIND_ATOMIC_STATE = 3;
 const MAX_HEADER = 16 * 1024;
 const MAX_PAYLOAD = 8 * 1024 * 1024;
+const MAX_ATOMIC_STATE_PAYLOAD = 64 * 1024 * 1024;
 const PREFIX_LENGTH = 15;
+
+export const binaryPayloadLimits = Object.freeze({
+  output: MAX_PAYLOAD,
+  input: MAX_PAYLOAD,
+  atomicState: MAX_ATOMIC_STATE_PAYLOAD,
+});
 
 export function isBinaryEnvelope(bytes) {
   if (!bytes || bytes.length < PREFIX_LENGTH) return false;
@@ -16,16 +24,20 @@ export function isBinaryEnvelope(bytes) {
   return bytes[4] === VERSION;
 }
 
-export function decodeOutputFrame(bytes) {
+function decodeEnvelope(bytes, expectedKind = null) {
   if (!isBinaryEnvelope(bytes)) return null;
   const direction = bytes[5];
   const kind = bytes[6];
-  if (direction !== DIRECTION_HOST_TO_CLIENT || kind !== KIND_OUTPUT) return null;
+  if (direction !== DIRECTION_HOST_TO_CLIENT
+    || (expectedKind !== null && kind !== expectedKind)) return null;
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const headerLength = view.getUint32(7);
   const payloadLength = view.getUint32(11);
-  if (headerLength > MAX_HEADER || payloadLength > MAX_PAYLOAD) return null;
+  const payloadLimit = kind === KIND_ATOMIC_STATE
+    ? MAX_ATOMIC_STATE_PAYLOAD
+    : MAX_PAYLOAD;
+  if (headerLength > MAX_HEADER || payloadLength > payloadLimit) return null;
   const headerEnd = PREFIX_LENGTH + headerLength;
   const expected = headerEnd + payloadLength;
   if (bytes.length !== expected) return null;
@@ -37,18 +49,52 @@ export function decodeOutputFrame(bytes) {
     return null;
   }
   if (!header || header.payloadLength !== payloadLength) return null;
+  return { kind, header, payload: bytes.slice(headerEnd, expected) };
+}
+
+export function decodeOutputFrame(bytes) {
+  const decoded = decodeEnvelope(bytes, KIND_OUTPUT);
+  if (!decoded) return null;
   return {
     header: {
-      sessionID: header.sessionID,
-      epoch: header.epoch,
-      sequence: header.sequence,
-      payloadLength,
+      sessionID: decoded.header.sessionID,
+      epoch: decoded.header.epoch,
+      sequence: decoded.header.sequence,
+      payloadLength: decoded.header.payloadLength,
     },
-    payload: bytes.slice(headerEnd, expected),
+    payload: decoded.payload,
   };
 }
 
-export function encodeInput(payload, { sessionID = "", attachmentID = "", sequence = 0, version = "1.0" } = {}) {
+export function decodeAtomicStateFrame(bytes) {
+  const decoded = decodeEnvelope(bytes, KIND_ATOMIC_STATE);
+  if (!decoded || typeof decoded.header.format !== "string" || !decoded.header.format) return null;
+  return {
+    header: {
+      sessionID: decoded.header.sessionID,
+      epoch: decoded.header.epoch,
+      sequence: decoded.header.sequence,
+      format: decoded.header.format,
+      payloadLength: decoded.header.payloadLength,
+    },
+    payload: decoded.payload,
+  };
+}
+
+export function decodeFrame(bytes) {
+  if (!isBinaryEnvelope(bytes)) return null;
+  if (bytes[6] === KIND_OUTPUT) {
+    const output = decodeOutputFrame(bytes);
+    return output ? { type: "output", ...output } : null;
+  }
+  if (bytes[6] === KIND_ATOMIC_STATE) {
+    const state = decodeAtomicStateFrame(bytes);
+    return state ? { type: "atomicState", ...state } : null;
+  }
+  return null;
+}
+
+export function encodeInput(payload, { sessionID = "", attachmentID = "", sequence = 0, version = "2.0" } = {}) {
   const header = {
     version,
     sessionID,

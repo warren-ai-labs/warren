@@ -25,7 +25,7 @@ func main() {
 func serve(arguments []string) {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	socketPath := flags.String("socket", "", "unix socket path (required)")
-	outputDir := flags.String("output-dir", "", "output spool directory")
+	outputDir := flags.String("output-dir", "", "durable output directory")
 	adoptFrom := flags.String("adopt-from", "", "source admin socket")
 	probeForeground := flags.Bool("probe-foreground", false, "probe foreground process metadata")
 	_ = flags.Parse(arguments)

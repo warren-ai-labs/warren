@@ -15,17 +15,15 @@ The central design decision is ownership:
 
 ```text
 macOS Desktop ---+
-Web / PWA --------+-- WebSocket protocol 1.0 --> warren-headless
+Web / PWA --------+-- WebSocket protocol 2.0 (minimum) --> warren-headless
 CLI --------------+                                |
                                                    +-- Projects / Workspaces
                                                    +-- Terminal Groups
                                                    +-- Terminal Sessions
                                                    +-- JSON Host Store
-                                                   +-- Output Ring + Spool
+                                                   +-- Cursor Stream + Output Ring
                                                    +-- Agent Transcript Watchers
-                                                   +-- Runtime Adapter
-                                                       +-- ghostline
-                                                       +-- tmux
+                                                   +-- Ghostline Runtime Adapter
 ```
 
 A client disconnect, app quit, or network change does not end a running
@@ -59,8 +57,7 @@ Host
 - **Terminal Group** owns standalone Sessions that are not attached to a
   Project or Workspace.
 - **Terminal Session** is Warren's durable terminal resource.
-- **Runtime Binding** maps the Warren Session to a concrete ghostline PTY or
-  tmux session.
+- **Runtime Binding** maps the Warren Session to a concrete Ghostline PTY.
 
 ### 2.2 Client-owned presentation
 
@@ -101,12 +98,12 @@ The current source contains implementations for:
 - main-checkout and Git-worktree Workspaces;
 - standalone Terminal Groups;
 - Shell, Claude, Codex, and custom-command Sessions;
-- ghostline and tmux Runtime adapters;
+- the Ghostline Runtime adapter;
 - a macOS Ghostty terminal client;
 - a responsive React/xterm Web/PWA client;
 - a CLI that uses the same Host protocol;
 - SSH bootstrap and port forwarding for remote Hosts;
-- reconnect recovery using output anchors, rings, spools, and snapshots;
+- reconnect recovery using output anchors, rings, cursor streams, and native snapshots;
 - structured Codex and Claude transcript projection on the Web;
 - optional gnar, Cloudflare, and Tailscale reachability adapters;
 - one-time Superset Project/Workspace import;
@@ -139,7 +136,7 @@ The Relay end-to-end path is not source-closed in this checkout. See
 | `Headless/cmd/warren/` | CLI and SSH bootstrap executable | Main path |
 | `Headless/internal/server/` | Resource service and HTTP/WebSocket protocol | Backend core |
 | `Headless/internal/store/` | Atomic JSON Host Store and revision notifications | Backend core |
-| `Headless/internal/runtime/` | tmux adapter and runtime environment policy | Backend core |
+| `Headless/internal/runtime/` | Runtime metadata and environment policy | Backend core |
 | `Headless/internal/output/` | Output Ring and DENB binary envelope | Backend core |
 | `Headless/internal/agent/` | Agent binding, transcript parsing, and activity | Backend core |
 | `Headless/internal/tunnel/` | gnar, cloudflared, and Tailscale lifecycle | Optional runtime path |
@@ -280,7 +277,7 @@ The service:
 2. resolves the working directory;
 3. generates a Warren Session ID and opaque runtime name;
 4. derives a title and Session kind;
-5. selects ghostline or tmux;
+5. selects Ghostline;
 6. injects agent-binding environment variables;
 7. creates the Runtime;
 8. persists the Session record;
@@ -303,13 +300,13 @@ Resize
 Kill
 ```
 
-ghostline is the default. It owns one PTY per Session in a detached server
-process and can generate libghostty-vt screen snapshots. tmux remains a
-supported alternative.
+Ghostline owns one PTY per Session in a detached server process. It exposes a
+durable output cursor, ANSI checkpoint replay for compatibility clients, and
+an opaque native Ghostty snapshot for atomic desktop recovery.
 
-Both adapters start an interactive shell and then enter a preset command. As
-a result, exiting Codex or Claude returns to a usable shell instead of ending
-the Warren Session.
+The adapter starts an interactive shell and then enters a preset command. As a
+result, exiting Codex or Claude returns to a usable shell instead of ending the
+Warren Session.
 
 The current implementations wait a fixed 400 ms before entering the command.
 That is a timing seam, not a stable launch handshake; customizations should
@@ -329,9 +326,9 @@ not copy this pattern.
 ```text
 PTY raw bytes
     |
-    +-- append-only per-Session spool
-    |
-    +-- bounded in-memory Output Ring
+    +-- Ghostline cursor stream
+             |
+             +-- bounded in-memory Output Ring
              |
              +-- DENB binary WebSocket frame
                       |
@@ -350,8 +347,7 @@ Each output byte position is identified by:
 epoch + sequence
 ```
 
-- `epoch` changes when continuity can no longer be represented in the same
-  stream, such as spool compaction.
+- `epoch` changes when continuity can no longer be represented in the same stream.
 - `sequence` is the byte position inside the epoch.
 - A client stores the next byte it needs as a Recovery Anchor.
 
@@ -363,13 +359,12 @@ The Output Ring chooses one of three plans:
 | Tail | The client's Anchor is inside the retained interval |
 | Reanchor | The Anchor is absent, stale, from another epoch, or evicted |
 
-When the Ring cannot serve a Tail, the Host attempts bounded raw spool
-recovery. If that gap is too large or unsafe, it captures a rendered Runtime
-screen, sends it as a reset snapshot, and establishes a new Anchor.
-
-Attach recovery runs while the spool watcher is paused and the Session
-broadcast lock is held. This prevents old replay bytes and new live bytes
-from interleaving.
+When the Ring cannot serve a Tail, the Host stops and joins the current
+Ghostline reader while holding the attach preparation boundary. A capable
+desktop receives one opaque native Ghostty snapshot paired with the first
+cursor not represented by that state. Web and mobile compatibility peers
+receive Ghostline checkpoint replay. The replacement reader starts at the
+paired cursor, so recovery and live bytes cannot overlap or leave a gap.
 
 ### 8.3 DENB envelope
 
@@ -638,7 +633,7 @@ Default Host files:
 +-- settings.json
 +-- token
 +-- headless.log
-+-- output/
++-- output/            # Ghostline-owned durable output history
 +-- worktrees/
 +-- ghostline.sock
 +-- agent-bind/
@@ -652,7 +647,7 @@ Default Host files:
 | `config.json` | Desktop/CLI endpoint catalog and selected endpoint |
 | `settings.json` | Default Runtime, Runtime environment, optional gnar Edge override/account label, tunnel intent, and empty-workspace Shell/AI defaults; the release default Edge is injected at build time and Invite/Approval Keys are never persisted; an omitted account derives from the Warren Host/system name; worktree import policy lives on each Project |
 | `token` | Direct Host bearer token |
-| `output/` | Per-Session raw PTY spools and archives |
+| `output/` | Ghostline-owned durable output history |
 | `agent-bind/` | Warren Session to external agent conversation binding |
 | Desktop AppStorage | Font, title template, presets, navigation preferences |
 | Web localStorage | Token, selection, font, title template, preset commands |
@@ -760,14 +755,15 @@ map-based API is convenient but permits silent client/server drift.
 
 ### 16.3 new Runtime adapter
 
-Implement the Runtime interface first. If exact spool replay is available,
-implement the optional spool capabilities as well. Verify:
+Implement the Runtime interface first. If the engine can provide a durable
+cursor and native terminal state, expose those as generic optional
+capabilities. Verify:
 
 - create and rollback;
 - adoption after daemon restart;
 - exact input byte behavior;
 - resize ownership;
-- capture and reanchor;
+- cursor continuation, checkpoint fallback, and atomic reanchor;
 - explicit kill;
 - orphan cleanup;
 - runtime environment filtering.
@@ -779,7 +775,7 @@ but existing Sessions must retain the Runtime that created them.
 
 A new iOS or alternate desktop client should consume roster projections and
 the versioned WebSocket protocol. It must not directly inspect Host files,
-ghostline sockets, tmux state, or Git worktrees.
+Ghostline sockets or Git worktrees.
 
 ## 17. Testing and Verification Map
 
@@ -877,7 +873,6 @@ path before studying client presentation details.
 - Recovery Ring: `Headless/internal/output/ring.go`
 - DENB wire envelope: `Headless/internal/output/wire.go`
 - ghostline adapter: `Headless/internal/server/ghostline.go`
-- tmux adapter: `Headless/internal/runtime/tmux.go`
 - Agent binding: `Headless/internal/agent/binding.go`
 - Transcript normalization: `Headless/internal/agent/transcript.go`
 - macOS composition: `Sources/Warren/WarrenCompositionRoot.swift`

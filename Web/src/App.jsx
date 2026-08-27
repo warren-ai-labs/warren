@@ -64,7 +64,7 @@ import { AgentView } from "./agent.jsx";
 const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
 import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
-import { decodeOutputFrame, isBinaryEnvelope } from "./wire.js";
+import { decodeFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
 import { projectMenuItems, sessionMenuItems, workspaceMenuItems } from "./contextmenu.js";
 import {
@@ -134,6 +134,7 @@ const terminalTheme = {
   brightWhite: "#ffffff",
 };
 const pendingInputLimit = 64 * 1024;
+const terminalRecoveryTimeoutMs = 15_000;
 const terminalSearchDecorations = {
   matchBackground: "#3a3837",
   matchOverviewRuler: "#f59e0b",
@@ -163,6 +164,12 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(() => localStorage.getItem(storageKeys.activeSession));
   const [navigationMemory, setNavigationMemory] = useState(() => loadNavigationMemory());
   const [attachedSession, setAttachedSession] = useState(null);
+  // Transport readiness and presentation readiness are deliberately separate.
+  // The daemon acknowledges a subscription before it sends the atomic state;
+  // accepting input at that point keeps PTY interaction responsive, while the
+  // neutral overlay remains in place until the snapshot and its live tail have
+  // rendered completely.
+  const [terminalReadySession, setTerminalReadySession] = useState(null);
   const [expandedProjects, setExpandedProjects] = useState(() => loadSet(storageKeys.expandedProjects));
   const [fontFamily, setFontFamily] = useState(() => localStorage.getItem(storageKeys.fontFamily) || defaultFontFamily);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
@@ -214,9 +221,19 @@ export default function App() {
   const focusedSessionRef = useRef(null);
   const batcherRef = useRef(null);
   const recoveryAnchorRef = useRef(null);
-  const pendingStartAnchorRef = useRef(null);
-  const reanchorRequiredRef = useRef(false);
+  const recoveryTimeoutRef = useRef(null);
+  const subscriptionRef = useRef({
+    sessionID: null,
+    status: "idle",
+    generation: 0,
+    requestID: null,
+    cancelRequestID: null,
+  });
+  const subscriptionCleanupRef = useRef(() => {});
   const snapshotPendingRef = useRef(false);
+  const recoveryApplyingRef = useRef(false);
+  const pendingAtomicStateRef = useRef(null);
+  const stagedRecoveryOutputRef = useRef([]);
   const messageHandlerRef = useRef(() => {});
   const connectionStateHandlerRef = useRef(() => {});
   const maintenanceTimeoutRef = useRef(null);
@@ -590,18 +607,153 @@ export default function App() {
     }
   }, [request]);
 
-  const markAttachReady = useCallback((sessionID, flush = true) => {
+  const markAttachReady = useCallback((sessionID, flush = true, focus = true) => {
     const state = appStateRef.current;
     if (state.activeSession !== sessionID) return;
     // The attach response is ordered before subsequent WebSocket frames, so
-    // it is safe to accept input even if a legacy relay omits `attached`.
+    // it is safe to accept input even while the presentation gate is still
+    // holding the terminal behind the neutral recovery surface.
     state.attachedSession = sessionID;
     setAttachedSession(sessionID);
     if (flush) inputQueueRef.current.flush(sessionID);
     // Touch devices must not pop the software keyboard as a side effect of
     // attaching a session; the user focuses the terminal by tapping it.
-    if (autoFocusOnAttachRef.current && !isCoarsePointer()) terminalRef.current?.focus();
+    if (focus && autoFocusOnAttachRef.current && !isCoarsePointer()) terminalRef.current?.focus();
   }, []);
+
+  const markPresentationReady = useCallback(sessionID => {
+    const subscription = subscriptionRef.current;
+    if (appStateRef.current.activeSession !== sessionID
+      || subscription.sessionID !== sessionID
+      || subscription.status !== "applying") return;
+    subscription.status = "synced";
+    if (recoveryTimeoutRef.current !== null) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
+    }
+    setTerminalReadySession(sessionID);
+  }, []);
+
+  const clearRecoveryTimeout = useCallback(() => {
+    if (recoveryTimeoutRef.current !== null) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearRecoveryState = useCallback(() => {
+    clearRecoveryTimeout();
+    snapshotPendingRef.current = true;
+    recoveryApplyingRef.current = false;
+    pendingAtomicStateRef.current = null;
+    stagedRecoveryOutputRef.current = [];
+    recoveryAnchorRef.current = null;
+    batcherRef.current?.reset();
+    setTerminalReadySession(null);
+  }, [clearRecoveryTimeout]);
+
+  const cancelSubscription = useCallback((sendUnsubscribe = true) => {
+    const previous = subscriptionRef.current;
+    const previousSessionID = previous.sessionID;
+    if (previous.requestID) pendingRequestsRef.current.delete(previous.requestID);
+    if (previous.cancelRequestID) pendingRequestsRef.current.delete(previous.cancelRequestID);
+    subscriptionRef.current = {
+      sessionID: null,
+      status: "idle",
+      generation: previous.generation + 1,
+      requestID: null,
+      cancelRequestID: null,
+    };
+    clearRecoveryState();
+    if (sendUnsubscribe && previousSessionID) {
+      // Unsubscribe is best effort. The generation check below makes a late
+      // response harmless even when the socket closes before it is answered.
+      request("session.unsubscribe", { id: previousSessionID });
+    }
+    return previousSessionID;
+  }, [clearRecoveryState, request]);
+
+  // Keep an always-current cleanup callback for effects whose lifetime is
+  // intentionally independent from React render dependencies (the terminal
+  // and WebSocket are long-lived resources).
+  subscriptionCleanupRef.current = cancelSubscription;
+
+  const beginSubscription = useCallback((sessionID, terminal) => {
+    if (!sessionID) return false;
+    const previous = subscriptionRef.current;
+    const generation = previous.generation + 1;
+    const previousSessionID = previous.sessionID;
+    const state = {
+      sessionID,
+      status: previousSessionID ? "cancelling" : "subscribing",
+      generation,
+      requestID: null,
+      cancelRequestID: null,
+    };
+    subscriptionRef.current = state;
+    if (previous.requestID) pendingRequestsRef.current.delete(previous.requestID);
+    if (previous.cancelRequestID) pendingRequestsRef.current.delete(previous.cancelRequestID);
+    clearRecoveryState();
+
+    const sendSubscribe = () => {
+      if (subscriptionRef.current !== state
+        || state.generation !== subscriptionRef.current.generation
+        || appStateRef.current.activeSession !== sessionID) return false;
+      state.status = "subscribing";
+      const message = attachTerminalMessage(
+        sessionID,
+        terminal,
+        null,
+        !document.hidden && document.hasFocus(),
+      );
+      const sent = request(message.method, message.params, () => {
+        if (subscriptionRef.current !== state
+          || appStateRef.current.activeSession !== sessionID) return;
+        state.status = "acknowledged";
+        // The Host registers the output subscription before acknowledging the
+        // request. Accepting input here keeps the PTY responsive while the
+        // atomic state is still behind the presentation gate.
+        markAttachReady(sessionID, true, false);
+      }, detail => {
+        if (subscriptionRef.current !== state
+          || appStateRef.current.activeSession !== sessionID) return;
+        state.status = "failed";
+        clearRecoveryTimeout();
+        setConnectionStatus({ message: detail, online: false });
+        setEmptyOverride({ loading: false, message: detail });
+      });
+      state.requestID = sent || null;
+      if (!sent) {
+        state.status = "failed";
+        connectionRef.current?.reconnectNow();
+        return false;
+      }
+      clearRecoveryTimeout();
+      recoveryTimeoutRef.current = setTimeout(() => {
+        if (subscriptionRef.current !== state || state.status === "synced") return;
+        state.status = "failed";
+        setConnectionStatus({ message: "Terminal recovery timed out", online: false });
+        connectionRef.current?.reset();
+      }, terminalRecoveryTimeoutMs);
+      return true;
+    };
+
+    if (previousSessionID) {
+      // `session.subscribe` runs in a background handler on the Host. Wait for
+      // the explicit unsubscribe response before starting the replacement so
+      // rapid same-session switches cannot let old markers win the queue.
+      const sent = request(
+        "session.unsubscribe",
+        { id: previousSessionID },
+        () => sendSubscribe(),
+        () => sendSubscribe(),
+      );
+      state.cancelRequestID = sent || null;
+      if (!sent) return sendSubscribe();
+      return true;
+    }
+    return sendSubscribe();
+  }, [clearRecoveryState, clearRecoveryTimeout, markAttachReady, request]);
 
   const sendInput = useCallback(data => {
     const state = appStateRef.current;
@@ -747,7 +899,13 @@ export default function App() {
     const state = appStateRef.current;
     const sessionID = state.activeSession;
     if (!sessionID || state.attachedSession !== sessionID) return false;
-    const params = { focused };
+    // A passive Web subscription deliberately does not claim control during
+    // background/hidden-page attach. Carry the session id so the Host can
+    // promote that already-registered subscription when the page becomes
+    // visible again; omitting it would make `session.focus` depend on the
+    // legacy attached pointer and leave the page unable to send input after a
+    // background handoff.
+    const params = { focused, id: sessionID };
     if (focused) {
       const next = size || terminalSize(terminalRef.current);
       if (next) Object.assign(params, next);
@@ -816,6 +974,12 @@ export default function App() {
     const changed = sessionID !== state.activeSession;
     state.activeSession = sessionID;
     state.attachedSession = null;
+    setTerminalReadySession(null);
+    snapshotPendingRef.current = true;
+    recoveryApplyingRef.current = false;
+    pendingAtomicStateRef.current = null;
+    stagedRecoveryOutputRef.current = [];
+    batcherRef.current?.reset();
     focusedSessionRef.current = null;
     if (changed) inputQueueRef.current.clear();
     setActiveSession(sessionID);
@@ -826,21 +990,10 @@ export default function App() {
       terminalRef.current?.clear();
       clearTerminalSearch();
       recoveryAnchorRef.current = null;
-      reanchorRequiredRef.current = false;
       setAgentViewOverride(null);
     }
-    const anchor = (!changed || reanchorRequiredRef.current)
-      ? null
-      : recoveryAnchorRef.current;
-    const message = attachTerminalMessage(sessionID, terminalRef.current, anchor);
-    request(message.method, message.params, () => {
-      markAttachReady(sessionID);
-      // Mobile viewers need the shared PTY geometry before the first tap so
-      // the shell reflows to the phone viewport. Claiming protocol focus here
-      // does not focus the textarea, so the soft keyboard stays closed.
-      if (isCoarsePointer()) requestSessionFocus(true);
-    });
-  }, [clearTerminalSearch, markAttachReady, recordNavigation, refreshTerminal, request, requestSessionFocus]);
+    beginSubscription(sessionID, terminalRef.current);
+  }, [beginSubscription, clearTerminalSearch, recordNavigation, refreshTerminal]);
 
   const createSession = useCallback((kind, targetWorkspaceID = null) => {
     const workspaceID = targetWorkspaceID
@@ -905,6 +1058,7 @@ export default function App() {
     state.activeWorkspace = workspaceID;
     state.activeSession = null;
     state.attachedSession = null;
+    setTerminalReadySession(null);
     focusedSessionRef.current = null;
     setActiveWorkspace(workspaceID);
     if (previousWorkspaceID !== workspaceID) {
@@ -914,15 +1068,20 @@ export default function App() {
     setAttachedSession(null);
     setEmptyOverride(null);
     setAgentViewOverride(null);
+    batcherRef.current?.reset();
     terminalRef.current?.clear();
     clearTerminalSearch();
     recoveryAnchorRef.current = null;
-    reanchorRequiredRef.current = false;
+    snapshotPendingRef.current = true;
+    recoveryApplyingRef.current = false;
+    pendingAtomicStateRef.current = null;
+    stagedRecoveryOutputRef.current = [];
     setDrawerOpen(false);
 
     if (sessionID) attachSession(sessionID, true);
     else if (nextTabs.length) attachSession(nextTabs[0].id, true);
     else {
+      cancelSubscription();
       if (wasAttached) request("session.detach");
       const automaticKind = automaticSessionKind({
         tabs: nextTabs,
@@ -933,7 +1092,7 @@ export default function App() {
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, autoStartAI, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
+  }, [attachSession, autoStartAI, cancelSubscription, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
 
   const chooseSessionPreset = useCallback(kind => {
     setSessionSheetOpen(false);
@@ -1014,14 +1173,19 @@ export default function App() {
     if (activeTabWasRemoved) {
       state.activeSession = null;
       state.attachedSession = null;
+      setTerminalReadySession(null);
       focusedSessionRef.current = null;
       setActiveSession(null);
       setAttachedSession(null);
       setAgentViewOverride(null);
+      batcherRef.current?.reset();
       terminalRef.current?.clear();
       clearTerminalSearch();
       recoveryAnchorRef.current = null;
-      reanchorRequiredRef.current = false;
+      snapshotPendingRef.current = true;
+      recoveryApplyingRef.current = false;
+      pendingAtomicStateRef.current = null;
+      stagedRecoveryOutputRef.current = [];
     }
 
     setConnectionStatus({ message: "Connected", online: true });
@@ -1049,30 +1213,48 @@ export default function App() {
       recordNavigation(nextCatalog, nextWorkspaceID, sessionID);
       attachSession(sessionID, false, false, false);
     }
-    else if (activeTabWasRemoved) request("session.detach");
-  }, [attachSession, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+    else if (activeTabWasRemoved) {
+      cancelSubscription();
+      request("session.detach");
+    }
+  }, [attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
       const bytes = new Uint8Array(event.data);
-      const decoded = decodeOutputFrame(bytes);
-      const attached = appStateRef.current.attachedSession;
-      if (decoded && (!attached || decoded.header.sessionID === attached)) {
+      const decoded = decodeFrame(bytes);
+      const active = appStateRef.current.activeSession;
+      const subscription = subscriptionRef.current;
+      if (decoded?.type === "atomicState") {
+        if (active !== decoded.header.sessionID
+          || subscription.sessionID !== decoded.header.sessionID
+          || !["syncing", "applying"].includes(subscription.status)) return;
+        if (decoded.header.format !== "ghostline-vt-replay-v1") {
+          setConnectionStatus({ message: "Unsupported terminal state", online: false });
+          connectionRef.current?.stop();
+          return;
+        }
+        // The state is installed only at the synced boundary. Keeping it
+        // opaque here prevents a renderer from exposing a partial snapshot.
+        pendingAtomicStateRef.current = decoded;
+        snapshotPendingRef.current = true;
+        return;
+      }
+      if (decoded?.type === "output"
+        && active === decoded.header.sessionID
+        && subscription.sessionID === decoded.header.sessionID
+        && ["syncing", "applying", "synced"].includes(subscription.status)) {
         const current = recoveryAnchorRef.current;
-        if (current && !snapshotPendingRef.current) {
+        if (snapshotPendingRef.current || recoveryApplyingRef.current) {
+          stagedRecoveryOutputRef.current.push(decoded);
+          return;
+        }
+        if (current) {
           if (decoded.header.epoch !== current.epoch || decoded.header.sequence !== current.sequence) {
-            // A gap means the ring evicted our anchor; reconnect without an
-            // anchor and reanchor from Ghostline's atomic checkpoint instead
-            // of silently skipping or duplicating bytes.
-            reanchorRequiredRef.current = true;
+            // Protocol 2 recovery always starts from a fresh atomic state;
+            // never render an out-of-order frame into the visible surface.
             connectionRef.current?.reset();
             return;
-          }
-          if (!batcherRef.current?.hasPending) {
-            // Remember the byte position before this batch. If the renderer
-            // cannot keep up and the batch is dropped, the reconnect can
-            // resume exactly here instead of re-serving the whole ring.
-            pendingStartAnchorRef.current = recoveryAnchorRef.current;
           }
           recoveryAnchorRef.current = {
             epoch: decoded.header.epoch,
@@ -1080,19 +1262,12 @@ export default function App() {
           };
         }
         batcherRef.current?.enqueue(decoded.payload);
-      } else if (decoded) {
-        // A stale frame can still be queued while switching sessions. It must
-        // not leak into the newly selected terminal.
       } else if (isBinaryEnvelope(bytes)) {
-        // The frame claims to be a Warren envelope but cannot be decoded.
-        // Rendering it would print binary garbage (DENB headers) into the
-        // terminal; treat it as a protocol error and reanchor instead.
-        reanchorRequiredRef.current = true;
+        // Every protocol-2 binary message is a DENB frame. Raw PTY bytes and
+        // malformed envelopes are rejected instead of being fed to xterm.
         connectionRef.current?.reset();
       } else {
-        // Legacy raw PTY payload (older daemon builds send bytes without the
-        // envelope). Render it as-is.
-        batcherRef.current?.enqueue(bytes);
+        connectionRef.current?.reset();
       }
       return;
     }
@@ -1131,17 +1306,28 @@ export default function App() {
       acceptRoster(message);
       break;
     case "attached": {
-      if (appStateRef.current.activeSession !== message.session) break;
+      const subscription = subscriptionRef.current;
+      if (appStateRef.current.activeSession !== message.session
+        || subscription.sessionID !== message.session
+        || subscription.status !== "acknowledged") break;
+      subscription.status = "syncing";
       focusedSessionRef.current = null;
       setActiveSession(message.session);
-      markAttachReady(message.session);
+      // `attached` only acknowledges the subscription. The terminal remains
+      // behind the neutral loading surface until the atomic state has been
+      // written and the matching `synced` marker has rendered.
+      terminalRef.current?.reset();
+      batcherRef.current?.reset();
+      pendingAtomicStateRef.current = null;
+      stagedRecoveryOutputRef.current = [];
+      recoveryApplyingRef.current = false;
+      snapshotPendingRef.current = true;
+      // Input may be sent as soon as the subscription is acknowledged. The
+      // terminal itself remains covered until the matching synced marker has
+      // finished applying the atomic state below.
+      markAttachReady(message.session, true, false);
+      setTerminalReadySession(null);
       setEmptyOverride(null);
-      if (message.reanchor) {
-        terminalRef.current?.clear();
-        snapshotPendingRef.current = true;
-      } else {
-        snapshotPendingRef.current = false;
-      }
       if (Number.isFinite(message.epoch) && Number.isFinite(message.sequence)) {
         recoveryAnchorRef.current = {
           epoch: message.epoch,
@@ -1152,36 +1338,108 @@ export default function App() {
         // anchor null so frame validation stays disabled.
         recoveryAnchorRef.current = null;
       }
-      reanchorRequiredRef.current = false;
-      requestAnimationFrame(() => {
-        fitTerminal();
-        terminalRef.current?.scrollToBottom();
-        const terminal = terminalRef.current;
-        if (autoFocusOnAttachRef.current && terminal && document.hasFocus() && !isCoarsePointer()) {
-          terminal.focus();
-          if (focusedSessionRef.current !== message.session) requestSessionFocus(true);
-        }
-      });
       break;
     }
     case "created":
       appStateRef.current.activeSession = null;
       appStateRef.current.attachedSession = null;
+      setTerminalReadySession(null);
       focusedSessionRef.current = null;
       setActiveSession(null);
       setAttachedSession(null);
       setEmptyOverride(null);
       attachSession(message.session);
       break;
-    case "synced":
-      if (appStateRef.current.attachedSession === message.session) {
+    case "synced": {
+      const subscription = subscriptionRef.current;
+      if (appStateRef.current.activeSession !== message.session
+        || subscription.sessionID !== message.session
+        || subscription.status !== "syncing") break;
+      subscription.status = "applying";
+      const generation = subscription.generation;
+      const state = pendingAtomicStateRef.current;
+      if (!state
+        || state.header.sessionID !== message.session
+        || state.header.epoch !== message.epoch
+        || state.header.sequence !== message.sequence) {
+        subscription.status = "failed";
+        connectionRef.current?.reset();
+        break;
+      }
+      pendingAtomicStateRef.current = null;
+      recoveryApplyingRef.current = true;
+      snapshotPendingRef.current = true;
+      const terminal = terminalRef.current;
+      if (!terminal) {
+        subscription.status = "failed";
+        connectionRef.current?.reset();
+        break;
+      }
+      terminal.reset();
+      const write = (payload, callback) => {
+        // xterm does not guarantee that an empty write invokes its callback;
+        // an empty Ghostline checkpoint is still a valid atomic state and
+        // must release the gate at the same boundary as a non-empty one.
+        if (payload.length === 0) {
+          queueMicrotask(callback);
+        } else {
+          terminal.write(payload, callback);
+        }
+      };
+      const finish = () => {
+        if (subscriptionRef.current !== subscription
+          || subscription.generation !== generation
+          || appStateRef.current.activeSession !== message.session
+          || subscription.status !== "applying") {
+          recoveryApplyingRef.current = false;
+          return;
+        }
+        const staged = stagedRecoveryOutputRef.current;
+        stagedRecoveryOutputRef.current = [];
+        if (staged.length > 0) {
+          let total = 0;
+          for (const frame of staged) total += frame.payload.length;
+          const merged = new Uint8Array(total);
+          let offset = 0;
+          for (const frame of staged) {
+            if (frame.header.epoch !== message.epoch
+              || frame.header.sequence !== message.sequence + offset) {
+              subscription.status = "failed";
+              connectionRef.current?.reset();
+              return;
+            }
+            merged.set(frame.payload, offset);
+            offset += frame.payload.length;
+          }
+          write(merged, finish);
+          return;
+        }
         recoveryAnchorRef.current = {
           epoch: message.epoch,
           sequence: message.sequence,
         };
+        recoveryApplyingRef.current = false;
         snapshotPendingRef.current = false;
-      }
+        requestAnimationFrame(() => {
+          if (subscriptionRef.current !== subscription
+            || subscription.generation !== generation
+            || appStateRef.current.activeSession !== message.session
+            || subscription.status !== "applying") return;
+          fitTerminal();
+          terminal.scrollToBottom();
+          // The write callback means xterm has consumed the bytes; release
+          // the neutral surface one frame later so its renderer has also
+          // painted the restored grid before the overlay disappears.
+          markPresentationReady(message.session);
+          if (autoFocusOnAttachRef.current && document.hasFocus() && !isCoarsePointer()) {
+            terminal.focus();
+            if (focusedSessionRef.current !== message.session) requestSessionFocus(true);
+          }
+        });
+      };
+      write(state.payload, finish);
       break;
+    }
     case "agent":
       setAgentStateBySession(previous => {
         const current = previous[message.session];
@@ -1251,27 +1509,40 @@ export default function App() {
       break;
     case "sessionDeleted":
       if (appStateRef.current.activeSession === message.session) {
+        cancelSubscription();
         appStateRef.current.activeSession = null;
         appStateRef.current.attachedSession = null;
+        setTerminalReadySession(null);
         focusedSessionRef.current = null;
         setActiveSession(null);
         setAttachedSession(null);
+        batcherRef.current?.reset();
         terminalRef.current?.clear();
         clearTerminalSearch();
         recoveryAnchorRef.current = null;
-        reanchorRequiredRef.current = false;
         snapshotPendingRef.current = false;
+        recoveryApplyingRef.current = false;
+        pendingAtomicStateRef.current = null;
+        stagedRecoveryOutputRef.current = [];
       }
       break;
     case "exited":
-      if (appStateRef.current.attachedSession === message.session) {
+      if (appStateRef.current.activeSession === message.session
+        || appStateRef.current.attachedSession === message.session) {
+        cancelSubscription();
         appStateRef.current.activeSession = null;
         appStateRef.current.attachedSession = null;
+        setTerminalReadySession(null);
         focusedSessionRef.current = null;
         setActiveSession(null);
         setAttachedSession(null);
+        batcherRef.current?.reset();
         clearTerminalSearch();
         snapshotPendingRef.current = false;
+        recoveryApplyingRef.current = false;
+        pendingAtomicStateRef.current = null;
+        stagedRecoveryOutputRef.current = [];
+        terminalRef.current?.clear();
         setEmptyOverride({ loading: false, message: "Session ended" });
       }
       break;
@@ -1296,10 +1567,12 @@ export default function App() {
   }, [
     acceptRoster,
     attachSession,
+    cancelSubscription,
     clearMaintenanceTimeout,
     clearTerminalSearch,
     fitTerminal,
     markAttachReady,
+    markPresentationReady,
     requestSessionFocus,
     scheduleMaintenanceTimeout,
   ]);
@@ -1307,6 +1580,10 @@ export default function App() {
   const acceptConnectionState = useCallback(state => {
     clearMaintenanceTimeout();
     if (state === "connecting") {
+      // A new socket cannot carry the previous peer's subscriptions. Invalidate
+      // every recovery callback before the reconnect roster reattaches the
+      // selected session; do not send an unsubscribe over the closing socket.
+      cancelSubscription(false);
       settingsLoadedRef.current = false;
       setConnectionStatus({ message: "Connecting…", online: false });
       return;
@@ -1315,6 +1592,7 @@ export default function App() {
       setConnectionStatus({ message: "Authenticating…", online: false });
       return;
     }
+    cancelSubscription(false);
     rejectPendingRequests(pendingRequestsRef.current, "Connection lost; reconnect and retry.");
     gitNeedsReloadRef.current = true;
     if (fileViewRef.current) fileDiffNeedsReloadRef.current = true;
@@ -1322,12 +1600,16 @@ export default function App() {
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
     setAttachedSession(null);
+    setTerminalReadySession(null);
     sentTerminalSizeRef.current = null;
     batcherRef.current?.reset();
-    // The Recovery Anchor survives a transport reconnect; only an explicit
-    // reanchor decision (overflow, host adoption, evicted ring) clears it.
+    snapshotPendingRef.current = true;
+    recoveryApplyingRef.current = false;
+    pendingAtomicStateRef.current = null;
+    stagedRecoveryOutputRef.current = [];
+    recoveryAnchorRef.current = null;
     setConnectionStatus({ message: "Reconnecting…", online: false });
-  }, [clearMaintenanceTimeout]);
+  }, [cancelSubscription, clearMaintenanceTimeout]);
 
   messageHandlerRef.current = acceptMessage;
   connectionStateHandlerRef.current = acceptConnectionState;
@@ -1399,18 +1681,19 @@ export default function App() {
       // WebSocket here flashes "Connecting…" and re-auths on every output
       // burst while the user scrolls history.
       const sessionID = appStateRef.current.activeSession;
-      const start = pendingStartAnchorRef.current;
-      pendingStartAnchorRef.current = null;
-      recoveryAnchorRef.current = start || null;
-      reanchorRequiredRef.current = !start;
+      recoveryAnchorRef.current = null;
+      snapshotPendingRef.current = true;
+      recoveryApplyingRef.current = false;
+      pendingAtomicStateRef.current = null;
+      stagedRecoveryOutputRef.current = [];
       batcher.reset();
       terminal.reset();
       if (!sessionID) return;
       appStateRef.current.attachedSession = null;
       focusedSessionRef.current = null;
       setAttachedSession(null);
-      const message = attachTerminalMessage(sessionID, terminal, recoveryAnchorRef.current);
-      if (!request(message.method, message.params, () => markAttachReady(sessionID))) {
+      setTerminalReadySession(null);
+      if (!beginSubscription(sessionID, terminal)) {
         // The socket is gone after all; fall back to a full reconnect.
         connectionRef.current?.reset();
       }
@@ -1596,6 +1879,10 @@ export default function App() {
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
+      // Invalidate callbacks before disposing xterm. A queued write callback
+      // may run after this cleanup when a tab is replaced or the component is
+      // unmounted; the subscription generation then makes it harmless.
+      subscriptionCleanupRef.current(false);
       dataSubscription.dispose();
       resizeSubscription.dispose();
       searchResultsSubscription.dispose();
@@ -1627,7 +1914,7 @@ export default function App() {
       batcher.dispose();
       batcherRef.current = null;
     };
-  }, [markAttachReady, request, requestSessionFocus, scheduleRemoteResize, scheduleTerminalFit, sendInput]);
+  }, [beginSubscription, request, requestSessionFocus, scheduleRemoteResize, scheduleTerminalFit, sendInput]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -1776,6 +2063,7 @@ export default function App() {
     connectionRef.current = connection;
     connection.start();
     return () => {
+      subscriptionCleanupRef.current(false);
       connection.stop();
       connectionRef.current = null;
     };
@@ -1967,6 +2255,10 @@ export default function App() {
     const dialog = deleteDialog;
     if (!dialog) return;
     setDeleteDialog(null);
+    if (appStateRef.current.activeSession === dialog.id
+      || appStateRef.current.attachedSession === dialog.id) {
+      cancelSubscription();
+    }
     request("session.delete", { id: dialog.id }, () => {
       // If the deleted session owns the visible terminal, clear it right away
       // instead of waiting for the next roster broadcast. The empty-state
@@ -1974,12 +2266,21 @@ export default function App() {
       // last agent screen.
       const current = appStateRef.current;
       if (current.activeSession === dialog.id || current.attachedSession === dialog.id) {
+        current.activeSession = null;
+        current.attachedSession = null;
+        setActiveSession(null);
+        setAttachedSession(null);
         terminalRef.current?.clear();
+        batcherRef.current?.reset();
         recoveryAnchorRef.current = null;
-        reanchorRequiredRef.current = false;
+        setTerminalReadySession(null);
+        snapshotPendingRef.current = false;
+        recoveryApplyingRef.current = false;
+        pendingAtomicStateRef.current = null;
+        stagedRecoveryOutputRef.current = [];
       }
     });
-  }, [deleteDialog, request]);
+  }, [cancelSubscription, deleteDialog, request]);
 
   const sessionContextMenu = useCallback((event, session) => {
     showContextMenu(event, sessionMenuItems(session, {
@@ -2347,7 +2648,7 @@ export default function App() {
             <EmptyTerminal
               activeWorkspace={selectedWorkspaceID}
               activeSession={activeSession}
-              attachedSession={attachedSession}
+              terminalReadySession={terminalReadySession}
               tabCount={tabs.length}
               projectCount={catalog.projects.length}
               override={emptyOverride}

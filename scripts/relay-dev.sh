@@ -65,7 +65,7 @@ Usage: scripts/relay-dev.sh [up|start|pair|status|stop|logs]
   start   Start the Relay without launching or restarting Warren.
   pair    Generate and open another one-time Web/PWA URL.
   status  Show Relay health and Host presence.
-  stop    Stop the local Relay. Warren and its tmux sessions keep running.
+  stop    Stop the local Relay. Warren and its Ghostline sessions keep running.
   logs    Follow the local Relay log.
 
 Set WARREN_RELAY_NO_OPEN=1 to print the Web URL without opening a browser.
@@ -369,7 +369,7 @@ stop_relay() {
         echo "Relay did not stop cleanly (pid $pid)." >&2
         exit 1
     fi
-    echo "Relay stopped. Warren and tmux sessions were left running."
+    echo "Relay stopped. Warren and Ghostline sessions were left running."
 }
 
 require_command curl

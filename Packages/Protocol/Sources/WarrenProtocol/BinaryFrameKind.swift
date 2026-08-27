@@ -16,11 +16,12 @@ public enum BinaryFrameDirection: UInt8, Codable, Hashable, Sendable {
 public enum BinaryFrameKind: UInt8, Codable, Hashable, Sendable {
     case input = 1
     case output = 2
+    case atomicState = 3
 
     public var direction: BinaryFrameDirection {
         switch self {
         case .input: return .clientToHost
-        case .output: return .hostToClient
+        case .output, .atomicState: return .hostToClient
         }
     }
 }

@@ -455,6 +455,50 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertEqual(surface.semanticSnapshot().plainText, "abcdefgh")
         surface.outputWriter.shutdown()
     }
+
+    func testSnapshotRestoreRejectsEmptyOrMissingSurface() {
+        let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+        XCTAssertFalse(session.restoreSnapshot(Data()))
+        XCTAssertFalse(session.restoreSnapshot(Data("not-a-snapshot".utf8)))
+    }
+
+    @MainActor
+    func testNativeSnapshotRestoreReplacesViewportAndContinuesAtCursor() async throws {
+        let recorder = LockedInputRecorder()
+        let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
+        defer { window.orderOut(nil) }
+
+        surface.receive(Data("old-content".utf8))
+        let snapshot = try XCTUnwrap(Data(base64Encoded: Self.atomicSnapshotFixture))
+        XCTAssertTrue(surface.restoreSnapshot(snapshot, epoch: 7, sequence: 100))
+
+        let restored = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(restored.contains("first"))
+        XCTAssertTrue(restored.contains("styled blank"))
+        XCTAssertTrue(restored.contains("last"))
+        XCTAssertFalse(restored.contains("old-content"))
+
+        let beforeInvalidRestore = surface.inMemory.readViewportText()
+        XCTAssertFalse(surface.restoreSnapshot(Data("invalid".utf8), epoch: 8, sequence: 0))
+        XCTAssertEqual(surface.inMemory.readViewportText(), beforeInvalidRestore)
+
+        surface.outputWriter.enqueue(epoch: 7, sequence: 100, payload: Data("Z".utf8))
+        for _ in 0..<100 where surface.renderedSequence < 101 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(surface.renderedEpoch, 7)
+        XCTAssertEqual(surface.renderedSequence, 101)
+        let continued = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(
+            continued.contains("last  Z"),
+            "live output should continue from the restored row-3 column-7 cursor: \(continued)"
+        )
+        surface.outputWriter.shutdown()
+    }
+
+    private static let atomicSnapshotFixture = """
+    R0hPU1RTTlABAAEAlAMAAO/6KIooAAgAAAAAAAAAAAAAAAcAAAAnAAAAAAEAdAAAAAEBAQEAAAAACAAEIgBkAAAAAAQiAGQAAAAABCIAZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAP//////////AAEBAQEdHyHMZma1vWjwxnSBor6ylLuKvrfFyMZmZmbVTlO5ykrnxUd6ptrDl9hwwLHq6uoAAAAAAF8AAIcAAK8AANcAAP8AXwAAX18AX4cAX68AX9cAX/8AhwAAh18Ah4cAh68Ah9cAh/8ArwAAr18Ar4cAr68Ar9cAr/8A1wAA118A14cA168A19cA1/8A/wAA/18A/4cA/68A/9cA//9fAABfAF9fAIdfAK9fANdfAP9fXwBfX19fX4dfX69fX9dfX/9fhwBfh19fh4dfh69fh9dfh/9frwBfr19fr4dfr69fr9dfr/9f1wBf119f14df169f19df1/9f/wBf/19f/4df/69f/9df//+HAACHAF+HAIeHAK+HANeHAP+HXwCHX1+HX4eHX6+HX9eHX/+HhwCHh1+Hh4eHh6+Hh9eHh/+HrwCHr1+Hr4eHr6+Hr9eHr/+H1wCH11+H14eH16+H19eH1/+H/wCH/1+H/4eH/6+H/9eH//+vAACvAF+vAIevAK+vANevAP+vXwCvX1+vX4evX6+vX9evX/+vhwCvh1+vh4evh6+vh9evh/+vrwCvr1+vr4evr6+vr9evr/+v1wCv11+v14ev16+v19ev1/+v/wCv/1+v/4ev/6+v/9ev///XAADXAF/XAIfXAK/XANfXAP/XXwDXX1/XX4fXX6/XX9fXX//XhwDXh1/Xh4fXh6/Xh9fXh//XrwDXr1/Xr4fXr6/Xr9fXr//X1wDX11/X14fX16/X19fX1//X/wDX/1/X/4fX/6/X/9fX////AAD/AF//AIf/AK//ANf/AP//XwD/X1//X4f/X6//X9f/X///hwD/h1//h4f/h6//h9f/h///rwD/r1//r4f/r6//r9f/r///1wD/11//14f/16//19f/1////wD//1///4f//6///9f///8ICAgSEhIcHBwmJiYwMDA6OjpEREROTk5YWFhiYmJsbGx2dnaAgICKioqUlJSenp6oqKiysrK8vLzGxsbQ0NDa2trk5OTu7u4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgA2AAAAddWM0gAAAQAAAAAAAAAAAAYAAgABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAMAowAAAKcxwt4oAAgAAQAAAIAAwAAAIAAAAAgAAAEAAAAAAAHwAAAAAAAAAAAAAAAFAGZpcnN0IBYAzAEABNABAATkAQAEsAEABJQBAASQAQAEgAAABIgBAASwAQAEhAEABLgBAASsAQAEgAAABIAAAASAAAAEgAAABIAAAASAAAAEgAAABIAAAASAAAAEgAAABAAEAGxhc3QAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAJ4Bj0QUAAAAAAOQg7woEAAYAAAChEYpeAAAAAAAABgAAAAAAPutTPg==
+    """
 }
 
 private final class LockedInputRecorder: @unchecked Sendable {

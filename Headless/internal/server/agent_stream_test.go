@@ -53,7 +53,7 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), "runtime-agent", directory, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestAgentStateFileReflectsShellReturn(t *testing.T) {
 		ID: "session-agent", Title: "Codex", Kind: "codex",
 		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
 	}
-	service := &Service{Store: state, Runtime: newSpoolRuntime(t)}
+	service := &Service{Store: state, Runtime: newMemoryOutputRuntime(t)}
 	service.lazyInit()
 
 	statePath := agent.StatePath(session.ID)
@@ -569,7 +569,7 @@ func TestAgentHistoryIncludesInitialAndLiveEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	_ = runtime.Create(context.Background(), "runtime-history", directory, "", nil)
 	service := &Service{
 		Store:       state,
@@ -723,7 +723,7 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	_ = runtime.Create(context.Background(), "runtime-history-ws", directory, "", nil)
 	service := &Service{
 		Store:       state,
@@ -898,7 +898,7 @@ func TestAgentSubscribeDoesNotAttachTerminalOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := newSpoolRuntime(t)
+	runtime := newMemoryOutputRuntime(t)
 	if err := runtime.Create(context.Background(), session.Runtime, directory, "", nil); err != nil {
 		t.Fatal(err)
 	}

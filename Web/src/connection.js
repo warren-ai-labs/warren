@@ -118,7 +118,13 @@ export class WarrenConnection {
     socket.onopen = () => {
       if (socket !== this.socket) return;
       this.onState("open");
-      this.sendJSON({ t: "auth", token: this.token, version: "1.0" });
+      this.sendJSON({
+        t: "auth",
+        token: this.token,
+        version: "2.0",
+        capabilities: ["roster-delta"],
+        terminalStateFormats: ["ghostline-vt-replay-v1"],
+      });
     };
     socket.onmessage = event => {
       if (socket === this.socket) this.onMessage(event);

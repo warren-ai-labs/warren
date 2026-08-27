@@ -1,7 +1,7 @@
 # Headless and Remote Connection Architecture
 
 Status: implemented baseline architecture
-Protocol version: 1.0
+Protocol version: 2.0 (minimum supported version)
 
 ## Decisions
 
@@ -16,7 +16,7 @@ warren-headless
 ├── Project / Workspace / Session authority
 ├── atomic JSON state store
 ├── Git worktree adapter
-└── ghostline / tmux runtime adapter
+└── Ghostline runtime adapter
 ```
 
 SSH is not a Warren business protocol. `warren ssh` only starts the remote daemon, reads the token, and establishes loopback port forwarding. Once connected, Desktop and CLI use the same WebSocket API.
@@ -26,7 +26,7 @@ SSH is not a Warren business protocol. `warren ssh` only starts the remote daemo
 | State | Authority | Behavior after disconnect |
 | --- | --- | --- |
 | Projects, Workspaces, Sessions, sidebar order | Headless daemon | Retained |
-| Runtime (ghostline/tmux) | Headless daemon | Keeps running |
+| Ghostline Runtime | Headless daemon | Keeps running |
 | Current endpoint | Local Desktop/CLI config | Retained |
 | Desktop selection and renderer | Local Desktop | Rebuildable |
 | SSH tunnel | `warren ssh` process | Closed when the process exits |
@@ -38,6 +38,9 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - The daemon binds to loopback by default.
 - Tokens use 256 random bits; config files use `0600` permissions.
 - WebSocket auth uses constant-time comparison.
+- Protocol 2 is the minimum wire version. Clients that send another (or no)
+  version are rejected during authentication with an explicit upgrade error,
+  before the daemon sends a roster or session data.
 - HTTP state endpoints require a Bearer token.
 - Public connections should go through SSH, Tailscale, or a TLS-terminating Relay.
 
@@ -46,22 +49,36 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - The store can move from atomic JSON to a stronger database without changing the API.
 - Runtime is isolated behind an interface, so systemd, container, or PTY adapters can be added.
 - Endpoints can add Relay, mTLS, and organization-level discovery.
-- The protocol can add request receipts, incremental output sequences, Input Lease, and capability negotiation.
+- Protocol 2 negotiates roster deltas and an opaque terminal-state format. New
+  request receipts, input leases, and other capabilities must be introduced as
+  a later protocol version rather than inferred by older clients.
 - The Desktop remote model is the only client model; local Host state is owned by the daemon.
 
 ## Output and Recovery
 
-- The Runtime writes each Session's raw PTY bytes to a dedicated append-only spool (`~/.warren/output/<runtime>.out`); ghostline writes its own spool, while tmux uses `pipe-pane -o -O`. The Host holds one SpoolWatcher per Session that reads from a persisted offset. Ghostline wakes watchers through platform file notifications on Darwin and Linux, with a low-frequency heartbeat as a missed-event fallback.
-- A screen snapshot (`capture-pane` for tmux, a libghostty-vt snapshot for ghostline) is only used for first recovery and reanchoring: when a new client connects, the Host restarts and adopts, the Anchor is evicted from the Ring, or the spool is compacted, the Host sends a snapshot and reanchors.
-- Binary output frames use the same DENB envelope as the daemon protocol:
-  `DENB | version | direction | kind | headerLen | payloadLen | JSON header | payload`,
-  with the header carrying `sessionID/epoch/sequence/payloadLength`. Output first goes into a bounded OutputRing and is then broadcast to clients; on reconnect a client sends its last confirmed Recovery Anchor, and the Host either replays the exact interval from the Ring or sends a snapshot to reanchor.
+- Ghostline exposes raw PTY bytes through an opaque cursor stream. The Host owns
+  one reader per Session, appends each completed read to a bounded Output Ring,
+  persists the cursor only after recording the bytes, and broadcasts DENB output
+  frames to subscribed clients.
+- A reconnecting client sends its last confirmed Recovery Anchor. An anchor in
+  the Ring receives only the exact tail. A cold desktop peer that negotiates
+  `ghostty-vt-snapshot-v1` receives one opaque Ghostty snapshot and its
+  matching cursor; Web, mobile, and CLI peers negotiate
+  `ghostline-vt-replay-v1` and install that checkpoint behind their own
+  presentation gate.
+- Binary output and atomic-state frames share the DENB envelope:
+  `DENB | version | direction | kind | headerLen | payloadLen | JSON header | payload`.
+  Atomic state has its own kind and format so snapshot bytes can never enter a
+  VT output parser.
 - Each WebSocket client has its own outbound writer and send queue; queue overflow or a write timeout disconnects only that client, which can reconnect and catch up from its anchor.
-- After startup, a single lifecycle watcher probes and adopts live Runtimes (ghostline sessions through the server socket, tmux sessions through `list-sessions`, reinstalling spools idempotently); missing Runtimes are marked ended. Only an explicit Session delete ends the Runtime; detaching and client exits never terminate it.
+- After startup, the daemon adopts live Ghostline sessions through the server
+  socket and marks confirmed missing Runtimes ended. Only an explicit Session
+  delete ends the Runtime; detaching and client exits never terminate it.
 
 ## Current Limitations
 
-- When a spool reaches its cap, it is compacted in place (archive + truncate) and the epoch is bumped; all clients reanchor from a runtime screen snapshot, with no silent byte trimming.
+- The Host Ring is bounded. An evicted or stale anchor reanchors from Ghostline
+  state; it never guesses across a missing interval.
 - Headless Go's `/v1/ws` exposes one request/response control protocol. `session.attach` creates an output subscription only (and carries the `epoch/sequence` recovery anchor); a client sends `session.focus` with an optional `cols/rows` viewport after it gains UI focus. The Host only lets the focused peer resize the shared PTY; background `session.resize` requests are safe no-ops, and detach releases focus. Control messages and DENB output frames match the daemon protocol used by Desktop and Web clients.
 - Desktop discovers servers from the CLI config file and refreshes the endpoint catalog in the background, so CLI changes appear without restarting.
 - Remote Project paths must be added through the CLI; the Desktop file picker only applies to Local.

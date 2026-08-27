@@ -152,7 +152,7 @@ func resumeGhostlineMigration(config ghostlineMigrationConfig) error {
 
 // handoffGhostline delegates session ownership to Ghostline. Warren only
 // records the small lifecycle journal, launches the target, and swaps its
-// local route; it never reads a v0 spool or translates a cursor.
+// local route; it never reads v0 output files or translates a cursor.
 func handoffGhostline(config ghostlineMigrationConfig, sourceSocket string, sourceVersion ghostlineServerVersion, handoffVersion string, spawn []string) error {
 	if config.state == nil {
 		return fmt.Errorf("ghostline migration requires persistent Warren state")
