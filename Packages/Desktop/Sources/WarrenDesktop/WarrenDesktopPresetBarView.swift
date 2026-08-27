@@ -26,6 +26,8 @@ struct WarrenDesktopPresetBar: View {
     private var claudeCommand = "claude"
     @AppStorage(WarrenPreferenceKey.presetCommandCodex)
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
+    @AppStorage(WarrenPreferenceKey.presetCommandOpenCode)
+    private var opencodeCommand = "opencode"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -96,6 +98,7 @@ struct WarrenDesktopPresetBar: View {
         case "shell": shellCommand
         case "claude": claudeCommand
         case "codex": codexCommand
+        case "opencode": opencodeCommand
         case "trae": traeCommand
         default: ""
         }

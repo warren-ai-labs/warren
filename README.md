@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a local-first workspace for **durable AI workflows**, organized around **Workspaces** with durable terminal sessions at its core. Run an agent-driven workflow such as Codex or Claude Code on a Host — your Mac or a remote VPS — then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
+Warren is a local-first workspace for **durable AI workflows**, organized around **Workspaces** with durable terminal sessions at its core. Run an agent-driven workflow such as Codex, Claude Code, or OpenCode on a Host — your Mac or a remote VPS — then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
@@ -36,14 +36,14 @@ you want a structured conversation around the same session.
 - **One resource model** — Project → Workspace → Terminal Session → Runtime, shared by every client surface.
 - **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to `warren-headless` on a VPS. SSH only bootstraps the remote daemon and forwards a port; the same versioned WebSocket API is used everywhere.
 - **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
-- **Structured agent views** — Codex and Claude transcripts are projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
+- **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
 - **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
 - **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
 
 ## Current scope
 
-Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex and Claude; other interactive programs remain available through the generic terminal Session interface.
+Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 

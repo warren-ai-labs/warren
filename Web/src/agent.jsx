@@ -172,8 +172,9 @@ export function AgentView({
         </form>
       ) : (
         <div className="agent-starting">
-          Agent is starting — finish first-time setup in Terminal, then send
-          messages from here.
+          {session?.kind === "opencode"
+            ? "OpenCode is starting — enter the first prompt in Terminal, then send messages from here."
+            : "Agent is starting — finish first-time setup in Terminal, then send messages from here."}
         </div>
       )}
     </div>
@@ -182,7 +183,11 @@ export function AgentView({
 
 function blockKindKey(block, index) {
   const id = block.call?.id || block.event?.id || block.event?.seq || block.call?.seq;
-  return `${block.kind}-${id || index}`;
+  const sequence = block.call?.seq || block.event?.seq;
+  // Provider IDs identify logical parts, not always individual events (an
+  // OpenCode part can emit several deltas). Include the normalized sequence
+  // so a fallback or repeated provider ID can never collide in React.
+  return `${block.kind}-${id || "event"}-${sequence || index}`;
 }
 
 function AgentBlock({ block }) {

@@ -65,6 +65,32 @@ func TestReadNewNormalizesCodexTranscript(t *testing.T) {
 	}
 }
 
+func TestReadNewTrackedRestartsAfterAtomicReplacement(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "session.jsonl")
+	writeLines(t, path, `{"type":"user","uuid":"u1","message":{"role":"user","content":"old"}}`)
+	parser := newParser("claude")
+	first, offset, info, err := readNewTracked(path, 0, parser, nil)
+	if err != nil || len(first) != 1 || info == nil {
+		t.Fatalf("initial tracked read = events %v, offset %d, info %v, err %v", first, offset, info, err)
+	}
+	temporary := filepath.Join(directory, "session.new")
+	writeLines(t, temporary, `{"type":"user","uuid":"u2","message":{"role":"user","content":"new content after replacement"}}`)
+	if err := os.Rename(temporary, path); err != nil {
+		t.Fatal(err)
+	}
+	second, next, replacementInfo, err := readNewTracked(path, offset, parser, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementInfo == nil || os.SameFile(info, replacementInfo) {
+		t.Fatal("atomic replacement must expose a new file identity")
+	}
+	if next <= offset || len(second) != 1 || second[0].Content != "new content after replacement" {
+		t.Fatalf("replacement read = events %v, offset %d (previous %d)", second, next, offset)
+	}
+}
+
 func TestContentStringLimitBoundsBlockAssembly(t *testing.T) {
 	large := strings.Repeat("x", maxEventContent*2)
 	value, err := json.Marshal([]map[string]any{

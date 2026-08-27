@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
@@ -66,9 +67,37 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	case "error":
 		t.TurnFailed()
 	case "assistant":
-		if event.StopReason == "end_turn" {
+		// Codex historically called this boundary end_turn while OpenCode
+		// stores the provider-native value stop. Other model providers can
+		// terminate with a length/content-filter result; those are terminal
+		// turns too, while an explicit provider error is a failed turn.
+		if completed, failed := observeStopReason(event.StopReason); failed {
+			t.TurnFailed()
+		} else if completed {
 			t.TurnComplete()
 		}
+	}
+	// OpenCode attaches the final `finish` value to the last part in a
+	// message. That part can be a successful tool output or a reasoning block,
+	// not an assistant text event. Preserve the boundary without manufacturing
+	// an empty assistant message in the transcript projection.
+	if event.Type != "assistant" && event.Type != "error" && event.ToolStatus != "error" {
+		if completed, failed := observeStopReason(event.StopReason); failed {
+			t.TurnFailed()
+		} else if completed {
+			t.TurnComplete()
+		}
+	}
+}
+
+func observeStopReason(reason string) (completed, failed bool) {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "end_turn", "stop", "length", "content-filter", "content_filter", "max_tokens", "other":
+		return true, false
+	case "error":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

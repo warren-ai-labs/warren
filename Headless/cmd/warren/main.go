@@ -396,8 +396,8 @@ func resourceCommand(args []string) error {
 	}
 	if resource == "session" && (action == "create" || action == "add") {
 		kind := strings.ToLower(strings.TrimSpace(stringValue(params, "kind")))
-		if kind == "codex" || kind == "claude" {
-			return newUsageError("session create cannot create Codex or Claude agents; use agent create", actionUsageText(commandName, action))
+		if kind == "codex" || kind == "claude" || kind == "opencode" {
+			return newUsageError("session create cannot create Codex, Claude, or OpenCode agents; use agent create", actionUsageText(commandName, action))
 		}
 	}
 	var resolvedCurrentID string
@@ -754,16 +754,7 @@ func agentReadFullTranscript(ctx context.Context, c *client.Client, sessionID st
 }
 
 func printAgentText(events []api.AgentEvent) error {
-	lines := make([]string, 0, len(events))
-	for _, event := range events {
-		if event.Type != "user" && event.Type != "assistant" {
-			continue
-		}
-		if event.Content == "" {
-			continue
-		}
-		lines = append(lines, event.Content)
-	}
+	lines := agentTextLines(events)
 	if outputJSON {
 		return printValue(lines)
 	}
@@ -771,6 +762,37 @@ func printAgentText(events []api.AgentEvent) error {
 		fmt.Fprintln(os.Stdout, line)
 	}
 	return nil
+}
+
+func agentTextLines(events []api.AgentEvent) []string {
+	lines := make([]string, 0, len(events))
+	// OpenCode emits mutable text-part updates as deltas with one stable part
+	// ID. Keep the plain-text CLI output readable by folding those updates back
+	// into one logical message; Codex and Claude retain their existing one-event
+	// per-line behavior.
+	positions := make(map[string]int)
+	for _, event := range events {
+		if event.Type != "user" && event.Type != "assistant" {
+			continue
+		}
+		if event.Content == "" {
+			continue
+		}
+		if event.Provider == "opencode" && event.ID != "" {
+			key := event.Type + "\x00" + event.ID
+			if index, ok := positions[key]; ok {
+				if event.ContentDelta {
+					lines[index] += event.Content
+				} else {
+					lines[index] = event.Content
+				}
+				continue
+			}
+			positions[key] = len(lines)
+		}
+		lines = append(lines, event.Content)
+	}
+	return lines
 }
 
 func agentCommand(args []string) error {
@@ -818,8 +840,8 @@ func agentCreateCommand(args []string) error {
 		return newUsageError("workspace and --group are mutually exclusive", agentCreateUsageText())
 	}
 	provider := strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
-	if provider != "codex" && provider != "claude" {
-		return newUsageError("--provider must be codex or claude", agentCreateUsageText())
+	if provider != "codex" && provider != "claude" && provider != "opencode" {
+		return newUsageError("--provider must be codex, claude, or opencode", agentCreateUsageText())
 	}
 	command := strings.TrimSpace(stringValue(params, "command"))
 	if command == "" {
@@ -851,11 +873,11 @@ func agentCreateCommand(args []string) error {
 	request := normalizedParams(params, "session", "create")
 	request["kind"] = provider
 	if hasPrompt {
-		// Codex and Claude both accept an initial prompt as the final
-		// positional argument. Let the provider create its first turn so the
-		// transcript exists before Warren starts waiting on it; subsequent
-		// messages still use the interactive composer path below.
-		command = appendAgentInitialPrompt(command, prompt)
+		// Codex and Claude accept an initial prompt as the final positional
+		// argument. OpenCode exposes the same behavior through its --prompt
+		// option, so keep the provider-specific launch syntax here rather than
+		// silently passing a prompt that OpenCode treats as a project path.
+		command = appendAgentInitialPromptForProvider(command, provider, prompt)
 	}
 	request["command"] = command
 	for _, key := range []string{"provider", "prompt", "no-prompt", "wait", "timeout", "help", "h"} {
@@ -957,7 +979,7 @@ func agentCurrentCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("current session is not a Codex or Claude agent: %s", session.ID)
+		return fmt.Errorf("current session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
 	}
 	return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
 }
@@ -1022,7 +1044,7 @@ func agentSendCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
 	if err != nil {
@@ -1091,7 +1113,7 @@ func agentReadCommand(args []string) error {
 	}
 	session := subscription.Session
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
 	}
 	return agentReadSession(ctx, c, session, params)
 }
@@ -1132,7 +1154,7 @@ func agentAttachCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
 	}
 	return sessionTerminalRead(ctx, c, map[string]any{"timeout": ""}, true)
 }
@@ -1168,7 +1190,7 @@ const (
 
 func isAgentSession(session api.Session) bool {
 	switch strings.ToLower(strings.TrimSpace(session.Kind)) {
-	case "codex", "claude":
+	case "codex", "claude", "opencode":
 		return true
 	case "shell", "custom":
 		// A shell overlay is Agent-capable only after Warren's Codex/Claude
@@ -1242,8 +1264,8 @@ func sendAgentText(ctx context.Context, c *client.Client, text string) error {
 
 // validateAgentCommand keeps the command field focused on the executable and
 // its options. A positional argument is the provider's startup prompt for
-// both Codex and Claude, so accepting one alongside --prompt would create two
-// competing initial turns.
+// Codex and Claude (OpenCode uses --prompt), so accepting one alongside
+// Warren's initial prompt would create two competing turns.
 func validateAgentCommand(command, provider string) error {
 	if err := validateAgentCommandShellSyntax(command); err != nil {
 		return err
@@ -1277,6 +1299,9 @@ func validateAgentCommand(command, provider string) error {
 			}
 			if agentCommandPromptFlags[provider][flagName] {
 				return fmt.Errorf("--command for %s must not provide a prompt; pass it with --prompt", provider)
+			}
+			if agentCommandSessionReuseFlags[provider][flagName] {
+				return fmt.Errorf("--command for %s must start a new session; session resume flags are not supported", provider)
 			}
 			if agentCommandNonInteractiveFlags[provider][flagName] {
 				return fmt.Errorf("--command for %s must use interactive mode; remove %s and pass initial text with --prompt", provider, flagName)
@@ -1333,12 +1358,18 @@ func validateAgentCommandShellSyntax(command string) error {
 }
 
 var agentCommandPromptFlags = map[string]map[string]bool{
-	"codex":  {"--prompt": true},
-	"claude": {"--prompt": true},
+	"codex":    {"--prompt": true},
+	"claude":   {"--prompt": true},
+	"opencode": {"--prompt": true},
 }
 
 var agentCommandNonInteractiveFlags = map[string]map[string]bool{
-	"claude": {"-p": true, "--print": true},
+	"claude":   {"-p": true, "--print": true},
+	"opencode": {},
+}
+
+var agentCommandSessionReuseFlags = map[string]map[string]bool{
+	"opencode": {"--continue": true, "-c": true, "--session": true, "-s": true, "--fork": true},
 }
 
 var agentCommandShellOperator = map[string]bool{
@@ -1372,6 +1403,12 @@ var agentCommandValueFlags = map[string]map[string]bool{
 		"--system-prompt-file": true, "--tools": true, "--input-format": true,
 		"--session-id": true, "--disallowedTools": true, "--disallowed-tools": true,
 		"--remote-control-session-name-prefix": true,
+	},
+	"opencode": {
+		"-m": true, "--model": true, "-a": true, "--agent": true,
+		"--config": true, "--cwd": true, "--port": true, "--hostname": true,
+		"--log-level": true, "--file": true, "--prompt": true,
+		"--replay-limit": true, "--mdns-domain": true, "--cors": true,
 	},
 }
 
@@ -1449,6 +1486,14 @@ func appendAgentInitialPrompt(command, prompt string) string {
 	return strings.TrimSpace(command) + " " + shellQuote(prompt)
 }
 
+func appendAgentInitialPromptForProvider(command, provider, prompt string) string {
+	command = strings.TrimSpace(command)
+	if strings.EqualFold(strings.TrimSpace(provider), "opencode") {
+		return command + " --prompt " + shellQuote(prompt)
+	}
+	return appendAgentInitialPrompt(command, prompt)
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
@@ -1524,7 +1569,7 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex or Claude agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
 	if err != nil {
@@ -2789,7 +2834,7 @@ Examples:
 
 func agentUsageText() string {
 	return `Usage:
-  warren agent create [WORKSPACE_ID] --provider codex|claude [--command CMD] [--prompt TEXT | --no-prompt]
+  warren agent create [WORKSPACE_ID] --provider codex|claude|opencode [--command CMD] [--prompt TEXT | --no-prompt]
   warren agent list [--all | --ended] [--limit N]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
@@ -2808,16 +2853,16 @@ Run 'warren agent <command> --help' for command-specific help.
 func agentCreateUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID]
-      --provider codex|claude
+      --provider codex|claude|opencode
       [--command CMD]
       [--prompt TEXT | --no-prompt]
       [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]
 
-Create an Agent backed by a Codex or Claude session. --prompt is appended as
-the provider's initial positional prompt. Use --no-prompt to create an idle
-Agent explicitly. --command defaults to the provider executable and may name
-an alias or wrapper command with options, but must not include a positional
-prompt; pass that through --prompt instead.
+Create an Agent backed by a Codex, Claude, or OpenCode session. --prompt is
+passed with the provider's startup syntax (positional for Codex/Claude and
+--prompt for OpenCode). Use --no-prompt to create an idle Agent explicitly.
+--command defaults to the provider executable and may name an alias or wrapper
+command with options, but must not include a positional prompt or prompt option.
 `
 }
 
@@ -2952,7 +2997,7 @@ func resourceUsageText(commandName string) string {
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
 
-Session is a generic PTY resource. Use agent create for Codex or Claude;
+Session is a generic PTY resource. Use agent create for Codex, Claude, or OpenCode;
 Trae is only a shell preset and has no Agent transcript/activity semantics.
 `
 	}

@@ -1601,7 +1601,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if refreshed, ok := p.server.Service.Session(sessionID); ok {
 			session = refreshed
 		}
-		if (session.Kind == "codex" || session.Kind == "claude" || session.AgentSessionID != "") &&
+		if (session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.AgentSessionID != "") &&
 			session.AgentSessionID == "" && len(p.server.Service.agentHistory(sessionID)) == 0 {
 			return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
 		}

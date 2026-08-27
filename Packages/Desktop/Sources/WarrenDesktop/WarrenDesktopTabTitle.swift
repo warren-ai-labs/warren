@@ -76,6 +76,7 @@ enum WarrenDesktopTabTitle {
         switch kind {
         case .claude: "claude"
         case .codex: "codex"
+        case .opencode: "opencode"
         case .trae: "trae"
         case .shell, .custom: nil
         }
@@ -86,6 +87,7 @@ enum WarrenDesktopTabTitle {
         case .shell: ""
         case .claude: "claude"
         case .codex: "codex"
+        case .opencode: "opencode"
         case .trae: "trae"
         case .custom: kind.displayName
         }

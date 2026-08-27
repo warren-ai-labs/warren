@@ -101,7 +101,8 @@ type Service struct {
 	// capability queries answered while no client is attached.
 	ColorQuery   ghostline.ColorQueryCallback
 	WorktreeRoot string
-	// AgentFinder locates Codex/Claude transcript files. When nil, agent
+	// AgentFinder locates Codex/Claude transcript files and, when it also
+	// implements agent.BindingFinder, current OpenCode SQLite sessions. When nil, agent
 	// projection is disabled and sessions behave exactly as before.
 	AgentFinder agent.Finder
 	// AgentHooks installs the Warren-managed Codex hook that reports the
@@ -157,8 +158,12 @@ type Service struct {
 	runtimeSizes   map[string]ghostline.Size
 	broadcastLocks map[string]*sessionLock
 	agentsMu       sync.Mutex
-	agents         map[string]*agentSession
-	agentEpoch     uint64
+	// OpenCode session discovery and metadata persistence must be one critical
+	// section. A concurrent reconcile can otherwise observe the same provider
+	// row before either Warren session has persisted its binding.
+	openCodeBindingMu sync.Mutex
+	agents            map[string]*agentSession
+	agentEpoch        uint64
 
 	lifecycleOnce   sync.Once
 	lifecycleCancel context.CancelFunc
@@ -189,9 +194,12 @@ type peerOutputStream struct {
 type agentSession struct {
 	mu      sync.Mutex
 	watcher *agent.Watcher
-	events  []api.AgentEvent
-	status  api.AgentStatus
-	turn    api.AgentTurn
+	// tailer is non-nil only for OpenCode. It owns the read-only projection
+	// from the provider's SQLite store into watcher.Path().
+	tailer *agent.OpenCodeTailer
+	events []api.AgentEvent
+	status api.AgentStatus
+	turn   api.AgentTurn
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -465,15 +473,25 @@ func (s *Service) Shutdown() {
 		s.stopPeerCursorOutput(subscription.peer, subscription.sessionID, true)
 	}
 	s.agentsMu.Lock()
-	agents := make([]*agentSession, 0, len(s.agents))
+	agentWatchers := make([]*agent.Watcher, 0, len(s.agents))
+	agentTailers := make([]*agent.OpenCodeTailer, 0, len(s.agents))
 	for _, agentSession := range s.agents {
-		agents = append(agents, agentSession)
+		if agentSession == nil {
+			continue
+		}
+		if agentSession.watcher != nil {
+			agentWatchers = append(agentWatchers, agentSession.watcher)
+		}
+		if agentSession.tailer != nil {
+			agentTailers = append(agentTailers, agentSession.tailer)
+		}
 	}
 	s.agentsMu.Unlock()
-	for _, agentSession := range agents {
-		if agentSession.watcher != nil {
-			agentSession.watcher.Close()
-		}
+	for _, watcher := range agentWatchers {
+		watcher.Close()
+	}
+	for _, tailer := range agentTailers {
+		tailer.Close()
 	}
 }
 
@@ -731,7 +749,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
-		} else if session.Kind == "codex" || session.Kind == "claude" {
+		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 	}
@@ -2198,9 +2216,17 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	if kind == "" {
 		kind = "shell"
 	}
+	if kind == "opencode" {
+		if strings.TrimSpace(command) == "" {
+			command = "opencode"
+		}
+		if err := agent.ValidateOpenCodeCommand(command); err != nil {
+			return api.Session{}, err
+		}
+	}
 	customTitle := strings.TrimSpace(title)
 	defaultTitle := map[string]string{
-		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "trae": "Trae",
+		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "trae": "Trae",
 	}[kind]
 	if defaultTitle == "" {
 		fields := strings.Fields(command)
@@ -2235,6 +2261,11 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	// inside a plain shell is bound to the same Warren session by its own
 	// lifecycle hooks.
 	env := s.sessionEnvironment(id, kind)
+	// Capture the Warren creation time before launching the provider. OpenCode
+	// creates its SQLite session during process startup, so recording the time
+	// afterwards can make a valid first session look older than Warren's
+	// discovery lower bound.
+	sessionCreatedAt := time.Now().UTC()
 	runtimeStartedAt := time.Now()
 	if err := adapter.Create(ctx, runtimeName, workingDirectory, command, env); err != nil {
 		return api.Session{}, err
@@ -2252,7 +2283,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		Runtime:         runtimeName,
 		RuntimeKind:     sessionKind,
 		Lifecycle:       "running",
-		CreatedAt:       time.Now().UTC(),
+		CreatedAt:       sessionCreatedAt,
 	}
 	if groupID != "" {
 		session.Scope = api.SessionScopeTerminalGroup
@@ -2432,12 +2463,27 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 		// surface as failures.
 		return nil
 	}
+	var releaseOpenCodeBinding func()
+	if session.Kind == "opencode" {
+		// Serialize deletion with provider-session discovery so a concurrent
+		// reconcile cannot persist a binding or restart a tailer after this
+		// Warren session has been removed.
+		s.openCodeBindingMu.Lock()
+		releaseOpenCodeBinding = s.openCodeBindingMu.Unlock
+		defer releaseOpenCodeBinding()
+	}
 	// Only explicit Close Tab / Terminate Session reaches kill-session.
 	adapter := s.runtimeFor(*session)
 	if err := adapter.Kill(ctx, session.Runtime); err != nil {
 		return err
 	}
 	s.stopOutput(id, true)
+	if session.Kind == "opencode" {
+		// OpenCode's projection cache is retained across a daemon restart, but
+		// an explicitly deleted Warren session must not leave its conversation
+		// snapshot behind indefinitely.
+		_ = agent.RemoveOpenCodeCache(session.TranscriptPath)
+	}
 	agent.RemoveBinding(id)
 	return s.Store.Update(func(value *api.State) error {
 		value.Sessions = filter(value.Sessions, func(item api.Session) bool { return item.ID != id })
@@ -2688,11 +2734,20 @@ func (s *Service) UndoSessionMove(operationID string) (api.Session, error) {
 func (s *Service) removeWorkspaceRuntime(ctx context.Context, state api.State, workspaceID string) error {
 	for _, session := range state.Sessions {
 		if session.WorkspaceID == workspaceID {
+			if session.Kind == "opencode" {
+				s.openCodeBindingMu.Lock()
+			}
 			if adapter := s.runtimeFor(session); adapter != nil {
 				_ = adapter.Kill(ctx, session.Runtime)
 			}
 			s.stopOutput(session.ID, true)
+			if session.Kind == "opencode" {
+				_ = agent.RemoveOpenCodeCache(session.TranscriptPath)
+			}
 			agent.RemoveBinding(session.ID)
+			if session.Kind == "opencode" {
+				s.openCodeBindingMu.Unlock()
+			}
 		}
 	}
 	return nil
@@ -2703,11 +2758,20 @@ func (s *Service) removeTerminalGroupRuntimes(ctx context.Context, state api.Sta
 		if session.TerminalGroupID != groupID || session.Lifecycle != "running" {
 			continue
 		}
+		if session.Kind == "opencode" {
+			s.openCodeBindingMu.Lock()
+		}
 		if adapter := s.runtimeFor(session); adapter != nil {
 			_ = adapter.Kill(ctx, session.Runtime)
 		}
 		s.stopOutput(session.ID, true)
+		if session.Kind == "opencode" {
+			_ = agent.RemoveOpenCodeCache(session.TranscriptPath)
+		}
 		agent.RemoveBinding(session.ID)
+		if session.Kind == "opencode" {
+			s.openCodeBindingMu.Unlock()
+		}
 	}
 }
 
@@ -3093,13 +3157,17 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 // running sessions. A deep Store snapshot is intentionally expensive, so the
 // lifecycle loop must not take one for every session it inspects.
 func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
-	dedicated := session.Kind == "codex" || session.Kind == "claude"
+	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
 		return nil, nil
 	}
 	if dedicated && s.AgentFinder == nil {
 		return nil, nil
+	}
+	if session.Kind == "opencode" {
+		s.openCodeBindingMu.Lock()
+		defer s.openCodeBindingMu.Unlock()
 	}
 
 	workspacePath, pathErr := sessionWorkingDirectory(
@@ -3115,6 +3183,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 	provider := session.Kind
 	agentSessionID := session.AgentSessionID
 	transcriptPath := ""
+	var opencodeBinding *agent.OpenCodeBinding
 	if dedicated {
 		s.lazyInit()
 
@@ -3122,9 +3191,52 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		// Codex starts a fresh rollout after `/clear`, so the SessionStart
 		// hook can report a new session id and transcript path while the
 		// daemon is still projecting the old file.
-		transcriptPath = s.boundTranscript(session, workspacePath)
-		if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
-			agentSessionID = binding.SessionID
+		if session.Kind == "opencode" {
+			finder, ok := s.AgentFinder.(agent.BindingFinder)
+			if !ok {
+				return nil, nil
+			}
+			var err error
+			if session.AgentSessionID != "" {
+				opencodeBinding, err = finder.FindBindingBySessionID(ctx, session.ID, workspacePath, session.AgentSessionID)
+				if err == nil && opencodeBinding == nil {
+					// A live projection means the provider was already running in
+					// this Warren process. If its row disappears while that process
+					// is still alive, allow discovery to pick up an intentional CLI
+					// restart; after a daemon restart there is no such signal, so a
+					// missing durable ID remains unbound instead of guessing.
+					s.agentsMu.Lock()
+					entry := s.agents[session.ID]
+					hasLiveProjection := entry != nil && entry.watcher != nil
+					s.agentsMu.Unlock()
+					if hasLiveProjection {
+						opencodeBinding, err = s.findOpenCodeBinding(ctx, finder, session.ID, workspacePath, session.CreatedAt)
+					}
+				}
+			} else {
+				opencodeBinding, err = s.findOpenCodeBinding(ctx, finder, session.ID, workspacePath, session.CreatedAt)
+			}
+			if err != nil || opencodeBinding == nil || !opencodeBinding.Valid() {
+				return nil, nil
+			}
+			if opencodeBinding.CachePath == "" {
+				opencodeBinding.CachePath = agent.OpenCodeCachePath(session.ID, opencodeBinding.SessionID)
+			}
+			// Re-read the durable state after taking the binding lock. The caller's
+			// reconciliation snapshot may predate another concurrent ensure call.
+			if s.openCodeBindingTakenByOtherInState(s.Store.Snapshot(), opencodeBinding.SessionID, session.ID) {
+				// A provider conversation cannot safely be assigned to two Warren
+				// tabs. Leave this tab unbound until an explicit binding is available
+				// instead of leaking another tab's transcript into it.
+				return nil, nil
+			}
+			agentSessionID = opencodeBinding.SessionID
+			transcriptPath = opencodeBinding.CachePath
+		} else {
+			transcriptPath = s.boundTranscript(session, workspacePath)
+			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
+				agentSessionID = binding.SessionID
+			}
 		}
 
 		s.agentsMu.Lock()
@@ -3133,12 +3245,13 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			entry = &agentSession{}
 			s.agents[session.ID] = entry
 		}
-		if entry.watcher != nil {
+		existingWatcher := entry.watcher
+		if existingWatcher != nil && (session.Kind != "opencode" || entry.tailer != nil) {
 			s.agentsMu.Unlock()
-			if transcriptPath != "" && entry.watcher.Path() != transcriptPath {
+			if transcriptPath != "" && existingWatcher.Path() != transcriptPath {
 				// Re-bind to the CLI's new transcript; startAgentWatcher
 				// resets the stale projection before switching files.
-				entry = s.startAgentWatcher(session.ID, provider, transcriptPath, false)
+				entry = s.startAgentWatcher(session.ID, provider, transcriptPath, false, opencodeBinding)
 				s.persistAgentMetaWithState(state, session.ID, agentSessionID, transcriptPath)
 				return entry, nil
 			}
@@ -3183,7 +3296,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		transcriptPath = binding.TranscriptPath
 	}
 
-	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated)
+	entry := s.startAgentWatcher(session.ID, provider, transcriptPath, !dedicated, opencodeBinding)
 	s.persistAgentMetaWithState(state, session.ID, agentSessionID, transcriptPath)
 	return entry, nil
 }
@@ -3191,12 +3304,13 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 // startAgentWatcher starts (or reuses) the transcript watcher for one
 // session. For shell overlays the ready state is seeded immediately so the
 // roster shows a live agent even before the first transcript event arrives.
-func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, seedReady bool) *agentSession {
+func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, seedReady bool, opencodeBinding *agent.OpenCodeBinding) *agentSession {
 	s.lazyInit()
 	s.agentsMu.Lock()
 	existing := s.agents[sessionID]
 	state, _ := agent.ReadAgentStatus(agent.StatePath(sessionID))
-	if existing != nil && existing.watcher != nil && existing.watcher.Path() == transcriptPath {
+	if existing != nil && existing.watcher != nil && existing.watcher.Path() == transcriptPath &&
+		(provider != "opencode" || existing.tailer != nil) {
 		if seedReady && state.Activity != api.AgentActivityExited {
 			existing.mu.Lock()
 			if existing.status.Activity == api.AgentActivityExited {
@@ -3209,9 +3323,12 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	}
 	rebinding := existing != nil && existing.watcher != nil
 	var closing *agent.Watcher
+	var closingTailer *agent.OpenCodeTailer
 	if rebinding {
 		closing = existing.watcher
+		closingTailer = existing.tailer
 		existing.watcher = nil
+		existing.tailer = nil
 		existing.mu.Lock()
 		existing.events = nil
 		existing.status = api.AgentStatus{}
@@ -3246,6 +3363,30 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		s.bumpAgentEpoch()
 		s.broadcastAgentReset(sessionID)
 	}
+	var tailer *agent.OpenCodeTailer
+	if provider == "opencode" {
+		if opencodeBinding == nil {
+			if closing != nil {
+				closing.Close()
+			}
+			if closingTailer != nil {
+				closingTailer.Close()
+			}
+			return existing
+		}
+		var err error
+		tailer, err = agent.StartOpenCodeSessionTailer(*opencodeBinding)
+		if err != nil {
+			s.logWarn("start OpenCode tailer", "session", sessionID, "error", err)
+			if closing != nil {
+				closing.Close()
+			}
+			if closingTailer != nil {
+				closingTailer.Close()
+			}
+			return existing
+		}
+	}
 	watcher := agent.Start(
 		sessionID,
 		provider,
@@ -3264,16 +3405,26 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	current := s.agents[sessionID]
 	if current == nil || current.watcher != nil {
 		s.agentsMu.Unlock()
+		if tailer != nil {
+			tailer.Close()
+		}
 		if closing != nil {
 			closing.Close()
+		}
+		if closingTailer != nil {
+			closingTailer.Close()
 		}
 		watcher.Close()
 		return current
 	}
 	current.watcher = watcher
+	current.tailer = tailer
 	s.agentsMu.Unlock()
 	if closing != nil {
 		closing.Close()
+	}
+	if closingTailer != nil {
+		closingTailer.Close()
 	}
 	return current
 }
@@ -3322,6 +3473,50 @@ func (s *Service) clearShellAgentWithState(session api.Session, state *api.State
 // session already projects must never be stolen.
 func (s *Service) transcriptTakenByOther(transcriptPath, sessionID string) bool {
 	return s.transcriptTakenByOtherInState(s.Store.Snapshot(), transcriptPath, sessionID)
+}
+
+func (s *Service) openCodeBindingTakenByOtherInState(state api.State, openCodeSessionID, sessionID string) bool {
+	for _, other := range state.Sessions {
+		if other.ID != sessionID && other.Lifecycle == "running" && other.Kind == "opencode" && other.AgentSessionID == openCodeSessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// findOpenCodeBinding chooses the first provider conversation that is not
+// already claimed by another running Warren session. DefaultFinder exposes all
+// matching rows so concurrent launches in one workspace can make progress;
+// third-party finders retain the original single-binding behavior.
+func (s *Service) findOpenCodeBinding(
+	ctx context.Context,
+	finder agent.BindingFinder,
+	warrenSessionID, workspacePath string,
+	after time.Time,
+) (*agent.OpenCodeBinding, error) {
+	if candidatesFinder, ok := finder.(agent.BindingCandidatesFinder); ok {
+		candidates, err := candidatesFinder.FindBindings(ctx, warrenSessionID, "opencode", workspacePath, after)
+		if err != nil {
+			return nil, err
+		}
+		state := s.Store.Snapshot()
+		for _, candidate := range candidates {
+			if candidate == nil || !candidate.Valid() || s.openCodeBindingTakenByOtherInState(state, candidate.SessionID, warrenSessionID) {
+				continue
+			}
+			return candidate, nil
+		}
+		return nil, nil
+	}
+
+	binding, err := finder.FindBinding(ctx, warrenSessionID, "opencode", workspacePath, after)
+	if err != nil || binding == nil || !binding.Valid() {
+		return binding, err
+	}
+	if s.openCodeBindingTakenByOtherInState(s.Store.Snapshot(), binding.SessionID, warrenSessionID) {
+		return nil, nil
+	}
+	return binding, nil
 }
 
 func (s *Service) transcriptTakenByOtherInState(state api.State, transcriptPath, sessionID string) bool {
@@ -3560,7 +3755,7 @@ func (s *Service) agentTranscriptChunk(
 	if !ok {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session not found: %s", sessionID)
 	}
-	if session.Kind != "codex" && session.Kind != "claude" && session.AgentSessionID == "" {
+	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.AgentSessionID == "" {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session is not bound to an agent: %s", sessionID)
 	}
 	if session.TranscriptPath == "" && session.Lifecycle == "running" {
@@ -3743,9 +3938,18 @@ func (s *Service) stopAgent(sessionID string) {
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	delete(s.agents, sessionID)
+	var watcher *agent.Watcher
+	var tailer *agent.OpenCodeTailer
+	if entry != nil {
+		watcher = entry.watcher
+		tailer = entry.tailer
+	}
 	s.agentsMu.Unlock()
-	if entry != nil && entry.watcher != nil {
-		entry.watcher.Close()
+	if watcher != nil {
+		watcher.Close()
+	}
+	if tailer != nil {
+		tailer.Close()
 	}
 }
 

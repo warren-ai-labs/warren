@@ -16,7 +16,8 @@ warren-headless
 ├── Project / Workspace / Session authority
 ├── atomic JSON state store
 ├── Git worktree adapter
-└── Ghostline runtime adapter
+├── Ghostline runtime adapter
+└── read-only agent projection (Codex / Claude / OpenCode)
 ```
 
 SSH is not a Warren business protocol. `warren ssh` only starts the remote daemon, reads the token, and establishes loopback port forwarding. Once connected, Desktop and CLI use the same WebSocket API.
@@ -83,3 +84,18 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - Desktop discovers servers from the CLI config file and refreshes the endpoint catalog in the background, so CLI changes appear without restarting.
 - Remote Project paths must be added through the CLI; the Desktop file picker only applies to Local.
 - SSH auto-start requires `warren-headless` and `openssl` to be installed on the remote host.
+
+## Agent Projection Boundary
+
+Agent activity is a best-effort side channel; the runtime PTY remains the source
+of truth. Codex and Claude are tailed from their JSONL transcripts. OpenCode is
+read from its current SQLite store (`opencode.db`) with `mode=ro` and `PRAGMA
+query_only`; older storage formats are intentionally out of scope.
+The daemon binds one OpenCode session ID to one Warren session and persists the
+binding in the Host roster. It mirrors mutable provider rows into a Warren-owned
+JSONL cache, compacts that cache to the latest snapshot per message at bounded
+line/byte thresholds, and detects atomic cache replacement before resuming a
+watch offset. The cache is retained across daemon restarts and removed only on
+explicit Warren session deletion. A missing database, incomplete provider
+transaction, or schema mismatch never invalidates the terminal session; it only
+pauses structured Agent updates.

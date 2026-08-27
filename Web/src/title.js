@@ -24,6 +24,7 @@ const shellProcessNames = new Set([
 const kindLabels = {
   claude: "claude",
   codex: "codex",
+  opencode: "opencode",
   trae: "trae",
   custom: "Custom",
 };
@@ -117,7 +118,7 @@ function tabPurpose(session = {}) {
 
   // Integrated Codex/Claude sessions keep their stable launch kind even when
   // the foreground process is a shell or another implementation detail.
-  if (kind === "claude" || kind === "codex") {
+  if (kind === "claude" || kind === "codex" || kind === "opencode") {
     return kindLabels[kind];
   }
   if (process && !shellProcessNames.has(process)) return process;
