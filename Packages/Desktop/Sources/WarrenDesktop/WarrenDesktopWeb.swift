@@ -127,10 +127,15 @@ struct WarrenDesktopWebAddress: Identifiable, Hashable, Sendable {
 /// Keeps link selection separate from the SwiftUI layout so every reported
 /// address remains visible and duplicate local/LAN links do not waste space.
 enum WarrenDesktopWebAddressPresentation {
-    static func addresses(for status: WarrenDesktopWebStatus) -> [WarrenDesktopWebAddress] {
+    static func addresses(
+        for status: WarrenDesktopWebStatus,
+        includeLocalURL: Bool = true
+    ) -> [WarrenDesktopWebAddress] {
         var addresses: [WarrenDesktopWebAddress] = []
 
-        append(.local, url: status.localURL, to: &addresses)
+        if includeLocalURL {
+            append(.local, url: status.localURL, to: &addresses)
+        }
         append(.lan, url: status.lanURL, to: &addresses)
         append(.publicAccess, url: status.secureURL, to: &addresses)
 
@@ -150,6 +155,7 @@ enum WarrenDesktopWebAddressPresentation {
 public struct WarrenDesktopWebPanel: View {
     public let status: WarrenDesktopWebStatus
     public let canControl: Bool
+    public let canCopyLocalWebURL: Bool
     @available(*, deprecated, message: "Use canControl for Public Access controls.")
     public var canShare: Bool { canControl }
     public let onStart: () -> Void
@@ -168,6 +174,7 @@ public struct WarrenDesktopWebPanel: View {
     public init(
         status: WarrenDesktopWebStatus,
         canControl: Bool = true,
+        canCopyLocalWebURL: Bool = true,
         onStart: @escaping () -> Void,
         onEnable: ((String, String, String) -> Void)? = nil,
         onOpenSettings: (() -> Void)? = nil,
@@ -178,6 +185,7 @@ public struct WarrenDesktopWebPanel: View {
     ) {
         self.status = status
         self.canControl = canControl
+        self.canCopyLocalWebURL = canCopyLocalWebURL
         self.onStart = onStart
         self.onEnable = onEnable
         self.onOpenSettings = onOpenSettings
@@ -211,7 +219,7 @@ public struct WarrenDesktopWebPanel: View {
 
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let addresses = WarrenDesktopWebAddressPresentation.addresses(for: status)
+        let addresses = presentedAddresses
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens, showsDismiss: true, showsTitle: true)
             WarrenDesktopChromeDivider()
@@ -227,7 +235,7 @@ public struct WarrenDesktopWebPanel: View {
     @ViewBuilder
     var inlineContent: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let addresses = WarrenDesktopWebAddressPresentation.addresses(for: status)
+        let addresses = presentedAddresses
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens, showsDismiss: false, showsTitle: false)
             WarrenDesktopChromeDivider()
@@ -282,6 +290,13 @@ public struct WarrenDesktopWebPanel: View {
         } else {
             content(addresses: addresses, tokens: tokens)
         }
+    }
+
+    private var presentedAddresses: [WarrenDesktopWebAddress] {
+        WarrenDesktopWebAddressPresentation.addresses(
+            for: status,
+            includeLocalURL: canCopyLocalWebURL
+        )
     }
 
     private func content(

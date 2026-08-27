@@ -154,9 +154,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             endpointCount: endpointOptions.count
         )
         self.selectedEndpointID = selectedEndpointID
-        self.endpointCapabilities = endpointCapabilities
+        let resolvedEndpointCapabilities = endpointCapabilities
             ?? endpointOptions.first(where: { $0.id == selectedEndpointID })?.capabilities
             ?? (selectedEndpointID == "local" ? .local : .remote)
+        self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
         self.actions = actions
         self.terminalSurface = terminalSurface
@@ -173,6 +174,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.autoStartAI = autoStartAI
         self.onSetAutoStartAI = onSetAutoStartAI
         self.embeddedEditorAvailable = embeddedEditorAvailable
+            && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
@@ -229,36 +231,36 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             sessionMoveTargets: sessionMoveTargets,
             sessionMoveDestinations: sessionMoveDestinations
         )
+        let sidebarView = WarrenDesktopSidebar(
+            projection: projection,
+            sidebarState: $sidebarState,
+            sidebarTree: $sidebarTree,
+            selection: navigation.selection,
+            chromeMode: chromeMode,
+            updateStatus: updateStatus,
+            onUpdateAction: onUpdateAction,
+            deletingProjectIDs: deletingProjectIDs,
+            deletingWorkspaceIDs: deletingWorkspaceIDs,
+            endpointCapabilities: endpointCapabilities,
+            onAction: dispatch,
+            onCommandPalette: presentCommandPalette,
+            onRequestRename: presentRename,
+            onRequestDeletion: presentDeletion,
+            onRequestTerminalGroupCreate: presentTerminalGroupCreate,
+            onRequestTerminalGroupEdit: presentTerminalGroupEdit
+        )
+        .frame(width: sidebarState.renderedWidth)
+        let workspaceColumn = makeWorkspaceColumn(
+            presentation: presentation,
+            tabBarView: tabBarView,
+            contentMode: contentMode,
+            isAddingSession: isAddingSession
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                WarrenDesktopSidebar(
-                    projection: projection,
-                    sidebarState: $sidebarState,
-                    sidebarTree: $sidebarTree,
-                    selection: navigation.selection,
-                    chromeMode: chromeMode,
-                    updateStatus: updateStatus,
-                    onUpdateAction: onUpdateAction,
-                    deletingProjectIDs: deletingProjectIDs,
-                    deletingWorkspaceIDs: deletingWorkspaceIDs,
-                    endpointCapabilities: endpointCapabilities,
-                    onAction: dispatch,
-                    onCommandPalette: presentCommandPalette,
-                    onRequestRename: presentRename,
-                    onRequestDeletion: presentDeletion,
-                    onRequestTerminalGroupCreate: presentTerminalGroupCreate,
-                    onRequestTerminalGroupEdit: presentTerminalGroupEdit
-                )
-                .frame(width: sidebarState.renderedWidth)
-
-                makeWorkspaceColumn(
-                    presentation: presentation,
-                    tabBarView: tabBarView,
-                    contentMode: contentMode,
-                    isAddingSession: isAddingSession
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
+                sidebarView
+                workspaceColumn
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(settingsPresented ? 0 : 1)
@@ -303,6 +305,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     scope: newEndpointID
                 )
                 : [:]
+            if !endpointCapabilities.canOpenExternalIDE {
+                chromePopover = nil
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
@@ -410,7 +415,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private var externalIDEOptions: [WarrenDesktopExternalIDEOption]? {
         guard endpointCapabilities.canOpenExternalIDE else { return nil }
-        makePresentation().workspace.map { workspace in
+        return makePresentation().workspace.map { workspace in
             externalIDEService.options(
                 for: workspace,
                 isLocalEndpoint: selectedEndpointIsLocal
@@ -843,6 +848,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func openInExternalIDE(_ option: WarrenDesktopExternalIDEOption) {
+        guard endpointCapabilities.canOpenExternalIDE else { return }
         Task {
             do {
                 try await externalIDEService.open(option)

@@ -48,6 +48,25 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertEqual(addresses.map(\.url), [publicURL])
     }
 
+    func testAddressPresentationCanHideTheClientLocalURLForRemoteEndpoints() throws {
+        let localURL = try XCTUnwrap(URL(string: "http://127.0.0.1:8789/#t=local"))
+        let lanURL = try XCTUnwrap(URL(string: "http://192.168.1.23:8789/#t=lan"))
+        let publicURL = try XCTUnwrap(URL(string: "https://warren.example/#t=public"))
+
+        let addresses = WarrenDesktopWebAddressPresentation.addresses(
+            for: .init(
+                isRunning: true,
+                localURL: localURL,
+                lanURL: lanURL,
+                secureURL: publicURL
+            ),
+            includeLocalURL: false
+        )
+
+        XCTAssertEqual(addresses.map(\.kind), [.lan, .publicAccess])
+        XCTAssertEqual(addresses.map(\.url), [lanURL, publicURL])
+    }
+
     func testWebPopoverUsesCompactDocumentedWidth() {
         XCTAssertEqual(WarrenLayoutMetrics.webPopoverWidth, 288)
         XCTAssertLessThan(WarrenLayoutMetrics.webPopoverWidth, 340)

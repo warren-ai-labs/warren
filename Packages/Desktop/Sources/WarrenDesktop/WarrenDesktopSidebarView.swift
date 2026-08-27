@@ -12,13 +12,13 @@ struct WarrenDesktopSidebar: View {
     let onUpdateAction: () -> Void
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
+    let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let onAction: (WarrenDesktopAction) -> Void
     let onCommandPalette: () -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
     let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
-    let endpointCapabilities: WarrenDesktopEndpointCapabilities
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
