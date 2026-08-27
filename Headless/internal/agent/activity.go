@@ -58,7 +58,11 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	case "tool_call":
 		t.toolStarted(event.Timestamp)
 	case "tool_output":
-		t.toolFinished(event.ToolStatus == "error")
+		failed := event.ToolStatus == "error"
+		t.toolFinished(failed)
+		if !failed && event.StopReason == "stop" {
+			t.TurnComplete()
+		}
 	case "error":
 		t.TurnFailed()
 	case "assistant":
