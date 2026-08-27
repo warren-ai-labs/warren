@@ -122,8 +122,10 @@ public struct TerminalSurfaceManagerSnapshot: Equatable, Sendable {
 @MainActor
 public final class TerminalSurfaceManager {
     private enum RecoveryPresentationPhase: String {
-        /// Recovery bytes may be installed, but the display link and all
-        /// presentation requests remain disabled.
+        /// Recovery bytes may be installed, but user-visible presentation
+        /// remains disabled. The renderer may continue behind a transparent
+        /// view so queued output can make progress without leaking a partial
+        /// frame to the user.
         case recovering
         /// The atomic recovery boundary has arrived. Drawing and presenting
         /// are allowed through the single `schedulePresent` path.
@@ -394,18 +396,24 @@ public final class TerminalSurfaceManager {
         entry.recoveryPhase = .recovering
         cancelPresentation(for: entry)
         setDisplayVisible(false, for: entry)
+        // Keep the native renderer alive while the recovery stream is being
+        // staged, but hide its pixels until the matching `synced` boundary.
+        // `setDisplayVisible(false)` intentionally stops the coordinator's
+        // wakeups; enabling it again here lets Ghostty consume queued output
+        // without exposing a partially restored frame.
+        prepareHiddenRendering(for: entry)
     }
 
     public func endRecovery(for sessionID: TerminalSessionID) {
         guard let entry = entries[sessionID] else { return }
         entry.recoveryPhase = .ready
         if policy.activeSessionID == sessionID {
-            // Keep the Ghostty display link hidden until schedulePresent has
-            // observed that the restored state and every queued live byte have
-            // reached the native surface. Revealing it here would expose a
-            // warm-up backlog as a visible fast-forward when a busy session is
-            // promoted.
+            // Keep the pixels hidden until schedulePresent has observed that
+            // the restored state and the target live bytes have reached the
+            // native surface. The renderer itself stays enabled so a hidden
+            // promotion cannot wait on its own display wakeup.
             setDisplayVisible(false, for: entry)
+            prepareHiddenRendering(for: entry)
             schedulePresent(entry, generation: entry.transitionGeneration)
         } else {
             // The remote marker can arrive before the AppKit reconciliation
@@ -548,6 +556,7 @@ public final class TerminalSurfaceManager {
         cancelPresentation(for: entry)
         if !preserveDisplay {
             setDisplayVisible(false, for: entry)
+            entry.view.alphaValue = 0
             entry.view.isHidden = true
         }
         if entry.view.superview !== host {
@@ -593,13 +602,16 @@ public final class TerminalSurfaceManager {
                 return
             }
             entry.view.isHidden = false
+            entry.view.alphaValue = preserveDisplay ? 1 : 0
             if !preserveDisplay {
                 // A warm surface can have accumulated more output than
-                // Ghostty has rendered while it was parked. Keep its display
-                // occluded until schedulePresent observes the writer caught
-                // up; otherwise tab promotion visibly fast-forwards through
-                // that backlog.
+                // Ghostty has rendered while it was parked. Keep its pixels
+                // transparent until schedulePresent observes the writer
+                // caught up; otherwise tab promotion visibly fast-forwards
+                // through that backlog. The native renderer remains enabled
+                // behind the transparent view so the queue can make progress.
                 self.setDisplayVisible(false, for: entry)
+                self.prepareHiddenRendering(for: entry)
             }
             entry.view.fitToSize()
             entry.surface.resyncIfNeeded()
@@ -620,6 +632,7 @@ public final class TerminalSurfaceManager {
             entry.view.window?.makeFirstResponder(nil)
         }
         setDisplayVisible(false, for: entry)
+        entry.view.alphaValue = 0
         entry.view.isHidden = true
         entry.view.removeFromSuperview()
         onBlurred(sessionID)
@@ -634,6 +647,7 @@ public final class TerminalSurfaceManager {
             entry.view.window?.makeFirstResponder(nil)
         }
         setDisplayVisible(false, for: entry)
+        entry.view.alphaValue = 0
         entry.view.isHidden = true
         entry.view.removeFromSuperview()
         entry.surface.mountedTerminalView = nil
@@ -672,10 +686,18 @@ public final class TerminalSurfaceManager {
         let presentationGeneration = entry.presentationGeneration
         let targetEpoch = entry.surface.outputWriter.bufferEpoch
         let targetSequence = entry.surface.outputWriter.enqueuedSequence
+        if !entry.displayVisible {
+            // A mounted surface can be transparent during a cold recovery or
+            // warm promotion. Keep its display wakeups running while the
+            // target bytes drain; only the alpha transition below makes the
+            // settled frame user-visible.
+            prepareHiddenRendering(for: entry)
+        }
         entry.presentationTask = Task { @MainActor [weak self, weak entry] in
             guard let self, let entry else { return }
             let stallDeadline = ContinuousClock.now.advanced(by: .seconds(2))
             var extendedWaitLogged = false
+            var timeoutLogged = false
             defer {
                 if entry.presentationGeneration == presentationGeneration {
                     entry.presentationTask = nil
@@ -694,29 +716,32 @@ public final class TerminalSurfaceManager {
                     return
                 }
 
-                // The initial target is only a lower bound. A warm surface's
-                // writer may still be draining bytes that arrived while its
-                // view was parked, and new live output can extend that queue
-                // while we wait. Present only after the current queue endpoint
-                // has been rendered so promotion cannot reveal a fast-forward
-                // replay of the hidden interval.
-                let currentEpoch = entry.surface.outputWriter.bufferEpoch ?? targetEpoch
-                let currentSequence = max(
-                    targetSequence,
-                    entry.surface.outputWriter.enqueuedSequence
-                )
                 let outputReady = outputHasReached(
                     entry.surface,
-                    targetEpoch: currentEpoch,
-                    targetSequence: currentSequence
+                    targetEpoch: targetEpoch,
+                    targetSequence: targetSequence
                 )
                 let viewReady = entry.surface.terminalViewIsPresentable
-                if outputReady, viewReady, entry.surface.terminalSurfaceIsReady {
+                let timedOut = ContinuousClock.now >= stallDeadline
+                if (outputReady || timedOut), viewReady, entry.surface.terminalSurfaceIsReady {
+                    if timedOut, !outputReady, !timeoutLogged {
+                        timeoutLogged = true
+                        TerminalDiagnostics.log("present_wait_timeout", [
+                            "session": sessionID.description,
+                            "targetEpoch": targetEpoch.map { String($0) } ?? "nil",
+                            "targetSequence": String(targetSequence),
+                            "renderedEpoch": String(entry.surface.renderedEpoch),
+                            "renderedSequence": String(entry.surface.renderedSequence),
+                            "enqueuedSequence": String(entry.surface.outputWriter.enqueuedSequence),
+                        ])
+                    }
                     entry.surface.requestDisplayRefresh()
                     if entry.surface.presentNow() {
-                        // Draw once while occluded, then reveal the already
-                        // caught-up frame. A second tick covers renderers that
-                        // defer their first draw until occlusion is lifted.
+                        // Draw once while transparent, then reveal the frame.
+                        // A second tick covers renderers that defer their first
+                        // draw until the view becomes composited.
+                        entry.view.isHidden = false
+                        entry.view.alphaValue = 1
                         setDisplayVisible(true, for: entry)
                         entry.surface.requestDisplayRefresh()
                         _ = entry.surface.presentNow()
@@ -770,6 +795,18 @@ public final class TerminalSurfaceManager {
     private func setDisplayVisible(_ visible: Bool, for entry: Entry) {
         entry.displayVisible = visible
         entry.view.setSurfaceVisible(visible)
+    }
+
+    /// Enables Ghostty's wakeups for a surface whose pixels are still hidden
+    /// behind a transparent AppKit view. This is deliberately separate from
+    /// `displayVisible`: a promotion must render its queued bytes before it is
+    /// allowed to become visible, otherwise the user sees a fast-forward or a
+    /// permanently black pane when Ghostty is occluded.
+    private func prepareHiddenRendering(for entry: Entry) {
+        guard entry.view.superview != nil, entry.view.window != nil else { return }
+        entry.view.isHidden = false
+        entry.view.alphaValue = 0
+        entry.view.setSurfaceVisible(true)
     }
 
     private func outputHasReached(
