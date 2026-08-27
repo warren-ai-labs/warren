@@ -152,7 +152,7 @@ final class WarrenDomainTests: XCTestCase {
 
         XCTAssertEqual(
             TerminalDisplayTitleTemplate.defaultValue.render(context),
-            "claude — warren"
+            "warren · main · /Users/me/Workspace/warren"
         )
         XCTAssertEqual(
             TerminalDisplayTitleTemplate(
