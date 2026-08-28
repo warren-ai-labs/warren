@@ -86,7 +86,7 @@ export default function TerminalDemo() {
 
     async function boot() {
       const lines = [
-        `${dim}warren-headless${reset} v0.11.0 ${dim}(ghostline v1.0.0 runtime)${reset}`,
+        `${dim}warren-headless${reset} v0.11.1 ${dim}(ghostline v1.0.0 runtime)${reset}`,
         `${dim}host${reset} ${cyan}mac-studio${reset} ${dim}· ws://127.0.0.1:8789${reset}`,
         `${green}✓${reset} ${dim}restored${reset} ${cyan}warren/dev${reset} ${dim}· survived 2 detaches${reset}`,
         `${dim}terminal${reset} ${cyan}ghostty-wasm${reset} ${dim}· same VT parser as desktop${reset}`,
