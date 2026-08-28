@@ -133,15 +133,21 @@ struct WarrenDesktopSidebarRows: View {
         .onChange(of: groups) { newGroups in
             let oldGroups = previousGroups
             previousGroups = newGroups
-            guard let projectID = selectedProjectID else { return }
-            let oldCount = workspaceCount(for: projectID, in: oldGroups)
-            let newCount = workspaceCount(for: projectID, in: newGroups)
-            guard newCount > oldCount else { return }
-            _ = withAnimation(WarrenMotion.animation(
+            var grownProjectIDs: Set<ProjectID> = []
+            let allProjectIDs = Set(oldGroups.map(\.project.id) + newGroups.map(\.project.id))
+            for projectID in allProjectIDs {
+                let oldCount = workspaceCount(for: projectID, in: oldGroups)
+                let newCount = workspaceCount(for: projectID, in: newGroups)
+                if newCount > oldCount {
+                    grownProjectIDs.insert(projectID)
+                }
+            }
+            guard !grownProjectIDs.isEmpty else { return }
+            withAnimation(WarrenMotion.animation(
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
-                tree.expandedProjectIDs.insert(projectID)
+                tree.expandedProjectIDs.formUnion(grownProjectIDs)
             }
         }
     }

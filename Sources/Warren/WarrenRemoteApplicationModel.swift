@@ -1283,13 +1283,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return min(30_000, 500 * (1 << bounded))
     }
 
-    func createWorkspace(projectID: ProjectID, request creation: WorkspaceCreationRequest) {
+    @discardableResult
+    func createWorkspace(projectID: ProjectID, request creation: WorkspaceCreationRequest) -> Bool {
+        guard wire != nil else {
+            present(NSError(
+                domain: "WarrenRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Not connected to the Warren daemon. Check the menu bar status and try again."]
+            ))
+            return false
+        }
         request("workspace.create", params: [
             "project": projectID.description,
             "branch": creation.branch,
             "name": creation.displayName,
             "path": creation.path,
         ])
+        return true
     }
 
     /// Loads the headless daemon's settings. Runtime selection is a
@@ -2646,7 +2656,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         params: [String: String] = [:],
         onError: (@MainActor (Error) -> Void)? = nil
     ) {
-        guard let wire else { return }
+        guard let wire else {
+            let error = NSError(
+                domain: "WarrenRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Not connected to the Warren daemon. Check the menu bar status and try again."]
+            )
+            if let onError {
+                onError(error)
+            } else {
+                present(error)
+            }
+            return
+        }
         Task { @MainActor [weak self] in
             do { _ = try await wire.request(method, params: params) }
             catch {
