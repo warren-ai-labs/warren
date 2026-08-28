@@ -973,6 +973,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private var wire: WarrenRemoteWire?
     private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
+    private var isLocalEndpoint: Bool {
+        endpointConfiguration?.url.hasPrefix("http://127.0.0.1:8789") == true
+    }
     private var eventTask: Task<Void, Never>?
     private var selectedSessionID: TerminalSessionID?
     private var attachedSessionID: TerminalSessionID?
@@ -3597,7 +3600,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
-        if surfaceManager.surface(for: sessionID) != nil,
+        if !isLocalEndpoint,
+           surfaceManager.surface(for: sessionID) != nil,
            outputSubscriptions.contains(sessionID) {
             await promoteRetainedSession(sessionID)
             return
