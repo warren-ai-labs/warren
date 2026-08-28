@@ -150,6 +150,10 @@ install -m 755 "$repository_root/Support/Raycast/warren-terminal.sh" "$staging_p
 install -m 644 "$repository_root/Assets/Brand/warren-app-icon.png" "$staging_path/Contents/Resources/warren-terminal.png"
 install -m 644 "$repository_root/Assets/Brand/menubar-black-18.png" "$staging_path/Contents/Resources/menubar-template.png"
 install -m 644 "$repository_root/Assets/Brand/menubar-black-36.png" "$staging_path/Contents/Resources/menubar-template@2x.png"
+if [[ -d "$repository_root/Support/terminfo" ]]; then
+    mkdir -p "$staging_path/Contents/Resources/terminfo"
+    cp -R "$repository_root/Support/terminfo/." "$staging_path/Contents/Resources/terminfo/"
+fi
 cp -R \
     "$binary_directory/WarrenDesktop_WarrenDesktop.bundle" \
     "$staging_path/Contents/Resources/WarrenDesktop_WarrenDesktop.bundle"

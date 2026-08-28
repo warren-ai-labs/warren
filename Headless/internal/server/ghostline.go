@@ -37,8 +37,17 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 	// ghostline server; do not pass NO_COLOR= here because presence of an empty
 	// variable still disables colors for Codex.
 	sessionEnv := append([]string(nil), env...)
+	if !hasEnv(sessionEnv, "TERM") || hasEnvValue(sessionEnv, "TERM", "dumb") {
+		sessionEnv = append(sessionEnv, "TERM="+runtime.DefaultTerm)
+	}
 	if !hasEnv(sessionEnv, "COLORTERM") {
 		sessionEnv = append(sessionEnv, "COLORTERM=truecolor")
+	}
+	// Ensure ghostty terminfo is discoverable even without system install.
+	if terminfoDir := runtime.BundledTerminfoDir(); terminfoDir != "" {
+		if !hasEnv(sessionEnv, "TERMINFO") {
+			sessionEnv = append(sessionEnv, "TERMINFO="+terminfoDir)
+		}
 	}
 	session, err := r.client.Start(ctx, ghostline.SessionOptions{
 		Name: name,
@@ -238,6 +247,16 @@ func hasEnv(env []string, key string) bool {
 	prefix := key + "="
 	for _, kv := range env {
 		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnvValue(env []string, key, value string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if kv == prefix+value {
 			return true
 		}
 	}

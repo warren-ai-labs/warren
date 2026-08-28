@@ -2,12 +2,16 @@ package runtime
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 // DefaultTerm is the terminal type Warren uses when the daemon is launched
 // without a usable TERM (agent/CI shells often inherit TERM=dumb).
-const DefaultTerm = "xterm-256color"
+// xterm-ghostty carries Tc (truecolor) and is bundled in Support/terminfo
+// so no external Ghostty install is required.
+const DefaultTerm = "xterm-ghostty"
 
 // SanitizeEnvironment removes launcher-only environment semantics that would
 // make Warren terminal sessions behave like non-interactive pipelines:
@@ -32,9 +36,121 @@ func SanitizeEnvironment() {
 	if strings.TrimSpace(os.Getenv("COLORTERM")) == "" {
 		_ = os.Setenv("COLORTERM", "truecolor")
 	}
+	ensureGhosttyTerminfo()
 }
 
 func pagerDisabled(value string) bool {
 	value = strings.TrimSpace(value)
 	return value == "" || strings.EqualFold(value, "cat")
+}
+
+func ensureGhosttyTerminfo() {
+	if os.Getenv("TERM") != "xterm-ghostty" {
+		return
+	}
+	// If the host already has xterm-ghostty (e.g. Ghostty is installed),
+	// nothing to do.
+	if err := exec.Command("infocmp", "xterm-ghostty").Run(); err == nil {
+		return
+	}
+	// Try to find bundled terminfo and install to ~/.terminfo for the user.
+	candidates := []string{}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "..", "Resources", "terminfo", "78", "xterm-ghostty"))
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "terminfo", "78", "xterm-ghostty"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".warren", "terminfo", "78", "xterm-ghostty"))
+	}
+	// Dev checkout fallback.
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(wd, "Support", "terminfo", "78", "xterm-ghostty"))
+	}
+	var src string
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			src = c
+			break
+		}
+	}
+	if src == "" {
+		// No bundled file found; generate a minimal one from xterm-256color + Tc.
+		generateMinimalGhosttyTerminfo()
+		return
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dst := filepath.Join(home, ".terminfo", "78", "xterm-ghostty")
+		if _, err := os.Stat(dst); err == nil {
+			return
+		}
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		if data, err := os.ReadFile(src); err == nil {
+			_ = os.WriteFile(dst, data, 0644)
+		}
+	}
+}
+
+func generateMinimalGhosttyTerminfo() {
+	// Create a minimal xterm-ghostty that is xterm-256color + Tc via tic.
+	tmpDir, err := os.MkdirTemp("", "warren-terminfo-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+	tiPath := filepath.Join(tmpDir, "xterm-ghostty.ti")
+	content := "xterm-ghostty|xterm-ghostty with truecolor,\n\tuse=xterm-256color,\n\tTc,\n"
+	if err := os.WriteFile(tiPath, []byte(content), 0644); err != nil {
+		return
+	}
+	outDir := filepath.Join(tmpDir, "out")
+	_ = os.MkdirAll(outDir, 0755)
+	if err := exec.Command("tic", "-x", "-o", outDir, tiPath).Run(); err != nil {
+		return
+	}
+	src := filepath.Join(outDir, "78", "xterm-ghostty")
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dst := filepath.Join(home, ".terminfo", "78", "xterm-ghostty")
+		if _, err := os.Stat(dst); err == nil {
+			return
+		}
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		if data, err := os.ReadFile(src); err == nil {
+			_ = os.WriteFile(dst, data, 0644)
+		}
+	}
+}
+
+// BundledTerminfoDir returns the directory that contains the bundled
+// xterm-ghostty terminfo for ghostline children. Empty if not found or not
+// needed (host already has it).
+func BundledTerminfoDir() string {
+	if err := exec.Command("infocmp", "xterm-ghostty").Run(); err == nil {
+		return ""
+	}
+	candidates := []string{}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "..", "Resources", "terminfo"))
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "terminfo"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".warren", "terminfo"))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(wd, "Support", "terminfo"))
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(filepath.Join(c, "78", "xterm-ghostty")); err == nil {
+			return c
+		}
+		if _, err := os.Stat(c); err == nil {
+			// Check if c itself is the terminfo dir containing 78/
+			if _, err := os.Stat(filepath.Join(c, "78")); err == nil {
+				return c
+			}
+		}
+	}
+	return ""
 }
