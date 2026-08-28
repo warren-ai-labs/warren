@@ -1069,6 +1069,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // terminal teardown deadlock, so keep the live connection instead.
             return
         }
+        TerminalDiagnostics.log("remote_connect_begin", ["endpoint": configuration.name, "url": configuration.url])
         disconnect()
         cancelTransientConnectionIssue()
         restorePersistedTabOrders()
@@ -1108,6 +1109,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             || surfaceManager.retainedSurfaceCount > 0 else {
             return
         }
+        let disconnectStart = Date()
+        let prevEndpoint = endpointConfiguration?.name ?? "none"
+        TerminalDiagnostics.log("remote_disconnect_begin", ["endpoint": prevEndpoint, "surfaces": String(surfaceManager.retainedSurfaceCount)])
         eventTask?.cancel()
         eventTask = nil
         endpointConfiguration = nil
@@ -1129,6 +1133,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         resetAttachmentState()
         webStatus = WarrenDesktopWebStatus()
         publishProjectionIfChanged(projection.withConnectionState(.disconnected))
+        let ms = Int(Date().timeIntervalSince(disconnectStart) * 1000)
+        TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
     }
 
     func isConnected(to configuration: WarrenRemoteEndpointConfiguration) -> Bool {
