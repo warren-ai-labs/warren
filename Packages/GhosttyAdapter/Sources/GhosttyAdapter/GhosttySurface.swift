@@ -75,6 +75,9 @@ public final class GhosttySurface: Identifiable {
             builder.withSelectionBackground("#482b20")
             builder.withCursorStyle(.block)
             builder.withCursorStyleBlink(true)
+            // Match xterm.js drawBoldTextInBrightColors: bold uses bright palette.
+            builder.withBoldColor("bright")
+            builder.withCustom("bold-is-bright", "true")
             for (index, color) in TerminalPalette.ember.enumerated() {
                 builder.withPalette(index, color: Self.hex(color))
             }
