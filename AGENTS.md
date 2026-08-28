@@ -1,22 +1,9 @@
-- 使用中文回答；注释、面向用户的文案、文档和提交信息使用英文；
-- 每个提交都加上类型前缀，例如 `feat:`、`fix:`、`refactor:`、`test:` 或 `docs:`；
-- 保持代码可读、职责清晰；为未来扩展设计稳定的边界；
-- 完成代码修改后，运行相关检查并立即提交；
-- 遇到同一个文件多人并发修改时，尽量保留别人的修改并说明；
-- 发布版本前必须遵守 [`RELEASE.md`](RELEASE.md) 中的发布清单和顺序；
-
-## Review Standard
-
-Before submitting or merging a change, review the implementation from all of the following angles:
-
-- **Business intrusiveness**: confirm that the change does not alter existing business behavior, data ownership, or user expectations beyond the stated scope. Call out migrations, compatibility risks, and irreversible effects.
-- **Interaction impact**: verify loading, error, empty, retry, keyboard, accessibility, and responsive states. Check that existing flows remain predictable and that new prompts or defaults do not interrupt normal work.
-- **Performance impact**: consider startup time, steady-state latency, throughput, memory, CPU, I/O, network traffic, and battery usage. Measure or document the reason when a change adds work to a hot path.
-- **Out-of-the-box usability**: ensure a fresh checkout can build, run, and recover with the documented prerequisites and defaults. Avoid hidden credentials, machine-specific paths, manual cleanup, or undocumented setup steps.
-- **Functional coupling**: keep boundaries explicit and dependencies minimal. Check whether the change creates unnecessary coupling between domain logic, UI, storage, transport, or platform code, and preserve a straightforward path for future replacement.
-
-Record any material risk and its mitigation in the change description before requesting review. Do not mark a change ready while any of these dimensions remains unexamined.
-
-## Contribution Identity
-
-Only identifiable individual developers may submit contributions. Do not accept commits or pull requests authored by organizations, bots, shared accounts, or other non-personal identities. Company-domain email addresses are not accepted as contributor identities; ask the contributor to re-submit with a personal, verifiable identity before merging.
+- 注释、面向用户的文案、文档和提交信息使用英文。
+- 修改前先阅读相关实现、测试和文档，确认现有不变量；保持改动聚焦，不擅自扩展需求。
+- 定位问题时沿完整链路寻找根因，优先做最小因果修复，不通过更换协议、绕开原路径或牺牲用户体验来掩盖问题。
+- 涉及 UI、安装包或 TUI 时，必须验证真实运行产物；测试数据变化不能替代真实行为验证。
+- 按改动范围运行相关检查；无法运行时说明原因和未验证风险。
+- 不提交凭据、个人路径、私有主机名或敏感终端输出。
+- 多人修改同一文件时尽量保留已有改动，必要时说明冲突或取舍。
+- 实际产生代码或文档修改后，使用带类型前缀的英文提交信息及时提交，例如 `fix:`、`feat:`、`refactor:`、`test:`、`docs:`，保持提交信息简洁清晰，多次反复试错提交后自觉 squash。
+- 代码审查遵循 [`REVIEW.md`](REVIEW.md)；发布版本遵循 [`RELEASE.md`](RELEASE.md)。
