@@ -72,7 +72,10 @@ struct WarrenCompositionRoot: View {
                     guard let remoteModel else { throw URLError(.cancelled) }
                     return try await remoteModel.gitRequest(method, params: params)
                 }
-            )
+            ),
+            webBaseURLProvider: { [weak remoteModel] in
+                remoteModel?.webStatus.localURL
+            }
         )
         panelRegistry.register(gitPanelModule.contribution)
         self.panelRegistry = panelRegistry

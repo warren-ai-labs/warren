@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -6,9 +7,14 @@ public final class WarrenDesktopGitPanelModule {
     public static let panelID = "git"
 
     public let model: WarrenDesktopGitPanelModel
+    private let webBaseURLProvider: @MainActor () -> URL?
 
-    public init(model: WarrenDesktopGitPanelModel) {
+    public init(
+        model: WarrenDesktopGitPanelModel,
+        webBaseURLProvider: @escaping @MainActor () -> URL? = { nil }
+    ) {
         self.model = model
+        self.webBaseURLProvider = webBaseURLProvider
     }
 
     public lazy var contribution = WarrenDesktopPanelContribution(
@@ -37,9 +43,12 @@ public final class WarrenDesktopGitPanelModule {
                 onClose: { onClose.call() }
             ))
         },
-        centerDetail: { [weak model] _ in
+        centerDetail: { [weak model, webBaseURLProvider] _ in
             guard let model, model.fileView != nil else { return nil }
-            return AnyView(WarrenDesktopGitDiffView(model: model))
+            return AnyView(WarrenDesktopGitDiffView(
+                model: model,
+                webBaseURL: webBaseURLProvider()
+            ))
         },
         centerDetailChanges: model.$fileView
             .removeDuplicates()

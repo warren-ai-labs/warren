@@ -1060,10 +1060,29 @@ private enum WarrenGitDiffMetrics {
 /// The terminal stays mounted underneath while this view replaces its surface.
 public struct WarrenDesktopGitDiffView: View {
     @ObservedObject var model: WarrenDesktopGitPanelModel
+    let webBaseURL: URL?
+
+    @MainActor
+    public init(model: WarrenDesktopGitPanelModel, webBaseURL: URL? = nil) {
+        self.model = model
+        self.webBaseURL = webBaseURL
+    }
+
+    public var body: some View {
+        if let webBaseURL {
+            WarrenDesktopGitDiffWebView(model: model, baseURL: webBaseURL)
+        } else {
+            WarrenDesktopNativeGitDiffView(model: model)
+        }
+    }
+}
+
+private struct WarrenDesktopNativeGitDiffView: View {
+    @ObservedObject var model: WarrenDesktopGitPanelModel
 
     @Environment(\.colorScheme) private var colorScheme
 
-    public init(model: WarrenDesktopGitPanelModel) {
+    init(model: WarrenDesktopGitPanelModel) {
         self.model = model
     }
 
