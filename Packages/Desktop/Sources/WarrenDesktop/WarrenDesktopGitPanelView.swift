@@ -1049,8 +1049,8 @@ private struct WarrenGitActionButtonStyle: ButtonStyle {
 // MARK: - File diff viewer
 
 private enum WarrenGitDiffMetrics {
-    static let lineNumberWidth: CGFloat = 44
-    static let indicatorWidth: CGFloat = 18
+    static let lineNumberWidth: CGFloat = 32
+    static let indicatorWidth: CGFloat = 16
     static let lineHeight: CGFloat = 18
     static let codeFont = Font.system(size: 12, design: .monospaced)
     static let lineNumberFont = Font.system(size: 11, design: .monospaced)
@@ -1155,8 +1155,8 @@ public struct WarrenDesktopGitDiffView: View {
                     .frame(height: WarrenSpacing.hairline)
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                if model.diffViewTab == .diff {
+            if model.diffViewTab == .diff {
+                VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: WarrenSpacing.medium) {
                         WarrenGitDiffStyleButton(
                             title: "Highlight",
@@ -1176,20 +1176,30 @@ public struct WarrenDesktopGitDiffView: View {
 
                     Group {
                         if model.diffStyle == .unified {
-                            WarrenGitUnifiedDiffView(diff: model.fileDiff.diff)
+                            WarrenGitUnifiedDiffView(
+                                diff: model.fileDiff.diff,
+                                path: model.fileView?.path ?? ""
+                            )
                         } else {
-                            WarrenGitSplitDiffView(diff: model.fileDiff.diff)
+                            WarrenGitSplitDiffView(
+                                diff: model.fileDiff.diff,
+                                path: model.fileView?.path ?? ""
+                            )
                         }
                     }
                     .padding(.horizontal, WarrenSpacing.large)
                     .padding(.vertical, WarrenSpacing.medium)
-                } else {
-                    WarrenGitFileContentView(content: model.fileDiff.content)
-                        .padding(.horizontal, WarrenSpacing.large)
-                        .padding(.vertical, WarrenSpacing.medium)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                WarrenGitFileContentView(
+                    content: model.fileDiff.content,
+                    path: model.fileView?.path ?? ""
+                )
+                .padding(.horizontal, WarrenSpacing.large)
+                .padding(.vertical, WarrenSpacing.medium)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1254,6 +1264,7 @@ private struct WarrenGitDiffStyleButton: View {
 
 private struct WarrenGitUnifiedDiffView: View {
     let diff: String
+    let path: String
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1262,24 +1273,29 @@ private struct WarrenGitUnifiedDiffView: View {
         let lines = WarrenDesktopGitDiffParser.parse(diff).filter { $0.kind != .meta }
         GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        HStack(spacing: 0) {
-                            lineNumber(line.oldLine, tokens: tokens)
-                            lineNumber(line.newLine, tokens: tokens)
-                            indicator(for: line.kind, tokens: tokens)
-                            Text(line.text.isEmpty ? " " : line.text)
-                                .font(WarrenGitDiffMetrics.codeFont)
-                                .foregroundStyle(foreground(for: line.kind, tokens: tokens))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.trailing, WarrenSpacing.compact)
-                                .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            HStack(spacing: 0) {
+                                lineNumber(line.oldLine, tokens: tokens)
+                                lineNumber(line.newLine, tokens: tokens)
+                                indicator(for: line.kind, tokens: tokens)
+                                WarrenGitCodeLineView(
+                                    text: line.text.isEmpty ? " " : line.text,
+                                    path: path,
+                                    colorScheme: colorScheme,
+                                    baseColor: foreground(for: line.kind, tokens: tokens),
+                                    highlightsSyntax: line.kind != .hunk
+                                )
+                                    .textSelection(.enabled)
+                            }
+                            .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
+                            .background(background(for: line.kind, tokens: tokens))
                         }
-                        .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
-                        .background(background(for: line.kind, tokens: tokens))
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                 .padding(.vertical, WarrenSpacing.xs)
             }
         }
@@ -1337,6 +1353,7 @@ private struct WarrenGitUnifiedDiffView: View {
 
 private struct WarrenGitSplitDiffView: View {
     let diff: String
+    let path: String
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1345,32 +1362,40 @@ private struct WarrenGitSplitDiffView: View {
         let rows = WarrenGitSplitRow.make(from: WarrenDesktopGitDiffParser.parse(diff))
         GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        if let fullWidth = row.fullWidth {
-                            fullWidthRow(fullWidth, tokens: tokens, viewportWidth: proxy.size.width)
-                        } else {
-                            HStack(spacing: 0) {
-                                side(
-                                    line: row.old,
-                                    tokens: tokens,
-                                    isOld: true,
-                                    minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2
-                                )
-                                Rectangle()
-                                    .fill(tokens.border)
-                                    .frame(width: WarrenSpacing.hairline)
-                                side(
-                                    line: row.new,
-                                    tokens: tokens,
-                                    isOld: false,
-                                    minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2
-                                )
+                VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            if let fullWidth = row.fullWidth {
+                                fullWidthRow(fullWidth, tokens: tokens, viewportWidth: proxy.size.width)
+                            } else {
+                                HStack(spacing: 0) {
+                                    side(
+                                        line: row.old,
+                                        tokens: tokens,
+                                        isOld: true,
+                                        minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2,
+                                        path: path,
+                                        colorScheme: colorScheme
+                                    )
+                                    Rectangle()
+                                        .fill(tokens.border)
+                                        .frame(width: WarrenSpacing.hairline)
+                                    side(
+                                        line: row.new,
+                                        tokens: tokens,
+                                        isOld: false,
+                                        minimumWidth: (proxy.size.width - WarrenSpacing.hairline) / 2,
+                                        path: path,
+                                        colorScheme: colorScheme
+                                    )
+                                }
+                                .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
                             }
-                            .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
                         }
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                 .padding(.vertical, WarrenSpacing.xs)
             }
         }
@@ -1382,7 +1407,9 @@ private struct WarrenGitSplitDiffView: View {
         line: WarrenDesktopGitDiffLine?,
         tokens: WarrenColorTokens,
         isOld: Bool,
-        minimumWidth: CGFloat
+        minimumWidth: CGFloat,
+        path: String,
+        colorScheme: ColorScheme
     ) -> some View {
         HStack(spacing: 0) {
             Text(lineNumber(for: line, isOld: isOld))
@@ -1396,12 +1423,13 @@ private struct WarrenGitSplitDiffView: View {
                 .foregroundStyle(indicatorColor(for: line, tokens: tokens))
                 .frame(width: WarrenGitDiffMetrics.indicatorWidth)
                 .accessibilityHidden(true)
-            Text(line?.text.isEmpty == false ? line?.text ?? "" : " ")
-                .font(WarrenGitDiffMetrics.codeFont)
-                .foregroundStyle(tokens.foreground)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.trailing, WarrenSpacing.compact)
+            WarrenGitCodeLineView(
+                text: line?.text.isEmpty == false ? line?.text ?? "" : " ",
+                path: path,
+                colorScheme: colorScheme,
+                baseColor: tokens.foreground,
+                highlightsSyntax: true
+            )
                 .textSelection(.enabled)
         }
         .frame(minWidth: minimumWidth, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
@@ -1504,8 +1532,142 @@ struct WarrenGitSplitRow {
     }
 }
 
+private struct WarrenGitCodeLineView: View {
+    let text: String
+    let path: String
+    let colorScheme: ColorScheme
+    let baseColor: Color
+    let highlightsSyntax: Bool
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let code = highlightsSyntax
+            ? WarrenGitSyntaxHighlighter.text(text, path: path, tokens: tokens, baseColor: baseColor)
+            : Text(text).foregroundColor(baseColor)
+        code
+            .font(WarrenGitDiffMetrics.codeFont)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.trailing, WarrenSpacing.compact)
+    }
+}
+
+private enum WarrenGitSyntaxHighlighter {
+    private struct Segment {
+        let text: String
+        let color: Color
+    }
+
+    static func text(
+        _ source: String,
+        path: String,
+        tokens: WarrenColorTokens,
+        baseColor: Color
+    ) -> Text {
+        let segments = tokenize(source, path: path, tokens: tokens, baseColor: baseColor)
+        return segments.reduce(Text("") ) { result, segment in
+            result + Text(segment.text).foregroundColor(segment.color)
+        }
+    }
+
+    private static func tokenize(
+        _ source: String,
+        path: String,
+        tokens: WarrenColorTokens,
+        baseColor: Color
+    ) -> [Segment] {
+        let keywords: Set<String> = [
+            "actor", "async", "await", "break", "case", "catch", "class", "convenience",
+            "continue", "default", "defer", "deinit", "do", "else", "enum", "extension",
+            "fallthrough", "final", "for", "func", "guard", "if", "import", "in", "init",
+            "let", "nonisolated", "operator", "private", "protocol", "public", "repeat",
+            "return", "struct", "subscript", "switch", "throw", "throws", "try", "typealias",
+            "var", "where", "while", "with", "from", "as", "and", "def", "elif", "except",
+            "finally", "global", "lambda", "pass", "raise", "yield", "const", "function",
+            "interface", "namespace", "new", "null", "of", "this", "typeof", "undefined",
+            "export", "implements", "package", "super", "true", "false", "nil", "None",
+        ]
+        let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let hashComments = ["py", "rb", "sh", "bash", "zsh", "yaml", "yml", "toml", "ini", "dockerfile"].contains(fileExtension)
+        let characters = Array(source)
+        var segments: [Segment] = []
+        var plain = ""
+        var index = 0
+
+        func flushPlain() {
+            guard !plain.isEmpty else { return }
+            segments.append(Segment(text: plain, color: baseColor))
+            plain.removeAll(keepingCapacity: true)
+        }
+
+        while index < characters.count {
+            let character = characters[index]
+            if (character == "/" && index + 1 < characters.count && characters[index + 1] == "/")
+                || (hashComments && character == "#") {
+                flushPlain()
+                segments.append(Segment(text: String(characters[index...]), color: tokens.mutedForeground.opacity(0.78)))
+                break
+            }
+            if character == "\"" || character == "'" || character == "`" {
+                flushPlain()
+                let quote = character
+                var end = index + 1
+                var escaped = false
+                while end < characters.count {
+                    let next = characters[end]
+                    if escaped {
+                        escaped = false
+                    } else if next == "\\" {
+                        escaped = true
+                    } else if next == quote {
+                        end += 1
+                        break
+                    }
+                    end += 1
+                }
+                segments.append(Segment(text: String(characters[index..<min(end, characters.count)]), color: tokens.success))
+                index = end
+                continue
+            }
+            if character.isNumber {
+                flushPlain()
+                var end = index + 1
+                while end < characters.count, characters[end].isNumber || characters[end] == "." {
+                    end += 1
+                }
+                segments.append(Segment(text: String(characters[index..<end]), color: tokens.warning))
+                index = end
+                continue
+            }
+            if character.isLetter || character == "_" {
+                var end = index + 1
+                while end < characters.count, characters[end].isLetter || characters[end].isNumber || characters[end] == "_" {
+                    end += 1
+                }
+                let word = String(characters[index..<end])
+                if keywords.contains(word) {
+                    flushPlain()
+                    segments.append(Segment(text: word, color: tokens.info))
+                } else if word.first?.isUppercase == true {
+                    flushPlain()
+                    segments.append(Segment(text: word, color: tokens.highlight))
+                } else {
+                    plain.append(contentsOf: word)
+                }
+                index = end
+                continue
+            }
+            plain.append(character)
+            index += 1
+        }
+        flushPlain()
+        return segments
+    }
+}
+
 private struct WarrenGitFileContentView: View {
     let content: String
+    let path: String
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1514,26 +1676,31 @@ private struct WarrenGitFileContentView: View {
         let lines = content.components(separatedBy: "\n")
         GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                        HStack(spacing: 0) {
-                            Text("\(index + 1)")
-                                .font(WarrenGitDiffMetrics.lineNumberFont)
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.7))
-                                .frame(width: WarrenGitDiffMetrics.lineNumberWidth, alignment: .trailing)
-                                .padding(.trailing, WarrenSpacing.xs)
-                                .accessibilityHidden(true)
-                            Text(line.isEmpty ? " " : line)
-                                .font(WarrenGitDiffMetrics.codeFont)
-                                .foregroundStyle(tokens.foreground)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.horizontal, WarrenSpacing.compact)
-                                .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                            HStack(spacing: 0) {
+                                Text("\(index + 1)")
+                                    .font(WarrenGitDiffMetrics.lineNumberFont)
+                                    .foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                                    .frame(width: WarrenGitDiffMetrics.lineNumberWidth, alignment: .trailing)
+                                    .padding(.trailing, WarrenSpacing.xs)
+                                    .accessibilityHidden(true)
+                                WarrenGitCodeLineView(
+                                    text: line.isEmpty ? " " : line,
+                                    path: path,
+                                    colorScheme: colorScheme,
+                                    baseColor: tokens.foreground,
+                                    highlightsSyntax: true
+                                )
+                                    .textSelection(.enabled)
+                            }
+                            .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
                         }
-                        .frame(minWidth: proxy.size.width, minHeight: WarrenGitDiffMetrics.lineHeight, alignment: .leading)
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                 .padding(.vertical, WarrenSpacing.xs)
             }
         }
