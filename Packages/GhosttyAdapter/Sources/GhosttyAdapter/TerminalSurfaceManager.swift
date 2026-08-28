@@ -287,6 +287,9 @@ public final class TerminalSurfaceManager {
     }
 
     public func shutdown() {
+        let start = Date()
+        let count = entries.count
+        TerminalDiagnostics.log("surface_shutdown_begin", ["surfaces": String(count), "pending": String(pendingDisposals.count)])
         transitionGeneration &+= 1
         removeWindowObservers()
         for sessionID in Array(entries.keys) {
@@ -299,6 +302,8 @@ public final class TerminalSurfaceManager {
             viewportSize: .zero,
             wantsTerminalFocus: false
         )
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        TerminalDiagnostics.log("surface_shutdown_end", ["duration_ms": String(ms), "pending": String(pendingDisposals.count)])
     }
 
     public func apply(font: TerminalFontPreference) {

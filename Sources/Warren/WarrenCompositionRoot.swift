@@ -254,6 +254,8 @@ struct WarrenCompositionRoot: View {
             )
         }
         .task {
+            TerminalDiagnostics.configure(environment: ProcessInfo.processInfo.environment, arguments: CommandLine.arguments)
+            WarrenHangDiagnostics.start()
             presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
             hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
@@ -524,6 +526,7 @@ struct WarrenCompositionRoot: View {
 
     private func selectEndpoint(_ id: String) {
         guard endpointOptions.contains(where: { $0.id == id }) else { return }
+        WarrenHangDiagnostics.logEndpointSwitch(from: selectedEndpointID, to: id)
         selectedEndpointID = id
     }
 
@@ -560,6 +563,12 @@ struct WarrenCompositionRoot: View {
     }
 
     private func connectSelectedEndpoint() {
+        let start = Date()
+        TerminalDiagnostics.log("connect_selected_begin", ["endpoint": selectedEndpointID, "isLocal": isLocalEndpoint ? "true" : "false"])
+        defer {
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            TerminalDiagnostics.log("connect_selected_end", ["endpoint": selectedEndpointID, "duration_ms": String(ms)])
+        }
         guard isLocalEndpoint else {
             guard let endpoint = endpointCatalog.first(where: { $0.id == selectedEndpointID }) else {
                 remoteModel.disconnect()
