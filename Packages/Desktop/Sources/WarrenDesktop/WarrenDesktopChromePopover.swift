@@ -99,6 +99,7 @@ struct WarrenDesktopEndpointPopover: View {
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
     let onSelect: (String) -> Void
+    let onAddSSHHost: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -112,6 +113,7 @@ struct WarrenDesktopEndpointPopover: View {
                 endpoints: endpoints,
                 selectedID: selectedID,
                 onSelect: onSelect,
+                onAddSSHHost: onAddSSHHost,
                 onDismiss: onDismiss
             )
         }
@@ -126,6 +128,7 @@ struct WarrenDesktopEndpointPopoverContent: View {
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
     let onSelect: (String) -> Void
+    let onAddSSHHost: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -183,6 +186,22 @@ struct WarrenDesktopEndpointPopoverContent: View {
                 .accessibilityLabel(endpoint.label)
                 .accessibilityValue(endpoint.id == selectedID ? "Selected" : "")
             }
+
+            Divider()
+                .padding(.vertical, WarrenSpacing.xs)
+
+            Button {
+                onAddSSHHost()
+                onDismiss()
+            } label: {
+                Label("Add SSH Host…", systemImage: "plus.circle")
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(tokens.foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+            }
+            .buttonStyle(.plain)
         }
     }
 

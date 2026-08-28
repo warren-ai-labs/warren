@@ -108,6 +108,7 @@ final class TerminalSurfaceCoordinator {
     private var pendingImmediateTick = true
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
+    private var displayLoopTask: Task<Void, Never>?
     private var lastCreateFailureAt: TimeInterval?
 
     /// Cooldown before `fitToSize` may retry a surface create after
@@ -137,10 +138,24 @@ final class TerminalSurfaceCoordinator {
     }
 
     func startDisplayLink() {
+        guard displayLoopTask == nil else { return }
+        displayLoopTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.canRenderFrame else { return }
+                self.tick(context: .init(
+                    duration: 1.0 / 60.0,
+                    timestamp: Self.monotonicTimestamp(),
+                    targetTimestamp: Self.monotonicTimestamp()
+                ))
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
         scheduleTickIfNeeded()
     }
 
     func stopDisplayLink() {
+        displayLoopTask?.cancel()
+        displayLoopTask = nil
         tickScheduled = false
     }
 
@@ -521,7 +536,11 @@ final class TerminalSurfaceCoordinator {
         guard canRenderFrame else {
             return false
         }
-        return pendingImmediateTick || lastTickTimestamp == 0
+        // Ghostty owns continuous animations (cursor blink and TUI shimmer)
+        // and advances them during refresh. Do not gate visible frames on a
+        // one-shot wakeup flag; that would freeze an otherwise active spinner
+        // after the last output event.
+        return true
     }
 
     private func scheduleTickIfNeeded() {

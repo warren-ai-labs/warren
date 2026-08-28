@@ -49,7 +49,32 @@ From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves t
 warren ssh user@vps
 ```
 
-Keep that process running. The Desktop reads the endpoint from `~/.warren/config.json` and shows `Local` plus server options in the top-right corner. Endpoint changes made with `warren endpoint add|use|remove` are picked up within about a second, so restarting Warren is not required.
+The CLI now owns the SSH client and forwarding connection, so no separate
+OpenSSH tunnel process is required. Keep the command running while the
+endpoint is in use. The Desktop reads the endpoint from
+`~/.warren/config.json` and shows `Local` plus server options in the top-right
+corner. Endpoint changes made with `warren endpoint add|use|remove` are picked
+up within about a second, so restarting Warren is not required.
+The CLI chooses an ephemeral loopback port by default; pass `--local-port` only
+when a stable local port is required.
+
+List selectable aliases from the existing OpenSSH configuration before
+connecting:
+
+```sh
+warren ssh list
+warren ssh tenc_sh
+```
+
+In the macOS Desktop, open the execution-server menu, choose **Add SSH
+Host…**, and click an alias to save and activate the same SSH-backed endpoint.
+The list is refreshed each time the picker opens, so edits to `~/.ssh/config`
+take effect without restarting the app.
+
+The embedded client uses `SSH_AUTH_SOCK` when available, otherwise it loads
+`IdentityFile` entries from `~/.ssh/config`. Host keys are always verified
+against `~/.ssh/known_hosts`; connect once with OpenSSH if a host has not been
+trusted yet.
 
 ## LAN HTTPS
 

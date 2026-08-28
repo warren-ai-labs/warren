@@ -20,7 +20,11 @@ warren-headless
 └── read-only agent projection (Codex / Claude / OpenCode)
 ```
 
-SSH is not a Warren business protocol. `warren ssh` only starts the remote daemon, reads the token, and establishes loopback port forwarding. Once connected, Desktop and CLI use the same WebSocket API.
+SSH is not a Warren business protocol. `warren ssh` starts the remote daemon,
+reads the token, and establishes loopback port forwarding with the embedded Go
+client. Desktop can also launch the bundled helper directly after the user
+chooses an alias from `~/.ssh/config`; once connected, Desktop and CLI use the
+same WebSocket API.
 
 ## State Ownership
 
@@ -30,7 +34,7 @@ SSH is not a Warren business protocol. `warren ssh` only starts the remote daemo
 | Ghostline Runtime | Headless daemon | Keeps running |
 | Current endpoint | Local Desktop/CLI config | Retained |
 | Desktop selection and renderer | Local Desktop | Rebuildable |
-| SSH tunnel | `warren ssh` process | Closed when the process exits |
+| SSH tunnel | CLI process or bundled Desktop helper | Closed when its owner exits or switches endpoints |
 
 Local and Server are two independent Host resource trees. Switching endpoints only switches the projection and renderer; it does not migrate, copy, or terminate Sessions on the other end.
 

@@ -33,7 +33,7 @@ struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable, Senda
     var id: String { name }
 }
 
-private struct WarrenEndpointConfigurationFile: Decodable {
+private struct WarrenEndpointConfigurationFile: Codable {
     let current: String?
     let endpoints: [String: WarrenRemoteEndpointConfiguration]
 }
@@ -60,6 +60,36 @@ enum WarrenEndpointCatalog {
             return (nil, [])
         }
         return (file.current, file.endpoints.values.sorted { $0.name < $1.name })
+    }
+
+    static func save(
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        current: String?,
+        to configURL: URL = configurationURL()
+    ) throws {
+        let file = WarrenEndpointConfigurationFile(
+            current: current,
+            endpoints: Dictionary(uniqueKeysWithValues: endpoints.map { ($0.name, $0) })
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(file)
+        let directory = configURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let temporaryURL = configURL.appendingPathExtension("tmp")
+        var output = data
+        output.append(0x0A)
+        try output.write(to: temporaryURL, options: [.atomic])
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            _ = try FileManager.default.replaceItemAt(configURL, withItemAt: temporaryURL)
+        } else {
+            try FileManager.default.moveItem(at: temporaryURL, to: configURL)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
     }
 }
 
@@ -1051,6 +1081,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published private(set) var attachingSessionID: TerminalSessionID?
 
     private var wire: WarrenRemoteWire?
+    private var embeddedSSHTunnel: WarrenEmbeddedSSHTunnel?
+    /// The endpoint currently backed by the live transport. SSH endpoints
+    /// keep a durable alias in `endpointConfiguration`, while the helper
+    /// supplies a fresh loopback URL and token for each connection attempt.
+    private var activeEndpointConfiguration: WarrenRemoteEndpointConfiguration?
+    private var connectionGeneration: UInt64 = 0
     private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
     private var isLocalEndpoint = false
     private var eventTask: Task<Void, Never>?
@@ -1199,9 +1235,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         TerminalDiagnostics.log("remote_connect_begin", ["endpoint": configuration.name, "url": configuration.url])
         disconnect()
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         cancelTransientConnectionIssue()
         restorePersistedTabOrders()
         endpointConfiguration = configuration
+        activeEndpointConfiguration = nil
         isLocalEndpoint = isLocal
         settingsLoaded = false
         defaultRuntime = nil
@@ -1231,7 +1270,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 .withConnectionState(.connecting)
         )
         eventTask = Task { @MainActor [weak self] in
-            await self?.runConnectionLoop(configuration)
+            await self?.runConnectionLoop(configuration, generation: generation)
         }
     }
 
@@ -1247,12 +1286,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let disconnectStart = Date()
         let prevEndpoint = endpointConfiguration?.name ?? "none"
         TerminalDiagnostics.log("remote_disconnect_begin", ["endpoint": prevEndpoint, "surfaces": String(surfaceManager.retainedSurfaceCount)])
+        connectionGeneration &+= 1
         eventTask?.cancel()
         eventTask = nil
         endpointConfiguration = nil
+        activeEndpointConfiguration = nil
         isLocalEndpoint = false
         cancelTransientConnectionIssue()
         clearMaintenance()
+        embeddedSSHTunnel?.stop()
+        embeddedSSHTunnel = nil
         if let wire { Task { await wire.close() } }
         wire = nil
         currentRoster = nil
@@ -1279,10 +1322,44 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Keeps the endpoint alive across daemon restarts and transient network
     /// failures. A fresh wire is created per attempt; the old wire's event
     /// stream is finished by `close()` so it can never be reused.
-    private func runConnectionLoop(_ configuration: WarrenRemoteEndpointConfiguration) async {
+    private func runConnectionLoop(
+        _ configuration: WarrenRemoteEndpointConfiguration,
+        generation: UInt64
+    ) async {
         var attempt = 0
-        while !Task.isCancelled {
-            let wire = WarrenRemoteWire(configuration: configuration)
+        while !Task.isCancelled, isCurrentConnection(configuration, generation: generation) {
+            var wireConfiguration = configuration
+            var tunnel: WarrenEmbeddedSSHTunnel?
+            defer {
+                tunnel?.stop()
+                if let tunnel, embeddedSSHTunnel === tunnel {
+                    embeddedSSHTunnel = nil
+                }
+            }
+            if let target = configuration.ssh, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let embedded = WarrenEmbeddedSSHTunnel()
+                embeddedSSHTunnel = embedded
+                do {
+                    wireConfiguration = try await embedded.start(name: configuration.name, target: target)
+                    tunnel = embedded
+                } catch {
+                    guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
+                    if attempt == 0, maintenanceMessage == nil {
+                        present(error)
+                    }
+                    resetAttachmentState()
+                    publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
+                    let delay = Self.reconnectDelay(attempt: attempt)
+                    attempt += 1
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    continue
+                }
+            }
+            guard isCurrentConnection(configuration, generation: generation) else {
+                return
+            }
+            activeEndpointConfiguration = wireConfiguration
+            let wire = WarrenRemoteWire(configuration: wireConfiguration)
             self.wire = wire
             let events = wire.events()
             do {
@@ -1309,7 +1386,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     await consume(event)
                 }
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
                 if attempt == 0, maintenanceMessage == nil {
                     present(error)
                 }
@@ -1324,13 +1401,41 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 stopDeletionReconciliation()
             }
             await wire.close()
-            guard !Task.isCancelled else { return }
+            if activeEndpointConfiguration == wireConfiguration {
+                activeEndpointConfiguration = nil
+            }
+            guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
             resetAttachmentState()
             publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
             try? await Task.sleep(for: .milliseconds(delay))
         }
+        if isCurrentConnection(configuration, generation: generation) {
+            eventTask = nil
+            activeEndpointConfiguration = nil
+            embeddedSSHTunnel = nil
+        }
+    }
+
+    private func isCurrentConnection(
+        _ configuration: WarrenRemoteEndpointConfiguration,
+        generation: UInt64
+    ) -> Bool {
+        connectionGeneration == generation && endpointConfiguration == configuration
+    }
+
+    /// Returns the configuration that can reach the daemon right now. Direct
+    /// endpoints are usable as soon as they are selected; SSH endpoints only
+    /// become usable after the helper has supplied a live loopback URL/token.
+    private var liveEndpointConfiguration: WarrenRemoteEndpointConfiguration? {
+        if let activeEndpointConfiguration {
+            return activeEndpointConfiguration
+        }
+        guard let endpointConfiguration, endpointConfiguration.ssh == nil else {
+            return nil
+        }
+        return endpointConfiguration
     }
 
     /// Drops client-side attachment state so the next roster re-attaches the
@@ -2049,7 +2154,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let browserURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: liveEndpointConfiguration?.token ?? ""
         )
         NSWorkspace.shared.open(browserURL)
     }
@@ -2057,7 +2162,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let clipboardURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: liveEndpointConfiguration?.token ?? ""
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
@@ -2089,7 +2194,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             let clipboardURL = Self.publicAccessBrowserURL(
                 url,
                 currentEndpoint: webStatus.secureURL,
-                daemonToken: endpointConfiguration?.token ?? ""
+                daemonToken: liveEndpointConfiguration?.token ?? ""
             )
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(
@@ -2177,9 +2282,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func tunnelRequest(_ action: TunnelAction, kind: String) async throws {
-        guard let configuration = endpointConfiguration else {
+        guard let configuration = liveEndpointConfiguration else {
             throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+                NSLocalizedDescriptionKey: "The selected SSH endpoint is still connecting.",
             ])
         }
         let base = configuration.url.hasSuffix("/")
@@ -2205,7 +2310,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func refreshTunnelStatus() async {
-        guard let configuration = endpointConfiguration else { return }
+        guard let configuration = liveEndpointConfiguration else { return }
         let publicAccessAvailable = await refreshPublicAccessStatus(configuration: configuration)
         if publicAccessAvailable && webStatus.tunnelRunning {
             return
@@ -2237,9 +2342,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         inviteKey: String = "",
         approvalKey: String = ""
     ) async throws {
-        guard let configuration = endpointConfiguration else {
+        guard let configuration = liveEndpointConfiguration else {
             throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+                NSLocalizedDescriptionKey: "The selected SSH endpoint is still connecting.",
             ])
         }
         let base = configuration.url.hasSuffix("/")
