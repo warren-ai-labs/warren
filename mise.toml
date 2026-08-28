@@ -29,7 +29,7 @@ run = "go test -race ./Headless/..."
 
 [tasks.install]
 description = "Build the release app, install Warren.app into /Applications, and initialize the local CLI endpoint"
-run = "bash scripts/install-app.sh"
+run = "WARREN_GHOSTLINE_FORCE_HANDOFF=1 bash scripts/install-app.sh"
 
 [tasks."build:release"]
 description = "Release build"

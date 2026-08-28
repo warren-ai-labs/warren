@@ -203,7 +203,7 @@ func main() {
 		}
 	}
 	ghostlineTagVersion := ghostlineReleaseVersion()
-	ghostlineClient, err := ensureGhostlineClientWithStore(*ghostlineSocket, *outputDir, *ghostlineProbeForeground, ghostlineTagVersion, state, logger)
+	ghostlineClient, err := ensureGhostlineClientWithStore(*ghostlineSocket, *outputDir, *ghostlineProbeForeground, ghostlineTagVersion, version, state, logger)
 	if err != nil {
 		fatal(err)
 	}

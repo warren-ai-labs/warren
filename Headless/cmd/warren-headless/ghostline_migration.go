@@ -38,6 +38,7 @@ type ghostlineMigrationConfig struct {
 	outputDir       string
 	probeForeground bool
 	expectedTag     string
+	warrenVersion   string
 	state           *store.Store
 	logger          *slog.Logger
 }
@@ -47,12 +48,13 @@ type ghostlineMigrationConfig struct {
 // legacy v0 -> v0.8 compatibility daemon -> v1. Each handoff gets a fresh
 // socket; the stable socket is switched only after Ghostline transfers
 // ownership and the source has stopped serving.
-func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForeground bool, expectedTag string, state *store.Store, logger *slog.Logger) (*ghostline.Client, error) {
+func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForeground bool, expectedTag string, warrenVersion string, state *store.Store, logger *slog.Logger) (*ghostline.Client, error) {
 	config := ghostlineMigrationConfig{
 		stableSocket:    socketPath,
 		outputDir:       outputDir,
 		probeForeground: probeForeground,
 		expectedTag:     expectedTag,
+		warrenVersion:   warrenVersion,
 		state:           state,
 		logger:          logger,
 	}
@@ -62,6 +64,28 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 
 	if err := resumeGhostlineMigration(config); err != nil {
 		return nil, err
+	}
+	// Upgrade handoff for warren version change (app update) even when
+	// ghostline protocol/tag is unchanged. Only canonical tags (v0.10.1)
+	// trigger version-matched handoff; non-canonical (dev/dirty) require
+	// explicit force via WARREN_GHOSTLINE_FORCE_HANDOFF for `mise run install`.
+	if warrenVersion != "" && state != nil {
+		storedVersion := state.Snapshot().WarrenVersion
+		force := forceGhostlineHandoffRequested()
+		canVersionMatch := isCanonicalWarrenVersion(storedVersion) && isCanonicalWarrenVersion(warrenVersion)
+		if storedVersion != "" && storedVersion != warrenVersion && (canVersionMatch || force) {
+			config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
+			sourceSocket := currentGhostlineRoute(socketPath)
+			version, _ := probeGhostlineVersion(context.Background(), sourceSocket)
+			if err := handoffGhostline(config, sourceSocket, version, "warren-"+warrenVersion, v1GhostlineSpawn(config)); err != nil {
+				return nil, err
+			}
+			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
+			return ensureGhostlineClientWithStore(socketPath, outputDir, probeForeground, expectedTag, warrenVersion, state, logger)
+		}
+		if storedVersion != warrenVersion && (canVersionMatch || force || storedVersion == "") {
+			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
+		}
 	}
 	if !ghostlineSocketReady(socketPath) {
 		return startGhostline(config, socketPath, v1GhostlineSpawn(config))
@@ -334,6 +358,35 @@ func ghostlinePhaseAtLeast(phase, minimum string) bool {
 	value, exists := order[phase]
 	threshold, minimumExists := order[minimum]
 	return exists && minimumExists && value >= threshold
+}
+
+func isCanonicalWarrenVersion(v string) bool {
+	if v == "" || v == "dev" || v == "unknown" || strings.Contains(v, "dirty") {
+		return false
+	}
+	if !strings.HasPrefix(v, "v") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) < 3 {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := strconv.Atoi(strings.Split(parts[i], "-")[0]); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func forceGhostlineHandoffRequested() bool {
+	if v := strings.TrimSpace(os.Getenv("WARREN_GHOSTLINE_FORCE_HANDOFF")); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+		return true
+	}
+	if v := strings.TrimSpace(os.Getenv("WARREN_FORCE_HANDOFF")); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+		return true
+	}
+	return false
 }
 
 func ghostlineVersionNeedsUpgrade(serverVersion ghostline.VersionInfo, expectedTag string, versionErr error) (bool, string) {
