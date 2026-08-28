@@ -173,6 +173,37 @@ func TestReplaceWithSymlinkReplacesUnixSocket(t *testing.T) {
 	}
 }
 
+func TestConsumeForceGhostlineHandoffIsOneShot(t *testing.T) {
+	directory := shortGhostlineTempDir(t)
+	config := ghostlineMigrationConfig{
+		stableSocket: filepath.Join(directory, "ghostline.sock"),
+	}
+	marker := filepath.Join(directory, "force-ghostline-handoff")
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatalf("write force marker: %v", err)
+	}
+	if !consumeForceGhostlineHandoff(config) {
+		t.Fatal("first force marker read was not consumed")
+	}
+	if consumeForceGhostlineHandoff(config) {
+		t.Fatal("force marker was consumed more than once")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("force marker still exists, stat error = %v", err)
+	}
+}
+
+func TestConsumeForceGhostlineHandoffClearsEnvironment(t *testing.T) {
+	config := ghostlineMigrationConfig{stableSocket: filepath.Join(t.TempDir(), "ghostline.sock")}
+	t.Setenv("WARREN_GHOSTLINE_FORCE_HANDOFF", "1")
+	if !consumeForceGhostlineHandoff(config) {
+		t.Fatal("environment force signal was not consumed")
+	}
+	if forceGhostlineHandoffRequestedFor(config) {
+		t.Fatal("environment force signal leaked after consumption")
+	}
+}
+
 func shortGhostlineTempDir(t *testing.T) string {
 	t.Helper()
 	directory, err := os.MkdirTemp("/tmp", "wg-")
