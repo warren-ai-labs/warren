@@ -107,8 +107,8 @@ func generateMinimalGhosttyTerminfo() {
 	if err := exec.Command("tic", "-x", "-o", outDir, tiPath).Run(); err != nil {
 		return
 	}
-	src := filepath.Join(outDir, "78", "xterm-ghostty")
-	if _, err := os.Stat(src); err != nil {
+	src := compiledTerminfoPath(outDir)
+	if src == "" {
 		return
 	}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -121,6 +121,21 @@ func generateMinimalGhosttyTerminfo() {
 			_ = os.WriteFile(dst, data, 0644)
 		}
 	}
+}
+
+// compiledTerminfoPath resolves the first-character directory used by tic.
+// macOS commonly uses hexadecimal directories (78 for 'x'), while ncurses on
+// Linux uses the literal initial (x).
+func compiledTerminfoPath(root string) string {
+	for _, path := range []string{
+		filepath.Join(root, "78", "xterm-ghostty"),
+		filepath.Join(root, "x", "xterm-ghostty"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 // BundledTerminfoDir returns the directory that contains the bundled
