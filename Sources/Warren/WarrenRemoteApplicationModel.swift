@@ -3582,13 +3582,72 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     /// Entry point for every navigation that makes a session visible.
     ///
-    /// Retained surfaces are re-seeded from a fresh atomic snapshot on every
-    /// promotion. This discards any renderer backlog and presents the latest
-    /// Host state instead of visibly fast-forwarding queued output.
+    /// A retained surface with a live output subscription is promoted
+    /// locally: its grid already holds the current screen, so presentation
+    /// is a reparent plus a control-lease swap and performs zero replay,
+    /// snapshot, or clear. Everything else takes the cold seeding path.
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        if surfaceManager.surface(for: sessionID) != nil,
+           outputSubscriptions.contains(sessionID) {
+            await promoteRetainedSession(sessionID)
+            return
+        }
         await attachSelectedSession()
+    }
+
+    /// Promotes an already-current retained surface without touching the
+    /// terminal byte stream. The daemon-side work is one control-lease swap;
+    /// the pixels on screen are the live surface itself, not a replay.
+    private func promoteRetainedSession(_ sessionID: TerminalSessionID) async {
+        guard let wire else { return }
+        if selectedSessionID != sessionID {
+            pendingFocusSessionID = nil
+            pendingFocusSize = nil
+            pendingFocusResizeSize = nil
+            cancelResizeRequests()
+        }
+        inputRouter.prepare(for: sessionID)
+        selectedSessionID = sessionID
+        TerminalDiagnostics.log("tab_promote_local", [
+            "session": sessionID.description,
+        ])
+        do {
+            _ = try await wire.request(
+                "session.attach",
+                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
+            )
+        } catch {
+            // The control swap can fail when the session exited between the
+            // last roster and this switch. Re-seed through the cold path so
+            // the pane converges instead of silently losing input.
+            if selectedSessionID == sessionID {
+                await attachSelectedSession()
+            }
+            return
+        }
+        guard selectedSessionID == sessionID else { return }
+        attachedSessionID = sessionID
+        TerminalDiagnostics.log("promote_complete", [
+            "session": sessionID.description,
+        ])
+        surfaceManager.requestPresent(sessionID)
+        inputRouter.activate(for: sessionID) { [wire] data in
+            await wire.sendInput(data)
+        }
+        let measuredSize = surfaceManager.surface(for: sessionID)?.terminalSize
+        guard pendingFocusSessionID == sessionID else { return }
+        // Mirror the legacy attach flow: focus ownership is claimed only when
+        // the surface actually gained keyboard focus (the manager reports it
+        // through onFocused, which parks the request here while the control
+        // swap was still in flight). An unfocused window switching tabs must
+        // not steal resize authority from another endpoint viewing the same
+        // terminal.
+        let pendingSize = pendingFocusSize ?? measuredSize
+        pendingFocusSessionID = nil
+        pendingFocusSize = nil
+        sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
     }
 
     private func attachSelectedSession() async {
