@@ -204,17 +204,19 @@ public final class GhosttySurface: Identifiable {
             ])
             return false
         }
-        // Foreground live stream: avoid drawing a torn frame. A small pending
-        // (<8KB) is a TUI mid-frame; defer until the writer drains. A large
-        // backlog is a warm-promotion jump-to-latest and presents immediately.
-        let pending = outputWriter.enqueuedSequence &- outputWriter.renderedSequence
-        if pending > 0 && pending < 8192 {
+        // Foreground live stream: draw at synchronized-output frame boundary,
+        // not at queue-empty. A small pending is not a reliable mid-frame
+        // signal for animation — white flash frames are tiny and would be
+        // collapsed if we waited for pending==0. Defer only while inside
+        // ESC[?2026h ... ESC[?2026l; large warm-promotion backlogs have no
+        // pending sync and present immediately.
+        if outputWriter.isInSynchronizedOutput {
             state.controller.tick()
             TerminalDiagnostics.logVerbose("present_now_deferred", [
                 "session": id.description,
                 "enqueued": String(outputWriter.enqueuedSequence),
                 "rendered": String(outputWriter.renderedSequence),
-                "reason": "small-pending",
+                "reason": "sync-pending",
             ])
             return false
         }

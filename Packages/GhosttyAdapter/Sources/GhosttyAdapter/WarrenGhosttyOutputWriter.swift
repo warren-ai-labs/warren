@@ -109,6 +109,9 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private var rawEpoch: UInt64 = 1
     private var rawSequence: UInt64 = 0
     private var shutdownCompletion: (@MainActor @Sendable () -> Void)?
+    // Synchronized-output depth: >0 means Ghostty is inside ESC[?2026h ... ESC[?2026l.
+    // Foreground should draw at frame boundary (depth==0), not at queue-empty.
+    private var syncDepth: Int = 0
 
     init(
         inMemory: InMemoryTerminalSession,
@@ -152,12 +155,19 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         lock.withLock { latestRenderedSequence }
     }
 
+    /// Whether Ghostty is currently inside a synchronized-output block.
+    /// Foreground draws should wait for depth==0, not for pending==0.
+    public var isInSynchronizedOutput: Bool {
+        lock.withLock { syncDepth > 0 }
+    }
+
     /// Drops pending bytes and restarts the recovery anchor. Safe to call
     /// while a feed is in flight; the next enqueue starts a fresh drain.
     public func reset(epoch: UInt64, sequence: UInt64) {
         terminalFeedLock.withLock {
             lock.withLock {
                 buffer.reset(epoch: epoch, sequence: sequence)
+                syncDepth = 0
             }
         }
     }
@@ -178,6 +188,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             buffer.reset(epoch: epoch, sequence: sequence)
             latestRenderedEpoch = epoch
             latestRenderedSequence = sequence
+            syncDepth = 0
         }
         return true
     }
@@ -215,7 +226,38 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     public func receive(_ payload: Data) {
         terminalFeedLock.withLock {
             ansiObserver.receive(payload)
+            updateSyncDepth(with: payload)
             inMemory.receive(payload)
+        }
+    }
+
+    // MARK: - Synchronized output tracking
+
+    private func updateSyncDepth(with payload: Data) {
+        // Scan for ESC[?2026h / ESC[?2026l. Split sequences across Data
+        // boundaries are rare (8-byte pattern) and ignored for simplicity.
+        let bytes = [UInt8](payload)
+        var delta = 0
+        var i = 0
+        while i + 7 < bytes.count {
+            // ESC [ ? 2 0 2 6 h/l  -> 0x1B 0x5B 0x3F 0x32 0x30 0x32 0x36 0x68/0x6C
+            if bytes[i] == 0x1B, bytes[i + 1] == 0x5B, bytes[i + 2] == 0x3F,
+               bytes[i + 3] == 0x32, bytes[i + 4] == 0x30, bytes[i + 5] == 0x32, bytes[i + 6] == 0x36 {
+                if bytes[i + 7] == 0x68 { // h
+                    delta += 1
+                    i += 8
+                    continue
+                } else if bytes[i + 7] == 0x6C { // l
+                    delta -= 1
+                    i += 8
+                    continue
+                }
+            }
+            i += 1
+        }
+        guard delta != 0 else { return }
+        lock.withLock {
+            syncDepth = max(0, syncDepth + delta)
         }
     }
 
@@ -294,6 +336,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                     return (false, false)
                 }
                 ansiObserver.receive(slice.payload)
+                updateSyncDepth(with: slice.payload)
                 return (true, inMemory.receive(slice.payload))
             }
             guard writeResult.isCurrent else {
