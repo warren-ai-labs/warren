@@ -182,6 +182,11 @@ public final class GhosttySurface: Identifiable {
             return false
         }
         guard viewVisible else {
+            // Keep Ghostty's blink/clock ticking even while hidden so the
+            // amber Working dot resumes blinking immediately on promotion.
+            // Only the actual Metal draw is skipped to avoid polluting the
+            // shared framebuffer with a black frame.
+            state.controller.tick()
             TerminalDiagnostics.log("present_now", [
                 "session": id.description,
                 "result": "false",
