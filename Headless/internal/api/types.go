@@ -372,6 +372,7 @@ type State struct {
 	// WorktreeOwnershipMigrated records that legacy workspace ownership has
 	// been reconciled against the configured Warren worktree root.
 	WorktreeOwnershipMigrated bool `json:"worktreeOwnershipMigrated,omitempty"`
+	WarrenVersion string `json:"warrenVersion,omitempty"`
 }
 
 const (
