@@ -169,6 +169,8 @@ public final class TerminalSurfaceManager {
     private var windowObservers: [NSObjectProtocol] = []
     private var onFocused: (TerminalSessionID, TerminalSize?) -> Void = { _, _ in }
     private var onBlurred: (TerminalSessionID) -> Void = { _ in }
+    private var resizeDebounceTask: Task<Void, Never>?
+    private var resizingUntil: ContinuousClock.Instant?
     /// Invoked when a retained surface is disposed (warm eviction, tab close,
     /// or shutdown). Owners use this to invalidate recovery anchors that are
     /// only valid while the exact surface instance is still alive.
@@ -348,7 +350,19 @@ public final class TerminalSurfaceManager {
             viewportSize: size,
             wantsTerminalFocus: latestIntent.wantsTerminalFocus
         )
-        scheduleReconciliation()
+        // Coalesce rapid resize events (drag) and give the daemon a short
+        // window to reflow at the new size before revealing. Without this
+        // a shell that is actively producing output would promote with the
+        // old-width backlog and show 1-2s of missing color blocks until
+        // the new-width frames arrive.
+        resizingUntil = ContinuousClock.now.advanced(by: .milliseconds(250))
+        resizeDebounceTask?.cancel()
+        resizeDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard let self else { return }
+            self.resizeDebounceTask = nil
+            self.scheduleReconciliation()
+        }
     }
 
     public func requestFocusForActiveSurface() {
@@ -718,6 +732,13 @@ public final class TerminalSurfaceManager {
                 ) else {
                     staleCommandCancellationCount &+= 1
                     return
+                }
+
+                if let until = resizingUntil, ContinuousClock.now < until {
+                    do {
+                        try await Task.sleep(until: until, tolerance: .milliseconds(10))
+                    } catch { return }
+                    continue
                 }
 
                 let viewReady = entry.surface.terminalViewIsPresentable

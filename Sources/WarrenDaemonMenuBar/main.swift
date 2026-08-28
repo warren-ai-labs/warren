@@ -145,11 +145,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        let refresh = NSMenuItem(title: "Refresh Runtime", action: #selector(refreshRuntime), keyEquivalent: "")
-        refresh.tag = 10
-        menu.addItem(refresh)
-        menu.addItem(NSMenuItem(title: "Open Warren", action: #selector(openWarrenAction), keyEquivalent: "o"))
-        menu.addItem(.separator())
         let status = NSMenuItem(title: "Headless: Checking…", action: nil, keyEquivalent: "")
         status.tag = 1
         status.isEnabled = false
@@ -170,6 +165,11 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         ghostlineTagVersion.tag = 5
         ghostlineTagVersion.isEnabled = false
         menu.addItem(ghostlineTagVersion)
+        menu.addItem(.separator())
+        let refresh = NSMenuItem(title: "Refresh Runtime", action: #selector(refreshRuntime), keyEquivalent: "")
+        refresh.tag = 10
+        menu.addItem(refresh)
+        menu.addItem(NSMenuItem(title: "Open Warren", action: #selector(openWarrenAction), keyEquivalent: "o"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Restart Headless", action: #selector(restartDaemon), keyEquivalent: "r"))
         menu.addItem(NSMenuItem(title: "Stop Headless", action: #selector(stopDaemonAction), keyEquivalent: "s"))
