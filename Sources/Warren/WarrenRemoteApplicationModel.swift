@@ -1060,7 +1060,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             self.failedAtomicRecoverySessions.remove(sessionID)
             self.unsubscribeFromOutput(sessionID)
         }
-        guard endpointConfiguration != configuration || eventTask == nil else {
+        guard endpointConfiguration != configuration
+            || eventTask == nil
+            || isLocalEndpoint != isLocal else {
             // The root view's `.task` can restart on window transitions such
             // as entering full screen. Tearing down and recreating an already
             // healthy connection is both wasteful and the trigger for the
