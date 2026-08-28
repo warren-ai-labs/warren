@@ -118,6 +118,40 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.11.1",
+        dateISO: "2026-08-29",
+        date: "August 29, 2026",
+        title: "Warren hardens endpoint switching and Public Access state.",
+        summary:
+          "A patch release that hardens endpoint switching, preserves Public Access state across restarts, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add endpoint hang diagnostics with a main-thread watchdog, detailed switching logs, and a freeze-capture helper for weblink and host switching stalls.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Preserve Codex shimmer while lifting black text for clearer Working visibility.",
+              "Build and verify Linux headless artifacts in CI.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Persist Public Access authenticated state across daemon restarts by checking the persisted gnar credential store.",
+              "Preserve the auth fragment when copying web links so pasted links can authenticate the protected WebSocket.",
+              "Keep warm promotion for remote endpoints and rebuild the connection when endpoint locality changes.",
+              "Allow initial input for dedicated codex, claude, and opencode sessions before the agent transcript is bound.",
+              "Install xterm-ghostty terminfo on Linux by supporting both x and 78 tic output directories.",
+              "Restore vertical swipe scrolling for the agent view on mobile by fixing flex sizing and touch-action hints.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.11.0",
         dateISO: "2026-08-28",
         date: "August 28, 2026",
@@ -814,6 +848,40 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.11.1",
+        dateISO: "2026-08-29",
+        date: "2026 年 8 月 29 日",
+        title: "Warren 加固端点切换与 Public Access 状态。",
+        summary:
+          "修复版本：加固端点切换、重启后保持 Public Access 已认证状态、修复网页链接鉴权与移动端滚动，并在 Linux 上改进 terminfo 安装。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "为端点与 weblink 切换新增挂起诊断：主线程 watchdog、详细切换日志与 freeze 捕获脚本。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "在提升黑字可见性的同时保留 Codex shimmer 效果。",
+              "在 CI 中构建并校验 Linux headless 产物。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "重启后通过已持久化的 gnar 凭据保持 Public Access 已认证状态。",
+              "复制网页链接时保留鉴权 fragment，使粘贴链接可认证受保护的 WebSocket。",
+              "为远端端点保留 warm promotion，并在端点本地/远端变化时重建连接。",
+              "在 agent transcript 绑定前允许 codex/claude/opencode 专属会话的初始输入。",
+              "在 Linux 上同时支持 x 与 78 目录以正确安装 xterm-ghostty terminfo。",
+              "修复移动端 agent 视图的纵向滑动，修正 flex 与 touch-action。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.11.0",
         dateISO: "2026-08-28",

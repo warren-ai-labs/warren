@@ -6,6 +6,28 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.11.1] - 2026-08-29
+
+> Patch release: hardens endpoint switching, preserves Public Access state, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+
+### Added
+
+- Add endpoint hang diagnostics with a main-thread watchdog, detailed endpoint and surface lifecycle logging, and a freeze-capture helper for weblink and host switching stalls.
+
+### Changed
+
+- Preserve Codex shimmer while lifting black text for clearer Working visibility.
+- Build and verify Linux headless artifacts in CI.
+
+### Fixed
+
+- Persist Public Access authenticated state across daemon restarts by checking the persisted gnar credential store so a valid `~/.warren/gnar/credentials.json` keeps Start instead of Configure.
+- Preserve the auth fragment when copying web links so pasted links can authenticate the protected WebSocket.
+- Keep warm promotion for remote endpoints and rebuild the connection when endpoint locality changes so local and remote terminal presentation remain correct.
+- Allow initial input for dedicated codex, claude, and opencode sessions before the agent transcript is bound so the first prompt is delivered without requiring a Terminal setup retry.
+- Install `xterm-ghostty` terminfo on Linux by supporting both `x` and `78` tic output directories.
+- Restore vertical swipe scrolling for the agent view on mobile by fixing flex sizing and touch-action hints.
+
 ## [0.11.0] - 2026-08-28
 
 > Minor release: refreshes terminal rendering and session handoff, hardens workspace creation, and bundles truecolor terminfo for Ghostline. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
