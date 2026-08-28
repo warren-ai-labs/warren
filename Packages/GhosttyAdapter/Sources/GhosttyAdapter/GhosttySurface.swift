@@ -360,10 +360,8 @@ public final class GhosttySurface: Identifiable {
     }
 
     /// Resync the reattached viewport only when it did not return to its
-    /// pre-demotion position. A normal warm reattach keeps the same viewport
-    /// content, so no scroll is performed and the user's scroll position is
-    /// preserved. If the viewport moved (stale pin, clamped offset, or a blank
-    /// resume), the forced resync recovers it.
+    /// pre-demotion position. Jump to bottom without animation; scrollback
+    /// remains intact so the user can still scroll up after the jump.
     public func resyncIfNeeded() {
         let anchor = reattachAnchorText
         reattachAnchorText = nil

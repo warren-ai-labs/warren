@@ -692,25 +692,16 @@ public final class TerminalSurfaceManager {
         let sessionID = entry.surface.id
         cancelPresentation(for: entry)
         let presentationGeneration = entry.presentationGeneration
-        // Decision: Zeno's paradox — chasing a moving queue never finishes.
-        // We capture a fixed target at promotion (not max(enqueued)) and drain
-        // hidden until that target is rendered, then reveal once. Live bytes
-        // arriving after the capture stream in normally instead of being
-        // fast-forwarded. See docs/terminal-polish-backlog.md #Zeno.
-        let targetEpoch = entry.surface.outputWriter.bufferEpoch
-        let targetSequence = entry.surface.outputWriter.enqueuedSequence
+        // Jump to latest: warm surfaces are kept current while hidden
+        // (output subscription + retained grid), so promotion reveals the
+        // current frame immediately without replaying the backlog visibly.
+        // No fast-forward, no Zeno chase; backlog drains hidden or is
+        // superseded by the next snapshot.
         if !entry.displayVisible {
-            // A mounted surface can be transparent during a cold recovery or
-            // warm promotion. Keep its display wakeups running while the
-            // target bytes drain; only the alpha transition below makes the
-            // settled frame user-visible.
             prepareHiddenRendering(for: entry)
         }
         entry.presentationTask = Task { @MainActor [weak self, weak entry] in
             guard let self, let entry else { return }
-            let stallDeadline = ContinuousClock.now.advanced(by: .seconds(2))
-            var extendedWaitLogged = false
-            var timeoutLogged = false
             defer {
                 if entry.presentationGeneration == presentationGeneration {
                     entry.presentationTask = nil
@@ -729,30 +720,10 @@ public final class TerminalSurfaceManager {
                     return
                 }
 
-                let outputReady = outputHasReached(
-                    entry.surface,
-                    targetEpoch: targetEpoch,
-                    targetSequence: targetSequence
-                )
                 let viewReady = entry.surface.terminalViewIsPresentable
-                let timedOut = ContinuousClock.now >= stallDeadline
-                if (outputReady || timedOut), viewReady, entry.surface.terminalSurfaceIsReady {
-                    if timedOut, !outputReady, !timeoutLogged {
-                        timeoutLogged = true
-                        TerminalDiagnostics.log("present_wait_timeout", [
-                            "session": sessionID.description,
-                            "targetEpoch": targetEpoch.map { String($0) } ?? "nil",
-                            "targetSequence": String(targetSequence),
-                            "renderedEpoch": String(entry.surface.renderedEpoch),
-                            "renderedSequence": String(entry.surface.renderedSequence),
-                            "enqueuedSequence": String(entry.surface.outputWriter.enqueuedSequence),
-                        ])
-                    }
+                if viewReady, entry.surface.terminalSurfaceIsReady {
                     entry.surface.requestDisplayRefresh()
                     if entry.surface.presentNow() {
-                        // Draw once while transparent, then reveal the frame.
-                        // A second tick covers renderers that defer their first
-                        // draw until the view becomes composited.
                         entry.view.isHidden = false
                         entry.view.alphaValue = 1
                         setDisplayVisible(true, for: entry)
@@ -760,12 +731,8 @@ public final class TerminalSurfaceManager {
                         _ = entry.surface.presentNow()
                         TerminalDiagnostics.log("present_complete", [
                             "session": sessionID.description,
-                            "targetEpoch": targetEpoch.map { String($0) } ?? "nil",
-                            "targetSequence": String(targetSequence),
-                            // The writer sequence at completion time. When
-                            // this exceeds targetSequence the presentation
-                            // fired while recovery bytes were still being
-                            // enqueued: the pane became visible mid-replay.
+                            "targetEpoch": "jump",
+                            "targetSequence": "jump",
                             "enqueuedNow": String(entry.surface.outputWriter.enqueuedSequence),
                             "renderedEpoch": String(entry.surface.renderedEpoch),
                             "renderedSequence": String(entry.surface.renderedSequence),
@@ -775,23 +742,8 @@ public final class TerminalSurfaceManager {
                     }
                 }
 
-                if !extendedWaitLogged, ContinuousClock.now >= stallDeadline {
-                    extendedWaitLogged = true
-                    TerminalDiagnostics.log("present_wait_extended", [
-                        "session": sessionID.description,
-                        "targetEpoch": targetEpoch.map { String($0) } ?? "nil",
-                        "targetSequence": String(targetSequence),
-                        "renderedEpoch": String(entry.surface.renderedEpoch),
-                        "renderedSequence": String(entry.surface.renderedSequence),
-                        "surfaceReady": entry.surface.terminalSurfaceIsReady ? "true" : "false",
-                        "viewPresentable": viewReady ? "true" : "false",
-                    ])
-                }
-
                 do {
-                    try await Task.sleep(
-                        for: extendedWaitLogged ? .milliseconds(250) : .milliseconds(16)
-                    )
+                    try await Task.sleep(for: .milliseconds(16))
                 } catch {
                     return
                 }
