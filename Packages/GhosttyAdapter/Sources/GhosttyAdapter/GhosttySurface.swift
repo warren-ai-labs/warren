@@ -216,8 +216,10 @@ public final class GhosttySurface: Identifiable {
         // signal for animation — white flash frames are tiny and would be
         // collapsed if we waited for pending==0. Defer only while inside
         // ESC[?2026h ... ESC[?2026l; large warm-promotion backlogs have no
-        // pending sync and present immediately.
-        if outputWriter.isInSynchronizedOutput {
+        // pending sync and present immediately. Force after 50ms to avoid
+        // a permanently black warm promotion when the closing sequence is
+        // split across Data boundaries or never arrives.
+        if outputWriter.isInSynchronizedOutput, !outputWriter.isSyncStalled {
             state.controller.tick()
             TerminalDiagnostics.logVerbose("present_now_deferred", [
                 "session": id.description,

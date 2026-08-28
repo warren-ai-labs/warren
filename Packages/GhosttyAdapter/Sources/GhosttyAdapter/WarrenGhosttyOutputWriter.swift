@@ -112,6 +112,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     // Synchronized-output depth: >0 means Ghostty is inside ESC[?2026h ... ESC[?2026l.
     // Foreground should draw at frame boundary (depth==0), not at queue-empty.
     private var syncDepth: Int = 0
+    private var syncEnteredAt: ContinuousClock.Instant?
+    private var syncTail: [UInt8] = []
 
     init(
         inMemory: InMemoryTerminalSession,
@@ -161,6 +163,17 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         lock.withLock { syncDepth > 0 }
     }
 
+    /// Whether a synchronized block has been pending longer than the
+    /// presentation timeout (50ms). Foreground should force a draw after
+    /// this window to avoid a permanently black warm promotion when the
+    /// closing `ESC[?2026l` is split across Data boundaries or never arrives.
+    public var isSyncStalled: Bool {
+        lock.withLock {
+            guard syncDepth > 0, let entered = syncEnteredAt else { return false }
+            return ContinuousClock.now - entered >= .milliseconds(50)
+        }
+    }
+
     /// Drops pending bytes and restarts the recovery anchor. Safe to call
     /// while a feed is in flight; the next enqueue starts a fresh drain.
     public func reset(epoch: UInt64, sequence: UInt64) {
@@ -168,6 +181,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             lock.withLock {
                 buffer.reset(epoch: epoch, sequence: sequence)
                 syncDepth = 0
+                syncEnteredAt = nil
+                syncTail = []
             }
         }
     }
@@ -189,6 +204,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             latestRenderedEpoch = epoch
             latestRenderedSequence = sequence
             syncDepth = 0
+            syncEnteredAt = nil
+            syncTail = []
         }
         return true
     }
