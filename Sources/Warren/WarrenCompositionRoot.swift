@@ -309,8 +309,10 @@ struct WarrenCompositionRoot: View {
                     project: project,
                     onCancel: { workspaceCreatorProjectID = nil },
                     onCreate: { request in
-                        remoteModel.createWorkspace(projectID: projectID, request: request)
-                        workspaceCreatorProjectID = nil
+                        let sent = remoteModel.createWorkspace(projectID: projectID, request: request)
+                        if sent {
+                            workspaceCreatorProjectID = nil
+                        }
                     }
                 )
             }
