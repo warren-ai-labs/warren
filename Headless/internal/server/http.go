@@ -1025,11 +1025,11 @@ func (s *HTTPServer) handleRuntimeRefresh(writer http.ResponseWriter, request *h
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Manual Refresh Runtime from the menu bar. New sessions already inherit
-	// the current truecolor env via sessionEnv; this endpoint exists to
-	// acknowledge the request and let the UI refresh versions. A full
-	// ghostline handoff for existing sessions is handled by the upgrade
-	// path (version change) and is not required for the color fix.
+	// Manual Refresh Runtime from the menu bar. For now it acknowledges the
+	// request so the UI can refresh versions; new sessions already inherit
+	// truecolor via sessionEnv. A full ghostline handoff for existing
+	// sessions will be added here and will return a JSON error on failure
+	// so the menu bar can show the reason (handoffFailed).
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(map[string]any{"refreshed": true})
 }

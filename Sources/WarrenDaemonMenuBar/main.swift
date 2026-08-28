@@ -101,19 +101,28 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         let tokenURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".warren/token")
         guard let token = try? String(contentsOf: tokenURL, encoding: .utf8),
-              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            state = .failed("Missing token")
+            return
+        }
         var request = URLRequest(url: URL(string: "http://127.0.0.1:8789/v1/runtime/refresh")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token.trimmingCharacters(in: .whitespacesAndNewlines))", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 8
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if (response as? HTTPURLResponse)?.statusCode == 200 {
-                // Refresh succeeded; versions will be updated on next poll.
-                await refreshVersions()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                state = .failed("No response")
+                return
             }
+            if httpResponse.statusCode == 200 {
+                await refreshVersions()
+                return
+            }
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            state = .failed(message ?? "Refresh failed (\(httpResponse.statusCode))")
         } catch {
-            return
+            state = .failed(error.localizedDescription)
         }
     }
 
