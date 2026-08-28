@@ -973,9 +973,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private var wire: WarrenRemoteWire?
     private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
-    private var isLocalEndpoint: Bool {
-        endpointConfiguration?.url.hasPrefix("http://127.0.0.1:8789") == true
-    }
+    private var isLocalEndpoint = false
     private var eventTask: Task<Void, Never>?
     private var selectedSessionID: TerminalSessionID?
     private var attachedSessionID: TerminalSessionID?
@@ -1049,7 +1047,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    func connect(_ configuration: WarrenRemoteEndpointConfiguration) {
+    func connect(
+        _ configuration: WarrenRemoteEndpointConfiguration,
+        isLocal: Bool = false
+    ) {
         surfaceManager.onSurfaceDisposed = { [weak self] sessionID in
             guard let self else { return }
             self.outputAnchors.removeValue(forKey: sessionID)
@@ -1070,6 +1071,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         cancelTransientConnectionIssue()
         restorePersistedTabOrders()
         endpointConfiguration = configuration
+        isLocalEndpoint = isLocal
         settingsLoaded = false
         defaultRuntime = nil
         autoOpenShell = false
@@ -1107,6 +1109,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         eventTask?.cancel()
         eventTask = nil
         endpointConfiguration = nil
+        isLocalEndpoint = false
         cancelTransientConnectionIssue()
         clearMaintenance()
         if let wire { Task { await wire.close() } }

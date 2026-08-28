@@ -565,7 +565,7 @@ struct WarrenCompositionRoot: View {
                 remoteModel.disconnect()
                 return
             }
-            remoteModel.connect(endpoint)
+            remoteModel.connect(endpoint, isLocal: false)
             return
         }
         // Rebuild the endpoint on every pass instead of capturing it once
@@ -582,7 +582,7 @@ struct WarrenCompositionRoot: View {
                 // instead of issuing a second authenticated /v1/state probe
                 // that races the menu-bar supervisor.
                 if !endpoint.token.isEmpty {
-                    remoteModel.connect(endpoint)
+                    remoteModel.connect(endpoint, isLocal: true)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))
