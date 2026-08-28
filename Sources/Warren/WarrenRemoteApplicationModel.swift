@@ -1878,8 +1878,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         NSWorkspace.shared.open(browserURL)
     }
     func copyWebURL(_ url: URL) {
+        let clipboardURL = Self.publicAccessBrowserURL(
+            url,
+            currentEndpoint: webStatus.secureURL,
+            daemonToken: endpointConfiguration?.token ?? ""
+        )
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Self.canonicalWebURL(url).absoluteString, forType: .string)
+        NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
     }
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
@@ -1905,22 +1910,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ]))
                 return
             }
+            let clipboardURL = Self.publicAccessBrowserURL(
+                url,
+                currentEndpoint: webStatus.secureURL,
+                daemonToken: endpointConfiguration?.token ?? ""
+            )
             NSPasteboard.general.clearContents()
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            components?.fragment = nil
             NSPasteboard.general.setString(
-                (components?.url ?? url).absoluteString,
+                clipboardURL.absoluteString,
                 forType: .string
             )
         }
     }
 
     /// Returns the URL used only for an explicit browser-open action. Public
-    /// Access responses and clipboard paths stay canonical and credential-free;
-    /// the existing Warren fragment is added at the last possible moment so
-    /// the protected WebSocket can authenticate. This compatibility mechanism
-    /// remains a residual risk for browser history and is never persisted or
-    /// sent through analytics.
+    /// Public Access responses stay canonical and credential-free; explicit
+    /// browser and clipboard actions add the existing Warren fragment at the
+    /// last possible moment so the protected WebSocket can authenticate. This
+    /// compatibility mechanism remains a residual risk for browser history
+    /// and is never persisted or sent through analytics.
     static func publicAccessBrowserURL(
         _ url: URL,
         currentEndpoint: URL?,
