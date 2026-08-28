@@ -22,6 +22,8 @@ private struct WarrenProjectFileDialogLabels: ViewModifier {
 struct WarrenCompositionRoot: View {
     @StateObject private var remoteModel: WarrenRemoteApplicationModel
     @StateObject private var embeddedEditorModel: WarrenEmbeddedEditorModel
+    private let panelRegistry: WarrenDesktopPanelRegistry
+    private let gitPanelModule: WarrenDesktopGitPanelModule
     @State private var surfaceManager: TerminalSurfaceManager
     @State private var isProjectImporterPresented = false
     @State private var supersetImportPreview: SupersetImportPreview?
@@ -61,9 +63,23 @@ struct WarrenCompositionRoot: View {
     init() {
         let surfaceManager = TerminalSurfaceManager()
         _surfaceManager = State(initialValue: surfaceManager)
-        _remoteModel = StateObject(wrappedValue: WarrenRemoteApplicationModel(
-            surfaceManager: surfaceManager
-        ))
+        let remoteModel = WarrenRemoteApplicationModel(surfaceManager: surfaceManager)
+        _remoteModel = StateObject(wrappedValue: remoteModel)
+        let panelRegistry = WarrenDesktopPanelRegistry()
+        let gitPanelModule = WarrenDesktopGitPanelModule(
+            model: WarrenDesktopGitPanelModel(
+                client: WarrenRemoteGitClient { [weak remoteModel] method, params in
+                    guard let remoteModel else { throw URLError(.cancelled) }
+                    return try await remoteModel.gitRequest(method, params: params)
+                }
+            ),
+            webBaseURLProvider: { [weak remoteModel] in
+                remoteModel?.webStatus.localURL
+            }
+        )
+        panelRegistry.register(gitPanelModule.contribution)
+        self.panelRegistry = panelRegistry
+        self.gitPanelModule = gitPanelModule
         _embeddedEditorModel = StateObject(wrappedValue: WarrenEmbeddedEditorModel())
         // Endpoint configuration is user input, not frame state. Seed the
         // catalog once and refresh it from disk in the background so CLI
@@ -128,7 +144,8 @@ struct WarrenCompositionRoot: View {
                     workspace: workspace,
                     model: embeddedEditorModel
                 ))
-            }
+            },
+            panelRegistry: panelRegistry
         ) { context in
             WarrenTerminalSurfaceView(
                 context: context,

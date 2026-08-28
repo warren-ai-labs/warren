@@ -30,7 +30,10 @@ struct WarrenDesktopTabBar: View {
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
     let isOverflowPresented: Bool
     let isNoticePresented: Bool
+    let hasPanel: Bool
+    let panelActive: Bool
     let onToggleSidebar: () -> Void
+    let onTogglePanel: () -> Void
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
@@ -76,7 +79,10 @@ struct WarrenDesktopTabBar: View {
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
         isOverflowPresented: Bool = false,
         isNoticePresented: Bool = false,
+        hasPanel: Bool = false,
+        panelActive: Bool = false,
         onToggleSidebar: @escaping () -> Void,
+        onTogglePanel: @escaping () -> Void = {},
         onSettings: @escaping () -> Void,
         onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
         onOpenInExternalIDE: @escaping (WarrenDesktopExternalIDEOption) -> Void,
@@ -122,7 +128,10 @@ struct WarrenDesktopTabBar: View {
         )
         self.isOverflowPresented = isOverflowPresented
         self.isNoticePresented = isNoticePresented
+        self.hasPanel = hasPanel
+        self.panelActive = panelActive
         self.onToggleSidebar = onToggleSidebar
+        self.onTogglePanel = onTogglePanel
         self.onSettings = onSettings
         self.onChromePopover = onChromePopover
         self.onOpenInExternalIDE = onOpenInExternalIDE
@@ -256,6 +265,12 @@ struct WarrenDesktopTabBar: View {
                     .accessibilityHidden(true)
 
                 if chromeMode == .workspace {
+                    if hasPanel {
+                        WarrenDesktopGitButton(
+                            isVisible: panelActive,
+                            action: onTogglePanel
+                        )
+                    }
                     WarrenDesktopWorkspaceTabTrailing(
                         connectionState: connectionState,
                         endpointOptions: endpointOptions,

@@ -165,6 +165,7 @@ public enum WarrenPreferenceKey {
     public static let publicAccessEnabled = "web.gnarSharingEnabled"
     @available(*, deprecated, message: "Use publicAccessEnabled for Public Access.")
     public static let gnarSharingEnabled = publicAccessEnabled
+    public static let rightPanelWidth = "desktop.rightPanelWidth"
 }
 
 /// User-facing terminal typography shared by renderer adapters.

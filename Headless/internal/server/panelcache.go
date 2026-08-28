@@ -143,9 +143,6 @@ func (c *panelCache) remove(element *list.Element) {
 	c.list.Remove(element)
 }
 
-// panelLoad deduplicates concurrent synchronous panel loads for the same
-// workspace: only the first caller runs the query and the others wait for the
-// same result.
 type panelLoad struct {
 	mu      sync.Mutex
 	pending map[string]*panelLoadCall

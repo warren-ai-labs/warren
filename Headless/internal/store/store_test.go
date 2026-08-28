@@ -29,6 +29,9 @@ func TestOpenMigratesMissingTerminalGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := state.Snapshot()
+	if snapshot.Schema != currentSchema {
+		t.Fatalf("schema = %d, want %d", snapshot.Schema, currentSchema)
+	}
 	if len(snapshot.TerminalGroups) != 1 {
 		t.Fatalf("terminal groups = %#v, want one migrated Inbox", snapshot.TerminalGroups)
 	}
@@ -38,6 +41,32 @@ func TestOpenMigratesMissingTerminalGroups(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("migrated state was not persisted: %v", err)
+	}
+}
+
+func TestOpenAcceptsCurrentSchemaWithTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	data, err := json.Marshal(api.State{
+		Schema: currentSchema,
+		Host:   api.Host{ID: "host-1", Name: "test"},
+		Tasks:  []api.Task{{ID: "task-1", Name: "Task"}},
+		TerminalGroups: []api.TerminalGroup{{
+			ID: "group-1", Name: "Inbox", CreatedAt: time.Now().UTC(),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := Open(path, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Snapshot().Tasks; len(got) != 1 || got[0].ID != "task-1" {
+		t.Fatalf("tasks = %#v, want task-1", got)
 	}
 }
 

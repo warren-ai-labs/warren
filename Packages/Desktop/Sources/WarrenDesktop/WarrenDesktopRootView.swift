@@ -51,6 +51,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetAutoStartAI: (Bool) -> Void
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
+    private let panelRegistry: WarrenDesktopPanelRegistry
+    private let terminalFocusOwnership: WarrenDesktopTerminalFocusOwnership
     private let persistenceEnabled: Bool
     private let externalIDEService = WarrenDesktopExternalIDEService.live
     @State private var sidebarState: WarrenDesktopSidebarState
@@ -71,6 +73,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var pendingDeletionEndpointID: String?
     @State private var deleteWorkspaceRemoveWorktree = false
     @State private var workspaceContentModes: [WorkspaceID: WarrenDesktopWorkspaceContentMode]
+    @StateObject private var panelHost: WarrenDesktopPanelHost
+    @State private var terminalFocusRequested = true
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var terminalTitleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
@@ -131,6 +135,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSetAutoStartAI: @escaping (Bool) -> Void = { _ in },
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
+        panelRegistry: WarrenDesktopPanelRegistry = WarrenDesktopPanelRegistry(),
+        panelHost: WarrenDesktopPanelHost = WarrenDesktopPanelHost(),
+        terminalFocusOwnership: WarrenDesktopTerminalFocusOwnership = WarrenDesktopTerminalFocusOwnership(),
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -176,6 +183,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
+        self.panelRegistry = panelRegistry
+        self.terminalFocusOwnership = terminalFocusOwnership
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -194,9 +203,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 )
                 : [:]
         )
+        _panelHost = StateObject(wrappedValue: panelHost)
     }
 
     public var body: some View {
+        AnyView(rootBody)
+    }
+
+    private var rootBody: some View {
         let presentation = makePresentation()
         let tabTitles = Dictionary(uniqueKeysWithValues: presentation.tabs.map { tab in
             let session = tab.sessionID.flatMap { projection.session(id: $0) }
@@ -221,6 +235,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
         let contentMode = workspaceContentMode(for: presentation.workspace)
+        let currentPanelContext = panelContext(presentation)
+        let hasAvailablePanel = !panelRegistry.availablePanelIDs(in: currentPanelContext).isEmpty
         let tabBarView = makeTabBarView(
             presentation: presentation,
             contentMode: contentMode,
@@ -229,9 +245,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             pinnedSessionIDs: pinnedSessionIDs,
             isAddingSession: isAddingSession,
             sessionMoveTargets: sessionMoveTargets,
-            sessionMoveDestinations: sessionMoveDestinations
+            sessionMoveDestinations: sessionMoveDestinations,
+            hasAvailablePanel: hasAvailablePanel
         )
-        let sidebarView = WarrenDesktopSidebar(
+        let workspaceColumn = makeWorkspaceColumn(
+            presentation: presentation,
+            tabBarView: tabBarView,
+            contentMode: contentMode,
+            isAddingSession: isAddingSession
+        )
+        let sidebar = AnyView(WarrenDesktopSidebar(
             projection: projection,
             sidebarState: $sidebarState,
             sidebarTree: $sidebarTree,
@@ -248,40 +271,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onRequestDeletion: presentDeletion,
             onRequestTerminalGroupCreate: presentTerminalGroupCreate,
             onRequestTerminalGroupEdit: presentTerminalGroupEdit
-        )
-        .frame(width: sidebarState.renderedWidth)
-        let workspaceColumn = makeWorkspaceColumn(
-            presentation: presentation,
-            tabBarView: tabBarView,
-            contentMode: contentMode,
-            isAddingSession: isAddingSession
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                sidebarView
-                workspaceColumn
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .opacity(settingsPresented ? 0 : 1)
-            .allowsHitTesting(!settingsPresented)
-            .accessibilityHidden(settingsPresented)
-
-            if settingsPresented {
-                settingsOverlay
-            }
-        }
-        .frame(
-            minWidth: WarrenLayoutMetrics.sidebarExpandedWidth
-                + WarrenLayoutMetrics.paneMinimumWidth,
-            minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
-                + WarrenLayoutMetrics.tabBarHeight
-                + WarrenLayoutMetrics.presetBarHeight
-                + WarrenLayoutMetrics.paneHeaderHeight
-                + WarrenLayoutMetrics.paneMinimumHeight
-        )
-        .denSurface()
-        .warrenUnixTextEditing()
+        ))
+        let settings = AnyView(settingsOverlay)
+        let shell = rootShell(sidebar: sidebar, workspaceColumn: workspaceColumn, settings: settings)
+        let minimumWidth = WarrenLayoutMetrics.sidebarExpandedWidth + WarrenLayoutMetrics.paneMinimumWidth
+        let minimumHeight = (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
+            + WarrenLayoutMetrics.tabBarHeight
+            + WarrenLayoutMetrics.presetBarHeight
+            + WarrenLayoutMetrics.paneHeaderHeight
+            + WarrenLayoutMetrics.paneMinimumHeight
+        let framed = AnyView(shell.frame(minWidth: minimumWidth, minHeight: minimumHeight))
+        let styled = framed.denSurface().warrenUnixTextEditing()
+        let observed = AnyView(styled
         .onChange(of: sidebarState) { newState in
             if persistenceEnabled { Self.persist(newState) }
         }
@@ -309,6 +310,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 chromePopover = nil
             }
         }
+        .onChange(of: currentPanelContext) { context in
+            panelHost.sync(context: context, registry: panelRegistry)
+        }
+        )
+        return observed
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
         }
@@ -385,6 +391,20 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             refreshWebDismissal()
         }
         .warrenSemanticObservationRoot(recorder: semanticRecorder)
+    }
+
+    private func rootShell(sidebar: AnyView, workspaceColumn: AnyView, settings: AnyView) -> AnyView {
+        AnyView(ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                sidebar.frame(width: sidebarState.renderedWidth)
+                workspaceColumn.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(settingsPresented ? 0 : 1)
+            .allowsHitTesting(!settingsPresented)
+            .accessibilityHidden(settingsPresented)
+            if settingsPresented { settings }
+        })
     }
 
     private var selectedEndpointIsLocal: Bool {
@@ -545,7 +565,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         pinnedSessionIDs: Set<TerminalSessionID>,
         isAddingSession: Bool,
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
-        sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination]
+        sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination],
+        hasAvailablePanel: Bool
     ) -> AnyView {
         AnyView(WarrenDesktopTabBar(
             tabs: presentation.tabs,
@@ -569,7 +590,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             externallyVisibleControls: externallyVisibleControls,
             isOverflowPresented: chromePopover == .overflow,
             isNoticePresented: chromePopover == .notices,
+            hasPanel: hasAvailablePanel,
+            panelActive: panelHost.isPanelOpen,
             onToggleSidebar: toggleSidebar,
+            onTogglePanel: { togglePanel(presentation: presentation) },
             onSettings: openSettings,
             onChromePopover: { popover in
                 setChromePopover(chromePopover == popover ? nil : popover)
@@ -625,59 +649,133 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     )
                 }
                 tabBarView
-                if contentMode == .terminal {
-                    WarrenDesktopPresetBar(
-                        workspace: presentation.workspace,
-                        terminalGroup: presentation.terminalGroup,
-                        isBusy: isAddingSession,
-                        onLaunch: { request in
-                            launchSession(request, in: presentation)
-                        }
-                    )
-                }
-                ZStack {
-                    WarrenDesktopWorkspaceContent(
-                        workspace: presentation.contentWorkspace,
-                        terminalGroup: presentation.contentTerminalGroup,
-                        tab: presentation.tab,
-                        hasProjects: !projection.groups.isEmpty,
-                        connectionState: projection.connectionState,
-                        endpointCapabilities: endpointCapabilities,
-                        // Superset keeps the 28pt pane toolbar in workspace
-                        // mode too. It is pane chrome, not a duplicate top bar.
-                        showsPaneHeader: true,
-                        session: presentation.session,
-                        hostName: projection.host.name,
-                        titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
-                        terminalFont: TerminalFontPreference(
-                            family: terminalFontFamily,
-                            size: terminalFontSize
-                        ),
-                        wantsTerminalFocus: contentMode == .terminal
-                            && !commandPalettePresented
-                            && !settingsPresented,
-                        onAddProject: { dispatch(.addProject) },
-                        onImportSuperset: { dispatch(.importSuperset) },
-                        terminalSurface: terminalSurface
-                    )
-                    .opacity(contentMode == .terminal ? 1 : 0)
-                    .allowsHitTesting(contentMode == .terminal)
-                    .accessibilityHidden(contentMode != .terminal)
+                workspaceBody(
+                    presentation: presentation,
+                    contentMode: contentMode,
+                    isAddingSession: isAddingSession
+                )
+            }
+        )
+    }
 
-                    if let workspace = presentation.workspace,
-                       workspaceContentModes[workspace.id] != nil,
-                       embeddedEditorAvailable {
-                        WarrenDesktopEmbeddedEditorPane(
-                            workspace: workspace,
-                            surface: editorSurface(workspace)
+    @ViewBuilder
+    private func workspaceBody(
+        presentation: Presentation,
+        contentMode: WarrenDesktopWorkspaceContentMode,
+        isAddingSession: Bool
+    ) -> some View {
+        GeometryReader { proxy in
+            let context = panelContext(presentation)
+            let contribution = activePanelContribution(in: context)
+            let panelOpen = panelHost.isPanelOpen && contribution != nil
+            let resolution = WarrenDesktopPanelLayout.resolve(
+                containerWidth: proxy.size.width,
+                panelOpen: panelOpen,
+                requestedPanelWidth: panelHost.rightPanelWidth
+            )
+            ZStack(alignment: .trailing) {
+                HStack(spacing: 0) {
+                    centerBody(
+                        presentation: presentation,
+                        contentMode: contentMode,
+                        isAddingSession: isAddingSession,
+                        detail: panelOpen ? contribution?.centerDetail(in: context) : nil
+                    )
+                    .frame(width: resolution.centerWidth)
+
+                    if resolution.panelPlacement == .side, let contribution {
+                        WarrenDesktopPanelSurface(
+                            width: resolution.panelWidth,
+                            containerCap: proxy.size.width,
+                            onResize: { _ = panelHost.resize(to: $0) }
+                        ) {
+                            contribution.rightContent(
+                                in: context,
+                                onClose: WarrenDesktopPanelCloseAction { closePanel(context: context) }
+                            )
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+
+                if resolution.panelPlacement != .side, let contribution {
+                    WarrenDesktopPanelDrawer(
+                        width: resolution.panelWidth,
+                        containerCap: proxy.size.width,
+                        onDismiss: { _ in closePanel(context: context) },
+                        onResize: { _ = panelHost.resize(to: $0) },
+                        onRestoreFocus: restorePanelTerminalFocus
+                    ) {
+                        contribution.rightContent(
+                            in: context,
+                            onClose: WarrenDesktopPanelCloseAction { closePanel(context: context) }
                         )
-                        .opacity(contentMode == .editor ? 1 : 0)
-                        .allowsHitTesting(contentMode == .editor)
-                        .accessibilityHidden(contentMode != .editor)
                     }
                 }
             }
-        )
+        }
+    }
+
+    @ViewBuilder
+    private func centerBody(
+        presentation: Presentation,
+        contentMode: WarrenDesktopWorkspaceContentMode,
+        isAddingSession: Bool,
+        detail: AnyView?
+    ) -> some View {
+        VStack(spacing: 0) {
+            if contentMode == .terminal {
+                WarrenDesktopPresetBar(
+                    workspace: presentation.workspace,
+                    terminalGroup: presentation.terminalGroup,
+                    isBusy: isAddingSession,
+                    onLaunch: { request in launchSession(request, in: presentation) }
+                )
+            }
+            ZStack {
+                WarrenDesktopWorkspaceContent(
+                    workspace: presentation.contentWorkspace,
+                    terminalGroup: presentation.contentTerminalGroup,
+                    tab: presentation.tab,
+                    hasProjects: !projection.groups.isEmpty,
+                    connectionState: projection.connectionState,
+                    endpointCapabilities: endpointCapabilities,
+                    showsPaneHeader: true,
+                    session: presentation.session,
+                    hostName: projection.host.name,
+                    titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
+                    terminalFont: TerminalFontPreference(family: terminalFontFamily, size: terminalFontSize),
+                    wantsTerminalFocus: terminalFocusRequested
+                        && contentMode == .terminal
+                        && !commandPalettePresented
+                        && !settingsPresented
+                        && detail == nil,
+                    detail: detail,
+                    onAddProject: { dispatch(.addProject) },
+                    onImportSuperset: { dispatch(.importSuperset) },
+                    terminalSurface: terminalSurface
+                )
+                .opacity(contentMode == .terminal || detail != nil ? 1 : 0)
+                .allowsHitTesting(contentMode == .terminal || detail != nil)
+                .accessibilityHidden(contentMode != .terminal && detail == nil)
+
+                if let workspace = presentation.workspace,
+                   workspaceContentModes[workspace.id] != nil,
+                   embeddedEditorAvailable {
+                    WarrenDesktopEmbeddedEditorPane(
+                        workspace: workspace,
+                        surface: editorSurface(workspace)
+                    )
+                    .opacity(contentMode == .editor && detail == nil ? 1 : 0)
+                    .allowsHitTesting(contentMode == .editor && detail == nil)
+                    .accessibilityHidden(contentMode != .editor || detail != nil)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: detail != nil) { isPresented in
+            terminalFocusRequested = !isPresented
+        }
     }
 
     private func workspaceContentMode(
@@ -1074,6 +1172,45 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             commandPalettePresented = presented
         }
+    }
+
+    private func panelContext(_ presentation: Presentation) -> WarrenDesktopPanelContext {
+        WarrenDesktopPanelContext(
+            endpointID: selectedEndpointID,
+            workspaceID: presentation.workspace?.id,
+            workspaceName: presentation.workspace?.name ?? ""
+        )
+    }
+
+    private func activePanelContribution(
+        in context: WarrenDesktopPanelContext
+    ) -> WarrenDesktopPanelContribution? {
+        guard panelHost.isPanelOpen,
+              let panelID = panelHost.activePanelID,
+              panelRegistry.isAvailable(panelID: panelID, in: context) else {
+            return nil
+        }
+        return panelRegistry.contribution(panelID: panelID)
+    }
+
+    private func togglePanel(presentation: Presentation) {
+        let context = panelContext(presentation)
+        guard let panelID = panelHost.activePanelID
+            ?? panelRegistry.availablePanelIDs(in: context).first else { return }
+        if panelHost.isPanelOpen, panelHost.activePanelID == panelID {
+            closePanel(context: context)
+        } else {
+            _ = panelHost.open(panelID: panelID, context: context, registry: panelRegistry)
+        }
+    }
+
+    private func closePanel(context: WarrenDesktopPanelContext) {
+        panelHost.close(context: context, registry: panelRegistry)
+        terminalFocusRequested = true
+    }
+
+    private func restorePanelTerminalFocus() {
+        terminalFocusRequested = true
     }
 
     private func tabIndex(from rawValue: Any?) -> Int? {

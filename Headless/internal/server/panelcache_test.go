@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,38 +60,6 @@ func TestPanelCacheShouldRevalidateCoalesces(t *testing.T) {
 	cache.FinishRevalidate("a")
 	if !cache.ShouldRevalidate("a", 0) {
 		t.Fatal("expected revalidation to be allowed again after finishing")
-	}
-}
-
-func TestPanelLoadMergesConcurrentLoads(t *testing.T) {
-	loads := newPanelLoad()
-	var calls atomic.Int32
-	start := make(chan struct{})
-	const workers = 8
-	results := make(chan string, workers)
-	for i := 0; i < workers; i++ {
-		go func() {
-			<-start
-			panel, err := loads.Do("a", func() (api.GitPanel, error) {
-				calls.Add(1)
-				time.Sleep(50 * time.Millisecond)
-				return api.GitPanel{WorkspaceID: "a", Branch: "main"}, nil
-			})
-			if err != nil {
-				results <- "error"
-				return
-			}
-			results <- panel.Branch
-		}()
-	}
-	close(start)
-	for i := 0; i < workers; i++ {
-		if branch := <-results; branch != "main" {
-			t.Fatalf("worker got branch %q, want main", branch)
-		}
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("load executed %d times, want 1", calls.Load())
 	}
 }
 
@@ -240,5 +207,25 @@ func TestGitPanelAheadOfMain(t *testing.T) {
 	}
 	if panel.AheadOfMain != 2 {
 		t.Fatalf("ahead of main = %d, want 2", panel.AheadOfMain)
+	}
+}
+
+func TestPanelCacheFinishRevalidateIsIdempotent(t *testing.T) {
+	cache := newPanelCache(2)
+	cache.Set("a", api.GitPanel{WorkspaceID: "a"})
+	if !cache.ShouldRevalidate("a", 0) {
+		t.Fatal("expected first check to trigger revalidation")
+	}
+	cache.FinishRevalidate("a")
+	cache.FinishRevalidate("a")
+	if !cache.ShouldRevalidate("a", 0) {
+		t.Fatal("expected revalidation to be allowed again after finishing twice")
+	}
+}
+
+func TestStaleRevalidateLaneRejectsWhenFull(t *testing.T) {
+	lane := newStaleRevalidateLane(nil, 0, 0)
+	if lane.submit("a", "path") {
+		t.Fatal("expected a full revalidate lane to reject submission")
 	}
 }

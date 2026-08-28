@@ -12,6 +12,20 @@ type Host struct {
 	Version string `json:"version"`
 }
 
+// Task is a durable external task projection. Older Warren builds may not
+// use tasks directly, but retaining the fields keeps newer state files
+// round-trippable when those builds update unrelated records.
+type Task struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Source     string    `json:"source,omitempty"`
+	ExternalID string    `json:"externalID,omitempty"`
+	URL        string    `json:"url,omitempty"`
+	Pinned     bool      `json:"pinned,omitempty"`
+	Order      int       `json:"order,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
 type Project struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -41,6 +55,7 @@ type WorktreeCandidate struct {
 type Workspace struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"project"`
+	TaskID    string `json:"task,omitempty"`
 	Name      string `json:"name"`
 	Path      string `json:"path"`
 	Branch    string `json:"branch,omitempty"`
@@ -357,6 +372,7 @@ type State struct {
 	// never written into the durable state file.
 	Revision       uint64          `json:"revision,omitempty"`
 	Host           Host            `json:"host"`
+	Tasks          []Task          `json:"tasks"`
 	Projects       []Project       `json:"projects"`
 	Workspaces     []Workspace     `json:"workspaces"`
 	TerminalGroups []TerminalGroup `json:"terminalGroups"`
