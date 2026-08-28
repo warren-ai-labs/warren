@@ -722,17 +722,25 @@ func (r sqliteOpenCodeReader) ReadMessages(ctx context.Context, sessionID string
 		r.invalidateVersion()
 		return nil, err
 	}
+	// Do not join and GROUP BY m.data here. OpenCode stores the complete user
+	// prompt in message.data and a single row can be tens of megabytes. SQLite
+	// has to copy every GROUP BY value into a temporary B-tree, which can exhaust
+	// the process when several sessions are restored at once. The indexed
+	// correlated aggregate preserves the part timestamp without materialising
+	// the message payload as a grouping key.
 	query := `SELECT m.id, m.session_id, m.time_created, m.time_updated, m.data,
-		COALESCE(MAX(p.time_updated), 0) AS part_time_updated
+		COALESCE((SELECT MAX(p.time_updated) FROM part AS p WHERE p.message_id = m.id), 0) AS part_time_updated
 		FROM message AS m
-		LEFT JOIN part AS p ON p.message_id = m.id
 		WHERE m.session_id = ?`
 	args := []any{sessionID}
 	if updatedSince > 0 {
-		query += " AND (p.time_updated >= ? OR m.time_created >= ? OR m.time_updated >= ?)"
+		query += ` AND (
+			EXISTS (SELECT 1 FROM part AS changed WHERE changed.message_id = m.id AND changed.time_updated >= ?)
+			OR m.time_created >= ? OR m.time_updated >= ?
+		)`
 		args = append(args, updatedSince, updatedSince, updatedSince)
 	}
-	query += " GROUP BY m.id, m.session_id, m.time_created, m.time_updated, m.data ORDER BY m.time_created ASC, m.id ASC"
+	query += " ORDER BY m.time_created ASC, m.id ASC"
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		r.invalidateVersion()
@@ -761,6 +769,10 @@ func (r sqliteOpenCodeReader) ReadMessages(ctx context.Context, sessionID string
 			r.invalidateVersion()
 			return nil, fmt.Errorf("decode OpenCode message %q: %w", columnID, err)
 		}
+		// OpenCode may keep large diff snapshots under message.summary. Warren's
+		// projection only consumes a user-facing title/body, so retain that small
+		// subset and discard provider bookkeeping before it reaches the cache.
+		message.Summary = compactOpenCodeSummary(message.Summary)
 		message.ID = columnID
 		message.SessionID = sessionIDValue
 		if message.Time.Created == 0 && created.Valid {
@@ -962,9 +974,21 @@ func (t *OpenCodeTailer) loop() {
 }
 
 // Poll performs one bounded read and is exported for deterministic fixtures.
-func (t *OpenCodeTailer) Poll(parent context.Context) error {
+func (t *OpenCodeTailer) Poll(parent context.Context) (err error) {
 	t.pollMu.Lock()
 	defer t.pollMu.Unlock()
+	// Provider databases are external state. The SQLite driver can panic on an
+	// allocation failure (SQLITE_NOMEM) instead of returning an error; contain
+	// that failure at the tailer boundary so one oversized conversation cannot
+	// terminate the headless control plane during restore.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if closer, ok := t.reader.(openCodeReaderCloser); ok {
+				_ = closer.Close()
+			}
+			err = fmt.Errorf("OpenCode tailer poll panic: %v", recovered)
+		}
+	}()
 	if t.reader == nil || t.binding.SessionID == "" {
 		return errors.New("OpenCode tailer has no bound reader")
 	}
@@ -1237,6 +1261,32 @@ func openCodeEnvelopeFromSource(source openCodeSourceMessage) (openCodeEnvelope,
 func openCodeRawValuePresent(raw json.RawMessage) bool {
 	value := strings.TrimSpace(string(raw))
 	return value != "" && value != "null"
+}
+
+func compactOpenCodeSummary(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == "true" || string(raw) == "false" {
+		return nil
+	}
+	var object struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if json.Unmarshal(raw, &object) == nil && (object.Title != "" || object.Body != "") {
+		compact, _ := json.Marshal(struct {
+			Title string `json:"title,omitempty"`
+			Body  string `json:"body,omitempty"`
+		}{
+			Title: truncate(object.Title, maxEventContent),
+			Body:  truncate(object.Body, maxEventContent),
+		})
+		return compact
+	}
+	var textValue string
+	if json.Unmarshal(raw, &textValue) == nil && textValue != "" {
+		compact, _ := json.Marshal(truncate(textValue, maxEventContent))
+		return compact
+	}
+	return nil
 }
 
 func openCodeEnvelopeFingerprint(envelope openCodeEnvelope) string {
