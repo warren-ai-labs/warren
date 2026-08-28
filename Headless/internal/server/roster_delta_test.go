@@ -17,6 +17,9 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
 	before := api.State{
 		Host: api.Host{ID: "host", Name: "before"},
+		Tasks: []api.Task{
+			{ID: "task-a", Name: "A", CreatedAt: createdAt},
+		},
 		Projects: []api.Project{
 			{ID: "project-a", Name: "A", CreatedAt: createdAt},
 			{ID: "project-b", Name: "B", CreatedAt: createdAt},
@@ -30,6 +33,10 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 	}
 	after := api.State{
 		Host: api.Host{ID: "host", Name: "after"},
+		Tasks: []api.Task{
+			{ID: "task-a", Name: "A renamed", CreatedAt: createdAt},
+			{ID: "task-b", Name: "B", CreatedAt: createdAt},
+		},
 		Projects: []api.Project{
 			{ID: "project-b", Name: "B", CreatedAt: createdAt},
 			{ID: "project-a", Name: "A renamed", CreatedAt: createdAt},
@@ -48,6 +55,9 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 	}
 	if delta.Host == nil || delta.Host.Name != "after" {
 		t.Fatalf("host delta = %#v", delta.Host)
+	}
+	if delta.Tasks == nil || len(delta.Tasks.Upsert) != 2 {
+		t.Fatalf("task delta = %#v", delta.Tasks)
 	}
 	if delta.Projects == nil || len(delta.Projects.Upsert) != 1 || delta.Projects.Upsert[0].ID != "project-a" {
 		t.Fatalf("project delta = %#v", delta.Projects)

@@ -10,6 +10,37 @@ public struct Host: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct WarrenTask: Identifiable, Codable, Hashable, Sendable {
+    public let id: TaskID
+    public let hostID: HostID
+    public var name: String
+    public var source: String?
+    public var externalID: String?
+    public var url: URL?
+    public var pinned: Bool
+    public var order: Int
+
+    public init(
+        id: TaskID = TaskID(),
+        hostID: HostID,
+        name: String,
+        source: String? = nil,
+        externalID: String? = nil,
+        url: URL? = nil,
+        pinned: Bool = false,
+        order: Int = 0
+    ) {
+        self.id = id
+        self.hostID = hostID
+        self.name = name
+        self.source = source
+        self.externalID = externalID
+        self.url = url
+        self.pinned = pinned
+        self.order = order
+    }
+}
+
 public struct Project: Identifiable, Codable, Hashable, Sendable {
     public let id: ProjectID
     public let hostID: HostID
@@ -81,6 +112,7 @@ public enum WorkspaceMergeState: String, Codable, CaseIterable, Hashable, Sendab
 public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     public let id: WorkspaceID
     public let projectID: ProjectID
+    public var taskID: TaskID?
     public var name: String
     public var path: String
     public var branch: String?
@@ -100,6 +132,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     public init(
         id: WorkspaceID = WorkspaceID(),
         projectID: ProjectID,
+        taskID: TaskID? = nil,
         name: String,
         path: String,
         branch: String? = nil,
@@ -111,6 +144,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     ) {
         self.id = id
         self.projectID = projectID
+        self.taskID = taskID
         self.name = name
         self.path = path
         self.branch = branch
@@ -124,6 +158,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case projectID
+        case taskID
         case name
         case path
         case branch
@@ -138,6 +173,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(WorkspaceID.self, forKey: .id)
         projectID = try container.decode(ProjectID.self, forKey: .projectID)
+        taskID = try container.decodeIfPresent(TaskID.self, forKey: .taskID)
         name = try container.decode(String.self, forKey: .name)
         path = try container.decode(String.self, forKey: .path)
         branch = try container.decodeIfPresent(String.self, forKey: .branch)

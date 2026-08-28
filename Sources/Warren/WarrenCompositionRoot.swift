@@ -19,6 +19,11 @@ private struct WarrenProjectFileDialogLabels: ViewModifier {
     }
 }
 
+private struct WarrenWorkspaceCreatorContext: Equatable {
+    let projectID: ProjectID
+    let taskID: TaskID?
+}
+
 struct WarrenCompositionRoot: View {
     @StateObject private var remoteModel: WarrenRemoteApplicationModel
     @StateObject private var embeddedEditorModel: WarrenEmbeddedEditorModel
@@ -26,9 +31,7 @@ struct WarrenCompositionRoot: View {
     @State private var isProjectImporterPresented = false
     @State private var supersetImportPreview: SupersetImportPreview?
     @State private var isSupersetImporting = false
-    @State private var workspaceCreatorProjectID: ProjectID?
-    @State private var workspaceCreatorError: String?
-    @State private var isCreatingWorkspace = false
+    @State private var workspaceCreatorContext: WarrenWorkspaceCreatorContext?
     @State private var worktreeImportProjectID: ProjectID?
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
@@ -84,6 +87,9 @@ struct WarrenCompositionRoot: View {
                 )
             },
             actions: WarrenDesktopActions(send: handle),
+            onCreateTask: { creation in
+                try await remoteModel.createTask(creation)
+            },
             webStatus: remoteModel.webStatus,
             creatingSessionWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs,
             creatingSessionTerminalGroupIDs: remoteModel.creatingSessionTerminalGroupIDs,
@@ -304,51 +310,24 @@ struct WarrenCompositionRoot: View {
             .zIndex(WarrenPresentationLayer.modal)
             .onAppear { presentation.present(.sheet) }
             .onDisappear { presentation.dismissTop() }
-        } else if let projectID = workspaceCreatorProjectID,
-                  let project = activeProjection.projectGroup(id: projectID)?.project {
+        } else if let context = workspaceCreatorContext,
+                  let project = activeProjection.projectGroup(id: context.projectID)?.project {
             WarrenModalSurface {
                 WarrenWorkspaceCreatorView(
                     project: project,
-                    isCreating: isCreatingWorkspace,
-                    errorMessage: workspaceCreatorError,
-                    onCancel: {
-                        workspaceCreatorProjectID = nil
-                        workspaceCreatorError = nil
-                        isCreatingWorkspace = false
-                    },
+                    onCancel: { workspaceCreatorContext = nil },
                     onCreate: { request in
-                        guard !isCreatingWorkspace else { return }
-                        isCreatingWorkspace = true
-                        workspaceCreatorError = nil
-                        Task { @MainActor in
-                            do {
-                                try await remoteModel.createWorkspace(projectID: projectID, request: request)
-                                // Only clear the modal if it is still the same request.
-                                if workspaceCreatorProjectID == projectID {
-                                    workspaceCreatorProjectID = nil
-                                    workspaceCreatorError = nil
-                                }
-                            } catch {
-                                if workspaceCreatorProjectID == projectID {
-                                    workspaceCreatorError = error.localizedDescription
-                                }
-                                // Also surface in notice center for persistence.
-                                remoteModel.report(error)
-                            }
-                            isCreatingWorkspace = false
-                        }
+                        try await remoteModel.createWorkspace(
+                            projectID: context.projectID,
+                            taskID: context.taskID,
+                            request: request
+                        )
                     }
                 )
             }
             .zIndex(WarrenPresentationLayer.modal)
             .onAppear { presentation.present(.modal) }
-            .onDisappear {
-                presentation.dismissTop()
-                // Reset transient creation state when the modal is dismissed
-                // by any path (e.g. outside tap), so a later open starts clean.
-                workspaceCreatorError = nil
-                isCreatingWorkspace = false
-            }
+            .onDisappear { presentation.dismissTop() }
         } else if let projectID = worktreeImportProjectID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenSheetSurface {
@@ -391,8 +370,11 @@ struct WarrenCompositionRoot: View {
             if selectedEndpointCapabilities.canImportSuperset {
                 beginSupersetImport()
             }
-        } else if case .requestNewWorkspace(let projectID) = action {
-            workspaceCreatorProjectID = projectID
+        } else if case .requestNewWorkspace(let projectID, let taskID) = action {
+            workspaceCreatorContext = WarrenWorkspaceCreatorContext(
+                projectID: projectID,
+                taskID: taskID
+            )
         } else if case .requestProjectWorktreeImport(let projectID) = action {
             presentWorktreeImport(for: projectID)
         } else if case .setProjectAutoImportGitWorktrees(let projectID, let enabled) = action {

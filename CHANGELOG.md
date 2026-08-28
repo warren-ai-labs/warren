@@ -4,7 +4,13 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-- Add release notes here before the next version is published.
+### Added
+
+- Add Host-owned Tasks that aggregate Workspaces across Projects, with provider-neutral external work-item metadata, Web and CLI lifecycle controls, and Web/Desktop Workspace attach and detach actions.
+
+### Changed
+
+- Migrate Host state from schema 1 to schema 2 so Task data is durable and unknown future schemas fail closed.
 
 ## [0.11.0] - 2026-08-28
 
