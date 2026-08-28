@@ -4,6 +4,8 @@ import WarrenDesignSystem
 
 struct WarrenWorkspaceCreatorView: View {
     let project: Project
+    let isCreating: Bool
+    let errorMessage: String?
     let onCancel: () -> Void
     let onCreate: (WorkspaceCreationRequest) -> Void
 
@@ -50,23 +52,42 @@ struct WarrenWorkspaceCreatorView: View {
                 .font(WarrenTypography.dialogBody)
                 .foregroundStyle(tokens.mutedForeground)
 
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Creation failed: \(errorMessage)")
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
                     .keyboardShortcut(.cancelAction)
-                Button("Create") {
+                    .disabled(isCreating)
+                Button {
                     onCreate(WorkspaceCreationRequest(
                         requestID: requestID,
                         displayName: displayName,
                         branch: branch,
                         path: ""
                     ))
-                    onCancel()
+                } label: {
+                    if isCreating {
+                        HStack(spacing: WarrenSpacing.xs) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Creating…")
+                        }
+                    } else {
+                        Text("Create")
+                    }
                 }
                 .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
                 .keyboardShortcut(.defaultAction)
                 .disabled(
+                    isCreating ||
                     branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                     displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
