@@ -31,6 +31,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     private var daemonProcess: Process?
     private var pollTask: Task<Void, Never>?
     private var autoStartDisabled = false
+    private var pendingForceHandoff = false
     private var buildVersion: String?
     private var ghostlineRPCVersion: String?
     private var ghostlineTagVersion: String?
@@ -74,6 +75,8 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     @objc private func restartDaemon() {
         autoStartDisabled = false
+        pendingForceHandoff = true
+        writeForceHandoffMarker()
         stopDaemon()
         ensureDaemon()
     }
@@ -272,7 +275,16 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         // config; dropping the inherited value keeps interactive TUIs colored
         // by default.
         childEnvironment.removeValue(forKey: "NO_COLOR")
+        // Force handoff is a one-shot control signal. `open` may launch this
+        // helper with the install shell's environment, but that ambient value
+        // must not be forwarded to every daemon restart (or to Ghostline).
+        childEnvironment.removeValue(forKey: "WARREN_GHOSTLINE_FORCE_HANDOFF")
+        childEnvironment.removeValue(forKey: "WARREN_FORCE_HANDOFF")
         childEnvironment["PATH"] = executableSearchPath(from: childEnvironment["PATH"])
+        if pendingForceHandoff {
+            childEnvironment["WARREN_GHOSTLINE_FORCE_HANDOFF"] = "1"
+            writeForceHandoffMarker()
+        }
         process.environment = childEnvironment
         process.terminationHandler = { [weak self] _ in
             Task { @MainActor in
@@ -283,6 +295,8 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         do {
             try process.run()
             daemonProcess = process
+            // Only the explicitly requested restart should force a handoff.
+            pendingForceHandoff = false
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -526,6 +540,22 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
     }
 }
+
+private func writeForceHandoffMarker() {
+        let marker = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".warren/force-ghostline-handoff")
+        try? FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: marker.path, contents: Data())
+        // Also ensure next daemon start sees the flag even if env propagation fails
+        // (e.g., `open` from install script). The headless daemon clears the file after handoff.
+    }
+
+    private func clearForceHandoffMarkerIfNeeded() {
+        // Called implicitly by the daemon after handoff; keep helper for testing symmetry.
+        let marker = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".warren/force-ghostline-handoff")
+        try? FileManager.default.removeItem(at: marker)
+    }
 
 @MainActor
 private enum WarrenDaemonMenuBarLock {

@@ -62,17 +62,47 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 		config.logger = slog.Default()
 	}
 
+	// Force handoff is a one-shot control signal. Consume it before spawning
+	// any Ghostline child (and before recovery can return an error), so it
+	// cannot be inherited by the serve process or trigger another handoff when
+	// this daemon is restarted.
+	force := consumeForceGhostlineHandoff(config)
 	if err := resumeGhostlineMigration(config); err != nil {
 		return nil, err
 	}
 	// Upgrade handoff for warren version change (app update) even when
 	// ghostline protocol/tag is unchanged. Only canonical tags (v0.10.1)
 	// trigger version-matched handoff; non-canonical (dev/dirty) require
-	// explicit force via WARREN_GHOSTLINE_FORCE_HANDOFF for `mise run install`.
+	// explicit force via WARREN_GHOSTLINE_FORCE_HANDOFF for `mise run install`
+	// or the menubar Restart. A forced handoff also covers same-version
+	// rebuilds (e.g., a rebuilt binary with same hash) so operator fixes
+	// like COLORTERM are picked up.
 	if warrenVersion != "" && state != nil {
 		storedVersion := state.Snapshot().WarrenVersion
-		force := forceGhostlineHandoffRequested()
 		canVersionMatch := isCanonicalWarrenVersion(storedVersion) && isCanonicalWarrenVersion(warrenVersion)
+		// Forced path: explicit operator request triggers a handoff regardless
+		// of version equality or canonical status, as long as an existing
+		// ghostline is reachable. This makes `mise run install` and menubar
+		// Restart reliably pick up a rebuilt daemon with the same version
+		// string.
+		if force && ghostlineSocketReady(socketPath) {
+			sourceSocket := currentGhostlineRoute(socketPath)
+			if ghostlineSocketReady(sourceSocket) && ghostlineSocketReady(sourceSocket+".admin") {
+				handoffVersion := "warren-" + warrenVersion
+				if storedVersion == warrenVersion {
+					handoffVersion += "-forced"
+				}
+				config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
+				version, _ := probeGhostlineVersion(context.Background(), sourceSocket)
+				if err := handoffGhostline(config, sourceSocket, version, handoffVersion, v1GhostlineSpawn(config)); err != nil {
+					return nil, err
+				}
+				if storedVersion != warrenVersion {
+					_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
+				}
+				return checkedGhostlineClient(socketPath, "after forced handoff")
+			}
+		}
 		if storedVersion != "" && storedVersion != warrenVersion && (canVersionMatch || force) {
 			config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
 			sourceSocket := currentGhostlineRoute(socketPath)
@@ -81,7 +111,7 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 				return nil, err
 			}
 			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
-			return ensureGhostlineClientWithStore(socketPath, outputDir, probeForeground, expectedTag, warrenVersion, state, logger)
+			return checkedGhostlineClient(socketPath, "after version handoff")
 		}
 		if storedVersion != warrenVersion && (canVersionMatch || force || storedVersion == "") {
 			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
@@ -280,6 +310,14 @@ func startGhostline(config ghostlineMigrationConfig, socketPath string, spawn []
 	return client, nil
 }
 
+func checkedGhostlineClient(socketPath, phase string) (*ghostline.Client, error) {
+	client := ghostline.NewClient(socketPath)
+	if err := client.Check(context.Background()); err != nil {
+		return nil, fmt.Errorf("check ghostline server %s: %w", phase, err)
+	}
+	return client, nil
+}
+
 func v1GhostlineSpawn(config ghostlineMigrationConfig) []string {
 	executable, err := os.Executable()
 	if err != nil {
@@ -387,6 +425,31 @@ func forceGhostlineHandoffRequested() bool {
 		return true
 	}
 	return false
+}
+
+func forceGhostlineHandoffRequestedFor(config ghostlineMigrationConfig) bool {
+	if forceGhostlineHandoffRequested() {
+		return true
+	}
+	marker := filepath.Join(filepath.Dir(config.stableSocket), "force-ghostline-handoff")
+	if _, err := os.Stat(marker); err == nil {
+		return true
+	}
+	return false
+}
+
+func consumeForceGhostlineHandoff(config ghostlineMigrationConfig) bool {
+	requested := forceGhostlineHandoffRequestedFor(config)
+	if requested {
+		clearForceGhostlineHandoffMarker(config)
+	}
+	return requested
+}
+
+func clearForceGhostlineHandoffMarker(config ghostlineMigrationConfig) {
+	_ = os.Remove(filepath.Join(filepath.Dir(config.stableSocket), "force-ghostline-handoff"))
+	_ = os.Unsetenv("WARREN_GHOSTLINE_FORCE_HANDOFF")
+	_ = os.Unsetenv("WARREN_FORCE_HANDOFF")
 }
 
 func ghostlineVersionNeedsUpgrade(serverVersion ghostline.VersionInfo, expectedTag string, versionErr error) (bool, string) {
