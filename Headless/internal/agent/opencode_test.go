@@ -392,6 +392,23 @@ func (r *mutableOpenCodeReader) ReadMessages(context.Context, string, int64) ([]
 	return []openCodeSourceMessage{r.source}, nil
 }
 
+type panicOpenCodeReader struct{}
+
+func (panicOpenCodeReader) ReadMessages(context.Context, string, int64) ([]openCodeSourceMessage, error) {
+	panic("provider allocation failure")
+}
+
+func TestOpenCodeTailerContainsProviderPanics(t *testing.T) {
+	tailer := &OpenCodeTailer{
+		binding: OpenCodeBinding{Provider: openCodeProvider, SessionID: "ses_panic", Backend: openCodeSQLite},
+		reader:  panicOpenCodeReader{},
+	}
+	err := tailer.Poll(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "provider allocation failure") {
+		t.Fatalf("provider panic = %v, want contained error", err)
+	}
+}
+
 func TestOpenCodeTailerCompactsMutableSnapshots(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "cache.jsonl")
 	reader := &mutableOpenCodeReader{source: openCodeSourceMessage{
@@ -519,6 +536,47 @@ func TestOpenCodeReaderSupportsCurrentSQLiteJSONColumns(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Content != "first" || events[1].Content != " second" {
 		t.Fatalf("current SQLite incremental events = %#v", events)
+	}
+}
+
+func TestOpenCodeReaderCompactsProviderSummary(t *testing.T) {
+	directory := t.TempDir()
+	dbPath := filepath.Join(directory, "opencode.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	largeDiff := strings.Repeat("x", maxEventContent*4)
+	messageData := `{"role":"user","summary":{"diffs":[{"patch":"` + largeDiff + `"}]},"time":{"created":1700000000000}}`
+	if _, err := db.Exec(`INSERT INTO message VALUES(?,?,?,?,?)`, "msg_summary", "ses_summary", 1700000000000, 1700000000000, messageData); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO part VALUES(?,?,?,?,?,?)`, "part_summary", "msg_summary", "ses_summary", 1700000000000, 1700000000000, `{"type":"text","text":"prompt"}`); err != nil {
+		t.Fatal(err)
+	}
+	tailer, err := NewOpenCodeTailer(OpenCodeBinding{
+		Provider: openCodeProvider, SessionID: "ses_summary", Backend: openCodeSQLite,
+		DatabasePath: dbPath, CachePath: filepath.Join(directory, "cache.jsonl"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tailer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(tailer.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) >= maxTranscriptLine || strings.Contains(string(data), `"diffs"`) {
+		t.Fatalf("provider diff summary was not compacted: bytes=%d", len(data))
 	}
 }
 
