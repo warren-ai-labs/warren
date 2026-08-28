@@ -133,6 +133,22 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	}
 }
 
+func TestWaitAgentReadyAllowsRunningDedicatedAgentBeforeBinding(t *testing.T) {
+	state, session := testSession(t)
+	session.Kind = "codex"
+	session.Title = "Codex"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{session}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state}
+	if err := service.waitAgentReady(context.Background(), session.ID); err != nil {
+		t.Fatalf("waitAgentReady() = %v, want nil before first transcript binding", err)
+	}
+}
+
 func TestEnsureAgentPrefersCodexBinding(t *testing.T) {
 	directory := t.TempDir()
 	t.Setenv("WARREN_DATA_DIR", directory)
