@@ -54,7 +54,11 @@ With `minimum-contrast=1`, darkest `1.27>1` stays `#2a2625`; with `1.8`, `1.27<1
 - `cell.zig:294` `noMinContrast` only for graphics elements, not text.
 
 ## Decision
-Reset to `origin/main` (1.8) as clean baseline per user. Next step should keep `minimum-contrast` at `1` (or deleted) to preserve shimmer, and if pure-black `0,0,0` must be visible, narrow the rewrite to only `38;2;0;0;0` foreground truecolor (no `48`/`30`/`40`) or handle at the specific Codex status widget, not global SGR rewriting, to avoid Composer distortion.
+The renderer now uses `minimum-contrast=1.2`: this promotes Codex's pure-black
+Working label while the measured darkest shimmer color (`#2a2625`, contrast
+1.27) remains unchanged. Do not raise the value further without rechecking the
+shimmer gradient; if this threshold proves insufficient, prefer a narrow
+Codex-specific rewrite over global SGR rewriting to avoid Composer distortion.
 
 ## Verification
 - `swift build --target GhosttyAdapter` OK
