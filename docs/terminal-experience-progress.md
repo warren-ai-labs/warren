@@ -133,23 +133,31 @@ before exposing roster data.
 
 The native implementation contains the main persistent-warm experience:
 
-- `TerminalSurfaceRetentionPolicy` tracks `active`, `warm`, and `cold` residency
+ - `TerminalSurfaceRetentionPolicy` tracks `active`, `warm`, and `cold` residency
   with an LRU policy, a default maximum of 8 warm surfaces, and an estimated
   1 GiB warm-surface byte budget.
 - `TerminalSurfaceManager` keeps one AppKit host, reparents the selected view,
   hides warm views without destroying their native Ghostty surface, guards
   transitions with generations, and cancels stale present/focus commands.
+  Warm promotion now jumps to latest: the surface is kept current by a live
+  background subscription while hidden, so entering reveals the current frame
+  in one display tick (~16ms) without replaying the backlog visibly.
+  Resize is debounced (50ms coalesce + 250ms hidden defer) so an actively
+  outputting shell settles at the new width before reveal, avoiding 1-2s of
+  missing background color blocks.
 - Recovery is gated until the view is presentable, the native surface exists,
   and the native grid has a positive viewport. This prevents a snapshot from
   being consumed by a nil or zero-sized renderer.
 - `WarrenGhosttyOutputWriter` drains live output off the main actor, tracks
   `(epoch, sequence)`, serializes snapshot installation with live writes, and
   drops stale in-flight slices. Native snapshots are restored directly into
-  Ghostty; ANSI frames use the background VT drain.
+  Ghostty; ANSI frames use the background VT drain. During a resize the writer
+  continues buffering; promotion does not wait for the full backlog.
 - Warm reattachment captures and compares a viewport anchor, resynchronizing
-  only when the retained viewport moved. Scrollback compression is disabled so
-  retained history remains visible after reparenting; the configured scrollback
-  limit still bounds logical history.
+  only when the retained viewport moved (jump to bottom without animation;
+  scrollback stays intact for upward scroll after the jump). Scrollback
+  compression is disabled so retained history remains visible after
+  reparenting; the configured scrollback limit still bounds logical history.
 - Pending disposal avoids waiting for an output drain while tearing down a
   surface, removing the observed background-drain/teardown deadlock.
 
@@ -184,10 +192,15 @@ Cold session path:
 Warm session path:
 
 - `promoteRetainedSession` logs `tab_promote_local`, swaps the control lease,
-  reparents/presents the retained surface, and performs no replay, snapshot, or
-  clear.
+  reparents/presents the retained surface with a jump to latest (no visible
+  replay, no Zeno target chase). Background shells use the same path: their
+  grid is kept current while hidden, so entering never fast-forwards; missing
+  output while hidden is covered by the next snapshot rather than a visible
+  stream.
 - Output subscriptions remain per retained session, so background surfaces
-  stay current. Resize is debounced and only the focused session may claim it.
+  stay current. Resize is debounced (50ms) and promotion defers 250ms after
+  resize; only the focused session may claim resize. This prevents color-block
+  flicker on actively outputting shells.
 - A failed control swap falls back to the cold path instead of leaving a blank
   or non-interactive pane.
 

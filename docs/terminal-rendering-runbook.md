@@ -124,11 +124,11 @@ Use the events as a sequence rather than treating one line as a root cause:
 | `feed_output` | Output was accepted by the selected desktop surface; correlate its `session` and `bytes` with the incident window |
 | `present_now` with `surfaceReady`, `viewAttached`, `viewHidden`, `viewVisible` | Whether a draw was attempted and whether the native view was actually able to show it |
 | `present_stall_suspected` with `reason` | A draw happened while the view was absent, unattached, hidden, or not visible; this strongly favors a lifecycle/presentation issue |
-| `present_complete` | Recovery reached a ready surface and presentable view; `targetEpoch` must be non-nil on a cold atomic attach |
-| `present_wait_extended` | The first 2-second present window passed but the presentation task is still waiting; this is diagnostic only and no longer means the attempt was abandoned |
-| `activation_resync` | A warm surface reattach detected that the viewport did not return to its pre-demotion anchor (captured at `demote`) and forced a live-bottom resync plus immediate draw; its absence means the reattach kept the user's scroll position |
+| `present_complete` | Recovery reached a ready surface and presentable view. Warm promotions log `targetEpoch/targetSequence=jump` (jump to latest) and reveal in one tick (~16ms); cold attaches log the atomic anchor. |
+| `present_wait_extended` | Legacy diagnostic for the previous 2-second Zeno wait; warm promotions no longer use this gate. |
+| `activation_resync` | A warm surface reattach detected that the viewport did not return to its pre-demotion anchor (captured at `demote`) and forced a live-bottom jump (no animation) plus immediate draw; scrollback remains intact so upward scroll after the jump still works. Its absence means the reattach kept the user's scroll position |
 | `roster_apply` | Roster processing and retained-surface count; repeated events indicate churn but do not prove that a changed projection was published |
-| `resize_request`, `viewport_sync` | The grid-size negotiation around the black pane; a resize that recovers the pane is useful evidence, not a root-cause fix |
+| `resize_request`, `viewport_sync` | Grid-size negotiation. Rapid resizes are debounced (50ms) and promotion defers 250ms after resize to let actively outputting shells settle at the new width; a brief buffered delay replaces 1-2s of missing color blocks. |
 
 The default file records milestone events. Successful visible draws and normal
 `feed_output` events are verbose-only after the initial attach nudge, so their
