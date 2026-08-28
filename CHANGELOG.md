@@ -6,6 +6,28 @@ All notable changes to Warren are documented here.
 
 - Add release notes here before the next version is published.
 
+## [0.11.0] - 2026-08-28
+
+> Minor release: refreshes terminal rendering and session handoff, hardens workspace creation, and bundles truecolor terminfo for Ghostline. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+
+### Added
+
+- Add Refresh Runtime to the daemon menubar for manual runtime refresh with failure feedback and automatic version polling.
+- Bundle `xterm-ghostty` terminfo with Tc (truecolor) so Ghostline sessions inherit correct truecolor without requiring Ghostty to be installed; the bundled entry is auto-installed to `~/.terminfo` when missing and falls back to `tic` generation when no checked-in entry is available.
+
+### Changed
+
+- Make warm promotion jump to the latest frame in one tick without visible replay or Zeno target chase; background subscriptions keep the grid current while hidden and scrollback remains intact.
+- Debounce resize handling (50 ms coalesce plus 250 ms hidden defer) so actively outputting shells settle at the new width before reveal and avoid 1-2 s of missing color blocks.
+- Tune terminal palette for codex Working visibility: restore bold-bright palette to match xterm, set Ghostty minimum-contrast to 1.8, and ensure foreground draws happen at synchronized-output boundaries rather than queue-empty heuristics.
+
+### Fixed
+
+- Make workspace creation visible and reliable: auto-expand the owning project when a workspace is added while collapsed or unselected, keep the creation dialog open on failure with inline error and Creating state, and surface Not connected and daemon errors both inline and in the notice center.
+- Harden Ghostline handoff: restrict version handoff to canonical semver tags, expose WarrenVersion in headless State for upgrade gating, make forced ghostline handoff reliable even without a cached revision, and guard synchronized-output tracking across Data boundaries with spillover buffering and a 50 ms stall force to avoid permanently black warm promotions.
+- Isolate OpenCode SQLite tailer memory failures: avoid GROUP BY on large message payloads by using an indexed correlated aggregate for part timestamps, retain only title and body from message summaries, and contain SQLITE_NOMEM panics at the tailer boundary so one oversized conversation cannot crash headless during restore.
+- Unify shell and direct codex Working blink color: keep Ghostty ticking while hidden without Metal draws for the blink clock and ensure direct codex sessions inherit truecolor via sanitized environment so shell and direct share the same amber Working color.
+
 ## [0.10.1] - 2026-08-28
 
 > Patch release: fixes codex Working blink color/visibility and the OpenCode bind plugin payload format.

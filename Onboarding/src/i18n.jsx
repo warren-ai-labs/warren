@@ -118,6 +118,40 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.11.0",
+        dateISO: "2026-08-28",
+        date: "August 28, 2026",
+        title: "Warren refreshes terminal rendering and workspace creation.",
+        summary:
+          "A minor release that bundles xterm-ghostty truecolor terminfo, tightens terminal rendering around warm promotion and resize, and hardens Ghostline handoff and workspace creation. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add Refresh Runtime to the daemon menubar for manual runtime refresh with failure feedback and automatic version polling.",
+              "Bundle xterm-ghostty terminfo with Tc (truecolor) so Ghostline sessions inherit correct truecolor without requiring Ghostty; auto-installs to ~/.terminfo when missing.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Make warm promotion jump to the latest frame without visible replay; background subscriptions keep the grid current while hidden and scrollback remains intact.",
+              "Debounce resize handling so actively outputting shells settle at the new width before reveal and avoid missing color blocks.",
+              "Tune terminal palette for codex Working visibility: restore bold-bright palette, set minimum-contrast to 1.8, and draw at synchronized-output boundaries.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Make workspace creation visible and reliable: auto-expand the owning project while collapsed, keep the dialog open on failure with inline error, and surface Not connected and daemon errors.",
+              "Harden Ghostline handoff by restricting version checks to canonical semver tags, exposing WarrenVersion in State, and guarding synchronized-output tracking across Data boundaries with stall recovery.",
+              "Isolate OpenCode SQLite tailer memory failures by avoiding GROUP BY on large payloads and containing SQLITE_NOMEM panics at the tailer boundary.",
+              "Unify shell and direct codex Working blink color so both share the same amber truecolor.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.10.1",
         dateISO: "2026-08-28",
         date: "August 28, 2026",
@@ -780,6 +814,40 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.11.0",
+        dateISO: "2026-08-28",
+        date: "2026 年 8 月 28 日",
+        title: "Warren 刷新终端渲染与工作区创建。",
+        summary:
+          "次版本：内置 xterm-ghostty truecolor，收紧 warm promotion 与 resize 渲染，并加固 Ghostline handoff 与工作区创建。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "在 daemon 菜单栏新增 Refresh Runtime，支持手动刷新并在失败时显示原因。",
+              "内置带 Tc 的 xterm-ghostty terminfo，使 Ghostline 会话无需安装 Ghostty 即可获得正确 truecolor；缺失时自动安装到 ~/.terminfo。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "warm promotion 改为一帧跳到最新，无可见回放；后台保持订阅使网格常新，scrollback 保持可回滚。",
+              "对 resize 做防抖处理，避免高频输出 shell 在新宽度下出现色块缺失。",
+              "校正终端调色：恢复粗体亮色、将最小对比度调至 1.8，并在同步输出边界绘制前景。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "让工作区创建更可靠：折叠时自动展开所属项目，失败时保持对话框并内联展示错误。",
+              "加固 Ghostline 迁移：仅对规范 tag 触发版本 handoff，并在 Data 切片间跟踪同步深度。",
+              "隔离 OpenCode 大会话的内存风险，避免在超大 payload 上 GROUP BY 并兜住 SQLITE_NOMEM panic。",
+              "统一 shell 与直连 codex Working 闪烁颜色，共享同一 amber truecolor。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.10.1",
         dateISO: "2026-08-28",
