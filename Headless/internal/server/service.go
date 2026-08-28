@@ -3935,6 +3935,7 @@ func (s *Service) agentTurnEvents(sessionID string, turn uint64) []api.AgentEven
 
 func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 	s.lazyInit()
+	session, sessionExists := s.Session(sessionID)
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	var watcher *agent.Watcher
@@ -3943,6 +3944,13 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 	}
 	s.agentsMu.Unlock()
 	if watcher == nil {
+		// A dedicated Agent TUI is input-ready before its first prompt creates
+		// a transcript binding. Allow the initial subscription so agent send can
+		// deliver that prompt and let reconciliation attach the watcher later.
+		if sessionExists && session.Lifecycle == "running" &&
+			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode") {
+			return nil
+		}
 		return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
 	}
 	return watcher.WaitReady(ctx)
