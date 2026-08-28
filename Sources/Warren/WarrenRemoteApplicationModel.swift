@@ -1302,6 +1302,28 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return true
     }
 
+    /// Async workspace creation that surfaces the daemon error to the caller.
+    /// Used by the creation dialog to keep the modal open and render the
+    /// failure inline instead of only posting a notice badge.
+    func createWorkspace(
+        projectID: ProjectID,
+        request creation: WorkspaceCreationRequest
+    ) async throws {
+        guard let wire else {
+            throw NSError(
+                domain: "WarrenRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Not connected to the Warren daemon. Check the menu bar status and try again."]
+            )
+        }
+        _ = try await wire.request("workspace.create", params: [
+            "project": projectID.description,
+            "branch": creation.branch,
+            "name": creation.displayName,
+            "path": creation.path,
+        ])
+    }
+
     /// Loads the headless daemon's settings. Runtime selection is a
     /// headless-side decision; the Desktop only reflects and changes it.
     func loadSettings() {
