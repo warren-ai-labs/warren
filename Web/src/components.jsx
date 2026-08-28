@@ -163,15 +163,20 @@ function SessionPresetIcon({ kind }) {
 export function Sidebar({
   catalog,
   activeWorkspace,
+  expandedTasks,
   expandedProjects,
   tabsForWorkspace,
   connection,
+  onToggleTask,
+  onFocusTask,
+  onNewTask,
   onToggleProject,
   onChooseWorkspace,
   onOpenWorkspace,
   onNewSessionInWorkspace,
   onNewSession,
   onOpenSettings,
+  onTaskContextMenu,
   onProjectContextMenu,
   onWorkspaceContextMenu,
   onMoveProject,
@@ -246,7 +251,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="sidebar" aria-label="Projects and workspaces">
+    <aside className="sidebar" aria-label="Tasks, projects, and workspaces">
       <div className="brand">
         <img className="brand-mark" src={webAssetURL("icon.svg")} alt="Warren" />
         {isBuild && <span className="build-badge">Build</span>}
@@ -256,6 +261,58 @@ export function Sidebar({
         </span>
       </div>
       <div className="sidebar-scroll">
+        <div className="section-label-row">
+          <div className="section-label">Tasks</div>
+          <button type="button" className="section-add" aria-label="New task" title="New task" onClick={onNewTask}>
+            <PlusIcon />
+          </button>
+        </div>
+        {catalog.tasks.length ? catalog.tasks.map(task => {
+          const workspaces = catalog.workspacesByTask.get(task.id) || [];
+          const open = expandedTasks.has(task.id);
+          return (
+            <section className={`project task${open ? " open" : ""}`} key={task.id} id={`task-${task.id}`}>
+              <div className="project-toggle" onContextMenu={event => onTaskContextMenu(event, task)}>
+                <button
+                  type="button"
+                  className="project-toggle-main"
+                  aria-expanded={open}
+                  onClick={() => onToggleTask(task.id)}
+                >
+                  <span className="branch">{task.name}</span>
+                  {task.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
+                  <span className="project-count">({workspaces.length})</span>
+                </button>
+                <button
+                  type="button"
+                  className="project-chevron"
+                  aria-label={open ? `Collapse ${task.name}` : `Expand ${task.name}`}
+                  onClick={() => onToggleTask(task.id)}
+                >
+                  <span className="chevron">{ChevronRightIcon}</span>
+                </button>
+              </div>
+              <div className="workspace-list">
+                {workspaces.length ? workspaces.map(workspace => {
+                  const project = catalog.projectsByID.get(workspace.project);
+                  return (
+                    <button
+                      type="button"
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}`}
+                      key={workspace.id}
+                      onClick={() => onChooseWorkspace(workspace.id)}
+                      onDoubleClick={() => onOpenWorkspace(workspace.id)}
+                      onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
+                    >
+                      <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />
+                      <span className="branch">{project?.name || "Project"} · {workspace.branch || workspace.name || "Workspace"}</span>
+                    </button>
+                  );
+                }) : <div className="workspace-row task-empty">No linked workspaces</div>}
+              </div>
+            </section>
+          );
+        }) : <div className="workspace-row task-empty">No tasks</div>}
         <div className="section-label">Projects</div>
         {catalog.projects.length ? catalog.projects.map(project => {
           const workspaces = catalog.workspacesByProject.get(project.id) || [];
@@ -305,27 +362,50 @@ export function Sidebar({
                 </button>
               </div>
               <div className="workspace-list">
-                {workspaces.map(workspace => (
-                  <button
-                    type="button"
-                    className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
-                    key={workspace.id}
-                    onClick={() => onChooseWorkspace(workspace.id)}
-                    onDoubleClick={() => onOpenWorkspace(workspace.id)}
-                    onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
-                    draggable
-                    onDragStart={event => beginDrag("workspace", workspace.id, workspace.project, event)}
-                    onDragEnd={endDrag}
-                    onDragOver={event => workspaceDragOver(workspace, event)}
-                    onDrop={event => dropWorkspace(workspace, event)}
-                  >
-                    {workspace.mergeState === "merged"
-                      ? <MergedBadge tabs={tabsForWorkspace(workspace.id)} />
-                      : <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />}
-                    {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
-                    <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
-                  </button>
-                ))}
+                {workspaces.map(workspace => {
+                  const task = workspace.task
+                    ? catalog.tasks.find(value => value.id === workspace.task)
+                    : null;
+                  return (
+                    <div
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
+                      key={workspace.id}
+                      onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
+                      draggable
+                      onDragStart={event => beginDrag("workspace", workspace.id, workspace.project, event)}
+                      onDragEnd={endDrag}
+                      onDragOver={event => workspaceDragOver(workspace, event)}
+                      onDrop={event => dropWorkspace(workspace, event)}
+                    >
+                      <button
+                        type="button"
+                        className="workspace-row-main"
+                        onClick={() => onChooseWorkspace(workspace.id)}
+                        onDoubleClick={() => onOpenWorkspace(workspace.id)}
+                      >
+                        {workspace.mergeState === "merged"
+                          ? <MergedBadge tabs={tabsForWorkspace(workspace.id)} />
+                          : <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />}
+                        {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
+                        <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
+                      </button>
+                      {task && (
+                        <button
+                          type="button"
+                          className="workspace-task-link"
+                          aria-label={`Open task ${task.name}`}
+                          title={`Task: ${task.name}`}
+                          onClick={event => {
+                            event.stopPropagation();
+                            onFocusTask(task.id);
+                          }}
+                        >
+                          T
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
                 {dragState?.kind === "workspace" && dragState.projectID === project.id && (
                   <div
                     className={`sidebar-drop-end${dragOverID === "__workspace_end" ? " drag-over" : ""}`}

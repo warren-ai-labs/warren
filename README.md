@@ -25,7 +25,7 @@ Warren is a local-first workspace for **durable AI workflows**, organized around
 ## Why Warren
 
 AI workflows are rarely finished in one sitting or on one screen. Warren keeps the
-Project, Workspace, Session, and Runtime together on a durable Host, so a workflow
+Task, Project, Workspace, Session, and Runtime together on a durable Host, so a workflow
 can move from a Mac to the Web or a phone without losing its terminal state or agent
 conversation. Use the terminal view when you need raw control and the Agent view when
 you want a structured conversation around the same session.
@@ -33,11 +33,12 @@ you want a structured conversation around the same session.
 ## Highlights
 
 - **Durable sessions** — Sessions belong to the Host, not the client. Detaching, switching workspaces, or quitting the app never ends a running session; closing a Tab is the explicit command to end one.
-- **One resource model** — Project → Workspace → Terminal Session → Runtime, shared by every client surface.
+- **One resource model** — Tasks aggregate related Workspaces across Projects, while Project → Workspace → Terminal Session → Runtime remains the ownership path shared by every client surface.
 - **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to `warren-headless` on a VPS. SSH only bootstraps the remote daemon and forwards a port; the same versioned WebSocket API is used everywhere.
 - **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
 - **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
+- **Cross-repository tasks** — A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.
 - **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
 - **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
 

@@ -16,10 +16,18 @@ struct WarrenDesktopWorkspaceRow: View {
     let isPinned: Bool
     let isDeleting: Bool
     let isInteractionDisabled: Bool
+    /// The task label is supplied only when this workspace is rendered in the
+    /// project list. Task-list rows already sit beneath their task heading.
+    let taskName: String?
+    let taskID: TaskID?
+    let tasks: [WarrenTask]
+    let onSelectTask: (TaskID) -> Void
     let onSelect: () -> Void
     let onDoubleClick: () -> Void
     let onRename: () -> Void
     let onTogglePin: () -> Void
+    let onAttachToTask: (TaskID) -> Void
+    let onDetachFromTask: (TaskID) -> Void
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -60,6 +68,11 @@ struct WarrenDesktopWorkspaceRow: View {
         .foregroundStyle(tokens.mutedForeground)
         .opacity(isInteractionDisabled ? 0.62 : 1)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .help(taskName.map { "Task: \($0)" } ?? "")
+        .overlay(alignment: .topTrailing) {
+            taskLinkButton
+                .offset(x: 2, y: -2)
+        }
         .accessibilityLabel("Workspace \(workspace.name)")
         .accessibilityValue(workspaceAccessibilityValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -78,12 +91,7 @@ struct WarrenDesktopWorkspaceRow: View {
         })
         .contextMenu {
             if !isInteractionDisabled {
-                WarrenDesktopContextMenu([
-                    .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
-                    .button(title: "Rename Workspace", action: onRename),
-                    .divider,
-                    .button(title: "Delete Workspace…", destructive: true, action: onDelete),
-                ])
+                WarrenDesktopContextMenu(contextMenuActions)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -156,18 +164,68 @@ struct WarrenDesktopWorkspaceRow: View {
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)
+        .overlay(alignment: .trailing) {
+            taskLinkButton
+                .padding(.trailing, WarrenSpacing.compact)
+        }
         .contextMenu {
             if !isInteractionDisabled {
-                WarrenDesktopContextMenu([
-                    .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
-                    .button(title: "Rename Workspace", action: onRename),
-                    .divider,
-                    .button(title: "Delete Workspace…", destructive: true, action: onDelete),
-                ])
+                WarrenDesktopContextMenu(contextMenuActions)
             }
         }
         .padding(.horizontal, WarrenSpacing.compact)
+        .help(taskName.map { "Task: \($0)" } ?? "")
         .accessibilityElement(children: .contain)
+    }
+
+    private var contextMenuActions: [WarrenDesktopContextMenuAction] {
+        var actions: [WarrenDesktopContextMenuAction] = [
+            .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
+            .button(title: "Rename Workspace", action: onRename),
+        ]
+        if let taskID = workspace.taskID {
+            actions.append(.button(title: "Detach from Task", action: {
+                onDetachFromTask(taskID)
+            }))
+        } else if !tasks.isEmpty {
+            actions.append(.menu(title: "Add to Task", actions: tasks.map { task in
+                .button(title: task.name, action: { onAttachToTask(task.id) })
+            }))
+        }
+        actions.append(contentsOf: [
+            .divider,
+            .button(title: "Delete Workspace…", destructive: true, action: onDelete),
+        ])
+        return actions
+    }
+
+    @ViewBuilder
+    private var taskLinkButton: some View {
+        if let taskID, let taskName {
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            Button {
+                guard !isInteractionDisabled else { return }
+                onSelectTask(taskID)
+            } label: {
+                Text("T")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tokens.success)
+                    .frame(width: 18, height: 18)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionDisabled)
+            .accessibilityLabel("Task \(taskName)")
+            .accessibilityValue("Open task")
+            .warrenSemanticElement(
+                id: "workspace-task.\(semanticScope).\(workspace.id.description)",
+                role: .button,
+                label: "Task \(taskName)",
+                value: "Open task",
+                isEnabled: !isInteractionDisabled,
+                action: { if !isInteractionDisabled { onSelectTask(taskID) } }
+            )
+        }
     }
 
     private var isMergedWorktree: Bool {
@@ -176,6 +234,9 @@ struct WarrenDesktopWorkspaceRow: View {
 
     private var workspaceAccessibilityValue: String {
         var values: [String] = []
+        if let taskName {
+            values.append("Belongs to task \(taskName)")
+        }
         if workspace.branch != nil, let mergeState = workspace.mergeState {
             values.append(mergeState.accessibilityLabel)
         }

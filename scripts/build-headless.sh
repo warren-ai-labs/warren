@@ -55,7 +55,12 @@ validate_arm64_artifact() {
 }
 
 compatibility_module_directory="$repository_root/Headless/cmd/ghostline-v0-compat"
+go -C "$compatibility_module_directory" mod download github.com/abcdlsj/ghostline
 compatibility_ghostline_directory="$(go -C "$compatibility_module_directory" list -m -f '{{.Dir}}' github.com/abcdlsj/ghostline)"
+if [[ -z "$compatibility_ghostline_directory" ]]; then
+    echo "Cannot resolve the downloaded ghostline v0.8 module directory." >&2
+    exit 66
+fi
 compatibility_library="$compatibility_ghostline_directory/third_party/lib/libghostty-vt.dylib"
 if [[ ! -f "$compatibility_library" ]]; then
     echo "Missing v0.8 arm64 libghostty-vt.dylib: $compatibility_library" >&2
