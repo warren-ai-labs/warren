@@ -95,6 +95,12 @@ Expose `SearchAddon` overview ruler and `resultIndex/count` in the find bar for 
 Add `scripts/verify-terminal-lifecycle.sh` asserting `rg '"event":"present_complete"' ~/Library/Logs/Warren/terminal-diagnostics.log` + `headless.log:3893 recovery outcome` to enforce "warm switch = zero attach, resize = zero capture" in CI.
 **Files:** `docs/terminal-rendering-runbook.md:109`, `Headless/internal/server/service.go:3893`
 
+#### 13. Kitty keyboard protocol leak (deferred)
+**Problem:** TUI (`codex`/`claude`) enables kitty keyboard via `CSI > 1u`, killed with `Ctrl+C` before `CSI < u`. `Ghostty` per-screen stack (`src/terminal/kitty/key.zig:8` `FlagStack`, `src/terminal/Screen.zig:75`) stays enabled until `RIS`, so subsequent shell input is encoded as `CSI u` (`[99;5:3u`) and echoed literally. Repro on Warren Desktop and Web; standalone `ghostty` behaves identically (`src/terminal/stream.zig:2450`).
+**Proposal (deferred):** On abnormal TUI exit, auto-pop with `CSI < u` / `terminal.reset()` in `TerminalSurfaceManager` and `Web/src/App.jsx:1847` `onData` boundary, or expose `Reset Terminal` action. Do not disable kitty globally — keep `Shift+Enter` (`CSI 13;2u`) for TUIs.
+**Files:** `docs/problems/2026-08-28-kitty-keyboard-protocol-leak.md`, `Packages/Vendor/GhosttyEmbedding/Sources/GhosttyTerminal/Surface/TerminalSurface.swift:35`, `Web/src/App.jsx:822`, `Headless/README.md:242`
+**Effort:** S · Risk: low · Status: observed, deferred
+
 ## Non-goals (intentionally out)
 
 - Warm eviction user-visible hint — keep silent per product decision.
