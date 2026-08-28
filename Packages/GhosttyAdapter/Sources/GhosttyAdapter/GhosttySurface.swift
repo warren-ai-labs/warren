@@ -79,9 +79,9 @@ public final class GhosttySurface: Identifiable {
             builder.withBoldColor("bright")
             builder.withCustom("bold-is-bright", "true")
             // Pure-black truecolor 38;2;0;0;0 (codex Working) is invisible on
-            // dark #151110; 4.5 made it pure white, too harsh. Use 2.5 for
-            // grey (#5c5856 bright-black) instead of white.
-            builder.withMinimumContrast(2.5)
+            // dark #151110. 2.5 was still too flat for the white flash.
+            // 1.8 keeps the dark grey distinct from the 234 warm-white flash.
+            builder.withMinimumContrast(1.8)
             for (index, color) in TerminalPalette.ember.enumerated() {
                 builder.withPalette(index, color: Self.hex(color))
             }
