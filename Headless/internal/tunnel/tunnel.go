@@ -265,12 +265,22 @@ func (m *Manager) GnarDefaultEdge() string {
 }
 
 // GnarAuthenticated reports whether this manager has completed a gnar login or
-// a token-backed connection test during its lifetime. It is intentionally not
-// persisted and must not be treated as a credential-store query.
+// a token-backed connection test during its lifetime. It also checks the
+// persisted gnar credential store so a daemon restart does not appear
+// unauthenticated while credentials.json remains on disk.
 func (m *Manager) GnarAuthenticated() bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.gnarAuthenticated
+	if m.gnarAuthenticated {
+		m.mu.Unlock()
+		return true
+	}
+	dir := m.gnarConfigDir
+	edge := m.gnarEdge
+	if edge == "" {
+		edge = m.gnarDefaultEdge
+	}
+	m.mu.Unlock()
+	return hasPersistedGnarCredentials(dir, edge)
 }
 
 // SetGnarAuthenticationContext associates the presentation hint with the
@@ -298,16 +308,22 @@ func (m *Manager) SetGnarAuthenticationContext(edge, account string) {
 }
 
 // GnarAuthenticatedFor reports whether the current non-secret identity has
-// already completed authentication in this daemon lifetime. It makes
-// repeated Save & Test calls idempotent without retaining a bootstrap key.
+// already completed authentication in this daemon lifetime. It also checks
+// the persisted credential store so restarts do not require re-entering a
+// bootstrap key. Memory state is checked first for account-aware idempotency.
 func (m *Manager) GnarAuthenticatedFor(edge, account string) bool {
 	edge = strings.TrimSpace(edge)
 	account = strings.TrimSpace(account)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.gnarAuthenticated &&
+	if m.gnarAuthenticated &&
 		(m.gnarAuthenticatedEdge == "" || m.gnarAuthenticatedEdge == edge) &&
-		(m.gnarAuthenticatedAccount == "" || m.gnarAuthenticatedAccount == account)
+		(m.gnarAuthenticatedAccount == "" || m.gnarAuthenticatedAccount == account) {
+		m.mu.Unlock()
+		return true
+	}
+	dir := m.gnarConfigDir
+	m.mu.Unlock()
+	return hasPersistedGnarCredentials(dir, edge)
 }
 
 func (m *Manager) setGnarAuthenticated(value bool) {
@@ -1491,6 +1507,42 @@ func clearBytes(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+func hasPersistedGnarCredentials(directory, edge string) bool {
+	dir := strings.TrimSpace(directory)
+	if dir == "" {
+		return false
+	}
+	path := filepath.Join(dir, "credentials.json")
+	data, err := os.ReadFile(path)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return false
+	}
+	edge = strings.TrimSpace(edge)
+	if edge == "" {
+		return len(bytes.TrimSpace(data)) > 2
+	}
+	var cred struct {
+		Edges map[string]string `json:"edges"`
+	}
+	if err := json.Unmarshal(data, &cred); err != nil {
+		return len(bytes.TrimSpace(data)) > 2
+	}
+	if len(cred.Edges) == 0 {
+		return false
+	}
+	if _, ok := cred.Edges[edge]; ok {
+		return true
+	}
+	normalized := strings.TrimRight(edge, "/")
+	if _, ok := cred.Edges[normalized]; ok {
+		return true
+	}
+	if _, ok := cred.Edges[normalized+"/"]; ok {
+		return true
+	}
+	return false
 }
 
 func removeOwnedGnarConfigDir(directory string) error {
