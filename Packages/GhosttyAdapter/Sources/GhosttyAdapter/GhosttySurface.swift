@@ -182,10 +182,8 @@ public final class GhosttySurface: Identifiable {
             return false
         }
         guard viewVisible else {
-            // Keep Ghostty's blink/clock ticking even while hidden so the
-            // amber Working dot resumes blinking immediately on promotion.
-            // Only the actual Metal draw is skipped to avoid polluting the
-            // shared framebuffer with a black frame.
+            // Only tick while hidden to keep Ghostty's clock advancing; skip
+            // the Metal draw to avoid polluting the shared framebuffer.
             state.controller.tick()
             TerminalDiagnostics.log("present_now", [
                 "session": id.description,
@@ -203,6 +201,20 @@ public final class GhosttySurface: Identifiable {
                     : (!viewAttached ? "view-not-attached"
                         : (viewHidden ? "view-hidden" : "view-not-visible")),
                 "view": terminalViewDescription,
+            ])
+            return false
+        }
+        // Foreground live stream: avoid drawing a torn frame. A small pending
+        // (<8KB) is a TUI mid-frame; defer until the writer drains. A large
+        // backlog is a warm-promotion jump-to-latest and presents immediately.
+        let pending = outputWriter.enqueuedSequence &- outputWriter.renderedSequence
+        if pending > 0 && pending < 8192 {
+            state.controller.tick()
+            TerminalDiagnostics.logVerbose("present_now_deferred", [
+                "session": id.description,
+                "enqueued": String(outputWriter.enqueuedSequence),
+                "rendered": String(outputWriter.renderedSequence),
+                "reason": "small-pending",
             ])
             return false
         }
