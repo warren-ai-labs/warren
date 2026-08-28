@@ -192,9 +192,8 @@ final class TerminalSurfaceManagerTests: XCTestCase {
                 && manager.isDisplayVisible(first.id)
         }
 
-        // Build a deliberate warm-surface backlog. The old promotion path
-        // revealed the view immediately and made these bytes visibly stream
-        // past at render speed instead of showing one settled frame.
+        // Warm promotion now jumps to latest: even with a backlog the
+        // display reveals immediately without visible fast-forward.
         first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 500_000))
         try await waitUntil {
             first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
@@ -208,17 +207,11 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         try await waitUntil {
             manager.snapshot().activeSessionID == first.id
                 && first.terminalViewIsPresentable
-                && first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
         }
-        XCTAssertFalse(
-            manager.isDisplayVisible(first.id),
-            "warm promotion must keep the display hidden while queued output drains"
-        )
-
-        try await waitUntil(timeout: 12) {
+        try await waitUntil(timeout: 5) {
             manager.isDisplayVisible(first.id)
-                && first.outputWriter.renderedSequence >= first.outputWriter.enqueuedSequence
         }
+        XCTAssertTrue(manager.isDisplayVisible(first.id))
     }
 
     func testWarmPromotionDoesNotWaitForAContinuouslyGrowingQueue() async throws {
