@@ -329,6 +329,8 @@ button:disabled {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   padding: var(--space-md) var(--space-lg) var(--space-lg);
 }
 
@@ -942,11 +944,13 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--color-bg-page);
+  touch-action: pan-y;
 }
 
 .agent-events {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   width: 100%;
   max-width: 820px;
@@ -956,7 +960,10 @@ button:disabled {
   gap: 14px;
   padding: 26px 22px 18px;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 .agent-events > * {
