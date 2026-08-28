@@ -37,6 +37,9 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 	// ghostline server; do not pass NO_COLOR= here because presence of an empty
 	// variable still disables colors for Codex.
 	sessionEnv := append([]string(nil), env...)
+	if !hasEnv(sessionEnv, "COLORTERM") {
+		sessionEnv = append(sessionEnv, "COLORTERM=truecolor")
+	}
 	session, err := r.client.Start(ctx, ghostline.SessionOptions{
 		Name: name,
 		Process: ghostline.ProcessSpec{
@@ -229,4 +232,14 @@ func (r *GhostlineRuntime) OpenOutput(ctx context.Context, name string, cursor g
 		return nil, fmt.Errorf("ghostline session %s: %w", name, err)
 	}
 	return session.Output(ctx, cursor)
+}
+
+func hasEnv(env []string, key string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
 }
