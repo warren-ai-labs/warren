@@ -59,6 +59,8 @@ struct WarrenCompositionRoot: View {
     @AppStorage("executionEndpoint")
     private var selectedEndpointID = "local"
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
+    @State private var sshHosts: [WarrenSSHHost]
+    @State private var isSSHHostPickerPresented = false
 
     @MainActor
     init() {
@@ -72,6 +74,7 @@ struct WarrenCompositionRoot: View {
         // catalog once and refresh it from disk in the background so CLI
         // changes appear without restarting Warren.
         _endpointCatalog = State(initialValue: WarrenEndpointCatalog.load().endpoints)
+        _sshHosts = State(initialValue: WarrenSSHHostCatalog.load())
     }
 
     var body: some View {
@@ -109,6 +112,13 @@ struct WarrenCompositionRoot: View {
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: selectEndpoint,
+            onAddSSHHost: {
+                // Reload on every presentation so edits made in an editor or
+                // by a provisioning tool are available without restarting
+                // Warren.
+                sshHosts = WarrenSSHHostCatalog.load()
+                isSSHHostPickerPresented = true
+            },
             onWebStart: { remoteModel.startWebFromUI() },
             onWebTest: { edgeURL, accountName, inviteKey, approvalKey in
                 remoteModel.testPublicAccess(
@@ -199,6 +209,13 @@ struct WarrenCompositionRoot: View {
             allowsMultipleSelection: false,
             onCompletion: importProject
         )
+        .sheet(isPresented: $isSSHHostPickerPresented) {
+            WarrenSSHHostPicker(
+                hosts: sshHosts,
+                onConfigure: configureSSHHost,
+                onDismiss: { isSSHHostPickerPresented = false }
+            )
+        }
         .modifier(WarrenProjectFileDialogLabels())
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
             guard selectedEndpointCapabilities.canCopyLocalWebURL else { return }
@@ -302,6 +319,12 @@ struct WarrenCompositionRoot: View {
         }
         .onDisappear {
             embeddedEditorModel.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            // A bundled SSH helper is a child process of the Desktop. Stop it
+            // before AppKit tears down the process so a tunnel cannot outlive
+            // the app that owns the endpoint.
+            remoteModel.disconnect()
         }
     }
 
@@ -468,7 +491,7 @@ struct WarrenCompositionRoot: View {
                 WarrenDesktopEndpointOption(
                     id: endpoint.id,
                     label: endpoint.name,
-                    detail: Self.endpointDetail(endpoint.url)
+                    detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url)
                 )
             }
         return [local] + configured
@@ -523,6 +546,52 @@ struct WarrenCompositionRoot: View {
         guard endpointOptions.contains(where: { $0.id == id }) else { return }
         WarrenHangDiagnostics.logEndpointSwitch(from: selectedEndpointID, to: id)
         selectedEndpointID = id
+    }
+
+    private func configureSSHHost(_ host: WarrenSSHHost) {
+        guard host.supported else { return }
+        let name = Self.endpointName(for: host.name, endpoints: endpointCatalog)
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: name,
+            url: "http://127.0.0.1:0",
+            token: "",
+            ssh: host.name
+        )
+        var endpoints = endpointCatalog.filter { $0.name != name }
+        endpoints.append(endpoint)
+        endpoints.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        do {
+            try WarrenEndpointCatalog.save(
+                endpoints: endpoints,
+                current: name
+            )
+            endpointCatalog = endpoints
+            selectedEndpointID = name
+            isSSHHostPickerPresented = false
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    nonisolated static func endpointName(
+        for hostName: String,
+        endpoints: [WarrenRemoteEndpointConfiguration]
+    ) -> String {
+        let occupied = Set(endpoints.map(\.name))
+        if !occupied.contains(hostName) {
+            return hostName
+        }
+        var candidate = "ssh-\(hostName)"
+        var suffix = 2
+        while occupied.contains(candidate) {
+            candidate = "ssh-\(hostName)-\(suffix)"
+            suffix += 1
+        }
+        // Re-selecting an existing SSH endpoint should update it in place.
+        if endpoints.contains(where: { $0.name == hostName && $0.ssh == hostName }) {
+            return hostName
+        }
+        return candidate
     }
 
     private func restoreEndpointSelection() {

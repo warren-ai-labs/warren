@@ -108,6 +108,11 @@ public final class GhosttySurface: Identifiable {
             workingDirectory: workingDirectory
         )
         self.state = state
+        outputWriter.onOutputReceived = { [weak self] in
+            Task { @MainActor in
+                self?.requestDisplayRefresh()
+            }
+        }
 
         // Consume Ghostty's open-url action with Warren's own semantics.
         // Without a handler the embedded apprt falls back to spawning

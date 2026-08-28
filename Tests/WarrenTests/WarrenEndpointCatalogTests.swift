@@ -52,4 +52,50 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertNil(catalog.current)
         XCTAssertTrue(catalog.endpoints.isEmpty)
     }
+
+    func testSavesSSHEndpointWithPrivateFilePermissions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "tenc_sh",
+            url: "http://127.0.0.1:0",
+            token: "",
+            ssh: "tenc_sh"
+        )
+
+        try WarrenEndpointCatalog.save(endpoints: [endpoint], current: endpoint.name, to: url)
+
+        let catalog = WarrenEndpointCatalog.load(from: url)
+        XCTAssertEqual(catalog.current, "tenc_sh")
+        XCTAssertEqual(catalog.endpoints, [endpoint])
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, 0o600)
+    }
+
+    func testSSHEndpointNamesDoNotOverwriteExistingEndpoints() {
+        let direct = WarrenRemoteEndpointConfiguration(
+            name: "tenc_sh",
+            url: "https://example.test",
+            token: "token",
+            ssh: nil
+        )
+        let existingSSH = WarrenRemoteEndpointConfiguration(
+            name: "ssh-tenc_sh",
+            url: "http://127.0.0.1:0",
+            token: "",
+            ssh: "other-host"
+        )
+
+        XCTAssertEqual(
+            WarrenCompositionRoot.endpointName(
+                for: "tenc_sh",
+                endpoints: [direct, existingSSH]
+            ),
+            "ssh-tenc_sh-2"
+        )
+    }
 }

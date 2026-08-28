@@ -28,6 +28,10 @@ build_non_macos() {
         -ldflags "$headless_ldflags" \
         -o "$output_directory/warren" \
         "$repository_root/Headless/cmd/warren"
+    go build \
+        -ldflags "$headless_ldflags" \
+        -o "$output_directory/warren-ssh-tunnel" \
+        "$repository_root/Headless/cmd/warren-ssh-tunnel"
     cp -f "$output_directory/warren" "$output_directory/warren-cli"
 }
 
@@ -96,6 +100,7 @@ build_v0_compatibility() {
 
 build_macos_product warren-headless "$output_directory/warren-headless"
 build_macos_product warren "$output_directory/warren"
+build_macos_product warren-ssh-tunnel "$output_directory/warren-ssh-tunnel"
 build_v0_compatibility
 cp -f "$output_directory/warren" "$output_directory/warren-cli"
 validate_arm64_artifact "$output_directory/ghostline-v0-compat"

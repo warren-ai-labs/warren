@@ -1323,7 +1323,7 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		{[]string{"task", "workspace", "create", "task-1", "project-1"}, "missing --branch BRANCH", "warren task workspace create TASK_ID PROJECT_ID"},
 		{[]string{"session", "send"}, "missing SESSION_ID", "warren session send SESSION_ID"},
 		{[]string{"endpoint", "add"}, "missing ENDPOINT_NAME", "warren endpoint add NAME"},
-		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh USER@HOST"},
+		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh TARGET"},
 	}
 	for _, test := range tests {
 		err := run(test.arguments)
@@ -1338,6 +1338,20 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		if !contains(usageErr.text, test.usage) {
 			t.Errorf("run(%v) usage = %q, want it to contain %q", test.arguments, usageErr.text, test.usage)
 		}
+	}
+}
+
+func TestSSHListReadsAnExplicitOpenSSHConfig(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    HostName 192.0.2.10\n    User deploy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousJSON := outputJSON
+	outputJSON = true
+	defer func() { outputJSON = previousJSON }()
+	if err := run([]string{"ssh", "list", "--ssh-config", configPath}); err != nil {
+		t.Fatalf("ssh list returned an error: %v", err)
 	}
 }
 

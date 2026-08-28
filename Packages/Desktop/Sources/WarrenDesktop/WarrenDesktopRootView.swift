@@ -34,6 +34,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let selectedEndpointID: String
     private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
+    private let onAddSSHHost: () -> Void
 
     private let actions: WarrenDesktopActions
     private let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
@@ -127,6 +128,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
+        onAddSSHHost: @escaping () -> Void = {},
         onWebStart: @escaping () -> Void = {},
         onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
@@ -176,6 +178,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             ?? (selectedEndpointID == "local" ? .local : .remote)
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
+        self.onAddSSHHost = onAddSSHHost
         self.actions = actions
         self.onCreateTask = onCreateTask
         self.terminalSurface = terminalSurface
@@ -493,6 +496,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         endpoints: endpointOptions,
                         selectedID: selectedEndpointID,
                         onSelect: onSelectEndpoint,
+                        onAddSSHHost: onAddSSHHost,
                         onDismiss: { setChromePopover(nil) }
                     )
                 case .externalIDE:
@@ -1002,6 +1006,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     selectedID: selectedEndpointID,
                     onSelect: { endpointID in
                         onSelectEndpoint(endpointID)
+                        onBack()
+                    },
+                    onAddSSHHost: {
+                        onAddSSHHost()
                         onBack()
                     },
                     onDismiss: onBack

@@ -20,6 +20,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/client"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/sshclient"
 )
 
 var version = "dev"
@@ -2219,6 +2220,32 @@ func sshCommand(args []string) error {
 		fmt.Print(sshUsageText())
 		return nil
 	}
+	if len(args) >= 1 && args[0] == "list" {
+		flags := parseFlags(args[1:])
+		if boolValue(flags, "help") || boolValue(flags, "h") {
+			fmt.Print(sshUsageText())
+			return nil
+		}
+		if len(positionals(flags)) > 0 {
+			return newUsageError("ssh list does not accept a target", sshUsageText())
+		}
+		entries, err := sshclient.ListHosts(stringValue(flags, "ssh-config"))
+		if err != nil {
+			return err
+		}
+		rows := make([]sshHostRow, 0, len(entries))
+		for _, entry := range entries {
+			rows = append(rows, sshHostRow{
+				Name:          entry.Name,
+				Host:          entry.Config.Host,
+				User:          entry.Config.User,
+				Port:          entry.Config.Port,
+				IdentityFiles: len(entry.Config.IdentityFile),
+				Error:         entry.Error,
+			})
+		}
+		return printValue(rows)
+	}
 	flags := parseFlags(args)
 	if boolValue(flags, "help") || boolValue(flags, "h") {
 		fmt.Print(sshUsageText())
@@ -2227,34 +2254,48 @@ func sshCommand(args []string) error {
 	if label := missingPositional(flags, []string{"SSH_TARGET"}); label != "" {
 		return newUsageError("missing "+label, sshUsageText())
 	}
+	if len(positionals(flags)) > 1 {
+		return newUsageError("ssh accepts exactly one target", sshUsageText())
+	}
 	target := positional(flags, 0, "SSH target")
-	localPort := stringValueDefault(flags, "local-port", "8789")
+	// Use an ephemeral loopback port by default so a local daemon on 8789 and
+	// multiple SSH-backed endpoints can coexist without manual coordination.
+	localPort := stringValueDefault(flags, "local-port", "0")
 	remotePort := stringValueDefault(flags, "remote-port", "8789")
 	name := stringValueDefault(flags, "name", strings.NewReplacer("@", "-", ":", "-").Replace(target))
-	remoteStart := "command -v warren-headless >/dev/null || { echo 'warren-headless is not installed' >&2; exit 127; }; mkdir -p ~/.warren; test -s ~/.warren/token || (umask 077; openssl rand -hex 32 > ~/.warren/token); (curl -fsS http://127.0.0.1:" + remotePort + "/healthz >/dev/null 2>&1 || nohup warren-headless --listen 127.0.0.1:" + remotePort + " > ~/.warren/headless.log 2>&1 &); cat ~/.warren/token"
-	output, err := exec.Command("ssh", target, remoteStart).CombinedOutput()
+	localAddress := localPort
+	if !strings.Contains(localAddress, ":") {
+		localAddress = "127.0.0.1:" + localAddress
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	tunnel, ready, err := sshclient.Start(ctx, sshclient.Options{
+		Target:         target,
+		RemoteAddress:  "127.0.0.1:" + remotePort,
+		LocalAddress:   localAddress,
+		SSHConfigPath:  stringValue(flags, "ssh-config"),
+		KnownHostsPath: stringValue(flags, "known-hosts"),
+	})
 	if err != nil {
-		return fmt.Errorf("start remote headless: %s: %w", strings.TrimSpace(string(output)), err)
+		return err
 	}
-	token := strings.TrimSpace(string(output))
-	if token == "" {
-		return errors.New("remote headless returned an empty token")
-	}
+	defer tunnel.Close()
 	settings, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
-	settings.Endpoints[name] = config.Endpoint{Name: name, URL: "http://127.0.0.1:" + localPort, Token: token, SSH: target}
+	settings.Endpoints[name] = config.Endpoint{Name: name, URL: ready.URL, Token: ready.Token, SSH: target}
 	settings.Current = name
 	if err := config.Save(configPath, settings); err != nil {
 		return err
 	}
-	command := exec.Command("ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-L", localPort+":127.0.0.1:"+remotePort, target)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	fmt.Fprintf(os.Stderr, "Warren endpoint %q active at http://127.0.0.1:%s; keep this process running.\n", name, localPort)
-	return command.Run()
+	fmt.Fprintf(os.Stderr, "Warren endpoint %q active at %s; keep this process running.\n", name, ready.URL)
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-tunnel.Done():
+		return nil
+	}
 }
 
 func headlessCommand(args []string) error {
@@ -2657,6 +2698,15 @@ func taskWorkspaceRows(state api.State, taskID string, available bool) ([]Worksp
 	return result, nil
 }
 
+type sshHostRow struct {
+	Name          string `json:"name"`
+	Host          string `json:"host"`
+	User          string `json:"user"`
+	Port          int    `json:"port"`
+	IdentityFiles int    `json:"identityFiles"`
+	Error         string `json:"error,omitempty"`
+}
+
 func printValue(value any) error {
 	if outputJSON {
 		data, err := json.MarshalIndent(value, "", "  ")
@@ -2673,6 +2723,28 @@ func printValue(value any) error {
 			rows = append(rows, taskRowCells(item))
 		}
 		printTable([]string{"ID", "NAME", "SOURCE", "EXTERNAL ID", "URL", "WORKSPACES", "PINNED", "CREATED"}, rows...)
+	case []sshHostRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, []string{
+				item.Name,
+				item.User,
+				item.Host,
+				func() string {
+					if item.Port == 0 {
+						return "-"
+					}
+					return strconv.Itoa(item.Port)
+				}(),
+				func() string {
+					if item.Error != "" {
+						return item.Error
+					}
+					return strconv.Itoa(item.IdentityFiles)
+				}(),
+			})
+		}
+		printTable([]string{"NAME", "USER", "HOST", "PORT", "IDENTITIES / STATUS"}, rows...)
 	case []ProjectRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
@@ -3085,7 +3157,7 @@ Commands:
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
   session list|current|create|delete|rename|pin|move|send|read|attach|undo
-  ssh USER@HOST                     start daemon, save endpoint, keep SSH tunnel
+  ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
 
 Global flags:
@@ -3424,6 +3496,28 @@ func endpointUsageText() string {
 
 func sshUsageText() string {
 	return `Usage:
-  warren ssh USER@HOST [--local-port PORT] [--remote-port PORT] [--name NAME]
+  warren ssh list [--ssh-config PATH] [--json]
+  warren ssh TARGET [--local-port PORT] [--remote-port PORT] [--name NAME] [--ssh-config PATH] [--known-hosts PATH]
+
+TARGET is an SSH alias from ~/.ssh/config or user@host. The embedded client
+resolves OpenSSH config (Host, Include, HostName, User, Port, IdentityFile,
+UserKnownHostsFile), verifies host keys against known_hosts, and authenticates
+via ssh-agent or IdentityFile. It bootstraps warren-headless on the remote host
+and forwards a loopback port to 127.0.0.1:8789.
+
+Unsupported ProxyJump/ProxyCommand aliases are reported by 'warren ssh list';
+use a direct host or keep an external 'ssh -L' tunnel with 'warren endpoint add'.
+
+Options:
+  --local-port PORT     local loopback port (default 0 = ephemeral random port)
+  --remote-port PORT    remote daemon port (default 8789)
+  --name NAME           endpoint name (default TARGET with @/: replaced by -)
+  --ssh-config PATH     SSH config path (default ~/.ssh/config)
+  --known-hosts PATH    known_hosts path (default ~/.ssh/known_hosts)
+
+Examples:
+  warren ssh list
+  warren ssh tenc_sh
+  warren ssh user@vps --local-port 8789 --name vps
 `
 }
