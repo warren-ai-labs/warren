@@ -78,10 +78,10 @@ public final class GhosttySurface: Identifiable {
             // Match xterm.js drawBoldTextInBrightColors: bold uses bright palette.
             builder.withBoldColor("bright")
             builder.withCustom("bold-is-bright", "true")
-            // Pure-black truecolor 38;2;0;0;0 (codex Working) is invisible on
-            // dark #151110. 2.5 was still too flat for the white flash.
-            // 1.8 keeps the dark grey distinct from the 234 warm-white flash.
-            builder.withMinimumContrast(1.8)
+            // Make Codex's pure-black Working label visible without flattening
+            // its shimmer: Ghostty's binary contrast shader promotes black at
+            // 1.2, while the shimmer's darkest emitted grey remains above it.
+            builder.withMinimumContrast(1.2)
             for (index, color) in TerminalPalette.ember.enumerated() {
                 builder.withPalette(index, color: Self.hex(color))
             }
