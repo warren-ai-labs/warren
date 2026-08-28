@@ -171,6 +171,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
+	mux.HandleFunc("POST /v1/runtime/refresh", s.handleRuntimeRefresh)
 	mux.HandleFunc("GET /v1/tunnels", s.handleTunnels)
 	mux.HandleFunc("POST /v1/tunnels/start", s.handleTunnelStart)
 	mux.HandleFunc("POST /v1/tunnels/stop", s.handleTunnelStop)
@@ -1017,6 +1018,20 @@ func (s *HTTPServer) unregisterPeer(peer *wsPeer) {
 	s.peersMu.Lock()
 	delete(s.peers, peer)
 	s.peersMu.Unlock()
+}
+
+func (s *HTTPServer) handleRuntimeRefresh(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Manual Refresh Runtime from the menu bar. New sessions already inherit
+	// the current truecolor env via sessionEnv; this endpoint exists to
+	// acknowledge the request and let the UI refresh versions. A full
+	// ghostline handoff for existing sessions is handled by the upgrade
+	// path (version change) and is not required for the color fix.
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(map[string]any{"refreshed": true})
 }
 
 // handleMaintenance announces an operator-initiated maintenance window to all

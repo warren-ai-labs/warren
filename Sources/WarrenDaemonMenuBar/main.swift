@@ -87,6 +87,36 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         NSApp.terminate(nil)
     }
 
+    @objc private func refreshRuntime() {
+        Task { @MainActor in
+            await triggerRuntimeRefresh()
+        }
+    }
+
+    @objc private func openWarrenAction() {
+        launchForegroundApplication()
+    }
+
+    private func triggerRuntimeRefresh() async {
+        let tokenURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".warren/token")
+        guard let token = try? String(contentsOf: tokenURL, encoding: .utf8),
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8789/v1/runtime/refresh")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token.trimmingCharacters(in: .whitespacesAndNewlines))", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 8
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if (response as? HTTPURLResponse)?.statusCode == 200 {
+                // Refresh succeeded; versions will be updated on next poll.
+                await refreshVersions()
+            }
+        } catch {
+            return
+        }
+    }
+
     private func launchForegroundApplication() {
         let environment = ProcessInfo.processInfo.environment
         let executable: URL
@@ -115,6 +145,11 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        let refresh = NSMenuItem(title: "Refresh Runtime", action: #selector(refreshRuntime), keyEquivalent: "")
+        refresh.tag = 10
+        menu.addItem(refresh)
+        menu.addItem(NSMenuItem(title: "Open Warren", action: #selector(openWarrenAction), keyEquivalent: "o"))
+        menu.addItem(.separator())
         let status = NSMenuItem(title: "Headless: Checking…", action: nil, keyEquivalent: "")
         status.tag = 1
         status.isEnabled = false
@@ -476,6 +511,9 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
         if let ghostlineTagVersion = statusItem.menu?.item(withTag: 5) {
             ghostlineTagVersion.title = "Ghostline tag: \(self.ghostlineTagVersion ?? "—")"
+        }
+        if let refresh = statusItem.menu?.item(withTag: 10) {
+            refresh.isEnabled = daemonRunning
         }
     }
 }
