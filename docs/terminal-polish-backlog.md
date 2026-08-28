@@ -2,7 +2,7 @@
 
 Date: 2026-08-28
 Branch: `feat/persistent-warm-runtime`
-Status: proposal — no behavior change yet, additive only
+Status: implementation notes
 Source: conversation on top of `docs/terminal-experience-progress.md` and `docs/decisions/2026-08-26-terminal-rendering-comparison-and-direction.md`
 
 This file collects polish that is **lossless** (presentation-only, no change to `prepareAttach`/`reanchorAtomicOutput` atomic boundary, no protocol change) and worth doing after the warm-runtime core lands.
@@ -12,7 +12,7 @@ This file collects polish that is **lossless** (presentation-only, no change to 
 - One stable frame: tab switch is `reparent+present` (`Packages/GhosttyAdapter/TerminalSurfaceManager.swift:122`), cold recovery stays behind `recoveryPhase=.recovering` (`TerminalSurfaceManager.swift:394`) and only reveals at `present_complete` (`TerminalSurfaceManager.swift:748`).
 - Sticky intent: `viewportY==baseY` means pinned to live output (`Web/src/App.jsx:1704`), otherwise preserve user scroll.
 - One owner: only the focused/key-window surface may `Input/Resize` (`Sources/Warren/WarrenRemoteApplicationModel.swift:244 ownsTerminalFocus`, `WarrenResizeRequestBuffer:309`).
-- Shell jump on promotion (supersedes Zeno fixed-target): warm promotion reveals the current frame immediately (jump to latest) without replaying the backlog visibly. Background subscription + retained grid keep the surface current while hidden, so entering shows latest in one frame (~16ms) instead of chasing `targetSequence`. Previously a fixed target drained hidden until `rendered >= target`; now backlog drains hidden or is superseded by the next snapshot. Chosen: **jump to latest** over **fixed-target drain**.
+- Shell promotion is endpoint-specific: Local promotions reseed from a fresh atomic snapshot so renderer backlog is discarded; Remote promotions reuse the retained surface and swap only the control lease, avoiding an extra network round trip. Remote output continues draining while hidden, so normal switches do not visibly replay backlog. Chosen: **local snapshot / remote warm reuse**.
 - Resize coalescing for active shells: rapid `hostDidLayout` events are debounced (50ms) and promotion stays hidden for 250ms after the last resize. This lets an actively outputting shell settle at the new width before reveal, turning 1-2s of missing background color blocks into one clean jump. Output is briefly buffered, scrollback remains intact.
 - Keep canvas on demote (decision point): `demote:625` keeps warm view hidden in place instead of `removeFromSuperview → clearSurface → surfaceReady=false → drain stall → backlog`. Warm backlog must drain hidden, not accumulate. Chosen: **keep hidden** over **tear down**.
 - Reveal on draw, not feed (decision point): `present:726` previously used `renderedSequence` (feed) as ready, causing reveal before Ghostty drew. Reveal must wait for `ghostty_surface_draw` success. Chosen: **draw-complete** over **feed-complete**.

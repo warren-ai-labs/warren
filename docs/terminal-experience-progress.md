@@ -191,12 +191,12 @@ Cold session path:
 
 Warm session path:
 
-- `promoteRetainedSession` logs `tab_promote_local`, swaps the control lease,
-  reparents/presents the retained surface with a jump to latest (no visible
-  replay, no Zeno target chase). Background shells use the same path: their
-  grid is kept current while hidden, so entering never fast-forwards; missing
-  output while hidden is covered by the next snapshot rather than a visible
-  stream.
+- Warm promotion is endpoint-specific. Local promotions re-seed the retained
+  surface from a fresh atomic snapshot, discarding renderer backlog before the
+  presentation gate opens. Remote promotions log `tab_promote_local`, swap the
+  control lease, and reparent the retained surface without an extra snapshot
+  round trip. Remote output continues draining while hidden, so normal
+  switches do not visibly replay backlog.
 - Output subscriptions remain per retained session, so background surfaces
   stay current. Resize is debounced (50ms) and promotion defers 250ms after
   resize; only the focused session may claim resize. This prevents color-block
