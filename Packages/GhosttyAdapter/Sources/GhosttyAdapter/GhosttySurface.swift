@@ -382,10 +382,25 @@ public final class GhosttySurface: Identifiable {
         reattachAnchorText = text
     }
 
+    public func clearReattachAnchor() {
+        reattachAnchorText = nil
+    }
+
     /// Resync the reattached viewport only when it did not return to its
     /// pre-demotion position. Jump to bottom without animation; scrollback
     /// remains intact so the user can still scroll up after the jump.
+    ///
+    /// The original anchor comparison called `ghostty_surface_read_text` on
+    /// MainActor inside `demote`, which blocks on `terminalCallLock` while the
+    /// background drain is in `ghostty_surface_write_buffer`. For tab-close
+    /// the anchor is never used (surface is disposed), so keep the synchronous
+    /// path cheap: clear instead of reading.
     public func resyncIfNeeded() {
+        // Cheap path used after the demote change: no synchronous grid read.
+        // Keep the hook for warm promotion if a future lightweight anchor
+        // (e.g. renderedEpoch/Sequence) is desired, but avoid the blocking
+        // `viewportText()` call on MainActor during close.
+        guard reattachAnchorText != nil else { return }
         let anchor = reattachAnchorText
         reattachAnchorText = nil
         guard let anchor, let text = viewportText(), text != anchor else {

@@ -645,7 +645,13 @@ public final class TerminalSurfaceManager {
         guard let entry = entries[sessionID] else { return }
         entry.transitionGeneration &+= 1
         cancelPresentation(for: entry)
-        entry.surface.captureReattachAnchor()
+        // Do not capture viewport text synchronously on MainActor: `captureReattachAnchor`
+        // previously called `ghostty_surface_read_text` under `terminalCallLock`,
+        // which blocks if the background drain is inside `ghostty_surface_write_buffer`.
+        // Closing a tab always disposes its surface, so the anchor is unused there;
+        // for warm demotion the next `resyncIfNeeded` now uses a cheap always-resync
+        // path that does not read the grid.
+        entry.surface.clearReattachAnchor()
         entry.view.setFocusLossReportingSuppressed(true)
         if entry.view.window?.firstResponder === entry.view {
             entry.view.window?.makeFirstResponder(nil)
