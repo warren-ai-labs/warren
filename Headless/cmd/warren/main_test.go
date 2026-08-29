@@ -895,6 +895,44 @@ func TestEndpointAddKeepsTokenFlag(t *testing.T) {
 	}
 }
 
+func TestResolveEndpointDefaultsToLocalWhenUnambiguous(t *testing.T) {
+	settings := config.Config{Endpoints: map[string]config.Endpoint{
+		"local": {Name: "local", URL: "http://127.0.0.1:8789", Token: "secret"},
+	}}
+	value, err := resolveEndpoint(settings, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" {
+		t.Fatalf("endpoint = %q, want local", value.Name)
+	}
+}
+
+func TestResolveEndpointRequiresNameWhenMultipleAreConfigured(t *testing.T) {
+	settings := config.Config{Endpoints: map[string]config.Endpoint{
+		"local": {Name: "local"},
+		"vps":   {Name: "vps"},
+	}}
+	_, err := resolveEndpoint(settings, "")
+	if err == nil || !strings.Contains(err.Error(), "--endpoint NAME") || !strings.Contains(err.Error(), "warren endpoint list") {
+		t.Fatalf("error = %v, want endpoint selection hint", err)
+	}
+}
+
+func TestResolveEndpointHonorsExplicitNameWhenMultipleAreConfigured(t *testing.T) {
+	settings := config.Config{Endpoints: map[string]config.Endpoint{
+		"local": {Name: "local"},
+		"vps":   {Name: "vps", URL: "http://vps", Token: "secret"},
+	}}
+	value, err := resolveEndpoint(settings, " vps ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "vps" {
+		t.Fatalf("endpoint = %q, want vps", value.Name)
+	}
+}
+
 func TestRunHelpExitsSuccessfully(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"help"},

@@ -29,6 +29,8 @@ var endpointURL string
 var endpointToken string
 var configPath string
 
+const defaultEndpointName = "local"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		var usageErr *usageError
@@ -295,9 +297,9 @@ func connect() (context.Context, *client.Client, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		value, err := settings.Resolve(endpointName)
+		value, err := resolveEndpoint(settings, endpointName)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w; add one with 'warren endpoint add' or pass --server and --token", err)
+			return nil, nil, err
 		}
 		url, token = value.URL, value.Token
 	}
@@ -306,6 +308,23 @@ func connect() (context.Context, *client.Client, error) {
 	}
 	value, err := client.Dial(dialContext, url, token)
 	return context.Background(), value, err
+}
+
+func resolveEndpoint(settings config.Config, name string) (config.Endpoint, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		if len(settings.Endpoints) > 1 {
+			return config.Endpoint{}, errors.New("multiple endpoints configured; run 'warren endpoint list', then retry with --endpoint NAME")
+		}
+		if _, ok := settings.Endpoints[defaultEndpointName]; ok {
+			name = defaultEndpointName
+		}
+	}
+	value, err := settings.Resolve(name)
+	if err != nil {
+		return config.Endpoint{}, fmt.Errorf("%w; add one with 'warren endpoint add' or pass --server and --token", err)
+	}
+	return value, nil
 }
 
 func resourceCommand(args []string) error {
@@ -2792,7 +2811,7 @@ Commands:
 
 Global flags:
   --json                            machine-readable JSON output
-  --endpoint NAME                   endpoint name from the local config
+  --endpoint NAME                   endpoint name from the local config (required when multiple are configured)
   --server URL --token TOKEN        connect directly to a server
   --config PATH                     config file (default ~/.warren/config.json)
 
