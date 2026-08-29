@@ -199,6 +199,32 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         terminalFeedLock.lock()
         defer { terminalFeedLock.unlock() }
         guard inMemory.restoreSnapshot(data) else { return false }
+        markSnapshotRestored(epoch: epoch, sequence: sequence)
+        return true
+    }
+
+    /// Installs a native snapshot and reapplies embedder configuration while
+    /// holding the same feed lock as live output. The callback runs on the
+    /// main actor because terminal configuration is main-actor owned; keeping
+    /// both operations in one critical section prevents live bytes from being
+    /// written between the snapshot replacement and its color restoration.
+    @MainActor
+    @discardableResult
+    func restoreSnapshotAndReapplyRuntimeConfig(
+        _ data: Data,
+        epoch: UInt64,
+        sequence: UInt64,
+        reapplyRuntimeConfig: () -> Bool
+    ) -> Bool {
+        terminalFeedLock.lock()
+        defer { terminalFeedLock.unlock() }
+        guard inMemory.restoreSnapshot(data) else { return false }
+        _ = reapplyRuntimeConfig()
+        markSnapshotRestored(epoch: epoch, sequence: sequence)
+        return true
+    }
+
+    private func markSnapshotRestored(epoch: UInt64, sequence: UInt64) {
         lock.withLock {
             buffer.reset(epoch: epoch, sequence: sequence)
             latestRenderedEpoch = epoch
@@ -207,7 +233,6 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             syncEnteredAt = nil
             syncTail = []
         }
-        return true
     }
 
     /// Records that Ghostty has consumed bytes through `sequence` for `epoch`.

@@ -8,6 +8,7 @@ import { sessionDisplayTitle } from "./title.js";
 export function AgentView({
   session,
   events = [],
+  status = null,
   onSend,
   ready = true,
   hasMore = false,
@@ -25,6 +26,10 @@ export function AgentView({
   const [draft, setDraft] = useState("");
   const blocks = groupAgentEvents(events);
   const displayTitle = sessionDisplayTitle(session) || "Agent";
+  // The Host projects a session-level lifecycle. "working" is the only state
+  // that means the agent is actively producing output; "blocked"/"stalled"
+  // are waiting on a human, not running, so they must not show the shim.
+  const running = status?.activity === "working";
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -136,6 +141,12 @@ export function AgentView({
             return <AgentBlock key={blockKindKey(block, index)} block={block} />;
           })
         )}
+        {running && (
+          <div className="agent-running-shim" aria-live="polite">
+            <span className="codex-caret" aria-hidden="true" />
+            <span className="agent-running-label">{displayTitle} is working…</span>
+          </div>
+        )}
       </div>
       {ready ? (
         <form
@@ -195,20 +206,25 @@ function AgentBlock({ block }) {
   case "user":
   case "assistant": {
     const event = block.event;
+    const interrupted = isInterrupted(event);
     if (event.type === "user") {
       return (
-        <div className="agent-message user">
+        <div className={`agent-message user${interrupted ? " interrupted" : ""}`}>
           <div className="agent-bubble">
             <MarkdownContent value={event.content || ""} />
           </div>
-          <div className="agent-message-meta">{formatMessageTime(event.timestamp)}</div>
+          <div className="agent-message-meta">
+            {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
+            {formatMessageTime(event.timestamp)}
+          </div>
         </div>
       );
     }
     return (
-      <div className="agent-message assistant">
+      <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
         <MarkdownContent value={event.content || ""} />
         <div className="agent-message-meta">
+          {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
           {event.durationMs ? formatDuration(event.durationMs) : ""}
           {event.durationMs && event.timestamp ? " · " : ""}
           {formatMessageTime(event.timestamp)}
@@ -406,6 +422,16 @@ function statusText(status) {
   case "running": return "Running…";
   default: return "Completed";
   }
+}
+
+// A message was cut short by a user interruption. OpenCode reports this on the
+// assistant event's stopReason; Claude Code emits a sentinel user message that
+// begins with "[Request interrupted".
+function isInterrupted(event) {
+  if (!event) return false;
+  if (event.stopReason === "interrupted") return true;
+  const content = event.content || "";
+  return /^\[Request interrupted/i.test(content.trim());
 }
 
 function displayToolName(name) {
