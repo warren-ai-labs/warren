@@ -4,6 +4,10 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-08-29
+
+> Patch release: adds Host-owned Tasks that aggregate Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+
 ### Added
 
 - Add Host-owned Tasks that aggregate Workspaces across Projects, with provider-neutral external work-item metadata, Web and CLI lifecycle controls, and Web/Desktop Workspace attach and detach actions.

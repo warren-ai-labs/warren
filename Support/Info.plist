@@ -18,10 +18,10 @@
     <string>Warren</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.11.1</string>
-    <key>CFBundleVersion</key>
-    <string>23</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.11.2</string>
+	<key>CFBundleVersion</key>
+	<string>24</string>
     <key>WarrenBuildVersion</key>
     <string>development</string>
     <key>WarrenBuildRevision</key>
