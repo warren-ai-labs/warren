@@ -9,16 +9,57 @@ import Foundation
 import GhosttyKit
 
 public final class InMemoryTerminalSession: @unchecked Sendable {
+    /// Tracks one native surface independently from the currently attached
+    /// surface. A write may outlive `clearSurface`; keeping the operation
+    /// count on this object lets teardown detach immediately while retaining
+    /// the native pointer until every in-flight C call has returned.
+    private final class SurfaceState: @unchecked Sendable {
+        let surface: ghostty_surface_t
+        let callLock = NSLock()
+        var activeCalls = 0
+        var ready = false
+        var detached = false
+        /// Bytes received after this surface was installed but before its
+        /// pre-surface queue has finished flushing. Keeping this queue on the
+        /// state itself closes the gap between moving the old queue and
+        /// publishing `ready = true`.
+        var pending = Data()
+        var drainedCallbacks: [@Sendable () -> Void] = []
+
+        init(surface: ghostty_surface_t) {
+            self.surface = surface
+        }
+    }
+
+    /// A lease keeps a native surface alive for the duration of one C call.
+    /// The call lock is per surface, so detaching one surface never blocks a
+    /// lifecycle operation for another surface.
+    private final class SurfaceLease: @unchecked Sendable {
+        let owner: InMemoryTerminalSession
+        let state: SurfaceState
+        private let releaseLock = NSLock()
+        private var hasReleased = false
+
+        init(owner: InMemoryTerminalSession, state: SurfaceState) {
+            self.owner = owner
+            self.state = state
+            state.callLock.lock()
+        }
+
+        func release() {
+            releaseLock.lock()
+            guard !hasReleased else {
+                releaseLock.unlock()
+                return
+            }
+            hasReleased = true
+            releaseLock.unlock()
+            owner.release(self)
+        }
+    }
+
     private let lock = NSLock()
-    /// Serializes every C call that reads or mutates the terminal. State
-    /// replacement and live output must have one unambiguous ordering.
-    private let terminalCallLock = NSLock()
-    private var surface: ghostty_surface_t?
-    /// Set only after `setSurface` has finished flushing any pre-surface
-    /// bytes. `receive` refuses to write while this is false so buffered
-    /// output always precedes live output without holding `lock` across a
-    /// Ghostty call.
-    private var surfaceReady = false
+    private var surfaceState: SurfaceState?
     /// Host output received before a surface has attached. The read pump is
     /// armed the instant the child is spawned, but the ghostty surface is not
     /// built until the view mounts a turn later — so the shell's first prompt
@@ -44,76 +85,102 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     // MARK: - Surface Lifecycle
 
     public func setSurface(_ surface: ghostty_surface_t?) {
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
-        var pending: Data?
+        guard let surface else {
+            clearSurface(ifMatches: currentSurface)
+            return
+        }
+
+        let state: SurfaceState
         lock.lock()
-        self.surface = surface
-        surfaceReady = false
-        if surface != nil, !pendingPreSurface.isEmpty {
-            pending = pendingPreSurface
+        if let current = surfaceState,
+           current.surface == surface,
+           !current.detached
+        {
+            lock.unlock()
+            return
+        }
+        state = SurfaceState(surface: surface)
+        surfaceState = state
+        if !pendingPreSurface.isEmpty {
+            state.pending = pendingPreSurface
             pendingPreSurface.removeAll(keepingCapacity: false)
         }
         lock.unlock()
 
         // Flush anything the host sent before the surface existed — the
         // shell's first prompt at cold start. The background writer now waits
-        // for `surfaceReady`, so this happens before any live byte is written
-        // and Ghostty is never called while `lock` is held.
-        if let surface, let pending, !pending.isEmpty {
-            pending.withUnsafeBytes { buffer in
-                guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                    return
-                }
-                ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
-            }
+        // for the not-ready surface state, so this happens before any live
+        // byte is written and Ghostty is never called while `lock` is held.
+        let flushedBytes = flushPending(for: state)
+        if flushedBytes > 0 {
             TerminalDebugLog.log(
                 .output,
-                "terminal <- host flushed pre-surface \(pending.count) bytes"
+                "terminal <- host flushed pre-surface \(flushedBytes) bytes"
             )
         }
-
-        lock.lock()
-        if surface != nil, self.surface == surface {
-            surfaceReady = true
-        }
-        lock.unlock()
 
         TerminalDebugLog.log(
             .lifecycle,
-            "in-memory session surface=\(surface == nil ? "nil" : "set")"
+            "in-memory session surface=set"
         )
     }
 
-    func clearSurface(ifMatches expectedSurface: ghostty_surface_t?) {
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
+    @discardableResult
+    func clearSurface(
+        ifMatches expectedSurface: ghostty_surface_t?,
+        onDrained: (@Sendable () -> Void)? = nil
+    ) -> Bool {
+        var callbacks: [@Sendable () -> Void] = []
         lock.lock()
-        defer { lock.unlock() }
-
-        guard surface == expectedSurface else {
+        guard surfaceState?.surface == expectedSurface
+            || (surfaceState == nil && expectedSurface == nil)
+        else {
             TerminalDebugLog.log(
                 .lifecycle,
-                "in-memory session clear skipped expected=\(expectedSurface == nil ? "nil" : "set") current=\(surface == nil ? "nil" : "set")"
+                "in-memory session clear skipped expected=\(expectedSurface == nil ? "nil" : "set") current=\(surfaceState == nil ? "nil" : "set")"
             )
-            return
+            lock.unlock()
+            return false
         }
 
-        surface = nil
-        surfaceReady = false
+        guard let state = surfaceState else {
+            lock.unlock()
+            if let onDrained { onDrained() }
+            return true
+        }
+
+        surfaceState = nil
+        state.ready = false
+        state.detached = true
+        // Preserve bytes queued while the surface was attaching. They belong
+        // before any output received after this detach and must not disappear
+        // if teardown wins the race with the attach flush.
+        appendPending(state.pending, to: &pendingPreSurface)
+        state.pending.removeAll(keepingCapacity: false)
+        if let onDrained {
+            if state.activeCalls == 0 {
+                callbacks.append(onDrained)
+            } else {
+                state.drainedCallbacks.append(onDrained)
+            }
+        }
+        lock.unlock()
+
+        callbacks.forEach { $0() }
         TerminalDebugLog.log(.lifecycle, "in-memory session surface=nil matched")
+        return true
     }
 
     public var currentSurface: ghostty_surface_t? {
         lock.lock()
         defer { lock.unlock() }
-        return surface
+        return surfaceState?.surface
     }
 
     public var isSurfaceReady: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return surface != nil && surfaceReady
+        return surfaceState?.ready == true && surfaceState?.detached == false
     }
 
     // MARK: - Viewport Read
@@ -128,17 +195,13 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     /// with `rectangle: false` (linear flow). This reads exactly the visible
     /// rows and ignores scrollback. Empty viewports return an empty string.
     ///
-    /// Thread-safe: acquires the same `NSLock` as `receive(_:)` and
-    /// `setSurface(_:)`, preventing reads against a surface mid-replacement.
+    /// Thread-safe: acquires a lease for the same native surface used by
+    /// `receive(_:)`, preventing reads against a surface while it is being
+    /// detached or replaced.
     public func readViewportText() -> String? {
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
-        lock.lock()
-        guard let surface, surfaceReady else {
-            lock.unlock()
-            return nil
-        }
-        lock.unlock()
+        guard let lease = beginLease() else { return nil }
+        defer { lease.release() }
+        let surface = lease.state.surface
 
         let topLeft = ghostty_point_s(
             tag: GHOSTTY_POINT_VIEWPORT,
@@ -189,15 +252,41 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     /// Feed data into the terminal from the host backend.
     @discardableResult
     public func receive(_ data: Data) -> Bool {
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
-        lock.lock()
-        guard let surface, surfaceReady else {
-            // No surface yet — buffer instead of dropping so the shell's first
-            // prompt survives the spawn→attach race. Flushed in `setSurface`.
-            pendingPreSurface.append(data)
-            if pendingPreSurface.count > Self.pendingPreSurfaceCap {
-                pendingPreSurface.removeFirst(pendingPreSurface.count - Self.pendingPreSurfaceCap)
+        while true {
+            if let lease = beginLease() {
+                defer { lease.release() }
+                let surface = lease.state.surface
+
+                TerminalDebugLog.log(
+                    .output,
+                    "terminal <- host \(TerminalDebugLog.describe(data))"
+                )
+
+                data.withUnsafeBytes { buffer in
+                    guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                        return
+                    }
+                    ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
+                }
+                return true
+            }
+
+            // Re-check the state while holding the same lock used by
+            // `flushPending` to publish `ready`. If an attach completed after
+            // the failed lease attempt, retry instead of appending to a queue
+            // that the attach path has already drained.
+            lock.lock()
+            if let state = surfaceState, !state.detached {
+                if state.ready {
+                    lock.unlock()
+                    continue
+                }
+                appendPending(data, to: &state.pending)
+            } else {
+                // No surface yet — buffer instead of dropping so the shell's
+                // first prompt survives the spawn→attach race. Flushed in
+                // `setSurface`.
+                appendPending(data, to: &pendingPreSurface)
             }
             TerminalDebugLog.log(
                 .output,
@@ -206,20 +295,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             lock.unlock()
             return false
         }
-        lock.unlock()
-
-        TerminalDebugLog.log(
-            .output,
-            "terminal <- host \(TerminalDebugLog.describe(data))"
-        )
-
-        data.withUnsafeBytes { buffer in
-            guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                return
-            }
-            ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
-        }
-        return true
     }
 
     /// Atomically replaces the current terminal emulator state with a native
@@ -229,14 +304,9 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     @discardableResult
     public func restoreSnapshot(_ data: Data) -> Bool {
         guard !data.isEmpty else { return false }
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
-        lock.lock()
-        guard let surface, surfaceReady else {
-            lock.unlock()
-            return false
-        }
-        lock.unlock()
+        guard let lease = beginLease() else { return false }
+        defer { lease.release() }
+        let surface = lease.state.surface
 
         let restored = data.withUnsafeBytes { buffer -> Bool in
             guard let pointer = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
@@ -273,18 +343,15 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
 
     /// Signal that the host-managed process has exited.
     public func finish(exitCode: UInt32, runtimeMilliseconds: UInt64) {
-        terminalCallLock.lock()
-        defer { terminalCallLock.unlock() }
-        lock.lock()
-        guard let surface, surfaceReady else {
+        guard let lease = beginLease() else {
             TerminalDebugLog.log(
                 .lifecycle,
                 "process exit ignored: missing surface exitCode=\(exitCode) runtimeMs=\(runtimeMilliseconds)"
             )
-            lock.unlock()
             return
         }
-        lock.unlock()
+        defer { lease.release() }
+        let surface = lease.state.surface
 
         TerminalDebugLog.log(
             .lifecycle,
@@ -357,5 +424,106 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             cellWidthPixels: resize.cellWidthPixels == 0 ? lastResize.cellWidthPixels : resize.cellWidthPixels,
             cellHeightPixels: resize.cellHeightPixels == 0 ? lastResize.cellHeightPixels : resize.cellHeightPixels
         )
+    }
+
+    // MARK: - Native surface leases
+
+    /// Appends bytes to a queue while enforcing the bounded pre-surface
+    /// retention policy. The caller must hold `lock`.
+    private func appendPending(_ data: Data, to queue: inout Data) {
+        queue.append(data)
+        if queue.count > Self.pendingPreSurfaceCap {
+            queue.removeFirst(queue.count - Self.pendingPreSurfaceCap)
+        }
+    }
+
+    /// Requeues a batch that was removed for an attach flush. It must precede
+    /// bytes received after teardown, so prepend rather than append while the
+    /// caller holds `lock`.
+    private func prependPending(_ data: Data, to queue: inout Data) {
+        guard !data.isEmpty else { return }
+        var combined = data
+        combined.append(queue)
+        if combined.count > Self.pendingPreSurfaceCap {
+            combined.removeFirst(combined.count - Self.pendingPreSurfaceCap)
+        }
+        queue = combined
+    }
+
+    /// Flushes all bytes accumulated before a surface becomes ready. New
+    /// receives during a flush land in `SurfaceState.pending`; the final
+    /// empty check and `ready` publication happen under `lock`, so no receive
+    /// can append to an abandoned queue after the attach completes.
+    private func flushPending(for state: SurfaceState) -> Int {
+        var flushedBytes = 0
+        while true {
+            let pending: Data
+            lock.lock()
+            guard surfaceState === state, !state.detached else {
+                lock.unlock()
+                return flushedBytes
+            }
+            guard !state.pending.isEmpty else {
+                state.ready = true
+                lock.unlock()
+                return flushedBytes
+            }
+            pending = state.pending
+            state.pending.removeAll(keepingCapacity: false)
+            lock.unlock()
+
+            guard let lease = beginLease(for: state, requireReady: false) else {
+                // Teardown may have detached the state after the queue was
+                // moved out. Keep those bytes for the next surface instead of
+                // silently dropping them.
+                lock.lock()
+                prependPending(pending, to: &pendingPreSurface)
+                lock.unlock()
+                return flushedBytes
+            }
+            pending.withUnsafeBytes { buffer in
+                guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return
+                }
+                ghostty_surface_write_buffer(state.surface, ptr, UInt(buffer.count))
+            }
+            lease.release()
+            flushedBytes += pending.count
+        }
+    }
+
+    /// Acquires a lease for the currently attached, ready surface. The state
+    /// is retained by the lease after detachment, so the native pointer cannot
+    /// be freed while a C call is still using it.
+    private func beginLease(
+        for requestedState: SurfaceState? = nil,
+        requireReady: Bool = true
+    ) -> SurfaceLease? {
+        lock.lock()
+        let state = requestedState ?? surfaceState
+        guard let state,
+              !state.detached,
+              (!requireReady || state.ready),
+              surfaceState === state
+        else {
+            lock.unlock()
+            return nil
+        }
+        state.activeCalls += 1
+        lock.unlock()
+        return SurfaceLease(owner: self, state: state)
+    }
+
+    private func release(_ lease: SurfaceLease) {
+        lease.state.callLock.unlock()
+        var callbacks: [@Sendable () -> Void] = []
+        lock.lock()
+        lease.state.activeCalls -= 1
+        if lease.state.detached, lease.state.activeCalls == 0 {
+            callbacks = lease.state.drainedCallbacks
+            lease.state.drainedCallbacks.removeAll()
+        }
+        lock.unlock()
+        callbacks.forEach { $0() }
     }
 }

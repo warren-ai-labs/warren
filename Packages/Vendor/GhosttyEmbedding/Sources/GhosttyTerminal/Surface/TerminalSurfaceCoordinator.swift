@@ -38,7 +38,7 @@ final class TerminalSurfaceCoordinator {
     }
 
     var surface: TerminalSurface?
-    let bridge = TerminalCallbackBridge()
+    private var bridge: TerminalCallbackBridge
 
     // MARK: - Platform Hooks
 
@@ -49,9 +49,12 @@ final class TerminalSurfaceCoordinator {
     var onMetricsUpdate: (() -> Void)?
     var onCellSizeDidChange: (() -> Void)?
 
-    /// Called immediately after `ghostty_surface_free`, on every teardown path
-    /// (in-place rebuild, explicit free, deinit) while the freed surface's
-    /// orphaned render layer is still attached to the platform view.
+    /// Called during every teardown path (in-place rebuild, explicit free,
+    /// deinit) while the detached surface's orphaned render layer is still
+    /// attached to the platform view. In-memory surfaces may defer
+    /// `ghostty_surface_free` until background calls drain, so this hook runs
+    /// before that deferred free to prevent a CoreAnimation commit from
+    /// reaching the stale layer delegate.
     ///
     /// On iOS ghostty's Metal renderer `addSublayer`s its own `IOSurfaceLayer`
     /// onto the view (the view's own backing layer is readonly, so it cannot
@@ -119,6 +122,7 @@ final class TerminalSurfaceCoordinator {
     private static let createRetryCooldown: TimeInterval = 2.0
 
     init() {
+        bridge = TerminalCallbackBridge()
         bridge.onCellSizeChange = { [weak self] width, height in
             self?.handleCellSizeChange(width: width, height: height)
         }
@@ -394,39 +398,112 @@ final class TerminalSurfaceCoordinator {
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         tickScheduled = false
+        let detachingSurface = surface
+        let detachingBridge = bridge
+        let expectedSurface = detachingSurface?.rawValue
+        let hadSurface = detachingSurface != nil
+        let shouldClearFocus = !suppressFocusLossReports
+
+        // Stop routing callbacks from the old surface before it is freed. A
+        // rebuild gets a fresh bridge below, so an in-flight old callback can
+        // never be delivered to the new surface's delegate.
+        detachingBridge.rawSurface = nil
+        detachingBridge.delegate = nil
+        detachingBridge.onCellSizeChange = nil
+        detachingBridge.onRenderRequest = nil
+
+        // The native surface stores the host-managed callbacks as unretained
+        // pointers. Keep the session alive until `ghostty_surface_free` has
+        // joined its IO thread; otherwise an old view can be torn down while
+        // that thread is still dispatching a final output callback.
+        let release: @MainActor @Sendable () -> Void
         if let session = configuration.inMemorySession {
-            session.clearSurface(ifMatches: surface?.rawValue)
+            release = {
+                // Keep the unretained host callback target alive through the
+                // synchronous native teardown. `withExtendedLifetime` is
+                // intentional: a capture list alone is optimized away when
+                // the captured value is not otherwise referenced.
+                withExtendedLifetime(session) {
+                    if shouldClearFocus {
+                        detachingSurface?.setFocus(false)
+                    }
+                    detachingSurface?.free()
+                    controller?.remove(detachingBridge)
+                }
+            }
+        } else {
+            release = {
+                if shouldClearFocus {
+                    detachingSurface?.setFocus(false)
+                }
+                detachingSurface?.free()
+                controller?.remove(detachingBridge)
+            }
+        }
+
+        if let session = configuration.inMemorySession {
+            // `ghostty_surface_write_buffer` can wait for the main runloop.
+            // Detach the session now, but delay native free until every call
+            // that already borrowed the pointer has returned.
+            let onDrained: @Sendable () -> Void = {
+                Task { @MainActor in
+                    release()
+                }
+            }
+            let matched = session.clearSurface(
+                ifMatches: expectedSurface,
+                onDrained: onDrained
+            )
+            if !matched {
+                Task { @MainActor in
+                    release()
+                }
+            }
+        } else {
+            Task { @MainActor in
+                release()
+            }
         }
         controller?.onWakeup = nil
         controller?.shouldProcessWakeup = nil
-        bridge.rawSurface = nil
-        let hadSurface = surface != nil
         // SwiftUI can replace an AppTerminalView while the old view is still
         // being released. Each view owns its own coordinator/surface, but the
         // delegate's `surface` is shared state; an old view's teardown must not
         // clear a newer surface that has already been installed.
-        let detachingSurface = surface
         let detachIsCurrent = (delegate as? TerminalViewState).map {
             $0.surface === detachingSurface
         } ?? true
         if suppressFocusLossReports {
             TerminalDebugLog.log(.lifecycle, "surface teardown focus=false suppressed")
         } else {
-            surface?.setFocus(false)
+            TerminalDebugLog.log(.lifecycle, "surface teardown focus=false deferred")
         }
-        surface?.free()
         surface = nil
-        if hadSurface {
-            onSurfaceLayersOrphaned?()
-        }
+        // The platform hook must run before the next CoreAnimation commit can
+        // observe a layer belonging to the detached surface. It is safe to
+        // clear the orphaned layer before the deferred native free; the
+        // release callback above still performs the final free on the main
+        // actor once all in-flight C calls have drained.
+        if hadSurface { onSurfaceLayersOrphaned?() }
         lastMetrics = nil
         lastSentSize = nil
         pendingImmediateTick = true
         lastTickTimestamp = 0
-        controller?.remove(bridge)
         if hadSurface, detachIsCurrent {
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()
+        }
+
+        if hadSurface {
+            bridge = TerminalCallbackBridge()
+            bridge.onCellSizeChange = { [weak self] width, height in
+                self?.handleCellSizeChange(width: width, height: height)
+            }
+            bridge.onRenderRequest = { [weak self] in
+                self?.requestImmediateTick()
+            }
+            bridge.delegate = delegate
+            bridge.openURLHandler = (delegate as? TerminalViewState)?.openURLHandler
         }
     }
 
