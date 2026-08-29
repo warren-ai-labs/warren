@@ -12,6 +12,7 @@ struct WarrenDesktopSidebar: View {
     let onUpdateAction: () -> Void
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
+    let onRequestTaskCreate: () -> Void
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let onAction: (WarrenDesktopAction) -> Void
     let onCommandPalette: () -> Void
@@ -41,6 +42,7 @@ struct WarrenDesktopSidebar: View {
                     surface: tokens.sidebarSurface
                 ) {
                     WarrenDesktopSidebarRows(
+                        taskGroups: projection.taskGroups,
                         groups: projection.groups,
                         terminalGroups: projection.terminalGroups.map {
                             WarrenDesktopTerminalGroup(
@@ -57,6 +59,21 @@ struct WarrenDesktopSidebar: View {
                         endpointCapabilities: endpointCapabilities,
                         isInteractionDisabled: !projection.isConnected,
                         onAddProject: { onAction(.addProject) },
+                        onRequestTaskCreate: onRequestTaskCreate,
+                        onFocusTask: { taskID in
+                            Self.revealTask(taskID, in: &sidebarTree)
+                            DispatchQueue.main.async {
+                                withAnimation(WarrenMotion.animation(
+                                    .stateChange,
+                                    reduceMotion: reduceMotion
+                                )) {
+                                    proxy.scrollTo(
+                                        "task.\(taskID.description)",
+                                        anchor: .center
+                                    )
+                                }
+                            }
+                        },
                         onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
                         onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                         onAction: onAction,
@@ -84,6 +101,14 @@ struct WarrenDesktopSidebar: View {
                 .frame(width: WarrenSpacing.hairline)
                 .zIndex(2)
         }
+    }
+
+    static func revealTask(
+        _ taskID: TaskID,
+        in tree: inout WarrenDesktopSidebarTreeState
+    ) {
+        tree.tasksCollapsed = false
+        tree.expandedTaskIDs.insert(taskID)
     }
 
     private func toggleSidebar() {

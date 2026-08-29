@@ -12,6 +12,19 @@ type Host struct {
 	Version string `json:"version"`
 }
 
+type Task struct {
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	Source              string    `json:"source,omitempty"`
+	ExternalID          string    `json:"externalID,omitempty"`
+	URL                 string    `json:"url,omitempty"`
+	CreationRequestID   string    `json:"creationRequestId,omitempty"`
+	CreationRequestHash string    `json:"creationRequestHash,omitempty"`
+	Pinned              bool      `json:"pinned,omitempty"`
+	Order               int       `json:"order,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+}
+
 type Project struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -39,12 +52,15 @@ type WorktreeCandidate struct {
 }
 
 type Workspace struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Branch    string `json:"branch,omitempty"`
-	Kind      string `json:"kind"`
+	ID                  string `json:"id"`
+	ProjectID           string `json:"project"`
+	TaskID              string `json:"task,omitempty"`
+	Name                string `json:"name"`
+	Path                string `json:"path"`
+	Branch              string `json:"branch,omitempty"`
+	Kind                string `json:"kind"`
+	CreationRequestID   string `json:"creationRequestId,omitempty"`
+	CreationRequestHash string `json:"creationRequestHash,omitempty"`
 	// ManagedWorktree is true only for Git worktrees created by Warren. An
 	// imported checkout remains on disk when its Warren record is removed.
 	ManagedWorktree bool `json:"managedWorktree,omitempty"`
@@ -357,6 +373,7 @@ type State struct {
 	// never written into the durable state file.
 	Revision       uint64          `json:"revision,omitempty"`
 	Host           Host            `json:"host"`
+	Tasks          []Task          `json:"tasks"`
 	Projects       []Project       `json:"projects"`
 	Workspaces     []Workspace     `json:"workspaces"`
 	TerminalGroups []TerminalGroup `json:"terminalGroups"`

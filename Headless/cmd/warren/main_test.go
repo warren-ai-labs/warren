@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -368,6 +373,16 @@ func TestParseFlagsBooleanEqualsStillWorks(t *testing.T) {
 	}
 }
 
+func TestParseFlagsPreservesShortHelpAsPositionalText(t *testing.T) {
+	params := parseFlags([]string{"session-1", "-h"})
+	if got := positionals(params); !reflect.DeepEqual(got, []string{"session-1", "-h"}) {
+		t.Fatalf("positionals = %#v, want literal -h text", got)
+	}
+	if boolValue(params, "h") {
+		t.Fatal("shared flag parser treated literal -h as help")
+	}
+}
+
 func TestValidateAgentReadArgs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -673,6 +688,168 @@ func TestProjectRowsCountWorkspaces(t *testing.T) {
 	}
 }
 
+func TestTaskRowsCountCrossProjectWorkspaces(t *testing.T) {
+	state := api.State{
+		Tasks: []api.Task{{ID: "task-1", Name: "Delivery"}},
+		Workspaces: []api.Workspace{
+			{ID: "workspace-a", ProjectID: "project-a", TaskID: "task-1"},
+			{ID: "workspace-b", ProjectID: "project-b", TaskID: "task-1"},
+			{ID: "workspace-c", ProjectID: "project-b"},
+		},
+	}
+	rows := taskRows(state)
+	if len(rows) != 1 || rows[0].Workspaces != 2 {
+		t.Fatalf("task rows = %#v", rows)
+	}
+}
+
+func TestTaskParamsNormalizeExternalIdentityAndMembership(t *testing.T) {
+	create := normalizedParams(parseFlags([]string{
+		"--name", "Delivery", "--source", "tapd", "--external-id", "12345",
+	}), "task", "create")
+	if create["externalID"] != "12345" || create["external-id"] != nil {
+		t.Fatalf("create params = %#v", create)
+	}
+	attach := normalizedParams(parseFlags([]string{"task-1", "workspace-1"}), "task", "attach")
+	if attach["id"] != "task-1" || attach["workspace"] != "workspace-1" {
+		t.Fatalf("attach params = %#v", attach)
+	}
+}
+
+func TestTaskWorkspaceCommandMapsNestedMutations(t *testing.T) {
+	tests := []struct {
+		arguments []string
+		resource  string
+		action    string
+		want      map[string]any
+	}{
+		{
+			arguments: []string{"attach", "task-1", "workspace-1"},
+			resource:  "task",
+			action:    "attach",
+			want:      map[string]any{"id": "task-1", "workspace": "workspace-1"},
+		},
+		{
+			arguments: []string{"detach", "task-1", "workspace-1"},
+			resource:  "task",
+			action:    "detach",
+			want:      map[string]any{"id": "task-1", "workspace": "workspace-1"},
+		},
+		{
+			arguments: []string{"create", "task-1", "project-1", "--branch", "feature/demo", "--name", "Demo", "--path", "/tmp/demo"},
+			resource:  "workspace",
+			action:    "create",
+			want: map[string]any{
+				"project": "project-1", "task": "task-1", "branch": "feature/demo", "name": "Demo", "path": "/tmp/demo",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		resource, action, params, err := taskWorkspaceMutation(test.arguments)
+		if err != nil {
+			t.Fatalf("taskWorkspaceMutation(%v): %v", test.arguments, err)
+		}
+		if resource != test.resource || action != test.action || !reflect.DeepEqual(params, test.want) {
+			t.Fatalf("taskWorkspaceMutation(%v) = %q, %q, %#v; want %q, %q, %#v", test.arguments, resource, action, params, test.resource, test.action, test.want)
+		}
+	}
+}
+
+func TestTaskWorkspaceRowsSelectAttachedOrAvailableAndValidateTask(t *testing.T) {
+	state := api.State{
+		Tasks: []api.Task{{ID: "task-1", Name: "Delivery"}},
+		Projects: []api.Project{
+			{ID: "project-1", Name: "First"},
+			{ID: "project-2", Name: "Second"},
+		},
+		Workspaces: []api.Workspace{
+			{ID: "attached", ProjectID: "project-1", TaskID: "task-1"},
+			{ID: "available", ProjectID: "project-2"},
+			{ID: "other-task", ProjectID: "project-2", TaskID: "task-2"},
+		},
+	}
+
+	attached, err := taskWorkspaceRows(state, "task-1", false)
+	if err != nil || len(attached) != 1 || attached[0].ID != "attached" || attached[0].ProjectName != "First" {
+		t.Fatalf("attached rows = %#v, %v", attached, err)
+	}
+	available, err := taskWorkspaceRows(state, "task-1", true)
+	if err != nil || len(available) != 1 || available[0].ID != "available" || available[0].ProjectName != "Second" {
+		t.Fatalf("available rows = %#v, %v", available, err)
+	}
+	if _, err := taskWorkspaceRows(api.State{}, "missing-task", false); err == nil || !strings.Contains(err.Error(), "task not found") {
+		t.Fatalf("missing task error = %v", err)
+	}
+}
+
+func TestWorkspaceCreateOutputIncludesOptionalTaskMembership(t *testing.T) {
+	previousOutputJSON := outputJSON
+	t.Cleanup(func() { outputJSON = previousOutputJSON })
+	result := api.WorkspaceCreateResult{
+		Workspace: api.Workspace{
+			ID: "workspace-1", ProjectID: "project-1", TaskID: "task-1", Name: "feature/demo",
+			Branch: "feature/demo", Path: "/tmp/demo", Kind: "worktree",
+		},
+		Created: true, GitWorktree: true,
+	}
+
+	outputJSON = false
+	human := capturePrintedValue(t, result)
+	if !strings.Contains(human, "TASK          task-1\n") {
+		t.Fatalf("human output missing Task membership:\n%s", human)
+	}
+	standalone := result
+	standalone.TaskID = ""
+	standaloneHuman := capturePrintedValue(t, standalone)
+	if strings.Contains(standaloneHuman, "TASK") {
+		t.Fatalf("standalone human output changed:\n%s", standaloneHuman)
+	}
+
+	outputJSON = true
+	jsonOutput := capturePrintedValue(t, result)
+	var decoded api.WorkspaceCreateResult
+	if err := json.Unmarshal([]byte(jsonOutput), &decoded); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, jsonOutput)
+	}
+	if decoded.TaskID != "task-1" {
+		t.Fatalf("JSON task = %q, want task-1", decoded.TaskID)
+	}
+}
+
+func capturePrintedValue(t *testing.T, value any) string {
+	t.Helper()
+	output, err := captureStdout(t, func() error { return printValue(value) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
+
+func captureStdout(t *testing.T, call func() error) (string, error) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousStdout := os.Stdout
+	os.Stdout = writer
+	defer func() { os.Stdout = previousStdout }()
+	callErr := call()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = previousStdout
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return string(data), callErr
+}
+
 func TestWorkspaceRowsJoinProjectAndCountRunningSessions(t *testing.T) {
 	now := time.Now().UTC()
 	state := api.State{
@@ -948,6 +1125,11 @@ func TestRunHelpExitsSuccessfully(t *testing.T) {
 		{"worktree", "--help"},
 		{"worktree", "-h"},
 		{"project", "--help"},
+		{"task", "--help"},
+		{"task", "workspace", "--help"},
+		{"task", "workspace", "list", "--help"},
+		{"task", "workspace", "create", "--help"},
+		{"task", "create", "--help"},
 		{"session", "--help"},
 	} {
 		if err := run(arguments); err != nil {
@@ -971,6 +1153,157 @@ func TestRunResourceHelpDoesNotConnect(t *testing.T) {
 	}
 }
 
+func TestTaskWorkspaceActionHelpDoesNotConnect(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments []string
+		usage     string
+	}{
+		{name: "list short help", arguments: []string{"list", "-h"}, usage: "warren task workspace list TASK_ID"},
+		{name: "create long help", arguments: []string{"create", "--help"}, usage: "warren task workspace create TASK_ID PROJECT_ID"},
+		{name: "attach short help", arguments: []string{"attach", "-h"}, usage: "warren task workspace attach TASK_ID WORKSPACE_ID"},
+		{name: "detach h flag", arguments: []string{"detach", "--h"}, usage: "warren task workspace detach TASK_ID WORKSPACE_ID"},
+		{
+			name:      "help ignores extra positionals after strict validation",
+			arguments: []string{"list", "task-1", "extra", "--help"},
+			usage:     "warren task workspace list TASK_ID",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := useTaskWorkspaceRequestCounter(t)
+			output, err := captureStdout(t, func() error { return taskWorkspaceCommand(test.arguments) })
+			if err != nil {
+				t.Fatalf("taskWorkspaceCommand(%v) = %v, want help success", test.arguments, err)
+			}
+			if !strings.Contains(output, test.usage) {
+				t.Fatalf("output = %q, want it to contain %q", output, test.usage)
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("daemon requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestTaskWorkspaceRejectsInvalidArgumentsBeforeConnect(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments []string
+		message   string
+		usage     string
+	}{
+		{
+			name:      "list extra positional",
+			arguments: []string{"list", "task-1", "extra"},
+			message:   "expected exactly 1 positional argument, got 2",
+			usage:     "warren task workspace list TASK_ID",
+		},
+		{
+			name:      "list unknown flag even with help",
+			arguments: []string{"list", "task-1", "--unknown", "--help"},
+			message:   `unknown flag "--unknown"`,
+			usage:     "warren task workspace list TASK_ID",
+		},
+		{
+			name:      "list unknown short flag",
+			arguments: []string{"list", "task-1", "-v"},
+			message:   `unknown flag "-v"`,
+			usage:     "warren task workspace list TASK_ID",
+		},
+		{
+			name:      "list value flag missing value",
+			arguments: []string{"list", "task-1", "--limit"},
+			message:   "--limit requires a value",
+			usage:     "warren task workspace list TASK_ID",
+		},
+		{
+			name:      "create extra positional with equals value",
+			arguments: []string{"create", "task-1", "project-1", "extra", "--branch=feature/demo"},
+			message:   "expected exactly 2 positional arguments, got 3",
+			usage:     "warren task workspace create TASK_ID PROJECT_ID",
+		},
+		{
+			name:      "create extra positional with hyphen-leading value",
+			arguments: []string{"create", "task-1", "project-1", "extra", "--branch", "-feature/demo"},
+			message:   "expected exactly 2 positional arguments, got 3",
+			usage:     "warren task workspace create TASK_ID PROJECT_ID",
+		},
+		{
+			name:      "create misspelled flag",
+			arguments: []string{"create", "task-1", "project-1", "--branch", "feature/demo", "--pathh", "/tmp/demo"},
+			message:   `unknown flag "--pathh"`,
+			usage:     "warren task workspace create TASK_ID PROJECT_ID",
+		},
+		{
+			name:      "create value flag missing value",
+			arguments: []string{"create", "task-1", "project-1", "--branch"},
+			message:   "--branch requires a value",
+			usage:     "warren task workspace create TASK_ID PROJECT_ID",
+		},
+		{
+			name:      "attach extra positional",
+			arguments: []string{"attach", "task-1", "workspace-1", "extra"},
+			message:   "expected exactly 2 positional arguments",
+			usage:     "warren task workspace attach TASK_ID WORKSPACE_ID",
+		},
+		{
+			name:      "attach unknown flag",
+			arguments: []string{"attach", "task-1", "workspace-1", "--force"},
+			message:   `unknown flag "--force"`,
+			usage:     "warren task workspace attach TASK_ID WORKSPACE_ID",
+		},
+		{
+			name:      "detach extra positional",
+			arguments: []string{"detach", "task-1", "workspace-1", "extra"},
+			message:   "expected exactly 2 positional arguments",
+			usage:     "warren task workspace detach TASK_ID WORKSPACE_ID",
+		},
+		{
+			name:      "detach unknown flag",
+			arguments: []string{"detach", "task-1", "workspace-1", "--keep-worktree"},
+			message:   `unknown flag "--keep-worktree"`,
+			usage:     "warren task workspace detach TASK_ID WORKSPACE_ID",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := useTaskWorkspaceRequestCounter(t)
+			err := taskWorkspaceCommand(test.arguments)
+			var usageErr *usageError
+			if !errors.As(err, &usageErr) {
+				t.Fatalf("error = %v, want *usageError", err)
+			}
+			if !strings.Contains(usageErr.message, test.message) {
+				t.Fatalf("message = %q, want it to contain %q", usageErr.message, test.message)
+			}
+			if !strings.Contains(usageErr.text, test.usage) {
+				t.Fatalf("usage = %q, want it to contain %q", usageErr.text, test.usage)
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("daemon requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func useTaskWorkspaceRequestCounter(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	requests := &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(writer, "unexpected daemon request", http.StatusServiceUnavailable)
+	}))
+	previousEndpointURL, previousEndpointToken := endpointURL, endpointToken
+	endpointURL, endpointToken = server.URL, "test"
+	t.Cleanup(func() {
+		endpointURL, endpointToken = previousEndpointURL, previousEndpointToken
+		server.Close()
+	})
+	return requests
+}
+
 func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 	tests := []struct {
 		arguments []string
@@ -981,6 +1314,13 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		{[]string{"worktree", "create"}, "missing PROJECT_ID", "warren worktree create PROJECT_ID"},
 		{[]string{"worktree", "create", "PROJECT_ID"}, "missing --branch BRANCH", "warren worktree create PROJECT_ID"},
 		{[]string{"workspace"}, "workspace command is required", "warren workspace list"},
+		{[]string{"task", "create"}, "missing --name NAME", "warren task create --name NAME"},
+		{[]string{"task", "attach", "task-1"}, "missing WORKSPACE_ID", "warren task attach TASK_ID WORKSPACE_ID"},
+		{[]string{"task", "workspace"}, "task workspace command is required", "warren task workspace list TASK_ID"},
+		{[]string{"task", "workspace", "list"}, "missing TASK_ID", "warren task workspace list TASK_ID"},
+		{[]string{"task", "workspace", "attach", "task-1"}, "missing WORKSPACE_ID", "warren task workspace attach TASK_ID WORKSPACE_ID"},
+		{[]string{"task", "workspace", "create", "task-1"}, "missing PROJECT_ID", "warren task workspace create TASK_ID PROJECT_ID"},
+		{[]string{"task", "workspace", "create", "task-1", "project-1"}, "missing --branch BRANCH", "warren task workspace create TASK_ID PROJECT_ID"},
 		{[]string{"session", "send"}, "missing SESSION_ID", "warren session send SESSION_ID"},
 		{[]string{"endpoint", "add"}, "missing ENDPOINT_NAME", "warren endpoint add NAME"},
 		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh USER@HOST"},

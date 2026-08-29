@@ -15,6 +15,7 @@ type rosterDeltaMessage struct {
 	BaseRevision uint64                                `json:"baseRevision"`
 	Revision     uint64                                `json:"revision"`
 	Host         *api.Host                             `json:"host,omitempty"`
+	Tasks        *rosterEntityDelta[api.Task]          `json:"tasks,omitempty"`
 	Projects     *rosterEntityDelta[api.Project]       `json:"projects,omitempty"`
 	Workspaces   *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
 	Groups       *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
@@ -37,6 +38,9 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 		host := after.Host
 		result.Host = &host
 	}
+	if delta := rosterEntries(before.Tasks, after.Tasks, func(value api.Task) string { return value.ID }); delta.hasChanges() {
+		result.Tasks = &delta
+	}
 	if delta := rosterEntries(before.Projects, after.Projects, func(value api.Project) string { return value.ID }); delta.hasChanges() {
 		result.Projects = &delta
 	}
@@ -53,7 +57,7 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 }
 
 func (m rosterDeltaMessage) hasChanges() bool {
-	return m.Host != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil
+	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil
 }
 
 func (d rosterEntityDelta[T]) hasChanges() bool {

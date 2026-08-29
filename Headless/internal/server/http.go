@@ -1701,6 +1701,48 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, value)
+	case "task.create":
+		value, err := p.server.Service.CreateTaskWithRequestID(
+			stringParam(params, "name"),
+			stringParam(params, "source"),
+			stringParam(params, "externalID"),
+			stringParam(params, "url"),
+			stringParam(params, "requestId"),
+		)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
+	case "task.remove":
+		if err := p.server.Service.RemoveTask(stringParam(params, "id")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"removed": true})
+	case "task.rename":
+		if err := p.server.Service.RenameTask(stringParam(params, "id"), stringParam(params, "name")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"renamed": true})
+	case "task.pin":
+		if err := p.server.Service.SetTaskPinned(stringParam(params, "id"), boolParam(params, "pinned")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"pinned": boolParam(params, "pinned")})
+	case "task.move":
+		if err := p.server.Service.MoveTask(stringParam(params, "id"), stringParam(params, "before")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"moved": true})
+	case "task.attach":
+		if err := p.server.Service.AttachWorkspaceToTask(stringParam(params, "id"), stringParam(params, "workspace")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"attached": true})
+	case "task.detach":
+		if err := p.server.Service.DetachWorkspaceFromTask(stringParam(params, "id"), stringParam(params, "workspace")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"detached": true})
 	case "project.worktrees":
 		value, err := p.server.Service.ListProjectWorktrees(stringParam(params, "project"))
 		if err != nil {
@@ -1746,7 +1788,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"moved": true})
 	case "workspace.create":
-		value, err := p.server.Service.CreateWorkspace(stringParam(params, "project"), stringParam(params, "branch"), stringParam(params, "name"), stringParam(params, "path"))
+		value, err := p.server.Service.CreateTaskWorkspaceWithRequestID(
+			stringParam(params, "project"),
+			stringParam(params, "task"),
+			stringParam(params, "branch"),
+			stringParam(params, "name"),
+			stringParam(params, "path"),
+			stringParam(params, "requestId"),
+		)
 		if err != nil {
 			return err
 		}

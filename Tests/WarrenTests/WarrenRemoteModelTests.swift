@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import WarrenDesktop
 import WarrenDomain
 @testable import Warren
 
@@ -158,7 +159,247 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
-    func testRemoteSubscribeParametersIncludeRecoveryAnchorWhenKnown() throws {
+    func testTaskCreateRequestCarriesOptionalMetadata() {
+        let requestID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let request = WarrenRemoteTaskProtocol.createRequest(
+            WarrenDesktopTaskCreationRequest(
+                requestID: requestID,
+                name: "Delivery",
+                source: "tapd",
+                externalID: "123",
+                url: "https://tracker.example/tasks/123"
+            )
+        )
+
+        XCTAssertEqual(request.method, "task.create")
+        XCTAssertEqual(request.params, [
+            "name": "Delivery",
+            "source": "tapd",
+            "externalID": "123",
+            "url": "https://tracker.example/tasks/123",
+            "requestId": requestID.uuidString.lowercased(),
+        ])
+    }
+
+    func testTaskCreateResultUsesHostReturnedIDAndRejectsInvalidID() throws {
+        let taskID = TaskID()
+        let result = Data("{\"id\":\"\(taskID.description)\"}".utf8)
+
+        XCTAssertEqual(try WarrenRemoteTaskProtocol.taskID(from: result), taskID)
+        XCTAssertThrowsError(
+            try WarrenRemoteTaskProtocol.taskID(from: Data("{\"id\":\"invalid\"}".utf8))
+        )
+        XCTAssertThrowsError(
+            try WarrenRemoteTaskProtocol.taskID(from: Data("{}".utf8))
+        )
+    }
+
+    @MainActor
+    func testTaskSubmitKeepsDraftForInvalidHostIDsUntilValidRetry() async {
+        let validID = TaskID()
+        var responses = [
+            Data("{}".utf8),
+            Data("{\"id\":\"invalid\"}".utf8),
+            Data("{\"id\":\"\(validID.description)\"}".utf8),
+        ]
+        var isPresented = true
+        var createdTaskID: TaskID?
+        let coordinator = WarrenDesktopTaskCreationCoordinator(
+            name: "Delivery",
+            source: "tapd",
+            externalID: "123",
+            url: "https://tracker.example/tasks/123",
+            onCreate: { _ in
+                try WarrenRemoteTaskProtocol.taskID(from: responses.removeFirst())
+            },
+            onCreated: {
+                createdTaskID = $0
+                isPresented = false
+            }
+        )
+
+        await coordinator.submit()
+        XCTAssertTrue(isPresented)
+        XCTAssertNil(createdTaskID)
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertNotNil(coordinator.errorMessage)
+        XCTAssertEqual(coordinator.name, "Delivery")
+        XCTAssertEqual(coordinator.source, "tapd")
+        XCTAssertEqual(coordinator.externalID, "123")
+        XCTAssertEqual(coordinator.url, "https://tracker.example/tasks/123")
+
+        await coordinator.submit()
+        XCTAssertTrue(isPresented)
+        XCTAssertNil(createdTaskID)
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertNotNil(coordinator.errorMessage)
+
+        await coordinator.submit()
+        XCTAssertFalse(isPresented)
+        XCTAssertEqual(createdTaskID, validID)
+        XCTAssertNil(coordinator.errorMessage)
+    }
+
+    func testWorkspaceCreateParametersCarryTaskWhenProvided() {
+        let projectID = ProjectID()
+        let taskID = TaskID()
+        let requestID = UUID()
+        let creation = WorkspaceCreationRequest(
+            requestID: requestID,
+            displayName: "Delivery API",
+            branch: "feature/delivery",
+            path: ""
+        )
+
+        XCTAssertEqual(
+            WarrenRemoteWorkspaceProtocol.createParameters(
+                projectID: projectID,
+                taskID: taskID,
+                creation: creation
+            ),
+            [
+                "project": projectID.description,
+                "task": taskID.description,
+                "branch": "feature/delivery",
+                "name": "Delivery API",
+                "path": "",
+                "requestId": requestID.uuidString.lowercased(),
+            ]
+        )
+    }
+
+    func testWorkspaceCreateParametersRemainCompatibleWithoutTask() {
+        let projectID = ProjectID()
+        let requestID = UUID()
+        let creation = WorkspaceCreationRequest(
+            requestID: requestID,
+            displayName: "Standalone",
+            branch: "feature/standalone",
+            path: ""
+        )
+
+        XCTAssertEqual(
+            WarrenRemoteWorkspaceProtocol.createParameters(
+                projectID: projectID,
+                taskID: nil,
+                creation: creation
+            ),
+            [
+                "project": projectID.description,
+                "branch": "feature/standalone",
+                "name": "Standalone",
+                "path": "",
+                "requestId": requestID.uuidString.lowercased(),
+            ]
+        )
+    }
+
+    @MainActor
+    func testWorkspaceSubmitPreventsDuplicatesKeepsFailureAndDismissesOnRetry() async {
+        let requestID = UUID()
+        let projectID = ProjectID()
+        let taskID = TaskID()
+        let firstStarted = expectation(description: "First workspace creation started")
+        let retryStarted = expectation(description: "Workspace creation retry started")
+        let fake = PausingWorkspaceCreationFake(
+            projectID: projectID,
+            taskID: taskID,
+            callExpectations: [firstStarted, retryStarted]
+        )
+        var dismissCount = 0
+        let coordinator = WarrenWorkspaceCreationCoordinator(
+            requestID: requestID,
+            displayName: "Delivery API",
+            branch: "feature/delivery",
+            path: "/tmp/delivery",
+            onCreate: fake.create,
+            onDismiss: { dismissCount += 1 }
+        )
+
+        let firstSubmission = Task { await coordinator.submit() }
+        await fulfillment(of: [firstStarted], timeout: 1)
+
+        XCTAssertEqual(fake.callCount, 1)
+        XCTAssertEqual(fake.parameters, [[
+            "project": projectID.description,
+            "task": taskID.description,
+            "branch": "feature/delivery",
+            "name": "Delivery API",
+            "path": "/tmp/delivery",
+            "requestId": requestID.uuidString.lowercased(),
+        ]])
+        XCTAssertTrue(coordinator.isSubmitting)
+        XCTAssertEqual(dismissCount, 0)
+
+        await coordinator.submit()
+        XCTAssertEqual(fake.callCount, 1)
+
+        let failure = NSError(
+            domain: "WorkspaceCreationTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Workspace creation failed"]
+        )
+        fake.fail(failure)
+        await firstSubmission.value
+
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertEqual(dismissCount, 0)
+        XCTAssertEqual(coordinator.errorMessage, "Workspace creation failed")
+        XCTAssertEqual(coordinator.requestID, requestID)
+        XCTAssertEqual(coordinator.displayName, "Delivery API")
+        XCTAssertEqual(coordinator.branch, "feature/delivery")
+        XCTAssertEqual(coordinator.path, "/tmp/delivery")
+
+        coordinator.binding(\.branch).wrappedValue = "feature/delivery-retry"
+        XCTAssertNil(coordinator.errorMessage)
+        coordinator.binding(\.branch).wrappedValue = "feature/delivery"
+
+        let retry = Task { await coordinator.submit() }
+        await fulfillment(of: [retryStarted], timeout: 1)
+        XCTAssertEqual(fake.callCount, 2)
+        XCTAssertEqual(fake.requests.map(\.requestID), [requestID, requestID])
+        XCTAssertTrue(coordinator.isSubmitting)
+        XCTAssertNil(coordinator.errorMessage)
+        fake.succeed()
+        await retry.value
+
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertEqual(dismissCount, 1)
+    }
+
+    @MainActor
+    func testWorkspaceCreationChangesRequestIDOnlyWhenSubmittedDraftChanges() async {
+        let requestID = UUID()
+        var requests: [WorkspaceCreationRequest] = []
+        let coordinator = WarrenWorkspaceCreationCoordinator(
+            requestID: requestID,
+            displayName: "Delivery API",
+            branch: "feature/delivery",
+            onCreate: { request in
+                requests.append(request)
+                throw NSError(
+                    domain: "WorkspaceCreationTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Workspace creation failed"]
+                )
+            },
+            onDismiss: { XCTFail("Failed submissions must not dismiss the modal") }
+        )
+
+        await coordinator.submit()
+        await coordinator.submit()
+        XCTAssertEqual(requests.map(\.requestID), [requestID, requestID])
+
+        coordinator.binding(\.branch).wrappedValue = "feature/delivery-retry"
+        XCTAssertNil(coordinator.errorMessage)
+        await coordinator.submit()
+
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertNotEqual(requests[2].requestID, requestID)
+        XCTAssertEqual(requests[2].requestID, coordinator.requestID)
+    }
+
+    func testRemoteAttachParametersIncludeRecoveryAnchorWhenKnown() throws {
         let sessionID = TerminalSessionID()
         let anchor = TerminalOutputAnchor(epoch: 3, sequence: 4096)
 
@@ -317,6 +558,9 @@ final class WarrenRemoteModelTests: XCTestCase {
                 {
                   "revision": 7,
                   "host": {"id": "host", "name": "Before"},
+                  "tasks": [
+                    {"id": "task-a", "name": "Delivery", "source": "tapd", "externalID": "123"}
+                  ],
                   "projects": [
                     {"id": "project-a", "name": "A", "path": "/a"},
                     {"id": "project-b", "name": "B", "path": "/b"}
@@ -339,6 +583,11 @@ final class WarrenRemoteModelTests: XCTestCase {
                   "baseRevision": 7,
                   "revision": 9,
                   "host": {"id": "host", "name": "After"},
+                  "tasks": {
+                    "upsert": [{"id": "task-b", "name": "Follow-up"}],
+                    "remove": ["task-a"],
+                    "order": ["task-b"]
+                  },
                   "projects": {
                     "upsert": [{"id": "project-a", "name": "A renamed", "path": "/a"}],
                     "order": ["project-b", "project-a"]
@@ -357,6 +606,8 @@ final class WarrenRemoteModelTests: XCTestCase {
 
         XCTAssertEqual(updated.revision, 9)
         XCTAssertEqual(updated.host.name, "After")
+        XCTAssertEqual(updated.tasks.map(\.id), ["task-b"])
+        XCTAssertEqual(updated.tasks.first?.name, "Follow-up")
         XCTAssertEqual(updated.projects.map(\.id), ["project-b", "project-a"])
         XCTAssertEqual(updated.projects.last?.name, "A renamed")
         XCTAssertEqual(updated.workspaces.map(\.id), ["workspace-new"])
@@ -841,5 +1092,48 @@ private final class LockedDataRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         storage.append(data)
+    }
+}
+
+@MainActor
+private final class PausingWorkspaceCreationFake {
+    private let projectID: ProjectID
+    private let taskID: TaskID?
+    private let callExpectations: [XCTestExpectation]
+    private var continuations: [CheckedContinuation<Void, Error>] = []
+    private(set) var requests: [WorkspaceCreationRequest] = []
+    private(set) var parameters: [[String: String]] = []
+
+    var callCount: Int { parameters.count }
+
+    init(
+        projectID: ProjectID,
+        taskID: TaskID?,
+        callExpectations: [XCTestExpectation]
+    ) {
+        self.projectID = projectID
+        self.taskID = taskID
+        self.callExpectations = callExpectations
+    }
+
+    func create(_ request: WorkspaceCreationRequest) async throws {
+        requests.append(request)
+        parameters.append(WarrenRemoteWorkspaceProtocol.createParameters(
+            projectID: projectID,
+            taskID: taskID,
+            creation: request
+        ))
+        callExpectations[parameters.count - 1].fulfill()
+        try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func succeed() {
+        continuations.removeFirst().resume()
+    }
+
+    func fail(_ error: Error) {
+        continuations.removeFirst().resume(throwing: error)
     }
 }

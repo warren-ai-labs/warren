@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCatalog, moveInCatalog, rosterFromMessage, workspaceTabs } from "./catalog.js";
+import {
+  buildCatalog,
+  moveInCatalog,
+  rosterFromMessage,
+  updateSessionAgentStatus,
+  workspaceTabs,
+} from "./catalog.js";
 import {
   captureNavigationPosition,
   resolveRestoredWorkspace,
@@ -30,6 +36,38 @@ test("catalog indexes workspaces and open tabs", () => {
     title: "Shell",
     kind: undefined,
   }]);
+});
+
+test("catalog indexes task workspaces across projects", () => {
+  const catalog = buildCatalog({
+    tasks: [{ id: "task", name: "Delivery" }],
+    projects: [{ id: "project-a" }, { id: "project-b" }],
+    workspaces: [
+      { id: "workspace-a", project: "project-a", task: "task" },
+      { id: "workspace-b", project: "project-b", task: "task" },
+      { id: "workspace-unassigned", project: "project-b" },
+    ],
+    tabs: [],
+  });
+
+  assert.deepEqual(
+    catalog.workspacesByTask.get("task").map(workspace => workspace.id),
+    ["workspace-a", "workspace-b"],
+  );
+  assert.equal(catalog.projectsByID.get("project-b").id, "project-b");
+});
+
+test("live agent status updates preserve task aggregation", () => {
+  const catalog = buildCatalog({
+    tasks: [{ id: "task", name: "Delivery" }],
+    projects: [{ id: "project" }],
+    workspaces: [{ id: "workspace", project: "project", task: "task" }],
+    tabs: [{ id: "tab", session: "session", workspace: "workspace" }],
+  });
+
+  const updated = updateSessionAgentStatus(catalog, "session", { activity: "working" });
+  assert.equal(updated.tasks[0].id, "task");
+  assert.equal(updated.workspacesByTask.get("task")[0].id, "workspace");
 });
 
 test("catalog keeps agent binding fields on sessions", () => {
