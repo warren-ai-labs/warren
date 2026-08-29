@@ -19,6 +19,33 @@ public struct WarrenDesktopProjectGroup: Identifiable, Hashable, Sendable {
     }
 }
 
+public struct WarrenDesktopTaskGroup: Identifiable, Hashable, Sendable {
+    public let task: WarrenTask
+    public let workspaces: [Workspace]
+
+    public var id: TaskID { task.id }
+
+    public init(task: WarrenTask, workspaces: [Workspace] = []) {
+        self.task = task
+        self.workspaces = workspaces
+    }
+}
+
+enum WarrenDesktopTaskWorkspaceOptions {
+    static func availableGroups(
+        from groups: [WarrenDesktopProjectGroup]
+    ) -> [WarrenDesktopProjectGroup] {
+        groups.compactMap { group in
+            let workspaces = group.workspaces.filter { $0.taskID == nil }
+            guard !workspaces.isEmpty else { return nil }
+            return WarrenDesktopProjectGroup(
+                project: group.project,
+                workspaces: workspaces
+            )
+        }
+    }
+}
+
 /// The workspace-level activity presentation keeps the highest-priority
 /// state while also counting visible tabs whose agents are currently working.
 /// A workspace row can therefore show both actionable state and concurrency
@@ -232,6 +259,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     }
 
     public let host: WarrenDomain.Host
+    public let taskGroups: [WarrenDesktopTaskGroup]
     public let groups: [WarrenDesktopProjectGroup]
     public let terminalGroups: [TerminalGroup]
     public let sessions: [WarrenDesktopSession]
@@ -280,6 +308,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.host == rhs.host
+            && lhs.taskGroups == rhs.taskGroups
             && lhs.groups == rhs.groups
             && lhs.terminalGroups == rhs.terminalGroups
             && lhs.sessions == rhs.sessions
@@ -293,6 +322,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(host)
+        hasher.combine(taskGroups)
         hasher.combine(groups)
         hasher.combine(terminalGroups)
         hasher.combine(sessions)
@@ -307,6 +337,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     public init(
         host: WarrenDomain.Host,
         groups: [WarrenDesktopProjectGroup],
+        tasks: [WarrenTask] = [],
         sessions: [WarrenDesktopSession] = [],
         tabs: [ClientTab] = [],
         sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID] = [:],
@@ -324,6 +355,18 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             WarrenDesktopProjectGroup(
                 project: group.project,
                 workspaces: Self.pinnedFirst(group.workspaces) { $0.pinned }
+            )
+        }
+        var workspacesByTaskID: [TaskID: [Workspace]] = [:]
+        for workspace in self.groups.flatMap(\.workspaces) {
+            if let taskID = workspace.taskID {
+                workspacesByTaskID[taskID, default: []].append(workspace)
+            }
+        }
+        self.taskGroups = Self.pinnedFirst(tasks) { $0.pinned }.map { task in
+            WarrenDesktopTaskGroup(
+                task: task,
+                workspaces: Self.pinnedFirst(workspacesByTaskID[task.id] ?? []) { $0.pinned }
             )
         }
         self.terminalGroups = terminalGroups
@@ -459,6 +502,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     /// Grouping happens once at projection construction, not while rendering rows.
     public init(
         host: WarrenDomain.Host,
+        tasks: [WarrenTask] = [],
         projects: [Project],
         workspaces: [Workspace],
         sessions: [WarrenDesktopSession] = [],
@@ -483,6 +527,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         self.init(
             host: host,
             groups: groups,
+            tasks: tasks,
             sessions: sessions,
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
@@ -604,6 +649,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         return Self(
             host: host,
             groups: groups,
+            tasks: taskGroups.map(\.task),
             sessions: nextSessions,
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
@@ -838,11 +884,13 @@ public struct WarrenDesktopSessionMoveTarget: Identifiable, Hashable, Sendable {
 public enum WarrenDesktopAction: Hashable, Sendable {
     case addProject
     case importSuperset
-    case requestNewWorkspace(ProjectID)
+    case requestNewWorkspace(ProjectID, taskID: TaskID? = nil)
     case requestProjectWorktreeImport(ProjectID)
     case setProjectAutoImportGitWorktrees(ProjectID, Bool)
     case renameProject(ProjectID, String)
     case renameWorkspace(WorkspaceID, String)
+    case attachWorkspaceToTask(TaskID, WorkspaceID)
+    case detachWorkspaceFromTask(TaskID, WorkspaceID)
     case deleteProject(ProjectID)
     case deleteWorkspace(WorkspaceID, removeLocalWorktree: Bool)
     case renameSession(TerminalSessionID, String)

@@ -8,7 +8,7 @@ Update rules: when implementation conflicts with this document, this document wi
 
 Warren is a local-first development workbench organized around Workspaces, with durable terminal sessions at its core.
 
-The macOS Desktop connects to a local `warren-headless` daemon by default, and can also connect to `warren-headless` running on a VPS. Users can switch between Local and Server from the top-right corner to manage Projects, Workspaces, Git worktrees, and Terminal Sessions on the target Host, with persistent terminal interaction through Ghostty. The CLI uses the same remote API and provides SSH bootstrap and port-forwarding entry points.
+The macOS Desktop connects to a local `warren-headless` daemon by default, and can also connect to `warren-headless` running on a VPS. Users can switch between Local and Server from the top-right corner to manage Tasks, Projects, Workspaces, Git worktrees, and Terminal Sessions on the target Host, with persistent terminal interaction through Ghostty. The CLI uses the same remote API and provides SSH bootstrap and port-forwarding entry points.
 
 The system must keep stable boundaries for a future iOS native client, Session sharing, Automation, and a central control plane. Web reachability is enabled explicitly by the user; neither the Desktop nor the headless daemon opens a public entry point by default.
 
@@ -29,11 +29,13 @@ The system must keep stable boundaries for a future iOS native client, Session s
 
 ### 3.1 Resources
 
-**Host**: execution node holding the real state of Projects, Workspaces, Terminal Sessions, and Runtimes. A Host is a `warren-headless` daemon, either on the current Mac or on a remote VPS.
+**Host**: execution node holding the real state of Tasks, Projects, Workspaces, Terminal Sessions, and Runtimes. A Host is a `warren-headless` daemon, either on the current Mac or on a remote VPS.
+
+**Task**: Host-owned work context that aggregates related Workspaces across Projects. A Task may carry a provider-neutral `source` and `externalID` pair plus an HTTP(S) URL for an external work item. It does not own repositories, working directories, Sessions, or Runtimes.
 
 **Project**: identity of a Git repository. Projects organize Workspaces; they are not terminal working directories.
 
-**Workspace**: a concrete, accessible local working directory under a Project, together with its Git context. The main checkout and worktrees are both Workspaces. A Workspace ID is stable identity; branch and path are mutable attributes.
+**Workspace**: a concrete, accessible local working directory under a Project, together with its Git context. The main checkout and worktrees are both Workspaces. A Workspace may additionally belong to one Task for cross-Project aggregation. A Workspace ID is stable identity; branch and path are mutable attributes.
 
 **Terminal Group**: Host-owned ordered container for standalone terminal Sessions that are not tied to a Project or Workspace. The first Group is the default destination for newly created standalone Sessions. A Group may define a default startup directory; otherwise the Host user's home directory is used.
 
@@ -78,6 +80,7 @@ The system must keep stable boundaries for a future iOS native client, Session s
 ```text
 Resource Authority
 Selected Host
+├── Task ··· aggregates zero or more Workspaces
 ├── Project
 │   └── Workspace
 │       └── Terminal Session
@@ -104,8 +107,8 @@ Terminal Session
 
 | State | Single authority | Persisted |
 | --- | --- | --- |
-| Projects, Workspaces, Terminal Groups, Sessions | Host Store | Yes |
-| Project, Workspace, and Terminal Group sidebar order | Host Store | Yes |
+| Tasks, Projects, Workspaces, Terminal Groups, Sessions | Host Store | Yes |
+| Task, Project, Workspace, and Terminal Group sidebar order | Host Store | Yes |
 | Runtime Bindings, Session state | Host Store | Yes |
 | PTY output recovery position | Host Output Store | Yes |
 | Windows, Workspace / Terminal Group Views, Tabs | Client Layout Store | Yes, device-local |
@@ -116,24 +119,27 @@ Terminal Session
 
 ## 5. Required Invariants
 
-1. A Workspace belongs to exactly one Project.
-2. A Terminal Session belongs to exactly one Session Scope: a Workspace or a Terminal Group.
-3. A Tab belongs to exactly one Window's Workspace View or Terminal Group View and references only Sessions in that context.
-4. The top Tab bar shows only Tabs of the Active Session Context.
-5. Switching Workspaces or Terminal Groups must atomically switch Tabs, the Active Tab, and the Renderer Set.
-6. A Window has exactly one Active Session Context; each context View has at most one Active Tab.
-7. Background Workspaces and Terminal Groups mount no Surfaces and send no input or resize.
-8. A Session has at most one Input Lease and one Canonical Viewport Owner.
-9. In Warren v1, closing a Tab terminates its Runtime; it is not merely a detach. Ended Session records without a Tab can be retained for history and later cleanup.
-10. Adding a Project creates a Workspace; adding a Workspace or Terminal Group Tab-bar entry creates a Session.
-11. Creating a Session must carry a fixed Session Scope and Request ID; the same Request ID creates at most one Session.
-12. App initialization must not auto-create shell, Codex, or Claude Sessions.
-13. Selecting a Workspace with no Tabs may idempotently create its default Shell Tab; selecting an empty Terminal Group does not start a process until the user creates a Terminal.
-14. The app allows only one foreground Client Instance; repeated launches activate the existing instance and then exit.
-15. Quitting the app must end the Client process but must not kill created Ghostline PTYs.
-16. Import must not modify Superset data, Git repositories, worktrees, or runtimes.
-17. A Host always has at least one Terminal Group when a standalone Session is created; the first ordered Group is the default.
-18. Deleting a Terminal Group must not silently terminate its running Sessions; Sessions must be moved to another Group or explicitly terminated.
+1. A Workspace belongs to exactly one Project and at most one Task.
+2. A Task may aggregate Workspaces from any Project on the same Host but never changes their Project ownership.
+3. A Task's `source` and `externalID` are either both absent or both present; their pair is unique within a Host.
+4. Deleting a Task only detaches its Workspaces and never deletes Workspaces, Sessions, files, or Git worktrees.
+5. A Terminal Session belongs to exactly one Session Scope: a Workspace or a Terminal Group.
+6. A Tab belongs to exactly one Window's Workspace View or Terminal Group View and references only Sessions in that context.
+7. The top Tab bar shows only Tabs of the Active Session Context.
+8. Switching Workspaces or Terminal Groups must atomically switch Tabs, the Active Tab, and the Renderer Set.
+9. A Window has exactly one Active Session Context; each context View has at most one Active Tab.
+10. Background Workspaces and Terminal Groups mount no Surfaces and send no input or resize.
+11. A Session has at most one Input Lease and one Canonical Viewport Owner.
+12. In Warren v1, closing a Tab terminates its Runtime; it is not merely a detach. Ended Session records without a Tab can be retained for history and later cleanup.
+13. Adding a Project creates a Workspace; adding a Workspace or Terminal Group Tab-bar entry creates a Session.
+14. Creating a Session must carry a fixed Session Scope and Request ID; the same Request ID creates at most one Session.
+15. App initialization must not auto-create shell, Codex, or Claude Sessions.
+16. Selecting a Workspace with no Tabs may idempotently create its default Shell Tab; selecting an empty Terminal Group does not start a process until the user creates a Terminal.
+17. The app allows only one foreground Client Instance; repeated launches activate the existing instance and then exit.
+18. Quitting the app must end the Client process but must not kill created Runtime sessions (ghostline PTYs or tmux sessions).
+19. Import must not modify Superset data, Git repositories, worktrees, or runtimes.
+20. A Host always has at least one Terminal Group when a standalone Session is created; the first ordered Group is the default.
+21. Deleting a Terminal Group must not silently terminate its running Sessions; Sessions must be moved to another Group or explicitly terminated.
 
 ## 6. Module Boundaries
 
@@ -211,7 +217,7 @@ Default files under `~/.warren/`:
 
 ```text
 ~/.warren/
-├── state.json        # Projects, Workspaces, Sessions, sidebar order, runtime bindings, import receipts
+├── state.json        # Tasks, Projects, Workspaces, Sessions, sidebar order, runtime bindings, import receipts
 ├── config.json       # CLI/Desktop endpoint list and current endpoint
 ├── settings.json     # daemon settings such as defaultRuntime, optional gnarEdge override, and gnarAccount
 ├── token             # authentication token
@@ -227,7 +233,7 @@ through explicit flags or environment variables without touching user data.
 Minimal data set in `state.json`:
 
 - Host identity and display name.
-- Projects, Workspaces, Terminal Groups, and their sidebar order.
+- Tasks, Projects, Workspaces, Terminal Groups, and their sidebar order.
 - Terminal Sessions with lifecycle and output position (`epoch`/`sequence`).
 - Runtime Bindings with the Ghostline runtime identifier and recovery metadata.
 - Superset Import Receipts and request receipts for idempotency.
@@ -237,6 +243,8 @@ resources; the desktop persists navigation preferences locally.
 
 Constraints:
 
+- Task external identities are provider-neutral and unique by `source` plus `externalID` when present.
+- Workspace Task membership is optional and single-valued; changing Tasks requires an explicit detach followed by attach.
 - Projects are deduplicated by normalized repository identity.
 - Workspaces are deduplicated by normalized real path within a Host.
 - A Session belongs to exactly one Session Scope.
@@ -245,6 +253,11 @@ Constraints:
   migrates Sessions between engines.
 - Sidebar order is normalized within each Host.
 - Output positions are monotonic per Session and drive recovery anchors.
+
+State schema 2 introduces Tasks and optional Workspace membership. The Host
+automatically migrates schema 1 and immediately persists schema 2. Future or
+unknown schemas fail closed so an older binary cannot silently discard Task
+data.
 
 ## 8. Superset One-Time Import
 
@@ -366,6 +379,8 @@ The UI information architecture follows Superset's proven base relationships wit
 Window
 ├── Sidebar
 │   ├── Terminal Groups
+│   ├── Tasks
+│   │   └── Workspaces from any Project
 │   └── Projects
 │       └── Workspaces
 └── Session Context Screen
@@ -379,7 +394,10 @@ Window
 
 Behavior requirements:
 
-- The initial empty state shows only Import or Add Project; it creates no Sessions.
+- The initial empty state keeps Import and Add Project available, may also offer Task creation, and creates no Sessions.
+- Tasks provide a second navigation projection over existing Workspaces; they never replace Project ownership or duplicate Session state.
+- Task rows show linked Workspaces across Projects with enough Project context to disambiguate identical Workspace names.
+- Attaching and detaching a Workspace is explicit. Deleting a Task leaves its Workspaces and Sessions reachable under Projects.
 - Projects are collapsed by default; Workspaces appear only after explicit expansion, and newly added Projects are collapsed by default.
 - Besides a dedicated add button, the whole Project row is the expand/collapse hot zone; expanding does not implicitly create a Session.
 - The whole Workspace row is the hot zone for selecting and entering a Session; no small, easy-to-misclick add buttons remain.

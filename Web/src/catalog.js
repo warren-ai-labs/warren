@@ -3,6 +3,7 @@ export function rosterFromMessage(message = {}) {
     const state = message.state;
     return {
       host: state.host || {},
+      tasks: state.tasks || [],
       projects: state.projects || [],
       workspaces: state.workspaces || [],
       tabs: (state.sessions || [])
@@ -27,6 +28,7 @@ export function rosterFromMessage(message = {}) {
   }
   return {
     host: message.host || {},
+    tasks: message.tasks || [],
     projects: message.projects || [],
     workspaces: message.workspaces || [],
     tabs: message.tabs || [],
@@ -45,6 +47,7 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
   ));
   return buildCatalog({
     host: catalog.host,
+    tasks: catalog.tasks,
     projects: catalog.projects,
     workspaces: catalog.workspaces,
     tabs,
@@ -54,7 +57,9 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
 export function buildCatalog(roster = rosterFromMessage()) {
   const sessions = new Map();
   const tabsByWorkspace = new Map();
+  const workspacesByTask = new Map();
   const workspacesByProject = new Map();
+  const tasks = [...(roster.tasks || [])].sort(pinnedFirst);
   const projects = [...roster.projects].sort(pinnedFirst);
   const workspaces = [...roster.workspaces].sort(pinnedFirst);
   const tabs = [...roster.tabs].sort(pinnedFirst);
@@ -64,10 +69,22 @@ export function buildCatalog(roster = rosterFromMessage()) {
     append(tabsByWorkspace, tab.workspace, tab);
   }
   for (const workspace of workspaces) {
+    if (workspace.task) append(workspacesByTask, workspace.task, workspace);
     append(workspacesByProject, workspace.project, workspace);
   }
 
-  return { ...roster, projects, workspaces, sessions, tabsByWorkspace, workspacesByProject };
+  const projectsByID = new Map(projects.map(project => [project.id, project]));
+  return {
+    ...roster,
+    tasks,
+    projects,
+    workspaces,
+    sessions,
+    tabsByWorkspace,
+    workspacesByTask,
+    workspacesByProject,
+    projectsByID,
+  };
 }
 
 /**
@@ -91,6 +108,7 @@ export function moveInCatalog(catalog, kind, id, beforeID) {
   next.splice(target, 0, moved);
   return buildCatalog({
     host: catalog.host,
+    tasks: catalog.tasks,
     projects: kind === "projects" ? next : catalog.projects,
     workspaces: kind === "workspaces" ? next : catalog.workspaces,
     tabs: catalog.tabs,

@@ -15,13 +15,34 @@ export function projectMenuItems(project, actions) {
   ];
 }
 
+export function taskMenuItems(task, actions) {
+  return [
+    {
+      label: task.pinned ? "Unpin task" : "Pin task",
+      action: () => actions.togglePin(task),
+    },
+    { label: "Rename task", action: () => actions.rename(task) },
+    { label: "Delete task", danger: true, action: () => actions.delete(task) },
+  ];
+}
+
 export function workspaceMenuItems(workspace, actions) {
+  const tasks = actions.tasks || [];
+  const membershipItems = workspace.task
+    ? [{ label: "Detach from task", action: () => actions.detach(workspace) }]
+    : tasks.length
+      ? tasks.map(task => ({
+        label: `Add to task: ${task.name}`,
+        action: () => actions.attach(workspace, task),
+      }))
+      : [{ label: "No tasks — create one first", action: () => {}, disabled: true }];
   return [
     {
       label: workspace.pinned ? "Unpin workspace" : "Pin workspace",
       action: () => actions.togglePin(workspace),
     },
     { label: "Rename workspace", action: () => actions.rename(workspace) },
+    ...membershipItems,
   ];
 }
 
