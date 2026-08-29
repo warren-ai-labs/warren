@@ -287,6 +287,16 @@ public final class TerminalController {
         ghostty_app_tick(app)
     }
 
+    /// Re-applies the current embedder configuration to one in-memory surface.
+    /// Native snapshot restore replaces the terminal state and can discard the
+    /// configured default colors; callers use this immediately after a
+    /// successful restore to keep OSC color queries and rendering consistent.
+    @discardableResult
+    public func reapplyRuntimeConfig(to session: InMemoryTerminalSession) -> Bool {
+        guard let config else { return false }
+        return session.reapplyRuntimeConfig(config)
+    }
+
     func handleWakeup() {
         guard shouldProcessWakeup?() ?? true else {
             TerminalDebugLog.log(.lifecycle, "wakeup suspended")

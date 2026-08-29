@@ -545,6 +545,23 @@ final class GhosttyAdapterTests: XCTestCase {
         let snapshot = try XCTUnwrap(Data(base64Encoded: Self.atomicSnapshotFixture))
         XCTAssertTrue(surface.restoreSnapshot(snapshot, epoch: 7, sequence: 100))
 
+        recorder.clear()
+        surface.receive(Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8))
+        let colorQueryExpected = Data(
+            "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
+        )
+        let colorQueryDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while recorder.allBytes().count < colorQueryExpected.count,
+              ContinuousClock.now < colorQueryDeadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(
+            Array(recorder.allBytes()),
+            Array(colorQueryExpected),
+            "native snapshot restore must preserve Warren's configured default colors"
+        )
+
         let restored = try XCTUnwrap(surface.inMemory.readViewportText())
         XCTAssertTrue(restored.contains("first"))
         XCTAssertTrue(restored.contains("styled blank"))

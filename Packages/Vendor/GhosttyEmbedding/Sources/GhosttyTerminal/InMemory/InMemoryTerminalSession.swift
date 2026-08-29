@@ -321,6 +321,20 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         return restored
     }
 
+    /// Re-applies the embedder's runtime configuration to the current native
+    /// surface. Native snapshot restore replaces the terminal state wholesale;
+    /// Ghostty's configured default colors therefore need to be installed again
+    /// before the restored session answers OSC 10/11 queries.
+    @discardableResult
+    func reapplyRuntimeConfig(_ config: ghostty_config_t) -> Bool {
+        guard let lease = beginLease() else { return false }
+        defer { lease.release() }
+
+        ghostty_surface_update_config(lease.state.surface, config)
+        TerminalDebugLog.log(.lifecycle, "in-memory session runtime config reapplied")
+        return true
+    }
+
     /// Feed a UTF-8 string into the terminal from the host backend.
     public func receive(_ string: String) {
         guard let data = string.data(using: .utf8) else { return }

@@ -2815,6 +2815,7 @@ export default function App() {
               <AgentView
                 session={selectedSession}
                 events={selectedAgentEvents}
+                status={agentStateBySession[selectedSession.id]?.status || null}
                 onSend={sendAgentInput}
                 ready={agentViewReady}
                 hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}

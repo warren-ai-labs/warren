@@ -142,7 +142,14 @@ public final class GhosttySurface: Identifiable {
         epoch: UInt64,
         sequence: UInt64
     ) -> Bool {
-        outputWriter.restoreSnapshot(payload, epoch: epoch, sequence: sequence)
+        outputWriter.restoreSnapshotAndReapplyRuntimeConfig(
+            payload,
+            epoch: epoch,
+            sequence: sequence,
+            reapplyRuntimeConfig: { [controller = state.controller, inMemory] in
+                controller.reapplyRuntimeConfig(to: inMemory)
+            }
+        )
     }
 
     /// Requests an immediate Ghostty display tick. The first reanchor

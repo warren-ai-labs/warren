@@ -2776,6 +2776,62 @@ button:disabled {
 .braille-spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.54s; }
 .braille-spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: -0.63s; }
 
+.agent-running-shim {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 2px 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-md);
+}
+
+.agent-running-label {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  background: linear-gradient(
+    90deg,
+    var(--color-text-secondary, #9aa0a6) 0%,
+    var(--color-text-primary, #e6e6e6) 50%,
+    var(--color-text-secondary, #9aa0a6) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: codex-flow 1.6s linear infinite;
+}
+
+.codex-caret {
+  width: 6px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--color-text-primary, #e6e6e6);
+  animation: codex-blink 1s steps(1, end) infinite;
+  flex: none;
+}
+
+@keyframes codex-blink {
+  50% { opacity: 0; }
+}
+
+@keyframes codex-flow {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.agent-interrupted-tag {
+  display: inline-block;
+  margin-inline-end: 6px;
+  padding: 1px 7px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-danger, #e5484d) 16%, transparent);
+  color: var(--color-danger, #e5484d);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 @keyframes braille-spin {
   0% {
     opacity: 1;
