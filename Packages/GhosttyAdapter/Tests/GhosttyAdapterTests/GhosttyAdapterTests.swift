@@ -506,6 +506,29 @@ final class GhosttyAdapterTests: XCTestCase {
         surface.outputWriter.shutdown()
     }
 
+    @MainActor
+    func testOutputReceivedBeforeSurfaceMountIsFlushedAfterAttach() async throws {
+        let recorder = LockedInputRecorder()
+        let (surface, _, window) = try await makeMountedTerminal(
+            recorder: recorder,
+            preMountOutput: Data("BEFORE-MOUNT".utf8)
+        )
+        defer { window.orderOut(nil) }
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while surface.inMemory.readViewportText()?.contains("BEFORE-MOUNT") != true,
+              ContinuousClock.now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let viewport = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(
+            viewport.contains("BEFORE-MOUNT"),
+            "output received before the native surface attached must not be lost: \(viewport)"
+        )
+        surface.outputWriter.shutdown()
+    }
+
     func testSnapshotRestoreRejectsEmptyOrMissingSurface() {
         let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
         XCTAssertFalse(session.restoreSnapshot(Data()))
@@ -591,7 +614,8 @@ private func makeMountedTerminal(
     recorder: LockedInputRecorder,
     outputRenderBudgetBytes: Int = 128 * 1024,
     outputRenderYield: Duration = .milliseconds(8),
-    suppressFocusLossReporting: Bool = false
+    suppressFocusLossReporting: Bool = false,
+    preMountOutput: Data? = nil
 ) async throws -> (GhosttySurface, AppTerminalView, NSWindow) {
     let surface = GhosttySurface(
         id: TerminalSessionID(),
@@ -602,6 +626,9 @@ private func makeMountedTerminal(
         onInput: { recorder.append($0) },
         onResize: { _, _ in }
     )
+    if let preMountOutput {
+        surface.receive(preMountOutput)
+    }
 
     _ = NSApplication.shared
     let window = NSWindow(
