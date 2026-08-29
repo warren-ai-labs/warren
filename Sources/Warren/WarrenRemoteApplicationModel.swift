@@ -947,8 +947,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         .empty(host: WarrenDomain.Host(name: "Server"))
         .withConnectionState(.connecting)
     @Published private(set) var navigation: WarrenDesktopNavigationState {
-        didSet { WarrenDesktopNavigationPersistence.save(navigation) }
+        didSet { scheduleNavigationPersistence() }
     }
+    private var navigationPersistenceTask: Task<Void, Never>?
+    private var pendingNavigationToPersist: WarrenDesktopNavigationState?
+    private var terminationObserver: NSObjectProtocol?
     /// Client-local diagnostics and system messages shown by the desktop
     /// notice center. Keep this bounded so repeated failures cannot grow the
     /// model without limit.
@@ -1036,6 +1039,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         self.surfaceManager = surfaceManager
         self.navigation = WarrenDesktopNavigationPersistence.restore()
             ?? WarrenDesktopNavigationState(selection: nil, selectedTabID: nil)
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushNavigationPersistence()
+        }
         let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders()
         self.tabOrderByWorkspaceID = tabOrders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
@@ -1044,6 +1054,46 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         self.tabOrderByTerminalGroupID = tabOrders.terminalGroup.reduce(into: [:]) { result, entry in
             guard let id = TerminalGroupID(uuidString: entry.key) else { return }
             result[id] = entry.value
+        }
+    }
+
+    deinit {
+        // Best-effort flush: close tab is a focus-loss operation, persistence
+        // is allowed to be asynchronous, but termination must not lose the
+        // last selection. Synchronous save here is only a few microseconds.
+        if let pending = pendingNavigationToPersist {
+            WarrenDesktopNavigationPersistence.save(pending)
+        }
+        navigationPersistenceTask?.cancel()
+    }
+
+    private func scheduleNavigationPersistence() {
+        pendingNavigationToPersist = navigation
+        navigationPersistenceTask?.cancel()
+        let pending = navigation
+        navigationPersistenceTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch { return }
+            guard let self else { return }
+            // Coalesce rapid closes: only the latest navigation is persisted.
+            // Flush is also triggered on termination (see flushNavigationPersistence).
+            WarrenDesktopNavigationPersistence.save(pending)
+            if self.pendingNavigationToPersist == pending {
+                self.pendingNavigationToPersist = nil
+            }
+            self.navigationPersistenceTask = nil
+        }
+    }
+
+    func flushNavigationPersistence() {
+        navigationPersistenceTask?.cancel()
+        navigationPersistenceTask = nil
+        if let pending = pendingNavigationToPersist {
+            WarrenDesktopNavigationPersistence.save(pending)
+            pendingNavigationToPersist = nil
+        } else {
+            WarrenDesktopNavigationPersistence.save(navigation)
         }
     }
 
@@ -1109,6 +1159,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             || surfaceManager.retainedSurfaceCount > 0 else {
             return
         }
+        // Flush pending navigation persistence synchronously before tearing down:
+        // close tab is allowed to be asynchronous, but endpoint switch/termination
+        // must not lose the last selection within the 50ms debounce window.
+        flushNavigationPersistence()
         let disconnectStart = Date()
         let prevEndpoint = endpointConfiguration?.name ?? "none"
         TerminalDiagnostics.log("remote_disconnect_begin", ["endpoint": prevEndpoint, "surfaces": String(surfaceManager.retainedSurfaceCount)])
