@@ -24,6 +24,8 @@ type Store struct {
 	changed  chan struct{}
 }
 
+const currentSchema = 2
+
 var alreadyChanged = func() <-chan struct{} {
 	value := make(chan struct{})
 	close(value)
@@ -37,13 +39,22 @@ func Open(path, hostName string) (*Store, error) {
 		if err := json.Unmarshal(data, &s.state); err != nil {
 			return nil, fmt.Errorf("decode state: %w", err)
 		}
-		if s.state.Schema != 1 {
+		migrated := false
+		switch s.state.Schema {
+		case 1:
+			s.state.Schema = currentSchema
+			migrated = true
+		case currentSchema:
+		default:
 			return nil, fmt.Errorf("unsupported state schema %d", s.state.Schema)
 		}
 		if len(s.state.TerminalGroups) == 0 {
 			if err := ensureTerminalGroups(&s.state); err != nil {
 				return nil, err
 			}
+			migrated = true
+		}
+		if migrated {
 			if err := s.saveLocked(); err != nil {
 				return nil, err
 			}
@@ -58,7 +69,7 @@ func Open(path, hostName string) (*Store, error) {
 	}
 	current, _ := user.Current()
 	s.state = api.State{
-		Schema: 1,
+		Schema: currentSchema,
 		Host:   api.Host{ID: NewID(), Name: hostName, User: userName(current), OS: runtime.GOOS + "/" + runtime.GOARCH, Version: api.Version},
 	}
 	if err := ensureTerminalGroups(&s.state); err != nil {
@@ -147,6 +158,7 @@ func NewID() string {
 
 func clone(value api.State) api.State {
 	result := value
+	result.Tasks = append([]api.Task(nil), value.Tasks...)
 	result.Projects = append([]api.Project(nil), value.Projects...)
 	result.Workspaces = append([]api.Workspace(nil), value.Workspaces...)
 	result.TerminalGroups = append([]api.TerminalGroup(nil), value.TerminalGroups...)

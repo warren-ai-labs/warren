@@ -14,8 +14,14 @@ final class WarrenDomainTests: XCTestCase {
 
     func testRelationshipsAreRepresentedByDifferentStrongIDs() throws {
         let host = Host(name: "Mac")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
         let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
-        let workspace = Workspace(projectID: project.id, name: "main", path: "/tmp/warren")
+        let workspace = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "main",
+            path: "/tmp/warren"
+        )
         let session = TerminalSession(workspaceID: workspace.id)
         let client = Client(name: "iPhone")
         let attachment = TerminalAttachment(sessionID: session.id, clientID: client.id)
@@ -27,9 +33,48 @@ final class WarrenDomainTests: XCTestCase {
         ))
 
         XCTAssertEqual(project.hostID, host.id)
+        XCTAssertEqual(task.hostID, host.id)
         XCTAssertEqual(workspace.projectID, project.id)
+        XCTAssertEqual(workspace.taskID, task.id)
         XCTAssertEqual(attachment.sessionID, session.id)
         XCTAssertEqual(lease.attachmentID, attachment.id)
+    }
+
+    func testTaskAndWorkspaceMembershipRoundTripWithLegacyFallback() throws {
+        let host = Host(name: "Mac")
+        let task = WarrenTask(
+            hostID: host.id,
+            name: "Delivery",
+            source: "tapd",
+            externalID: "12345",
+            url: URL(string: "https://tapd.example.com/story/12345"),
+            pinned: true,
+            order: 2
+        )
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "review",
+            path: "/tmp/warren-review"
+        )
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(WarrenTask.self, from: JSONEncoder().encode(task)),
+            task
+        )
+        let encodedWorkspace = try JSONEncoder().encode(workspace)
+        XCTAssertEqual(
+            try JSONDecoder().decode(Workspace.self, from: encodedWorkspace).taskID,
+            task.id
+        )
+
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedWorkspace) as? [String: Any]
+        )
+        legacyObject.removeValue(forKey: "taskID")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        XCTAssertNil(try JSONDecoder().decode(Workspace.self, from: legacyData).taskID)
     }
 
     func testWorkspaceMergeStateRoundTripsAndLegacyPayloadDefaults() throws {

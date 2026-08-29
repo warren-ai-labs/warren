@@ -65,6 +65,15 @@ enum WarrenEndpointCatalog {
 
 struct RemoteRoster: Decodable, Sendable, Equatable {
     struct Host: Decodable, Sendable, Equatable { let id: String; let name: String }
+    struct Task: Decodable, Sendable, Equatable {
+        let id: String
+        let name: String
+        let source: String?
+        let externalID: String?
+        let url: String?
+        let pinned: Bool?
+        let order: Int?
+    }
     struct Project: Decodable, Sendable, Equatable {
         let id: String
         let name: String
@@ -83,6 +92,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     struct Workspace: Decodable, Sendable, Equatable {
         let id: String
         let project: String
+        let task: String?
         let name: String
         let path: String
         let branch: String?
@@ -162,6 +172,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let baseRevision: UInt64
         let revision: UInt64
         let host: Host?
+        let tasks: EntityChanges<Task>?
         let projects: EntityChanges<Project>?
         let workspaces: EntityChanges<Workspace>?
         let terminalGroups: EntityChanges<TerminalGroup>?
@@ -188,6 +199,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
 
     let revision: UInt64?
     let host: Host
+    let tasks: [Task]
     let projects: [Project]
     let workspaces: [Workspace]
     let terminalGroups: [TerminalGroup]
@@ -197,6 +209,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         revision = try container.decodeIfPresent(UInt64.self, forKey: .revision)
         host = try container.decode(Host.self, forKey: .host)
+        tasks = try container.decodeIfPresent([Task].self, forKey: .tasks) ?? []
         projects = try container.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
@@ -206,6 +219,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case revision
         case host
+        case tasks
         case projects
         case workspaces
         case terminalGroups
@@ -215,6 +229,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     private init(
         revision: UInt64?,
         host: Host,
+        tasks: [Task],
         projects: [Project],
         workspaces: [Workspace],
         terminalGroups: [TerminalGroup],
@@ -222,6 +237,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     ) {
         self.revision = revision
         self.host = host
+        self.tasks = tasks
         self.projects = projects
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
@@ -237,6 +253,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         return RemoteRoster(
             revision: delta.revision,
             host: delta.host ?? host,
+            tasks: Self.applying(tasks, changes: delta.tasks, id: \.id),
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
@@ -503,6 +520,61 @@ enum WarrenRemoteTerminalProtocol {
     ) -> Bool {
         guard nextTabID != nil else { return false }
         return previousTabID != nextTabID || mountedSurfaceCount == 0
+    }
+}
+
+enum WarrenRemoteTaskProtocol {
+    private struct CreateResult: Decodable {
+        let id: String
+    }
+
+    static func createRequest(
+        _ creation: WarrenDesktopTaskCreationRequest
+    ) -> (method: String, params: [String: String]) {
+        var params = [
+            "name": creation.name,
+            "requestId": creation.requestID.uuidString.lowercased(),
+        ]
+        if let source = creation.source { params["source"] = source }
+        if let externalID = creation.externalID { params["externalID"] = externalID }
+        if let url = creation.url { params["url"] = url }
+        return ("task.create", params)
+    }
+
+    static func taskID(from data: Data) throws -> TaskID {
+        let result = try JSONDecoder().decode(CreateResult.self, from: data)
+        guard let taskID = TaskID(uuidString: result.id) else {
+            throw WarrenRemoteTaskProtocolError.invalidTaskID
+        }
+        return taskID
+    }
+}
+
+private enum WarrenRemoteTaskProtocolError: LocalizedError {
+    case invalidTaskID
+
+    var errorDescription: String? {
+        "The Host returned an invalid Task ID."
+    }
+}
+
+enum WarrenRemoteWorkspaceProtocol {
+    static func createParameters(
+        projectID: ProjectID,
+        taskID: TaskID?,
+        creation: WorkspaceCreationRequest
+    ) -> [String: String] {
+        var params = [
+            "project": projectID.description,
+            "branch": creation.branch,
+            "name": creation.displayName,
+            "path": creation.path,
+            "requestId": creation.requestID.uuidString.lowercased(),
+        ]
+        if let taskID {
+            params["task"] = taskID.description
+        }
+        return params
     }
 }
 
@@ -1297,45 +1369,27 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return min(30_000, 500 * (1 << bounded))
     }
 
-    @discardableResult
-    func createWorkspace(projectID: ProjectID, request creation: WorkspaceCreationRequest) -> Bool {
-        guard wire != nil else {
-            present(NSError(
-                domain: "WarrenRemote",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Not connected to the Warren daemon. Check the menu bar status and try again."]
-            ))
-            return false
-        }
-        request("workspace.create", params: [
-            "project": projectID.description,
-            "branch": creation.branch,
-            "name": creation.displayName,
-            "path": creation.path,
-        ])
-        return true
+    func createTask(_ creation: WarrenDesktopTaskCreationRequest) async throws -> TaskID {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        let request = WarrenRemoteTaskProtocol.createRequest(creation)
+        let data = try await wire.request(request.method, params: request.params)
+        return try WarrenRemoteTaskProtocol.taskID(from: data)
     }
 
-    /// Async workspace creation that surfaces the daemon error to the caller.
-    /// Used by the creation dialog to keep the modal open and render the
-    /// failure inline instead of only posting a notice badge.
     func createWorkspace(
         projectID: ProjectID,
+        taskID: TaskID? = nil,
         request creation: WorkspaceCreationRequest
     ) async throws {
-        guard let wire else {
-            throw NSError(
-                domain: "WarrenRemote",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Not connected to the Warren daemon. Check the menu bar status and try again."]
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        _ = try await wire.request(
+            "workspace.create",
+            params: WarrenRemoteWorkspaceProtocol.createParameters(
+                projectID: projectID,
+                taskID: taskID,
+                creation: creation
             )
-        }
-        _ = try await wire.request("workspace.create", params: [
-            "project": projectID.description,
-            "branch": creation.branch,
-            "name": creation.displayName,
-            "path": creation.path,
-        ])
+        )
     }
 
     /// Loads the headless daemon's settings. Runtime selection is a
@@ -2441,6 +2495,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             request("project.rename", params: ["id": id.description, "name": name])
         case .renameWorkspace(let id, let name):
             request("workspace.rename", params: ["id": id.description, "name": name])
+        case .attachWorkspaceToTask(let taskID, let workspaceID):
+            request("task.attach", params: [
+                "id": taskID.description,
+                "workspace": workspaceID.description,
+            ])
+        case .detachWorkspaceFromTask(let taskID, let workspaceID):
+            request("task.detach", params: [
+                "id": taskID.description,
+                "workspace": workspaceID.description,
+            ])
         case .deleteProject(let id):
             deleteProject(id)
         case .deleteWorkspace(let id, let removeLocalWorktree):
@@ -3391,6 +3455,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         clearMaintenance()
         guard let hostID = HostID(uuidString: roster.host.id) else { return }
         let host = WarrenDomain.Host(id: hostID, name: roster.host.name)
+        let tasks = roster.tasks.enumerated().compactMap { index, value -> WarrenDomain.WarrenTask? in
+            guard let id = TaskID(uuidString: value.id) else { return nil }
+            return WarrenDomain.WarrenTask(
+                id: id,
+                hostID: hostID,
+                name: value.name,
+                source: value.source,
+                externalID: value.externalID,
+                url: value.url.flatMap(URL.init(string:)),
+                pinned: value.pinned ?? false,
+                order: value.order ?? index
+            )
+        }
         let projects = roster.projects.compactMap { value -> Project? in
             guard let id = ProjectID(uuidString: value.id) else { return nil }
             return Project(
@@ -3408,6 +3485,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             return Workspace(
                 id: id,
                 projectID: projectID,
+                taskID: value.task.flatMap(TaskID.init(uuidString:)),
                 name: value.name,
                 path: value.path,
                 branch: value.branch,
@@ -3521,6 +3599,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
         let nextProjection = WarrenDesktopProjection(
             host: host,
+            tasks: tasks,
             projects: projects,
             workspaces: workspaces,
             sessions: sessions,

@@ -101,8 +101,10 @@ type Service struct {
 	// capability queries answered while no client is attached.
 	ColorQuery   ghostline.ColorQueryCallback
 	WorktreeRoot string
-	// AgentFinder locates Codex/Claude transcript files and, when it also
-	// implements agent.BindingFinder, current OpenCode SQLite sessions. When nil, agent
+	// beforeWorkspaceInsert is a narrow test seam for failures between a
+	// managed Git worktree creation and its final Store insertion.
+	beforeWorkspaceInsert func()
+	// AgentFinder locates Codex/Claude transcript files. When nil, agent
 	// projection is disabled and sessions behave exactly as before.
 	AgentFinder agent.Finder
 	// AgentHooks installs the Warren-managed Codex hook that reports the
@@ -704,6 +706,14 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// the single lifecycle loop so additional observers cannot multiply process
 	// launches, runtime RPCs, or Session writes.
 	state, revision := s.Store.SnapshotVersion()
+	for index := range state.Tasks {
+		state.Tasks[index].CreationRequestID = ""
+		state.Tasks[index].CreationRequestHash = ""
+	}
+	for index := range state.Workspaces {
+		state.Workspaces[index].CreationRequestID = ""
+		state.Workspaces[index].CreationRequestHash = ""
+	}
 	// The store also carries Ghostline's local recovery data. Browser and CLI
 	// clients only need logical Warren identities, never a daemon socket path
 	// or an opaque output cursor.
@@ -713,6 +723,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// wire token so every current snapshot carries a non-zero revision without
 	// persisting it into State.
 	state.Revision = revision + 1
+	sortTasks(state.Tasks)
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
 	sortTerminalGroups(state.TerminalGroups)
@@ -766,6 +777,21 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		)
 	}
 	return state, revision
+}
+
+func sortTasks(tasks []api.Task) {
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].Pinned != tasks[j].Pinned {
+			return tasks[i].Pinned
+		}
+		if tasks[i].Order != tasks[j].Order {
+			return tasks[i].Order < tasks[j].Order
+		}
+		if tasks[i].Name != tasks[j].Name {
+			return tasks[i].Name < tasks[j].Name
+		}
+		return tasks[i].CreatedAt.Before(tasks[j].CreatedAt)
+	})
 }
 
 func sortProjects(projects []api.Project) {
@@ -1578,11 +1604,52 @@ func (s *Service) SetSessionPinned(id string, pinned bool) error {
 }
 
 func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.WorkspaceCreateResult, error) {
+	result, err := s.createWorkspace(projectID, "", branch, name, path, "")
+	return withoutWorkspaceCreationMetadata(result), err
+}
+
+func (s *Service) CreateTaskWorkspace(projectID, taskID, branch, name, path string) (api.WorkspaceCreateResult, error) {
+	result, err := s.createWorkspace(projectID, taskID, branch, name, path, "")
+	return withoutWorkspaceCreationMetadata(result), err
+}
+
+func (s *Service) CreateTaskWorkspaceWithRequestID(projectID, taskID, branch, name, path, requestID string) (api.WorkspaceCreateResult, error) {
+	result, err := s.createWorkspace(projectID, taskID, branch, name, path, requestID)
+	return withoutWorkspaceCreationMetadata(result), err
+}
+
+func (s *Service) createWorkspace(projectID, taskID, branch, name, path, requestID string) (api.WorkspaceCreateResult, error) {
+	var err error
+	requestID, err = normalizeCreationRequestID(requestID)
+	if err != nil {
+		return api.WorkspaceCreateResult{}, err
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return api.WorkspaceCreateResult{}, errors.New("branch is required")
+	}
+	if name == "" {
+		name = branch
+	}
+	requestPath := path
+	if requestPath != "" {
+		requestPath, _ = filepath.Abs(expandHome(requestPath))
+	}
+	requestHash := ""
+	if requestID != "" {
+		requestHash = creationRequestHash("workspace.create", projectID, taskID, branch, name, requestPath)
+	}
+
 	projectLock := s.projectLifecycleLock(projectID)
 	projectLock.Lock()
 	defer projectLock.Unlock()
 
 	state := s.Store.Snapshot()
+	if replay, found, err := workspaceCreationReplay(&state, requestID, requestHash); err != nil {
+		return api.WorkspaceCreateResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	var project *api.Project
 	for i := range state.Projects {
 		if state.Projects[i].ID == projectID {
@@ -1593,17 +1660,13 @@ func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.Wor
 	if project == nil {
 		return api.WorkspaceCreateResult{}, fmt.Errorf("project not found: %s", projectID)
 	}
-	branch = strings.TrimSpace(branch)
-	if branch == "" {
-		return api.WorkspaceCreateResult{}, errors.New("branch is required")
+	if err := taskExists(&state, taskID); err != nil {
+		return api.WorkspaceCreateResult{}, err
 	}
 	if err := branchAlreadyHasWorkspace(&state, projectID, branch); err != nil {
 		return api.WorkspaceCreateResult{}, err
 	}
 	id := store.NewID()
-	if name == "" {
-		name = branch
-	}
 	gitCreated := false
 	if path != "" {
 		if resolved, err := filepath.Abs(expandHome(path)); err == nil {
@@ -1618,18 +1681,14 @@ func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.Wor
 							name = defaultValue(branch, "main")
 						}
 						workspace := api.Workspace{
-							ID: id, ProjectID: projectID, Name: name, Path: resolved,
-							Branch: branch, Kind: "root", CreatedAt: time.Now().UTC(),
+							ID: id, ProjectID: projectID, TaskID: taskID, Name: name, Path: resolved,
+							Branch: branch, Kind: "root", CreationRequestID: requestID,
+							CreationRequestHash: requestHash, CreatedAt: time.Now().UTC(),
 						}
-						if err := s.Store.Update(func(value *api.State) error {
-							if err := branchAlreadyHasWorkspace(value, projectID, branch); err != nil {
-								return err
-							}
-							workspace.Order = nextWorkspaceOrder(value.Workspaces, projectID)
-							value.Workspaces = append(value.Workspaces, workspace)
-							return nil
-						}); err != nil {
+						if replay, found, err := s.insertWorkspaceForCreation(&workspace); err != nil {
 							return api.WorkspaceCreateResult{}, err
+						} else if found {
+							return replay, nil
 						}
 						s.invalidateMerge()
 						return api.WorkspaceCreateResult{Workspace: workspace, Created: true}, nil
@@ -1638,18 +1697,14 @@ func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.Wor
 						name = filepath.Base(resolved)
 					}
 					workspace := api.Workspace{
-						ID: id, ProjectID: projectID, Name: name, Path: resolved,
-						Branch: branch, Kind: "worktree", CreatedAt: time.Now().UTC(),
+						ID: id, ProjectID: projectID, TaskID: taskID, Name: name, Path: resolved,
+						Branch: branch, Kind: "worktree", CreationRequestID: requestID,
+						CreationRequestHash: requestHash, CreatedAt: time.Now().UTC(),
 					}
-					if err := s.Store.Update(func(value *api.State) error {
-						if err := branchAlreadyHasWorkspace(value, projectID, branch); err != nil {
-							return err
-						}
-						workspace.Order = nextWorkspaceOrder(value.Workspaces, projectID)
-						value.Workspaces = append(value.Workspaces, workspace)
-						return nil
-					}); err != nil {
+					if replay, found, err := s.insertWorkspaceForCreation(&workspace); err != nil {
 						return api.WorkspaceCreateResult{}, err
+					} else if found {
+						return replay, nil
 					}
 					s.invalidateMerge()
 					return api.WorkspaceCreateResult{Workspace: workspace, Created: true}, nil
@@ -1664,32 +1719,86 @@ func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.Wor
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return api.WorkspaceCreateResult{}, err
 	}
+	branchCreated := false
 	args := []string{"-C", project.Path, "worktree", "add", path, branch}
 	if exec.Command("git", "-C", project.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() != nil {
+		branchCreated = true
 		args = []string{"-C", project.Path, "worktree", "add", "-b", branch, path}
 	}
 	if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		return api.WorkspaceCreateResult{}, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	gitCreated = true
-	workspace := api.Workspace{
-		ID: id, ProjectID: projectID, Name: name, Path: path,
-		Branch: branch, Kind: "worktree", ManagedWorktree: true,
-		CreatedAt: time.Now().UTC(),
+	if s.beforeWorkspaceInsert != nil {
+		s.beforeWorkspaceInsert()
 	}
-	if err := s.Store.Update(func(value *api.State) error {
-		if err := branchAlreadyHasWorkspace(value, projectID, branch); err != nil {
-			return err
-		}
-		workspace.Order = nextWorkspaceOrder(value.Workspaces, projectID)
-		value.Workspaces = append(value.Workspaces, workspace)
-		return nil
-	}); err != nil {
-		_, _ = exec.Command("git", "-C", project.Path, "worktree", "remove", "--force", path).CombinedOutput()
-		return api.WorkspaceCreateResult{}, err
+	workspace := api.Workspace{
+		ID: id, ProjectID: projectID, TaskID: taskID, Name: name, Path: path,
+		Branch: branch, Kind: "worktree", ManagedWorktree: true,
+		CreationRequestID: requestID, CreationRequestHash: requestHash, CreatedAt: time.Now().UTC(),
+	}
+	if replay, found, err := s.insertWorkspaceForCreation(&workspace); err != nil {
+		return api.WorkspaceCreateResult{}, rollbackManagedWorktree(err, project.Path, path, branch, branchCreated)
+	} else if found {
+		return replay, nil
 	}
 	s.invalidateMerge()
 	return api.WorkspaceCreateResult{Workspace: workspace, Created: true, GitWorktree: gitCreated}, nil
+}
+
+func rollbackManagedWorktree(cause error, projectPath, path, branch string, branchCreated bool) error {
+	var cleanupErrors []error
+	if output, err := exec.Command("git", "-C", projectPath, "worktree", "remove", "--force", path).CombinedOutput(); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove git worktree %q: %s: %w", path, strings.TrimSpace(string(output)), err))
+	}
+	if branchCreated {
+		if output, err := exec.Command("git", "-C", projectPath, "branch", "-D", "--", branch).CombinedOutput(); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete created branch %q: %s: %w", branch, strings.TrimSpace(string(output)), err))
+		}
+	}
+	if len(cleanupErrors) == 0 {
+		return cause
+	}
+	return errors.Join(append([]error{cause}, cleanupErrors...)...)
+}
+
+func (s *Service) insertWorkspace(workspace *api.Workspace) error {
+	_, _, err := s.insertWorkspaceForCreation(workspace)
+	return err
+}
+
+func (s *Service) insertWorkspaceForCreation(workspace *api.Workspace) (api.WorkspaceCreateResult, bool, error) {
+	var replay api.WorkspaceCreateResult
+	var found bool
+	err := s.Store.Update(func(state *api.State) error {
+		var err error
+		replay, found, err = workspaceCreationReplay(
+			state, workspace.CreationRequestID, workspace.CreationRequestHash,
+		)
+		if err != nil || found {
+			return err
+		}
+		if err := taskExists(state, workspace.TaskID); err != nil {
+			return err
+		}
+		if err := branchAlreadyHasWorkspace(state, workspace.ProjectID, workspace.Branch); err != nil {
+			return err
+		}
+		workspace.Order = nextWorkspaceOrder(state.Workspaces, workspace.ProjectID)
+		state.Workspaces = append(state.Workspaces, *workspace)
+		return nil
+	})
+	return replay, found, err
+}
+
+func taskExists(state *api.State, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	if !slices.ContainsFunc(state.Tasks, func(task api.Task) bool { return task.ID == taskID }) {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+	return nil
 }
 
 // branchAlreadyHasWorkspace enforces the invariant that a project has at most

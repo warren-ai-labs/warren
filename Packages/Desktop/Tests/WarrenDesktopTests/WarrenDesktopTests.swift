@@ -1204,6 +1204,355 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(projection.firstWorkspace(in: populatedProject.id), workspace)
     }
 
+    func testProjectionAggregatesTaskWorkspacesAcrossProjects() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let firstProject = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let secondProject = Project(hostID: host.id, name: "Web", rootPath: "/tmp/web")
+        let firstWorkspace = Workspace(
+            projectID: firstProject.id,
+            taskID: task.id,
+            name: "delivery-api",
+            path: "/tmp/api-delivery"
+        )
+        let secondWorkspace = Workspace(
+            projectID: secondProject.id,
+            taskID: task.id,
+            name: "delivery-web",
+            path: "/tmp/web-delivery"
+        )
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: firstWorkspace.id,
+            title: "API"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [firstProject, secondProject],
+            workspaces: [firstWorkspace, secondWorkspace],
+            sessions: [session]
+        )
+
+        XCTAssertEqual(projection.taskGroups.map(\.task), [task])
+        XCTAssertEqual(
+            projection.taskGroups.first?.workspaces.map(\.id),
+            [firstWorkspace.id, secondWorkspace.id]
+        )
+        XCTAssertEqual(projection.groups.map(\.project.id), [firstProject.id, secondProject.id])
+        XCTAssertEqual(
+            projection.withSessionActivity(.working, for: session.id).taskGroups,
+            projection.taskGroups
+        )
+    }
+
+    @MainActor
+    func testProjectWorkspaceRowsIdentifyTheirTaskWithoutDuplicatingTaskRows() throws {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let assigned = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "assigned",
+            path: "/tmp/api-assigned"
+        )
+        let available = Workspace(
+            projectID: project.id,
+            name: "available",
+            path: "/tmp/api-available"
+        )
+        let groups = [WarrenDesktopProjectGroup(project: project, workspaces: [assigned, available])]
+        let recorder = WarrenSemanticRecorder()
+        var selectedTaskID: TaskID?
+        var selectedWorkspaceID: WorkspaceID?
+        var taskTree = WarrenDesktopSidebarTreeState(
+            expandedProjectIDs: [project.id],
+            tasksCollapsed: true
+        )
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [WarrenDesktopTaskGroup(task: task, workspaces: [assigned])],
+            groups: groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: [:],
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedTaskIDs: [task.id],
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { taskID in
+                selectedTaskID = taskID
+                WarrenDesktopSidebar.revealTask(taskID, in: &taskTree)
+            },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { action in
+                if case .selectWorkspace(let workspaceID) = action {
+                    selectedWorkspaceID = workspaceID
+                }
+            },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        let assignedProjectNode = snapshot.node(
+            id: "workspace.project-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(
+            assignedProjectNode?.label,
+            "Workspace assigned"
+        )
+        XCTAssertTrue(assignedProjectNode?.value?.contains("Belongs to task Delivery") == true)
+
+        let taskLinkNode = snapshot.node(
+            id: "workspace-task.project-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(taskLinkNode?.label, "Task Delivery")
+        XCTAssertEqual(taskLinkNode?.value, "Open task")
+        try recorder.perform(.press, on: "workspace-task.project-list.\(assigned.id.description)")
+        XCTAssertEqual(selectedTaskID, task.id)
+        XCTAssertFalse(taskTree.tasksCollapsed)
+        XCTAssertTrue(taskTree.expandedTaskIDs.contains(task.id))
+
+        try recorder.perform(.press, on: "workspace.project-list.\(assigned.id.description)")
+        XCTAssertEqual(selectedWorkspaceID, assigned.id)
+
+        let availableProjectNode = snapshot.node(
+            id: "workspace.project-list.\(available.id.description)"
+        )
+        XCTAssertEqual(availableProjectNode?.label, "Workspace available")
+        XCTAssertFalse(availableProjectNode?.value?.contains("Belongs to task") == true)
+        XCTAssertNil(snapshot.node(id: "workspace-task.project-list.\(available.id.description)"))
+
+        let assignedTaskNode = snapshot.node(
+            id: "workspace.task-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(assignedTaskNode?.label, "Workspace API · assigned")
+        XCTAssertFalse(assignedTaskNode?.label.contains("Delivery") == true)
+        XCTAssertFalse(assignedTaskNode?.value?.contains("Belongs to task") == true)
+        XCTAssertNil(snapshot.node(id: "workspace-task.task-list.\(assigned.id.description)"))
+    }
+
+    func testTaskWorkspaceOptionsKeepOnlyUnassignedWorkspacesGroupedByProject() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let firstProject = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let secondProject = Project(hostID: host.id, name: "Web", rootPath: "/tmp/web")
+        let availableWorkspace = Workspace(
+            projectID: firstProject.id,
+            name: "available",
+            path: "/tmp/api-available"
+        )
+        let assignedWorkspace = Workspace(
+            projectID: firstProject.id,
+            taskID: task.id,
+            name: "assigned",
+            path: "/tmp/api-assigned"
+        )
+        let groups = [
+            WarrenDesktopProjectGroup(
+                project: firstProject,
+                workspaces: [availableWorkspace, assignedWorkspace]
+            ),
+            WarrenDesktopProjectGroup(project: secondProject),
+        ]
+
+        let availableGroups = WarrenDesktopTaskWorkspaceOptions.availableGroups(from: groups)
+
+        XCTAssertEqual(availableGroups.map(\.project.id), [firstProject.id])
+        XCTAssertEqual(availableGroups.flatMap(\.workspaces).map(\.id), [availableWorkspace.id])
+    }
+
+    @MainActor
+    func testTaskCreationSubmitRejectsUnpairedReferenceAndInvalidURL() async {
+        var createCallCount = 0
+        var createdRequest: WarrenDesktopTaskCreationRequest?
+        let coordinator = WarrenDesktopTaskCreationCoordinator(
+            name: "Delivery",
+            source: "tapd",
+            externalID: "",
+            url: "not a URL",
+            onCreate: { request in
+                createCallCount += 1
+                createdRequest = request
+                return TaskID()
+            },
+            onCreated: { _ in }
+        )
+
+        XCTAssertEqual(
+            coordinator.validationMessage,
+            "Source and external ID must be provided together."
+        )
+        await coordinator.submit()
+        XCTAssertEqual(createCallCount, 0)
+
+        coordinator.externalID = "123"
+        XCTAssertEqual(
+            coordinator.validationMessage,
+            "URL must be an absolute HTTP(S) URL."
+        )
+        await coordinator.submit()
+        XCTAssertEqual(createCallCount, 0)
+
+        coordinator.url = "HTTPS://tracker.example/tasks/123"
+        XCTAssertNil(coordinator.validationMessage)
+        await coordinator.submit()
+        XCTAssertEqual(createCallCount, 1)
+        XCTAssertEqual(createdRequest?.url, "https://tracker.example/tasks/123")
+    }
+
+    @MainActor
+    func testTaskCreationSubmitPreventsDuplicatesAndExpandsReturnedID() async {
+        let requestID = UUID()
+        let started = expectation(description: "Task creation started")
+        let fake = PausingTaskCreationFake(callExpectations: [started])
+        let host = WarrenDomain.Host(name: "Task Host")
+        let first = WarrenTask(hostID: host.id, name: "Delivery")
+        let returned = WarrenTask(hostID: host.id, name: "Delivery")
+        var tree = WarrenDesktopSidebarTreeState()
+        var isPresented = true
+        let coordinator = WarrenDesktopTaskCreationCoordinator(
+            requestID: requestID,
+            name: "Delivery",
+            source: "tapd",
+            externalID: "123",
+            url: "https://tracker.example/tasks/123",
+            onCreate: fake.create,
+            onCreated: { taskID in
+                WarrenDesktopTaskCreationPresentation.complete(
+                    taskID: taskID,
+                    tree: &tree,
+                    onDismiss: { isPresented = false }
+                )
+            }
+        )
+
+        let submission = Task { await coordinator.submit() }
+        await fulfillment(of: [started], timeout: 1)
+
+        XCTAssertEqual(fake.callCount, 1)
+        XCTAssertEqual(fake.requests, [WarrenDesktopTaskCreationRequest(
+            requestID: requestID,
+            name: "Delivery",
+            source: "tapd",
+            externalID: "123",
+            url: "https://tracker.example/tasks/123"
+        )])
+        XCTAssertTrue(coordinator.isSubmitting)
+        XCTAssertTrue(isPresented)
+
+        await coordinator.submit()
+        XCTAssertEqual(fake.callCount, 1)
+
+        fake.succeed(returned.id)
+        await submission.value
+
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertFalse(isPresented)
+        XCTAssertNotEqual(first.id, returned.id)
+        XCTAssertEqual(tree.expandedTaskIDs, [returned.id])
+        XCTAssertFalse(tree.expandedTaskIDs.contains(first.id))
+        XCTAssertFalse(tree.tasksCollapsed)
+    }
+
+    @MainActor
+    func testTaskCreationSubmitFailureKeepsInputsAndAllowsRetry() async {
+        let firstStarted = expectation(description: "First task creation started")
+        let retryStarted = expectation(description: "Task creation retry started")
+        let fake = PausingTaskCreationFake(
+            callExpectations: [firstStarted, retryStarted]
+        )
+        var isPresented = true
+        let coordinator = WarrenDesktopTaskCreationCoordinator(
+            name: "Delivery",
+            source: "tapd",
+            externalID: "123",
+            url: "https://tracker.example/tasks/123",
+            onCreate: fake.create,
+            onCreated: { _ in isPresented = false }
+        )
+
+        let firstSubmission = Task { await coordinator.submit() }
+        await fulfillment(of: [firstStarted], timeout: 1)
+
+        let failure = NSError(
+            domain: "TaskCreationTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Task creation failed"]
+        )
+        fake.fail(failure)
+        await firstSubmission.value
+
+        XCTAssertFalse(coordinator.isSubmitting)
+        XCTAssertTrue(isPresented)
+        XCTAssertEqual(coordinator.errorMessage, "Task creation failed")
+        XCTAssertEqual(coordinator.name, "Delivery")
+        XCTAssertEqual(coordinator.source, "tapd")
+        XCTAssertEqual(coordinator.externalID, "123")
+        XCTAssertEqual(coordinator.url, "https://tracker.example/tasks/123")
+
+        coordinator.binding(\.url).wrappedValue = "HTTPS://tracker.example/tasks/123"
+        XCTAssertNil(coordinator.errorMessage)
+        coordinator.binding(\.url).wrappedValue = "https://tracker.example/tasks/123"
+
+        let retry = Task { await coordinator.submit() }
+        await fulfillment(of: [retryStarted], timeout: 1)
+        XCTAssertEqual(fake.callCount, 2)
+        XCTAssertEqual(fake.requests.map(\.requestID), [coordinator.requestID, coordinator.requestID])
+        XCTAssertTrue(coordinator.isSubmitting)
+        XCTAssertNil(coordinator.errorMessage)
+        fake.succeed(TaskID())
+        await retry.value
+        XCTAssertFalse(isPresented)
+    }
+
+    @MainActor
+    func testTaskCreationChangesRequestIDOnlyWhenSubmittedDraftChanges() async {
+        let requestID = UUID()
+        var requests: [WarrenDesktopTaskCreationRequest] = []
+        let coordinator = WarrenDesktopTaskCreationCoordinator(
+            requestID: requestID,
+            name: "Delivery",
+            onCreate: { request in
+                requests.append(request)
+                throw NSError(
+                    domain: "TaskCreationTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Task creation failed"]
+                )
+            },
+            onCreated: { _ in XCTFail("Failed submissions must not complete creation") }
+        )
+
+        await coordinator.submit()
+        await coordinator.submit()
+        XCTAssertEqual(requests.map(\.requestID), [requestID, requestID])
+
+        coordinator.binding(\.name).wrappedValue = "Updated delivery"
+        XCTAssertNil(coordinator.errorMessage)
+        await coordinator.submit()
+
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertNotEqual(requests[2].requestID, requestID)
+        XCTAssertEqual(requests[2].requestID, coordinator.requestID)
+    }
+
     func testProjectionCarriesWorkspaceMergeStateThroughGrouping() {
         let host = WarrenDomain.Host(name: "Merge Host")
         let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
@@ -1368,11 +1717,13 @@ final class WarrenDesktopTests: XCTestCase {
         let fixture = WarrenDesktopFixture.preview
         let projectID = fixture.groups[0].project.id
         let workspaceID = fixture.groups[0].workspaces[0].id
+        let taskID = TaskID()
         let sessionID = fixture.sessions[0].id
 
         actions(.addProject)
         actions(.importSuperset)
         actions(.requestNewWorkspace(projectID))
+        actions(.requestNewWorkspace(projectID, taskID: taskID))
         actions(.selectWorkspace(workspaceID))
         actions(.openSession(sessionID))
         actions(.deleteSession(sessionID))
@@ -1394,6 +1745,7 @@ final class WarrenDesktopTests: XCTestCase {
                 .addProject,
                 .importSuperset,
                 .requestNewWorkspace(projectID),
+                .requestNewWorkspace(projectID, taskID: taskID),
                 .selectWorkspace(workspaceID),
                 .openSession(sessionID),
                 .deleteSession(sessionID),
@@ -2455,7 +2807,9 @@ final class WarrenDesktopTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let state = WarrenDesktopSidebarTreeState(
+            expandedTaskIDs: [TaskID(), TaskID()],
             expandedProjectIDs: [ProjectID(), ProjectID()],
+            tasksCollapsed: true,
             projectsCollapsed: true
         )
 
@@ -2528,5 +2882,34 @@ private final class WarrenDragProbeWindow: NSWindow {
 
     override func toggleFullScreen(_ sender: Any?) {
         didToggleFullScreen = true
+    }
+}
+
+@MainActor
+private final class PausingTaskCreationFake {
+    private let callExpectations: [XCTestExpectation]
+    private var continuations: [CheckedContinuation<TaskID, Error>] = []
+    private(set) var requests: [WarrenDesktopTaskCreationRequest] = []
+
+    var callCount: Int { requests.count }
+
+    init(callExpectations: [XCTestExpectation]) {
+        self.callExpectations = callExpectations
+    }
+
+    func create(_ request: WarrenDesktopTaskCreationRequest) async throws -> TaskID {
+        requests.append(request)
+        callExpectations[requests.count - 1].fulfill()
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func succeed(_ taskID: TaskID) {
+        continuations.removeFirst().resume(returning: taskID)
+    }
+
+    func fail(_ error: Error) {
+        continuations.removeFirst().resume(throwing: error)
     }
 }

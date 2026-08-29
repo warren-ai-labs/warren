@@ -73,7 +73,7 @@ import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./inpu
 import { OutputBatcher } from "./output.js";
 import { decodeFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
-import { projectMenuItems, sessionMenuItems, workspaceMenuItems } from "./contextmenu.js";
+import { projectMenuItems, sessionMenuItems, taskMenuItems, workspaceMenuItems } from "./contextmenu.js";
 import {
   ConfirmationDialog,
   EmptyTerminal,
@@ -103,7 +103,9 @@ const storageKeys = {
   activeWorkspace: "warren.activeWorkspace",
   activeSession: "warren.activeSession",
   navigationMemory: "warren.navigationMemory",
+  expandedTasks: "warren.expandedTasks",
   expandedProjects: "warren.expandedProjects",
+  tasksCollapsed: "warren.tasksCollapsed",
   fontFamily: "warren.terminalFontFamily",
   fontSize: "warren.terminalFontSize",
   titleTemplate: "warren.terminalTitleTemplate",
@@ -171,13 +173,14 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(() => localStorage.getItem(storageKeys.activeSession));
   const [navigationMemory, setNavigationMemory] = useState(() => loadNavigationMemory());
   const [attachedSession, setAttachedSession] = useState(null);
-  // Transport readiness and presentation readiness are deliberately separate.
-  // The daemon acknowledges a subscription before it sends the atomic state;
-  // accepting input at that point keeps PTY interaction responsive, while the
-  // neutral overlay remains in place until the snapshot and its live tail have
-  // rendered completely.
-  const [terminalReadySession, setTerminalReadySession] = useState(null);
+  const [expandedTasks, setExpandedTasks] = useState(() => loadSet(storageKeys.expandedTasks));
   const [expandedProjects, setExpandedProjects] = useState(() => loadSet(storageKeys.expandedProjects));
+  const [tasksCollapsed, setTasksCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKeys.tasksCollapsed);
+      return raw ? JSON.parse(raw) : false;
+    } catch { return false; }
+  });
   const [fontFamily, setFontFamily] = useState(() => localStorage.getItem(storageKeys.fontFamily) || defaultFontFamily);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
@@ -1216,6 +1219,12 @@ export default function App() {
         setExpandedProjects(previous => previous.has(workspace.project)
           ? previous
           : new Set([...previous, workspace.project]));
+        if (workspace.task) {
+          setTasksCollapsed(false);
+          setExpandedTasks(previous => previous.has(workspace.task)
+            ? previous
+            : new Set([...previous, workspace.task]));
+        }
       }
     }
 
@@ -2096,8 +2105,16 @@ export default function App() {
   }, [navigationMemory]);
 
   useEffect(() => {
+    localStorage.setItem(storageKeys.expandedTasks, JSON.stringify([...expandedTasks]));
+  }, [expandedTasks]);
+
+  useEffect(() => {
     localStorage.setItem(storageKeys.expandedProjects, JSON.stringify([...expandedProjects]));
   }, [expandedProjects]);
+
+  useEffect(() => {
+    localStorage.setItem(storageKeys.tasksCollapsed, JSON.stringify(tasksCollapsed));
+  }, [tasksCollapsed]);
 
   useEffect(() => {
     localStorage.setItem(storageKeys.fontFamily, fontFamily);
@@ -2136,6 +2153,37 @@ export default function App() {
     }
   }, []);
 
+  const toggleTask = useCallback(taskID => {
+    setExpandedTasks(previous => {
+      const next = new Set(previous);
+      if (next.has(taskID)) next.delete(taskID);
+      else next.add(taskID);
+      return next;
+    });
+  }, []);
+
+  const toggleTasksCollapsed = useCallback(() => {
+    setTasksCollapsed(previous => !previous);
+  }, []);
+
+  const focusTask = useCallback(taskID => {
+    setTasksCollapsed(false);
+    setExpandedTasks(previous => new Set([...previous, taskID]));
+    requestAnimationFrame(() => {
+      const section = document.getElementById(`task-${taskID}`);
+      section?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "center",
+      });
+      requestAnimationFrame(() => {
+        const target = section?.querySelector(".project-toggle-main");
+        if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+      });
+    });
+  }, []);
+
   const toggleProject = useCallback(projectID => {
     setExpandedProjects(previous => {
       const next = new Set(previous);
@@ -2150,6 +2198,29 @@ export default function App() {
   const showContextMenu = useCallback((event, items) => {
     event.preventDefault();
     setContextMenu({ x: event.clientX, y: event.clientY, items });
+  }, []);
+
+  const newTask = useCallback(() => {
+    setRenameDialog({
+      kind: "task-create",
+      title: "New task",
+      message: "Create a work context that can contain workspaces from several projects.",
+      fieldLabel: "Task name",
+      initialValue: "",
+      confirmLabel: "Create",
+    });
+  }, []);
+
+  const renameTask = useCallback(task => {
+    setRenameDialog({
+      kind: "task",
+      id: task.id,
+      title: "Rename task",
+      message: "Choose a new name for this task.",
+      fieldLabel: "Task name",
+      initialValue: task.name || "",
+      confirmLabel: "Rename",
+    });
   }, []);
 
   const renameProject = useCallback(project => {
@@ -2193,15 +2264,35 @@ export default function App() {
     if (!dialog) return;
     const trimmed = value.trim();
     if (!trimmed) return;
-    if (dialog.kind === "project") {
-      request("project.rename", { id: dialog.id, name: trimmed });
+    const showError = detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    };
+    if (dialog.kind === "task-create") {
+      request("task.create", { name: trimmed }, task => {
+        if (task?.id) {
+          setTasksCollapsed(false);
+          setExpandedTasks(previous => new Set([...previous, task.id]));
+        }
+      }, showError);
+    } else if (dialog.kind === "task") {
+      request("task.rename", { id: dialog.id, name: trimmed }, null, showError);
+    } else if (dialog.kind === "project") {
+      request("project.rename", { id: dialog.id, name: trimmed }, null, showError);
     } else if (dialog.kind === "workspace") {
-      request("workspace.rename", { id: dialog.id, name: trimmed });
+      request("workspace.rename", { id: dialog.id, name: trimmed }, null, showError);
     } else if (dialog.kind === "session") {
-      request("session.rename", { id: dialog.id, title: trimmed });
+      request("session.rename", { id: dialog.id, title: trimmed }, null, showError);
     }
     setRenameDialog(null);
   }, [renameDialog, request]);
+
+  const toggleTaskPin = useCallback(task => {
+    request("task.pin", { id: task.id, pinned: !task.pinned }, null, detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    });
+  }, [request]);
 
   const toggleProjectPin = useCallback(project => {
     request("project.pin", { id: project.id, pinned: !project.pinned });
@@ -2280,6 +2371,24 @@ export default function App() {
     request("session.pin", { id: session.id, pinned: !session.pinned });
   }, [request]);
 
+  const deleteTask = useCallback(task => {
+    setDeleteDialog({
+      kind: "task",
+      id: task.id,
+      title: "Delete task?",
+      message: `“${task.name}” will be removed. Its workspaces and sessions will remain available under Projects.`,
+      confirmLabel: "Delete",
+    });
+  }, []);
+
+  const taskContextMenu = useCallback((event, task) => {
+    showContextMenu(event, taskMenuItems(task, {
+      togglePin: toggleTaskPin,
+      rename: renameTask,
+      delete: deleteTask,
+    }));
+  }, [deleteTask, renameTask, showContextMenu, toggleTaskPin]);
+
   const projectContextMenu = useCallback((event, project) => {
     showContextMenu(event, projectMenuItems(project, {
       togglePin: toggleProjectPin,
@@ -2290,15 +2399,23 @@ export default function App() {
   }, [openWorktreeImport, renameProject, showContextMenu, toggleProjectAutoImport, toggleProjectPin]);
 
   const workspaceContextMenu = useCallback((event, workspace) => {
+    const showError = detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    };
     showContextMenu(event, workspaceMenuItems(workspace, {
       togglePin: toggleWorkspacePin,
       rename: renameWorkspace,
+      tasks: catalog.tasks,
+      attach: (value, task) => request("task.attach", { id: task.id, workspace: value.id }, null, showError),
+      detach: value => request("task.detach", { id: value.task, workspace: value.id }, null, showError),
     }));
-  }, [renameWorkspace, showContextMenu, toggleWorkspacePin]);
+  }, [catalog.tasks, renameWorkspace, request, showContextMenu, toggleWorkspacePin]);
 
   const deleteSession = useCallback(session => {
     const label = sessionDisplayTitle(session) || session.id;
     setDeleteDialog({
+      kind: "session",
       id: session.id,
       title: "Delete session?",
       message: `“${label}” will be terminated and removed from Warren.`,
@@ -2306,13 +2423,16 @@ export default function App() {
     });
   }, []);
 
-  const confirmDeleteSession = useCallback(() => {
+  const confirmDelete = useCallback(() => {
     const dialog = deleteDialog;
     if (!dialog) return;
     setDeleteDialog(null);
-    if (appStateRef.current.activeSession === dialog.id
-      || appStateRef.current.attachedSession === dialog.id) {
-      cancelSubscription();
+    if (dialog.kind === "task") {
+      request("task.remove", { id: dialog.id }, null, detail => {
+        setConnectionStatus({ message: detail, online: false });
+        setEmptyOverride({ loading: false, message: detail });
+      });
+      return;
     }
     request("session.delete", { id: dialog.id }, () => {
       // If the deleted session owns the visible terminal, clear it right away
@@ -2567,15 +2687,22 @@ export default function App() {
         <Sidebar
           catalog={catalog}
           activeWorkspace={selectedWorkspaceID}
+          expandedTasks={expandedTasks}
           expandedProjects={expandedProjects}
+          tasksCollapsed={tasksCollapsed}
           tabsForWorkspace={workspaceID => workspaceTabs(catalog, workspaceID)}
           connection={connectionStatus}
+          onToggleTasksCollapsed={toggleTasksCollapsed}
+          onToggleTask={toggleTask}
+          onFocusTask={focusTask}
+          onNewTask={newTask}
           onToggleProject={toggleProject}
           onChooseWorkspace={chooseWorkspace}
           onOpenWorkspace={openWorkspace}
           onNewSessionInWorkspace={workspaceID => openWorkspace(workspaceID, true)}
           onNewSession={() => createSession("shell")}
           onOpenSettings={openSettings}
+          onTaskContextMenu={taskContextMenu}
           onProjectContextMenu={projectContextMenu}
           onWorkspaceContextMenu={workspaceContextMenu}
           onMoveProject={moveProject}
@@ -2811,7 +2938,7 @@ export default function App() {
           message={deleteDialog.message}
           confirmLabel={deleteDialog.confirmLabel}
           onCancel={() => setDeleteDialog(null)}
-          onConfirm={confirmDeleteSession}
+          onConfirm={confirmDelete}
         />
       )}
       <ContextMenu menu={contextMenu} onClose={closeContextMenu} />
