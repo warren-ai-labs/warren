@@ -1116,6 +1116,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            // Keep termination flushing synchronous: the process may exit before
+            // an asynchronous persistence task gets a chance to run.
             self?.flushNavigationPersistence()
         }
         let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders()
