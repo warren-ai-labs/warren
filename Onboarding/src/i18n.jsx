@@ -118,6 +118,28 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.11.2",
+        dateISO: "2026-08-29",
+        date: "August 29, 2026",
+        title: "Warren adds Host-owned Tasks and a durable Host schema.",
+        summary:
+          "A patch release that adds Host-owned Tasks aggregating Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add Host-owned Tasks that aggregate Workspaces across Projects, with provider-neutral external work-item metadata, Web and CLI lifecycle controls, and Web/Desktop Workspace attach and detach actions.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Migrate Host state from schema 1 to schema 2 so Task data is durable and unknown future schemas fail closed.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.11.1",
         dateISO: "2026-08-29",
         date: "August 29, 2026",
