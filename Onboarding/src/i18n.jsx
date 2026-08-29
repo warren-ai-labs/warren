@@ -118,6 +118,27 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.11.3",
+        dateISO: "2026-08-30",
+        date: "August 30, 2026",
+        title: "Warren makes Codex Working visibly blink.",
+        summary:
+          "A patch release that adds a visible blinking Working indicator, preserves configured terminal colors after snapshot restore, and marks interrupted agent messages consistently. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Show a visible blinking Working indicator while Codex is actively producing output.",
+              "Reapply Warren's terminal color configuration after native snapshot restoration so Working output remains visible.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: ["Mark interrupted agent messages consistently in the Web view."],
+          },
+        ],
+      },
+      {
         version: "0.11.2",
         dateISO: "2026-08-29",
         date: "August 29, 2026",
@@ -870,6 +891,27 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.11.3",
+        dateISO: "2026-08-30",
+        date: "2026 年 8 月 30 日",
+        title: "Warren 让 Codex Working 明显闪烁。",
+        summary:
+          "修复版本：新增可见的 Working 闪烁指示器，在快照恢复后保持终端颜色配置，并在 Web 界面统一标记被中断的 agent 消息。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "Codex 正在生成输出时显示可见的 Working 闪烁指示器。",
+              "原生快照恢复后重新应用 Warren 的终端颜色配置，确保 Working 输出保持可见。",
+            ],
+          },
+          {
+            title: "修复",
+            items: ["在 Web 界面统一标记被中断的 agent 消息。"],
+          },
+        ],
+      },
       {
         version: "0.11.1",
         dateISO: "2026-08-29",

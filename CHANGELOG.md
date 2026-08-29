@@ -4,6 +4,19 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-08-30
+
+> Patch release: makes Codex Working state visibly blink in the agent view and preserves configured terminal colors after snapshot restore. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+
+### Changed
+
+- Show a visible blinking Working indicator while Codex is actively producing output.
+- Reapply Warren's terminal color configuration after native snapshot restoration so Working output remains visible.
+
+### Fixed
+
+- Mark interrupted agent messages consistently in the Web view.
+
 ## [0.11.2] - 2026-08-29
 
 > Patch release: adds Host-owned Tasks that aggregate Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
