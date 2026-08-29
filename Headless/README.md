@@ -98,6 +98,9 @@ and error messages keep the command name you typed instead of rewriting it to
 the canonical name. `warren help`, `warren --help`, and
 `warren <command> --help` print help and exit 0. Missing or invalid arguments
 print the relevant usage and exit 2; server errors use exit code 1.
+When exactly one endpoint is configured, the CLI uses the `local` endpoint by
+default when it is present. If multiple endpoints are configured, pass
+`--endpoint NAME`; run `warren endpoint list` to see the available names.
 
 Roster-heavy `list` commands return at most 10 rows by default so an Agent
 does not receive an entire long-lived roster in one context window. Use
