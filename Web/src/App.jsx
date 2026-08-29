@@ -29,7 +29,7 @@ import {
   restoreNavigationPosition,
   resolveWorkspaceSession,
 } from "./navigation.js";
-import { runtime, serviceWorkerURL, webSocketURL } from "./runtime.js";
+import { runtime, serviceWorkerURL, tokenReady, webSocketURL } from "./runtime.js";
 import {
   automaticSessionKind,
   defaultHiddenSessionPresetKinds,
@@ -249,6 +249,7 @@ export default function App() {
   const maintenanceTimeoutRef = useRef(null);
   const appStateRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
+  const relayRefreshInFlightRef = useRef(false);
   const fileDiffNeedsReloadRef = useRef(false);
   const creatingSessionWorkspaceIDsRef = useRef(new Set());
   const settingsLoadedRef = useRef(false);
@@ -1603,10 +1604,30 @@ export default function App() {
         const detail = connectionErrorDetail(message);
         setConnectionStatus({ message: detail, online: false });
         setEmptyOverride({ loading: false, message: detail });
-        // An authorization failure is terminal for this URL/token. Retrying
-        // the same fragment forever only produces an Authenticating/
-        // Reconnecting loop and hides the actionable failure from the user.
-        if (detail === "unauthorized") connectionRef.current?.stop();
+        if (detail === "unauthorized") {
+          // Relay access capabilities are intentionally short lived. Rotate
+          // through the HttpOnly refresh cookie once before treating an
+          // unauthorized socket as terminal; local daemon tokens retain the
+          // historical stop-on-auth-failure behavior.
+          if (runtime.usesControlPlane && !relayRefreshInFlightRef.current) {
+            relayRefreshInFlightRef.current = true;
+            runtime.refresh().then(token => {
+              relayRefreshInFlightRef.current = false;
+              const connection = connectionRef.current;
+              if (!token || !connection) {
+                connection?.stop();
+                return;
+              }
+              connection.token = token;
+              connection.reset();
+            }).catch(() => {
+              relayRefreshInFlightRef.current = false;
+              connectionRef.current?.stop();
+            });
+          } else if (!runtime.usesControlPlane) {
+            connectionRef.current?.stop();
+          }
+        }
       }
       break;
     case "maintenance":
@@ -2109,17 +2130,24 @@ export default function App() {
   }, [titleTemplate]);
 
   useEffect(() => {
-    const connection = new WarrenConnection({
-      url: webSocketURL(),
-      token: runtime.token,
-      onMessage: event => messageHandlerRef.current(event),
-      onState: state => connectionStateHandlerRef.current(state),
+    let connection;
+    let cancelled = false;
+    tokenReady.then(() => {
+      if (cancelled) return;
+      connection = new WarrenConnection({
+        url: webSocketURL(),
+        token: runtime.token,
+        getToken: () => runtime.token,
+        onMessage: event => messageHandlerRef.current(event),
+        onState: state => connectionStateHandlerRef.current(state),
+      });
+      connectionRef.current = connection;
+      connection.start();
     });
-    connectionRef.current = connection;
-    connection.start();
     return () => {
+      cancelled = true;
       subscriptionCleanupRef.current(false);
-      connection.stop();
+      connection?.stop();
       connectionRef.current = null;
     };
   }, []);

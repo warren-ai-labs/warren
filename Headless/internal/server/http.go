@@ -22,6 +22,7 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
+	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 	"github.com/gorilla/websocket"
@@ -39,10 +40,16 @@ const (
 )
 
 type HTTPServer struct {
-	Service       *Service
-	Token         string
-	Logger        *slog.Logger
-	Tunnels       *tunnel.Manager
+	Service *Service
+	Token   string
+	Logger  *slog.Logger
+	Tunnels *tunnel.Manager
+	// RelayStart and RelayStop are installed by the daemon entrypoint. Keeping
+	// lifecycle hooks on the HTTP server lets settings.put toggle the supervised
+	// connector without touching Session or PTY ownership; tests and embedded
+	// callers may leave them nil.
+	RelayStart    func() error
+	RelayStop     func()
 	BuildVersion  string
 	BuildRevision string
 	BuildDirty    bool
@@ -59,6 +66,11 @@ type HTTPServer struct {
 
 	peersMu sync.Mutex
 	peers   map[*wsPeer]struct{}
+	// relayPeers maps one authenticated BRLY control stream to the same
+	// service peer implementation used by local WebSocket clients. The Relay
+	// connector owns the transport; this map only carries lifecycle state.
+	relayPeersMu sync.Mutex
+	relayPeers   map[relay.ConnectionID]*relayControlPeer
 	// tunnelMu serializes configuration persistence with all lifecycle routes.
 	// Manager has its own process-operation lock, but this server-level lock also
 	// keeps an enable/test/restart from observing half-written Edge/account
@@ -71,12 +83,21 @@ type rosterMessage struct {
 	State api.State `json:"state"`
 }
 
+type relayControlPeer struct {
+	peer          *wsPeer
+	open          relay.StreamOpen
+	stateMu       sync.Mutex
+	authenticated bool
+	ctx           context.Context
+}
+
 func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPServer {
 	server := &HTTPServer{
-		Service: service,
-		Token:   token,
-		Logger:  logger,
-		peers:   make(map[*wsPeer]struct{}),
+		Service:    service,
+		Token:      token,
+		Logger:     logger,
+		peers:      make(map[*wsPeer]struct{}),
+		relayPeers: make(map[relay.ConnectionID]*relayControlPeer),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 256 * 1024, WriteBufferSize: 256 * 1024,
 			CheckOrigin: func(request *http.Request) bool {
@@ -284,35 +305,28 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("Content-Type", "application/json")
 	switch request.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":        s.Service.DefaultRuntime,
-			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":           s.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
-			"autoStartAI":           s.Service.Settings.AutoStartAI,
-		})
+		_ = json.NewEncoder(writer).Encode(s.settingsProjection())
 	case http.MethodPut:
 		var body struct {
-			DefaultRuntime string            `json:"defaultRuntime"`
-			RuntimeEnv     map[string]string `json:"runtimeEnv"`
-			GnarEdge       *string           `json:"gnarEdge"`
-			GnarAccount    *string           `json:"gnarAccount"`
-			AutoOpenShell  *bool             `json:"autoOpenShell"`
-			AutoStartAI    *bool             `json:"autoStartAI"`
+			DefaultRuntime string                         `json:"defaultRuntime"`
+			RuntimeEnv     map[string]string              `json:"runtimeEnv"`
+			GnarEdge       *string                        `json:"gnarEdge"`
+			GnarAccount    *string                        `json:"gnarAccount"`
+			AutoOpenShell  *bool                          `json:"autoOpenShell"`
+			AutoStartAI    *bool                          `json:"autoStartAI"`
+			Relay          *settings.RelaySettings        `json:"relay"`
+			PublicTunnel   *settings.PublicTunnelSettings `json:"publicTunnel"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
 			http.Error(writer, "invalid settings", http.StatusBadRequest)
 			return
 		}
+		current := s.Service.SettingsSnapshot()
 		runtimeEnv := body.RuntimeEnv
 		if runtimeEnv == nil {
-			runtimeEnv = s.Service.Settings.RuntimeEnv
+			runtimeEnv = current.RuntimeEnv
 		}
-		gnarEdge := s.Service.Settings.GnarEdge
+		gnarEdge := current.GnarEdge
 		if body.GnarEdge != nil {
 			gnarEdge = *body.GnarEdge
 		}
@@ -330,12 +344,9 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			return
 		}
 		if body.GnarAccount != nil {
-			s.Service.Settings.GnarAccount = normalizedAccount
-			if s.Service.SettingsPath != "" {
-				if err := settings.Save(s.Service.SettingsPath, s.Service.Settings); err != nil {
-					http.Error(writer, err.Error(), http.StatusBadRequest)
-					return
-				}
+			if err := s.Service.SetGnarAccount(normalizedAccount); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
 			}
 		}
 		if body.AutoOpenShell != nil {
@@ -350,22 +361,63 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 				return
 			}
 		}
-		if s.Tunnels != nil {
-			s.Tunnels.SetGnarEdgeOverride(s.Service.Settings.GnarEdge)
+		if body.Relay != nil {
+			if err := s.Service.UpdateRelaySettings(*body.Relay); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":        s.Service.DefaultRuntime,
-			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":           s.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
-			"autoStartAI":           s.Service.Settings.AutoStartAI,
-		})
+		if body.PublicTunnel != nil {
+			if err := s.Service.UpdatePublicTunnelSettings(*body.PublicTunnel); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := s.syncRelayLifecycle(); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if s.Tunnels != nil {
+			s.Tunnels.SetGnarEdgeOverride(s.Service.SettingsSnapshot().GnarEdge)
+		}
+		_ = json.NewEncoder(writer).Encode(s.settingsProjection())
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *HTTPServer) syncRelayLifecycle() error {
+	if s.Service == nil {
+		return nil
+	}
+	value := s.Service.SettingsSnapshot()
+	enabled := value.Relay.Enabled || value.PublicTunnel.Enabled
+	if enabled {
+		if s.RelayStart != nil {
+			return s.RelayStart()
+		}
+		return nil
+	}
+	if s.RelayStop != nil {
+		s.RelayStop()
+	}
+	return nil
+}
+
+func (s *HTTPServer) settingsProjection() map[string]any {
+	value := s.Service.SettingsSnapshot()
+	return map[string]any{
+		"defaultRuntime":        value.DefaultRuntime,
+		"runtimeEnv":            value.RuntimeEnv,
+		"gnarEdge":              safeEdgeURL(value.GnarEdge),
+		"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
+		"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
+		"gnarAccount":           s.Service.EffectiveGnarAccount(),
+		"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
+		"autoOpenShell":         value.AutoOpenShell,
+		"autoStartAI":           value.AutoStartAI,
+		"relay":                 value.Relay,
+		"publicTunnel":          value.PublicTunnel,
 	}
 }
 
@@ -454,7 +506,8 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 	}
 	s.tunnelMu.Lock()
 	defer s.tunnelMu.Unlock()
-	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	current := s.Service.SettingsSnapshot()
+	edge := strings.TrimSpace(current.GnarEdge)
 	if body.EdgeURL != nil {
 		edge = strings.TrimSpace(*body.EdgeURL)
 	}
@@ -483,7 +536,7 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when enrolling gnar"))
 		return
 	}
-	configuredAccount := s.Service.Settings.GnarAccount
+	configuredAccount := current.GnarAccount
 	if body.AccountName != nil {
 		configuredAccount = *body.AccountName
 	}
@@ -497,7 +550,7 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		}
 	}
 	account := settings.EffectiveGnarAccount(normalizedAccount, s.Service.HostName)
-	previousEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	previousEdge := strings.TrimSpace(current.GnarEdge)
 	previousAccount := s.Service.EffectiveGnarAccount()
 	if err := s.Service.UpdatePublicAccessConfig(edge, normalizedAccount); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, err)
@@ -565,7 +618,8 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 	}
 	s.tunnelMu.Lock()
 	defer s.tunnelMu.Unlock()
-	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	current := s.Service.SettingsSnapshot()
+	configuredEdge := strings.TrimSpace(current.GnarEdge)
 	if body.EdgeURL != nil {
 		configuredEdge = strings.TrimSpace(*body.EdgeURL)
 	}
@@ -575,7 +629,7 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 			return
 		}
 	}
-	configuredAccount := settings.ConfiguredGnarAccount(s.Service.Settings.GnarAccount)
+	configuredAccount := settings.ConfiguredGnarAccount(current.GnarAccount)
 	account := s.Service.EffectiveGnarAccount()
 	if body.AccountName != nil {
 		var err error
@@ -769,7 +823,8 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 
 func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 	edge := s.gnarEffectiveEdge()
-	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
+	current := s.Service.SettingsSnapshot()
+	configuredEdge := strings.TrimSpace(current.GnarEdge)
 	defaultEdge := s.gnarDefaultEdge()
 	status := api.PublicAccessStatus{
 		EdgeURL:               edge,
@@ -833,12 +888,13 @@ func (s *HTTPServer) gnarDefaultEdge() string {
 }
 
 func (s *HTTPServer) gnarEffectiveEdge() string {
+	configured := strings.TrimSpace(s.Service.SettingsSnapshot().GnarEdge)
 	if s.Tunnels != nil {
-		if edge := s.Tunnels.GnarEdge(); edge != "" || strings.TrimSpace(s.Service.Settings.GnarEdge) == "" {
+		if edge := s.Tunnels.GnarEdge(); edge != "" || configured == "" {
 			return edge
 		}
 	}
-	return strings.TrimSpace(s.Service.Settings.GnarEdge)
+	return configured
 }
 
 func safeEdgeURL(value string) string {
@@ -987,6 +1043,145 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	}
 }
 
+// HandleRelayControl adapts one BRLY/2 control stream to the daemon's normal
+// wsPeer protocol. The Relay has already authenticated the client capability;
+// the Host still validates the stream metadata and never forwards its Host
+// Secret back across the transport. send is Connector.Send for the owning
+// stream and is kept as a callback to avoid coupling this package to relay's
+// connection state.
+func (s *HTTPServer) HandleRelayControl(
+	ctx context.Context,
+	open relay.StreamOpen,
+	value relay.Frame,
+	send func(relay.Frame) error,
+) error {
+	if open.Class != "control" {
+		return fmt.Errorf("unsupported Relay control class: %s", open.Class)
+	}
+	if send == nil {
+		return errors.New("Relay control transport is unavailable")
+	}
+	transport := func(item outboundMessage) bool {
+		kind := relay.FrameText
+		if item.kind == websocket.BinaryMessage {
+			kind = relay.FrameBinary
+		}
+		return send(relay.Frame{Kind: kind, ID: value.ID, Payload: append([]byte(nil), item.data...)}) == nil
+	}
+
+	s.relayPeersMu.Lock()
+	entry := s.relayPeers[value.ID]
+	if value.Kind == relay.FrameOpen {
+		if entry != nil {
+			s.relayPeersMu.Unlock()
+			return errors.New("duplicate Relay control stream")
+		}
+		entry = &relayControlPeer{peer: newRelayPeer(s, transport), open: open, ctx: ctx}
+		s.relayPeers[value.ID] = entry
+	}
+	s.relayPeersMu.Unlock()
+	if entry == nil {
+		return errors.New("unknown Relay control stream")
+	}
+
+	peer := entry.peer
+	if value.Kind == relay.FrameClose || value.Kind == relay.FrameError || value.Kind == relay.FrameEnd {
+		s.removeRelayControl(value.ID, entry)
+		return nil
+	}
+	if value.Kind != relay.FrameText && value.Kind != relay.FrameBinary {
+		return nil
+	}
+	entry.stateMu.Lock()
+	authenticated := entry.authenticated
+	entry.stateMu.Unlock()
+	if !authenticated {
+		if value.Kind != relay.FrameText {
+			return errors.New("Relay control authentication must be text")
+		}
+		var auth struct {
+			Type         string   `json:"t"`
+			AccessToken  string   `json:"access_token"`
+			Token        string   `json:"token"`
+			ClientID     string   `json:"client_id"`
+			Version      string   `json:"version"`
+			Capabilities []string `json:"capabilities"`
+			Formats      []string `json:"terminalStateFormats"`
+		}
+		if err := json.Unmarshal(value.Payload, &auth); err != nil || auth.Type != "auth" || auth.Version != api.Version {
+			return errors.New("invalid Relay control authentication")
+		}
+		capability := auth.AccessToken
+		if capability == "" {
+			capability = auth.Token
+		}
+		if capability == "" || open.Token == "" || capability != open.Token {
+			return errors.New("Relay control capability mismatch")
+		}
+		if open.ClientID != "" && auth.ClientID != open.ClientID {
+			return errors.New("Relay control client mismatch")
+		}
+		peer.terminalStateFormat = selectTerminalStateFormat(auth.Formats)
+		if peer.terminalStateFormat == "" {
+			return errors.New("Relay control has no compatible terminal state format")
+		}
+		// The local wsPeer implementation expects the daemon token in its
+		// envelope. This substitution happens entirely inside Headless; the
+		// Host Secret is never put on the Relay wire.
+		entry.stateMu.Lock()
+		entry.authenticated = true
+		entry.stateMu.Unlock()
+		s.registerPeer(peer)
+		state, revision := s.Service.RosterVersion(ctx)
+		if err := peer.writeJSON(map[string]any{"t": "welcome", "version": api.Version, "host": state.Host}); err != nil {
+			s.removeRelayControl(value.ID, entry)
+			return err
+		}
+		if err := peer.writeJSON(makeRoster(state)); err != nil {
+			s.removeRelayControl(value.ID, entry)
+			return err
+		}
+		peer.startRoster(ctx, state, revision, supportsRosterDeltas(auth.Capabilities))
+		return nil
+	}
+
+	if value.Kind == relay.FrameBinary {
+		return peer.input(ctx, value.Payload)
+	}
+	var command api.Envelope
+	if err := json.Unmarshal(value.Payload, &command); err != nil {
+		return peer.writeError("", fmt.Errorf("invalid request: %w", err))
+	}
+	if command.Type != "request" {
+		return peer.writeError(command.ID, errors.New("unsupported message type"))
+	}
+	if isSlowMutation(command.Method) || isBackgroundRequest(command.Method) {
+		go func() {
+			if err := peer.handle(ctx, command); err != nil {
+				_ = peer.writeError(command.ID, err)
+			}
+		}()
+		return nil
+	}
+	return peer.handle(ctx, command)
+}
+
+func (s *HTTPServer) removeRelayControl(id relay.ConnectionID, entry *relayControlPeer) {
+	s.relayPeersMu.Lock()
+	if current := s.relayPeers[id]; current == entry {
+		delete(s.relayPeers, id)
+	}
+	s.relayPeersMu.Unlock()
+	entry.stateMu.Lock()
+	authenticated := entry.authenticated
+	entry.authenticated = false
+	entry.stateMu.Unlock()
+	if authenticated {
+		s.unregisterPeer(entry.peer)
+	}
+	entry.peer.close()
+}
+
 func isSlowMutation(method string) bool {
 	switch method {
 	case "project.remove", "workspace.remove":
@@ -1127,6 +1322,9 @@ type wsPeer struct {
 	server     *HTTPServer
 	connection *websocket.Conn
 	outbound   chan outboundMessage
+	// transport is set for a Relay control peer. It bypasses the WebSocket
+	// writer while preserving the same bounded peer and service lifecycle.
+	transport func(outboundMessage) bool
 
 	enqueueMu sync.Mutex
 	closed    chan struct{}
@@ -1174,6 +1372,14 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 	}
 	go peer.writeLoop()
 	return peer
+}
+
+func newRelayPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsPeer {
+	return &wsPeer{
+		server:    server,
+		transport: transport,
+		closed:    make(chan struct{}),
+	}
 }
 
 // beginPendingSubscription installs a cancellable marker for one session. A
@@ -1245,6 +1451,9 @@ func (p *wsPeer) close() {
 }
 
 func (p *wsPeer) writeLoop() {
+	if p.connection == nil {
+		return
+	}
 	for item := range p.outbound {
 		_ = p.connection.SetWriteDeadline(time.Now().Add(outboundWriteTimeout))
 		if err := p.connection.WriteMessage(item.kind, item.data); err != nil {
@@ -1265,6 +1474,11 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		p.enqueueMu.Unlock()
 		return false
 	default:
+	}
+	if p.transport != nil {
+		ok := p.transport(item)
+		p.enqueueMu.Unlock()
+		return ok
 	}
 	select {
 	case p.outbound <- item:
@@ -1326,7 +1540,9 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 		sessionIDs = append(sessionIDs, p.attached.ID)
 	}
 	close(p.closed)
-	close(p.outbound)
+	if p.outbound != nil {
+		close(p.outbound)
+	}
 	return sessionIDs, p.agentSession
 }
 
@@ -1628,23 +1844,27 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: publicSession(session), Snapshot: snapshot})
 	case "settings.get":
+		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":        p.server.Service.DefaultRuntime,
-			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"defaultRuntime":        value.DefaultRuntime,
+			"runtimeEnv":            value.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(value.GnarEdge),
 			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
 			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
 			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
 			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
+			"autoOpenShell":         value.AutoOpenShell,
+			"autoStartAI":           value.AutoStartAI,
+			"relay":                 value.Relay,
+			"publicTunnel":          value.PublicTunnel,
 		})
 	case "settings.put":
+		current := p.server.Service.SettingsSnapshot()
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
 		if runtimeEnv == nil {
-			runtimeEnv = p.server.Service.Settings.RuntimeEnv
+			runtimeEnv = current.RuntimeEnv
 		}
-		gnarEdge := p.server.Service.Settings.GnarEdge
+		gnarEdge := current.GnarEdge
 		if _, specified := params["gnarEdge"]; specified {
 			gnarEdge = stringParam(params, "gnarEdge")
 		}
@@ -1669,27 +1889,50 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 				return err
 			}
 		}
-		if p.server.Tunnels != nil {
-			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.Settings.GnarEdge)
-		}
-		if _, specified := params["gnarAccount"]; specified {
-			p.server.Service.Settings.GnarAccount = normalizedAccount
-			if p.server.Service.SettingsPath != "" {
-				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
-					return err
-				}
+		if value, specified := params["relay"]; specified {
+			data, err := json.Marshal(value)
+			var relayValue settings.RelaySettings
+			if err != nil || json.Unmarshal(data, &relayValue) != nil {
+				return errors.New("invalid relay settings")
+			}
+			if err := p.server.Service.UpdateRelaySettings(relayValue); err != nil {
+				return err
 			}
 		}
+		if value, specified := params["publicTunnel"]; specified {
+			data, err := json.Marshal(value)
+			var tunnelValue settings.PublicTunnelSettings
+			if err != nil || json.Unmarshal(data, &tunnelValue) != nil {
+				return errors.New("invalid public tunnel settings")
+			}
+			if err := p.server.Service.UpdatePublicTunnelSettings(tunnelValue); err != nil {
+				return err
+			}
+		}
+		if p.server.Tunnels != nil {
+			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.SettingsSnapshot().GnarEdge)
+		}
+		if _, specified := params["gnarAccount"]; specified {
+			if err := p.server.Service.SetGnarAccount(normalizedAccount); err != nil {
+				return err
+			}
+		}
+		if err := p.server.syncRelayLifecycle(); err != nil {
+			return err
+		}
+		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":        p.server.Service.DefaultRuntime,
-			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
+			"defaultRuntime":        value.DefaultRuntime,
+			"runtimeEnv":            value.RuntimeEnv,
+			"gnarEdge":              safeEdgeURL(value.GnarEdge),
 			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
 			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
 			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
 			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
+			"autoOpenShell":         value.AutoOpenShell,
+			"autoStartAI":           value.AutoStartAI,
+			"relay":                 value.Relay,
+			"publicTunnel":          value.PublicTunnel,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(

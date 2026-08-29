@@ -28,17 +28,18 @@ WARREN_RELAY_ADMIN_TOKEN='<admin-token>' \
 mise run relay:connect
 ```
 
-Afterwards, the same address keeps the Host ID and a `0600`-permissioned Host credential in `~/Library/Application Support/Warren/relay-cli/<relay-id>`; Warren itself imports the credential into the macOS Keychain, so later runs can omit the admin token. If the Host is already online, re-running does not rebuild or restart the app; it only generates a new pairing URL. Add `WARREN_RELAY_NO_OPEN=1` to skip opening the browser automatically.
+Afterwards, the same address keeps the Host ID and pinned Relay key in `~/Library/Application Support/Warren/relay-cli/<relay-id>` with `0600` permissions. The daemon token remains the canonical Host Secret; later runs can omit the admin token. If the Host is already online, re-running does not rebuild or restart the app; it only generates a new pairing URL. Add `WARREN_RELAY_NO_OPEN=1` to skip opening the browser automatically.
 
 ## Start
 
-First generate three secrets: the admin token and a signing key of at least 32 bytes. Production must terminate TLS behind an HTTPS/WSS reverse proxy.
+First generate an admin token and an Ed25519 signing seed of at least 32 bytes. Production must terminate TLS behind an HTTPS/WSS reverse proxy (or provide the TLS certificate and key directly).
 
 ```bash
 export WARREN_RELAY_ADMIN_TOKEN='replace-admin-token'
 export WARREN_RELAY_SIGNING_KEY='replace-with-at-least-32-random-bytes'
 export WARREN_RELAY_PUBLIC_URL='https://relay.example.com'
 export WARREN_RELAY_ALLOWED_ORIGIN='https://relay.example.com'
+export WARREN_RELAY_TUNNEL_BASE_DOMAIN='tunnel.example.com'
 go run ./RelayService/cmd/warren-relay
 ```
 
@@ -46,11 +47,12 @@ Or build a container:
 
 ```bash
 docker build -f RelayService/Dockerfile -t warren-relay .
-docker run --read-only -p 8080:8080 -v warren-relay-data:/data \
+docker run --read-only --tmpfs /tmp -p 8080:8080 -v warren-relay-data:/data \
   -e WARREN_RELAY_ADMIN_TOKEN \
   -e WARREN_RELAY_SIGNING_KEY \
-  -e WARREN_RELAY_PUBLIC_URL \
-  -e WARREN_RELAY_ALLOWED_ORIGIN \
+  -e WARREN_RELAY_PUBLIC_URL=https://relay.example.com \
+  -e WARREN_RELAY_ALLOWED_ORIGIN=https://relay.example.com \
+  -e WARREN_RELAY_TUNNEL_BASE_DOMAIN=tunnel.example.com \
   warren-relay
 ```
 
@@ -58,7 +60,7 @@ If using `--read-only`, the runtime also needs a writable temporary directory (f
 
 ## Host Registration and Connection
 
-Admins issue a separate credential for each Host; the credential is shown only once in the response, and Relay stores only its SHA-256 hash. Re-provisioning the same Host rotates the credential and revokes existing client tokens.
+The daemon token in `~/.warren/token` is the canonical Host Secret. Create a Host record to obtain a one-time enrollment ticket, then enroll that existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or revocation bumps the Host generation, disconnects the old socket, and invalidates capabilities from the previous generation.
 
 ```bash
 export WARREN_HOST_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
@@ -68,14 +70,18 @@ curl -sS -X POST https://relay.example.com/v1/hosts \
   -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}"
 ```
 
-Configure the returned credential in the launch environment of Warren.app the first time. Warren imports it into the macOS Keychain and reads it on later launches; control-plane secrets are stripped from the environment of every shell/runtime child process:
+The response contains `enrollment_ticket` and the Relay signing public key. Enroll the existing daemon token once (the ticket is valid for ten minutes and cannot be reused):
 
 ```bash
-env WARREN_CONTROL_PLANE_URL=https://relay.example.com \
-  WARREN_CONTROL_PLANE_HOST_ID="$WARREN_HOST_ID" \
-  WARREN_CONTROL_PLANE_HOST_TOKEN='<host-credential>' \
-  ./Warren.app/Contents/MacOS/Warren
+warren relay enroll --url https://relay.example.com --host "$WARREN_HOST_ID" \
+  --ticket '<enrollment-ticket>' --secret "$(cat ~/.warren/token)"
 ```
+
+The command stores the Relay URL, Host ID, and signing key in the daemon
+settings and enables the supervised connector. It then opens exactly one
+outbound `wss://.../v1/host/connect` socket and reuses the local daemon token as
+its Host Secret; control-plane secrets are stripped from every shell/runtime
+child process.
 
 Warren only makes outbound WSS connections; with no control plane configured, it still listens on `127.0.0.1` only.
 
@@ -88,7 +94,7 @@ curl -sS -X POST https://relay.example.com/v1/hosts/<host-uuid>/pairing \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN"
 ```
 
-A client exchanges the code for an access token bound to the Host and credential generation:
+A client exchanges the code for a short-lived Ed25519 access capability bound to the Host, scope, route, and generation:
 
 ```bash
 curl -sS -X POST https://relay.example.com/v1/pair \
@@ -105,12 +111,12 @@ curl -sS -X DELETE https://relay.example.com/v1/hosts/<host-uuid> \
 
 ## Security Boundaries
 
-- The admin API uses a separate bootstrap token; each Host uses a separate credential.
-- Pairing codes are one-time and short-lived; client tokens use HMAC-SHA256 bound to the Host and generation.
-- Client tokens appear only in the URL fragment and the first WebSocket auth frame, never in HTTP query strings or normal access logs.
+- The admin API uses a separate bootstrap token; the Host Secret remains the daemon token and is never sent to a browser.
+- Pairing codes and enrollment tickets are one-time and short-lived. Access capabilities are Ed25519-signed and include scope, route, client, JTI, expiry, and generation claims.
+- Client capabilities appear only in the first WebSocket auth frame (or an `Authorization` header for an owner route), never in query strings or normal access logs.
 - Relay registry writes are atomic with `0600` permissions and only store Host credential hashes and control-plane metadata.
-- Each WebSocket message is capped at 8 MiB, and each virtual connection has a bounded memory queue; slow clients are closed.
-- Relay never sends the local Web pairing token to browsers: the Host connector rewrites only the first auth frame at a trusted edge.
+- Each BRLY/2 frame is capped at 8 MiB, each stream has a 16 MiB credit window, and each Host has 128 streams (64 public streams); slow queues are closed.
+- Relay never sends the Host Secret to browsers. The Web app exchanges a one-time pairing ticket for an in-memory access capability and an HttpOnly refresh cookie, then scrubs the fragment.
 - Production deployments must use TLS, strong random secrets, a persistent volume, and a strict `WARREN_RELAY_ALLOWED_ORIGIN`.
 
 The registry and Host tunnels currently live in a single Relay instance; deployments should stay single-replica with a persistent volume. Horizontal scaling requires moving registry, presence, and connection routing to a shared storage/messaging layer first.

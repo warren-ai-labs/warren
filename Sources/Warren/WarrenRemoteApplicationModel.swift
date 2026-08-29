@@ -25,12 +25,34 @@ extension WarrenRemoteEndpointConfiguration {
 }
 
 struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable, Sendable {
-    let name: String
-    let url: String
-    let token: String
-    let ssh: String?
+	let name: String
+	let url: String
+	let token: String
+	let ssh: String?
+	let type: String
+	let hostID: String?
+	let routeID: String?
 
-    var id: String { name }
+	init(name: String, url: String, token: String, ssh: String?, type: String = "daemon", hostID: String? = nil, routeID: String? = nil) {
+		self.name = name; self.url = url; self.token = token; self.ssh = ssh
+		self.type = type; self.hostID = hostID; self.routeID = routeID
+	}
+
+	var id: String { name }
+
+	private enum CodingKeys: String, CodingKey { case name, url, token, ssh, type; case hostID = "host_id"; case routeID = "route_id" }
+	init(from decoder: Decoder) throws {
+		let values = try decoder.container(keyedBy: CodingKeys.self)
+		self.init(
+			name: try values.decode(String.self, forKey: .name),
+			url: try values.decode(String.self, forKey: .url),
+			token: try values.decode(String.self, forKey: .token),
+			ssh: try values.decodeIfPresent(String.self, forKey: .ssh),
+			type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
+			hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
+			routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
+		)
+	}
 }
 
 private struct WarrenEndpointConfigurationFile: Decodable {
@@ -538,7 +560,13 @@ private actor WarrenRemoteWire {
             throw URLError(.badURL)
         }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = "/v1/ws"
+		let isRelay = configuration.type.lowercased() == "relay"
+		if isRelay {
+			guard let hostID = configuration.hostID, !hostID.isEmpty else { throw URLError(.badURL) }
+			components.path = "/h/\(hostID)/v1/client/connect"
+		} else {
+			components.path = "/v1/ws"
+		}
         guard let url = components.url else { throw URLError(.badURL) }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = Self.maximumWebSocketMessageBytes
@@ -551,13 +579,13 @@ private actor WarrenRemoteWire {
         // connection loop can tear this wire down and retry or fail visibly.
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await socket.send(.string(Self.json([
-                    "t": "auth",
-                    "token": token,
-                    "version": "2.0",
-                    "capabilities": ["roster-delta"],
-                    "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
-                ])))
+				var auth: [String: Any] = [
+					"t": "auth", "version": "2.0", "capabilities": ["roster-delta"],
+					"terminalStateFormats": ["ghostty-vt-snapshot-v1"],
+				]
+				auth[isRelay ? "access_token" : "token"] = token
+				if isRelay { auth["client_id"] = UUID().uuidString.lowercased() }
+				try await socket.send(.string(Self.json(auth)))
             }
             group.addTask {
                 try await Task.sleep(for: Self.connectTimeout)
@@ -1887,7 +1915,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let browserURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: webAuthToken
         )
         NSWorkspace.shared.open(browserURL)
     }
@@ -1895,7 +1923,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let clipboardURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: webAuthToken
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
@@ -1927,7 +1955,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             let clipboardURL = Self.publicAccessBrowserURL(
                 url,
                 currentEndpoint: webStatus.secureURL,
-                daemonToken: endpointConfiguration?.token ?? ""
+                daemonToken: webAuthToken
             )
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(
@@ -1935,6 +1963,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 forType: .string
             )
         }
+    }
+
+    /// Relay endpoints authenticate the control WebSocket with a short-lived
+    /// capability; that value must never be copied into a public URL fragment.
+    /// Only the legacy/local daemon path still needs the compatibility token
+    /// fragment when explicitly opening a protected Web URL.
+    private var webAuthToken: String {
+        guard endpointConfiguration?.type.lowercased() != "relay" else { return "" }
+        return endpointConfiguration?.token ?? ""
     }
 
     /// Returns the URL used only for an explicit browser-open action. Public

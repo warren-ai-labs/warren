@@ -10,10 +10,13 @@ import (
 )
 
 type Endpoint struct {
-	Name  string `json:"name"`
-	URL   string `json:"url"`
-	Token string `json:"token"`
-	SSH   string `json:"ssh,omitempty"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Token   string `json:"token"`
+	SSH     string `json:"ssh,omitempty"`
+	Type    string `json:"type,omitempty"`
+	HostID  string `json:"host_id,omitempty"`
+	RouteID string `json:"route_id,omitempty"`
 }
 type Config struct {
 	Current   string              `json:"current"`
