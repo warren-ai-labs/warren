@@ -160,7 +160,9 @@ struct WarrenDesktopWorkspaceRow: View {
             action: { if !isInteractionDisabled { onSelect() } }
         )
         .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
-        .padding(.leading, WarrenSpacing.compact + WarrenSpacing.xs)
+        .padding(.leading, semanticScope == "task-list"
+            ? WarrenSpacing.compact + WarrenSpacing.xs + WarrenSpacing.medium
+            : WarrenSpacing.compact + WarrenSpacing.xs)
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)
@@ -208,7 +210,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 onSelectTask(taskID)
             } label: {
                 Text("T")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(tokens.success)
                     .frame(width: 18, height: 18)
                     .contentShape(.rect)

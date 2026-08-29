@@ -346,12 +346,34 @@ button:disabled {
 
 .section-label-row {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
 }
 
 .section-label-row .section-label {
   flex: 1;
+}
+
+.section-label-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+  color: inherit;
+}
+
+.section-label-toggle .chevron {
+  opacity: 0.7;
+}
+
+.section-label-toggle .chevron.open {
+  transform: rotate(90deg);
 }
 
 .section-add {
@@ -522,8 +544,8 @@ button:disabled {
   background: transparent;
   color: var(--color-status-success);
   cursor: pointer;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   line-height: 1;
   place-items: center;
 }
@@ -532,6 +554,10 @@ button:disabled {
 .workspace-task-link:focus-visible {
   background: var(--fill-hover);
   color: var(--color-text-primary);
+}
+
+.project.task .workspace-row {
+  padding-inline-start: 32px;
 }
 
 .workspace-row.drag-over {
@@ -2688,6 +2714,9 @@ button:disabled {
   position: fixed;
   z-index: var(--layer-menu);
   min-width: 180px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 5px;
   border: 0;
   border-radius: var(--radius-lg);
@@ -3301,6 +3330,9 @@ button:disabled {
   .terminal-search {
     display: none;
   }
+  .project-count {
+    opacity: 1;
+  }
 }
 
 /* Hover treatments opt in on devices that actually hover, so a tap never
@@ -3456,6 +3488,13 @@ button:disabled {
   .session-sheet-cancel:active:not(:disabled),
   .agent-load-more:active:not(:disabled) {
     transform: scale(0.96);
+  }
+}
+
+@media (max-width: 767px) {
+  .workspace-task-link {
+    width: 24px;
+    height: 24px;
   }
 }
 

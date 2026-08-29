@@ -26,8 +26,9 @@ test("workspace context actions never mark a destructive item", () => {
     togglePin() {},
     rename() {},
   });
-  assert.deepEqual(items.map(item => item.label), ["Unpin workspace", "Rename workspace"]);
+  assert.deepEqual(items.map(item => item.label), ["Unpin workspace", "Rename workspace", "No tasks — create one first"]);
   assert.ok(items.every(item => !item.danger));
+  assert.ok(items.at(-1).disabled);
 });
 
 test("task menu exposes lifecycle actions", () => {

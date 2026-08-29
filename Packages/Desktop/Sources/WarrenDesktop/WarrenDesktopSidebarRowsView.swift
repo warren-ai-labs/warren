@@ -37,6 +37,7 @@ struct WarrenDesktopSidebarRows: View {
     @State private var dragSourceRowID: String?
     @State private var isDragMeasurementEnabled = false
     @State private var previousGroups: [WarrenDesktopProjectGroup] = []
+    @State private var previousTaskGroups: [WarrenDesktopTaskGroup] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -140,19 +141,60 @@ struct WarrenDesktopSidebarRows: View {
         }
         .onAppear {
             previousGroups = groups
+            previousTaskGroups = taskGroups
         }
         .onChange(of: groups) { newGroups in
             let oldGroups = previousGroups
             previousGroups = newGroups
-            guard let projectID = selectedProjectID else { return }
-            let oldCount = workspaceCount(for: projectID, in: oldGroups)
-            let newCount = workspaceCount(for: projectID, in: newGroups)
-            guard newCount > oldCount else { return }
+            var grownProjectIDs: Set<ProjectID> = []
+            let allProjectIDs = Set(oldGroups.map(\.project.id) + newGroups.map(\.project.id))
+            for projectID in allProjectIDs {
+                let oldCount = workspaceCount(for: projectID, in: oldGroups)
+                let newCount = workspaceCount(for: projectID, in: newGroups)
+                if newCount > oldCount {
+                    grownProjectIDs.insert(projectID)
+                }
+            }
+            guard !grownProjectIDs.isEmpty else { return }
             withAnimation(WarrenMotion.animation(
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
-                _ = tree.expandedProjectIDs.insert(projectID)
+                tree.expandedProjectIDs.formUnion(grownProjectIDs)
+                // If a workspace was created under a task, also expand that task.
+                for projectID in grownProjectIDs {
+                    if let newWorkspace = newGroups.first(where: { $0.project.id == projectID })?.workspaces.last,
+                       let taskID = newWorkspace.taskID {
+                        tree.expandedTaskIDs.insert(taskID)
+                        tree.tasksCollapsed = false
+                    }
+                }
+            }
+        }
+        .onChange(of: taskGroups) { newGroups in
+            let oldGroups = previousTaskGroups
+            previousTaskGroups = newGroups
+            var grownTaskIDs: Set<TaskID> = []
+            let allTaskIDs = Set(oldGroups.map(\.task.id) + newGroups.map(\.task.id))
+            for taskID in allTaskIDs {
+                let oldCount = oldGroups.first(where: { $0.task.id == taskID })?.workspaces.count ?? 0
+                let newCount = newGroups.first(where: { $0.task.id == taskID })?.workspaces.count ?? 0
+                if newCount > oldCount {
+                    grownTaskIDs.insert(taskID)
+                }
+                // New task inserted
+                if oldGroups.first(where: { $0.task.id == taskID }) == nil,
+                   newGroups.first(where: { $0.task.id == taskID }) != nil {
+                    grownTaskIDs.insert(taskID)
+                }
+            }
+            guard !grownTaskIDs.isEmpty else { return }
+            withAnimation(WarrenMotion.animation(
+                .stateChange,
+                reduceMotion: reduceMotion
+            )) {
+                tree.expandedTaskIDs.formUnion(grownTaskIDs)
+                tree.tasksCollapsed = false
             }
         }
     }
@@ -186,7 +228,8 @@ struct WarrenDesktopSidebarRows: View {
                                 Text("No linked workspaces")
                                     .font(WarrenTypography.supporting)
                                     .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                                    .padding(.horizontal, WarrenSpacing.standard)
+                                    .padding(.horizontal, WarrenSpacing.standard + WarrenSpacing.medium)
+                                    .padding(.bottom, WarrenSpacing.xs)
                             }
                         } else {
                             ForEach(group.workspaces) { workspace in

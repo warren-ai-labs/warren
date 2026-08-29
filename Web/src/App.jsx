@@ -105,6 +105,7 @@ const storageKeys = {
   navigationMemory: "warren.navigationMemory",
   expandedTasks: "warren.expandedTasks",
   expandedProjects: "warren.expandedProjects",
+  tasksCollapsed: "warren.tasksCollapsed",
   fontFamily: "warren.terminalFontFamily",
   fontSize: "warren.terminalFontSize",
   titleTemplate: "warren.terminalTitleTemplate",
@@ -174,6 +175,12 @@ export default function App() {
   const [attachedSession, setAttachedSession] = useState(null);
   const [expandedTasks, setExpandedTasks] = useState(() => loadSet(storageKeys.expandedTasks));
   const [expandedProjects, setExpandedProjects] = useState(() => loadSet(storageKeys.expandedProjects));
+  const [tasksCollapsed, setTasksCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKeys.tasksCollapsed);
+      return raw ? JSON.parse(raw) : false;
+    } catch { return false; }
+  });
   const [fontFamily, setFontFamily] = useState(() => localStorage.getItem(storageKeys.fontFamily) || defaultFontFamily);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
@@ -1212,6 +1219,12 @@ export default function App() {
         setExpandedProjects(previous => previous.has(workspace.project)
           ? previous
           : new Set([...previous, workspace.project]));
+        if (workspace.task) {
+          setTasksCollapsed(false);
+          setExpandedTasks(previous => previous.has(workspace.task)
+            ? previous
+            : new Set([...previous, workspace.task]));
+        }
       }
     }
 
@@ -2100,6 +2113,10 @@ export default function App() {
   }, [expandedProjects]);
 
   useEffect(() => {
+    localStorage.setItem(storageKeys.tasksCollapsed, JSON.stringify(tasksCollapsed));
+  }, [tasksCollapsed]);
+
+  useEffect(() => {
     localStorage.setItem(storageKeys.fontFamily, fontFamily);
     localStorage.setItem(storageKeys.fontSize, String(fontSize));
   }, [fontFamily, fontSize]);
@@ -2145,14 +2162,24 @@ export default function App() {
     });
   }, []);
 
+  const toggleTasksCollapsed = useCallback(() => {
+    setTasksCollapsed(previous => !previous);
+  }, []);
+
   const focusTask = useCallback(taskID => {
+    setTasksCollapsed(false);
     setExpandedTasks(previous => new Set([...previous, taskID]));
     requestAnimationFrame(() => {
-      document.getElementById(`task-${taskID}`)?.scrollIntoView({
+      const section = document.getElementById(`task-${taskID}`);
+      section?.scrollIntoView({
         behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
           ? "auto"
           : "smooth",
         block: "center",
+      });
+      requestAnimationFrame(() => {
+        const target = section?.querySelector(".project-toggle-main");
+        if (target instanceof HTMLElement) target.focus({ preventScroll: true });
       });
     });
   }, []);
@@ -2237,24 +2264,34 @@ export default function App() {
     if (!dialog) return;
     const trimmed = value.trim();
     if (!trimmed) return;
+    const showError = detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    };
     if (dialog.kind === "task-create") {
       request("task.create", { name: trimmed }, task => {
-        if (task?.id) setExpandedTasks(previous => new Set([...previous, task.id]));
-      });
+        if (task?.id) {
+          setTasksCollapsed(false);
+          setExpandedTasks(previous => new Set([...previous, task.id]));
+        }
+      }, showError);
     } else if (dialog.kind === "task") {
-      request("task.rename", { id: dialog.id, name: trimmed });
+      request("task.rename", { id: dialog.id, name: trimmed }, null, showError);
     } else if (dialog.kind === "project") {
-      request("project.rename", { id: dialog.id, name: trimmed });
+      request("project.rename", { id: dialog.id, name: trimmed }, null, showError);
     } else if (dialog.kind === "workspace") {
-      request("workspace.rename", { id: dialog.id, name: trimmed });
+      request("workspace.rename", { id: dialog.id, name: trimmed }, null, showError);
     } else if (dialog.kind === "session") {
-      request("session.rename", { id: dialog.id, title: trimmed });
+      request("session.rename", { id: dialog.id, title: trimmed }, null, showError);
     }
     setRenameDialog(null);
   }, [renameDialog, request]);
 
   const toggleTaskPin = useCallback(task => {
-    request("task.pin", { id: task.id, pinned: !task.pinned });
+    request("task.pin", { id: task.id, pinned: !task.pinned }, null, detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    });
   }, [request]);
 
   const toggleProjectPin = useCallback(project => {
@@ -2362,12 +2399,16 @@ export default function App() {
   }, [openWorktreeImport, renameProject, showContextMenu, toggleProjectAutoImport, toggleProjectPin]);
 
   const workspaceContextMenu = useCallback((event, workspace) => {
+    const showError = detail => {
+      setConnectionStatus({ message: detail, online: false });
+      setEmptyOverride({ loading: false, message: detail });
+    };
     showContextMenu(event, workspaceMenuItems(workspace, {
       togglePin: toggleWorkspacePin,
       rename: renameWorkspace,
       tasks: catalog.tasks,
-      attach: (value, task) => request("task.attach", { id: task.id, workspace: value.id }),
-      detach: value => request("task.detach", { id: value.task, workspace: value.id }),
+      attach: (value, task) => request("task.attach", { id: task.id, workspace: value.id }, null, showError),
+      detach: value => request("task.detach", { id: value.task, workspace: value.id }, null, showError),
     }));
   }, [catalog.tasks, renameWorkspace, request, showContextMenu, toggleWorkspacePin]);
 
@@ -2387,7 +2428,10 @@ export default function App() {
     if (!dialog) return;
     setDeleteDialog(null);
     if (dialog.kind === "task") {
-      request("task.remove", { id: dialog.id });
+      request("task.remove", { id: dialog.id }, null, detail => {
+        setConnectionStatus({ message: detail, online: false });
+        setEmptyOverride({ loading: false, message: detail });
+      });
       return;
     }
     request("session.delete", { id: dialog.id }, () => {
@@ -2645,8 +2689,10 @@ export default function App() {
           activeWorkspace={selectedWorkspaceID}
           expandedTasks={expandedTasks}
           expandedProjects={expandedProjects}
+          tasksCollapsed={tasksCollapsed}
           tabsForWorkspace={workspaceID => workspaceTabs(catalog, workspaceID)}
           connection={connectionStatus}
+          onToggleTasksCollapsed={toggleTasksCollapsed}
           onToggleTask={toggleTask}
           onFocusTask={focusTask}
           onNewTask={newTask}

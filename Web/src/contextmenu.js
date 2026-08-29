@@ -27,12 +27,15 @@ export function taskMenuItems(task, actions) {
 }
 
 export function workspaceMenuItems(workspace, actions) {
+  const tasks = actions.tasks || [];
   const membershipItems = workspace.task
     ? [{ label: "Detach from task", action: () => actions.detach(workspace) }]
-    : (actions.tasks || []).map(task => ({
-      label: `Add to task: ${task.name}`,
-      action: () => actions.attach(workspace, task),
-    }));
+    : tasks.length
+      ? tasks.map(task => ({
+        label: `Add to task: ${task.name}`,
+        action: () => actions.attach(workspace, task),
+      }))
+      : [{ label: "No tasks — create one first", action: () => {}, disabled: true }];
   return [
     {
       label: workspace.pinned ? "Unpin workspace" : "Pin workspace",

@@ -1254,11 +1254,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func presentTaskCreator() {
         guard projection.isConnected else { return }
-        isTaskCreatorPresented = true
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            isTaskCreatorPresented = true
+        }
     }
 
     private func dismissTaskCreator() {
-        isTaskCreatorPresented = false
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            isTaskCreatorPresented = false
+        }
     }
 
     @ViewBuilder
@@ -1277,6 +1281,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     }
                 )
             }
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
             .zIndex(WarrenPresentationLayer.modal)
         }
     }

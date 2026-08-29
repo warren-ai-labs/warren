@@ -165,8 +165,10 @@ export function Sidebar({
   activeWorkspace,
   expandedTasks,
   expandedProjects,
+  tasksCollapsed = false,
   tabsForWorkspace,
   connection,
+  onToggleTasksCollapsed,
   onToggleTask,
   onFocusTask,
   onNewTask,
@@ -262,12 +264,21 @@ export function Sidebar({
       </div>
       <div className="sidebar-scroll">
         <div className="section-label-row">
-          <div className="section-label">Tasks</div>
+          <button
+            type="button"
+            className="section-label-toggle"
+            aria-expanded={!tasksCollapsed}
+            aria-label={tasksCollapsed ? "Expand Tasks" : "Collapse Tasks"}
+            onClick={onToggleTasksCollapsed}
+          >
+            <span className="section-label">Tasks</span>
+            <span className={`chevron${!tasksCollapsed ? " open" : ""}`}>{ChevronRightIcon}</span>
+          </button>
           <button type="button" className="section-add" aria-label="New task" title="New task" onClick={onNewTask}>
             <PlusIcon />
           </button>
         </div>
-        {catalog.tasks.length ? catalog.tasks.map(task => {
+        {!tasksCollapsed && (catalog.tasks.length ? catalog.tasks.map(task => {
           const workspaces = catalog.workspacesByTask.get(task.id) || [];
           const open = expandedTasks.has(task.id);
           return (
@@ -312,7 +323,7 @@ export function Sidebar({
               </div>
             </section>
           );
-        }) : <div className="workspace-row task-empty">No tasks</div>}
+        }) : <div className="workspace-row task-empty">No tasks</div>)}
         <div className="section-label">Projects</div>
         {catalog.projects.length ? catalog.projects.map(project => {
           const workspaces = catalog.workspacesByProject.get(project.id) || [];
@@ -767,7 +778,10 @@ export function ContextMenu({ menu, onClose }) {
           role={mobile ? undefined : "menuitem"}
           className={item.danger ? "danger" : undefined}
           key={index}
+          disabled={item.disabled}
+          aria-disabled={item.disabled ? "true" : undefined}
           onClick={() => {
+            if (item.disabled) return;
             onClose();
             item.action();
           }}
