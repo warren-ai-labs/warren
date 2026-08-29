@@ -11,6 +11,7 @@ enum WarrenDesktopDeletionRequest {
 }
 
 struct WarrenDesktopSidebarRows: View {
+    let taskGroups: [WarrenDesktopTaskGroup]
     let groups: [WarrenDesktopProjectGroup]
     let terminalGroups: [WarrenDesktopTerminalGroup]
     let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
@@ -22,6 +23,8 @@ struct WarrenDesktopSidebarRows: View {
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let isInteractionDisabled: Bool
     let onAddProject: () -> Void
+    let onRequestTaskCreate: () -> Void
+    let onFocusTask: (TaskID) -> Void
     let onRequestTerminalGroupCreate: () -> Void
     let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
     let onAction: (WarrenDesktopAction) -> Void
@@ -34,6 +37,7 @@ struct WarrenDesktopSidebarRows: View {
     @State private var dragSourceRowID: String?
     @State private var isDragMeasurementEnabled = false
     @State private var previousGroups: [WarrenDesktopProjectGroup] = []
+    @State private var previousTaskGroups: [WarrenDesktopTaskGroup] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -42,6 +46,7 @@ struct WarrenDesktopSidebarRows: View {
         // feedback out of LazyVStack's placement cache during navigation.
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             terminalGroupsSection
+            tasksSection
             if !isCollapsed {
                 WarrenDesktopSidebarSectionHeader(
                     title: "Projects",
@@ -82,7 +87,11 @@ struct WarrenDesktopSidebarRows: View {
                         || isProjectExpanded(group.project.id)
                         || hasDeletingWorkspace(in: group.project.id) {
                         ForEach(group.workspaces) { workspace in
-                            workspaceRow(workspace, in: group)
+                            workspaceRow(
+                                workspace,
+                                in: group,
+                                taskName: taskName(for: workspace)
+                            )
                         }
                     }
                 }
@@ -120,15 +129,19 @@ struct WarrenDesktopSidebarRows: View {
                     .flatMap(\.workspaces)
                     .first(where: { $0.id == workspaceID })
             else { return }
-            _ = withAnimation(WarrenMotion.animation(
+            withAnimation(WarrenMotion.animation(
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
                 tree.expandedProjectIDs.insert(workspace.projectID)
+                if let taskID = workspace.taskID {
+                    tree.expandedTaskIDs.insert(taskID)
+                }
             }
         }
         .onAppear {
             previousGroups = groups
+            previousTaskGroups = taskGroups
         }
         .onChange(of: groups) { newGroups in
             let oldGroups = previousGroups
@@ -148,8 +161,189 @@ struct WarrenDesktopSidebarRows: View {
                 reduceMotion: reduceMotion
             )) {
                 tree.expandedProjectIDs.formUnion(grownProjectIDs)
+                // If a workspace was created under a task, also expand that task.
+                for projectID in grownProjectIDs {
+                    if let newWorkspace = newGroups.first(where: { $0.project.id == projectID })?.workspaces.last,
+                       let taskID = newWorkspace.taskID {
+                        tree.expandedTaskIDs.insert(taskID)
+                        tree.tasksCollapsed = false
+                    }
+                }
             }
         }
+        .onChange(of: taskGroups) { newGroups in
+            let oldGroups = previousTaskGroups
+            previousTaskGroups = newGroups
+            var grownTaskIDs: Set<TaskID> = []
+            let allTaskIDs = Set(oldGroups.map(\.task.id) + newGroups.map(\.task.id))
+            for taskID in allTaskIDs {
+                let oldCount = oldGroups.first(where: { $0.task.id == taskID })?.workspaces.count ?? 0
+                let newCount = newGroups.first(where: { $0.task.id == taskID })?.workspaces.count ?? 0
+                if newCount > oldCount {
+                    grownTaskIDs.insert(taskID)
+                }
+                // New task inserted
+                if oldGroups.first(where: { $0.task.id == taskID }) == nil,
+                   newGroups.first(where: { $0.task.id == taskID }) != nil {
+                    grownTaskIDs.insert(taskID)
+                }
+            }
+            guard !grownTaskIDs.isEmpty else { return }
+            withAnimation(WarrenMotion.animation(
+                .stateChange,
+                reduceMotion: reduceMotion
+            )) {
+                tree.expandedTaskIDs.formUnion(grownTaskIDs)
+                tree.tasksCollapsed = false
+            }
+        }
+    }
+
+    private var tasksSection: some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            if !isCollapsed {
+                WarrenDesktopSidebarSectionHeader(
+                    title: "Tasks",
+                    disclosureExpanded: !tree.tasksCollapsed,
+                    actionImage: "plus",
+                    actionLabel: "New task",
+                    actionEnabled: !isInteractionDisabled,
+                    onToggle: toggleTasks,
+                    onAction: onRequestTaskCreate
+                )
+            }
+            if !tree.tasksCollapsed || isCollapsed {
+                if taskGroups.isEmpty && !isCollapsed {
+                    Text("No tasks yet")
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .padding(.bottom, WarrenSpacing.compact)
+                }
+                ForEach(taskGroups) { group in
+                    taskRow(group)
+                    if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
+                        if group.workspaces.isEmpty {
+                            if !isCollapsed {
+                                Text("No linked workspaces")
+                                    .font(WarrenTypography.supporting)
+                                    .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                                    .padding(.horizontal, WarrenSpacing.standard + WarrenSpacing.medium)
+                                    .padding(.bottom, WarrenSpacing.xs)
+                            }
+                        } else {
+                            ForEach(group.workspaces) { workspace in
+                                if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
+                                    workspaceRow(
+                                        workspace,
+                                        in: project,
+                                        semanticScope: "task-list",
+                                        displayName: "\(project.project.name) · \(workspace.name)"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func taskRow(_ group: WarrenDesktopTaskGroup) -> some View {
+        let isExpanded = tree.expandedTaskIDs.contains(group.task.id)
+        return HStack(spacing: WarrenSpacing.xxs) {
+            Button {
+                toggleTask(group.task.id)
+            } label: {
+                HStack(spacing: WarrenSpacing.compact) {
+                    Image(systemName: "checklist")
+                        .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize)
+                    if !isCollapsed {
+                        Text(group.task.name)
+                            .font(WarrenTypography.navigationItem)
+                            .lineLimit(1)
+                        Text("\(group.workspaces.count)")
+                            .font(WarrenTypography.navigationMeta)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
+                .contentShape(.rect)
+            }
+            .buttonStyle(WarrenInteractiveRowStyle(isSelected: false, isFocused: false))
+            .disabled(isInteractionDisabled)
+            .accessibilityLabel("Task \(group.task.name), \(group.workspaces.count) workspaces")
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .warrenSemanticElement(
+                id: "task.\(group.task.id.description)",
+                role: .button,
+                label: "Task \(group.task.name)",
+                value: "\(group.workspaces.count) workspaces · \(isExpanded ? "Expanded" : "Collapsed")",
+                isEnabled: !isInteractionDisabled,
+                action: { toggleTask(group.task.id) }
+            )
+
+            if !isCollapsed {
+                taskAddMenu(group)
+            }
+        }
+        .padding(.horizontal, WarrenSpacing.compact)
+        .id("task.\(group.task.id.description)")
+    }
+
+    private func taskAddMenu(_ group: WarrenDesktopTaskGroup) -> some View {
+        Menu {
+            Menu("Add Existing Workspace") {
+                let availableGroups = WarrenDesktopTaskWorkspaceOptions.availableGroups(
+                    from: groups
+                )
+                if availableGroups.isEmpty {
+                    Text("No unassigned workspaces")
+                } else {
+                    ForEach(availableGroups) { projectGroup in
+                        Menu(projectGroup.project.name) {
+                            ForEach(projectGroup.workspaces) { workspace in
+                                Button(workspace.name) {
+                                    onAction(.attachWorkspaceToTask(group.task.id, workspace.id))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Menu("Create Workspace") {
+                if groups.isEmpty {
+                    Text("No projects available")
+                } else {
+                    ForEach(groups) { projectGroup in
+                        Button(projectGroup.project.name) {
+                            onAction(.requestNewWorkspace(
+                                projectGroup.project.id,
+                                taskID: group.task.id
+                            ))
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .frame(
+                    width: WarrenLayoutMetrics.sidebarActionButtonSize,
+                    height: WarrenLayoutMetrics.sidebarActionButtonSize
+                )
+                .contentShape(.rect)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(isInteractionDisabled)
+        .accessibilityLabel("Add workspace to task \(group.task.name)")
     }
 
     private var terminalGroupsSection: some View {
@@ -287,6 +481,24 @@ struct WarrenDesktopSidebarRows: View {
         }
     }
 
+    private func toggleTasks() {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            tree.tasksCollapsed.toggle()
+        }
+    }
+
+    private func toggleTask(_ taskID: TaskID) {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if tree.expandedTaskIDs.contains(taskID) {
+                tree.expandedTaskIDs.remove(taskID)
+            } else {
+                tree.expandedTaskIDs.insert(taskID)
+            }
+        }
+    }
+
     @ViewBuilder
     private func projectRow(
         for group: WarrenDesktopProjectGroup
@@ -376,15 +588,23 @@ struct WarrenDesktopSidebarRows: View {
     @ViewBuilder
     private func workspaceRow(
         _ workspace: Workspace,
-        in group: WarrenDesktopProjectGroup
+        in group: WarrenDesktopProjectGroup,
+        semanticScope: String = "project-list",
+        displayName: String? = nil,
+        taskName: String? = nil
     ) -> some View {
+        let presentedWorkspace = displayName.map { name in
+            var value = workspace
+            value.name = name
+            return value
+        } ?? workspace
         let isProjectDeleting = deletingProjectIDs.contains(group.project.id)
         let isDeleting = deletingWorkspaceIDs.contains(workspace.id)
         ZStack {
             let activitySummary = workspaceActivitySummary(workspace.id)
             WarrenDesktopWorkspaceRow(
-                workspace: workspace,
-                semanticScope: "project-list",
+                workspace: presentedWorkspace,
+                semanticScope: semanticScope,
                 activity: activitySummary?.activity,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
                 isCollapsed: isCollapsed,
@@ -392,6 +612,10 @@ struct WarrenDesktopSidebarRows: View {
                 isPinned: workspace.pinned,
                 isDeleting: isDeleting,
                 isInteractionDisabled: isInteractionDisabled || isProjectDeleting || isDeleting,
+                taskName: taskName,
+                taskID: workspace.taskID,
+                tasks: taskGroups.map(\.task),
+                onSelectTask: onFocusTask,
                 onSelect: { select(.workspace(workspace.id)) },
                 onDoubleClick: { onAction(.openWorkspace(workspace.id)) },
                 onRename: {
@@ -402,6 +626,12 @@ struct WarrenDesktopSidebarRows: View {
                         workspace.id,
                         !workspace.pinned
                     ))
+                },
+                onAttachToTask: { taskID in
+                    onAction(.attachWorkspaceToTask(taskID, workspace.id))
+                },
+                onDetachFromTask: { taskID in
+                    onAction(.detachWorkspaceFromTask(taskID, workspace.id))
                 },
                 onDelete: {
                     onRequestDeletion(.workspace(
@@ -443,6 +673,11 @@ struct WarrenDesktopSidebarRows: View {
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: dragSourceRowID
         )
+    }
+
+    private func taskName(for workspace: Workspace) -> String? {
+        guard let taskID = workspace.taskID else { return nil }
+        return taskGroups.first { $0.task.id == taskID }?.task.name
     }
 
     private func workspaceActivitySummary(
@@ -632,12 +867,12 @@ private struct WarrenDesktopSessionRow: View {
 private struct WarrenDesktopSidebarSectionHeader: View {
     let title: String
     var disclosureExpanded: Bool? = nil
-    let actionImage: String
-    let actionLabel: String
+    var actionImage: String? = nil
+    var actionLabel = ""
     var actionVisible = true
     var actionEnabled = true
     var onToggle: (() -> Void)?
-    let onAction: () -> Void
+    var onAction: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -662,7 +897,7 @@ private struct WarrenDesktopSidebarSectionHeader: View {
                 titleLabel
             }
 
-            if actionVisible {
+            if actionVisible, let actionImage, let onAction {
                 Button(action: onAction) {
                     Image(systemName: actionImage)
                         .font(.system(size: 12, weight: .medium))

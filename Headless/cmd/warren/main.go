@@ -89,7 +89,10 @@ func run(arguments []string) error {
 		return sshCommand(args[1:])
 	case "agent":
 		return agentCommand(args[1:])
-	case "project", "workspace", "worktree", "terminal-group", "group", "session":
+	case "task", "project", "workspace", "worktree", "terminal-group", "group", "session":
+		if args[0] == "task" && len(args) > 1 && args[1] == "workspace" {
+			return taskWorkspaceCommand(args[2:])
+		}
 		return resourceCommand(args)
 	case "headless":
 		return headlessCommand(args[1:])
@@ -203,6 +206,10 @@ func isHelpArgument(argument string) bool {
 }
 
 var resourceActions = map[string]map[string]bool{
+	"task": {
+		"list": true, "create": true, "add": true, "remove": true, "delete": true,
+		"rename": true, "pin": true, "move": true, "attach": true, "detach": true,
+	},
 	"project": {
 		"list": true, "add": true, "remove": true, "delete": true,
 		"rename": true, "pin": true, "move": true,
@@ -228,6 +235,10 @@ func knownResourceAction(resource, action string) bool {
 
 func requiredPositionals(resource, action string) []string {
 	switch resource + "." + action {
+	case "task.remove", "task.delete", "task.rename", "task.pin", "task.move":
+		return []string{"TASK_ID"}
+	case "task.attach", "task.detach":
+		return []string{"TASK_ID", "WORKSPACE_ID"}
 	case "project.add":
 		return []string{"PATH"}
 	case "project.remove", "project.delete", "project.rename", "project.pin", "project.move":
@@ -268,7 +279,7 @@ func sessionTargetAction(action string) bool {
 
 func missingRequiredFlag(resource, action string, params map[string]any) string {
 	switch resource + "." + action {
-	case "project.rename", "workspace.rename", "terminal-group.rename":
+	case "task.create", "task.add", "task.rename", "project.rename", "workspace.rename", "terminal-group.rename":
 		if stringValue(params, "name") == "" {
 			return "--name NAME"
 		}
@@ -460,6 +471,8 @@ func resourceCommand(args []string) error {
 		switch resource {
 		case "project":
 			return printValue(limitListRows(projectRows(state), limit))
+		case "task":
+			return printValue(limitListRows(taskRows(state), limit))
 		case "workspace":
 			return printValue(limitListRows(workspaceRows(state), limit))
 		case "terminal-group":
@@ -474,6 +487,27 @@ func resourceCommand(args []string) error {
 	method := ""
 	var result any
 	switch resource + "." + action {
+	case "task.create", "task.add":
+		method = "task.create"
+		result = &api.Task{}
+	case "task.remove", "task.delete":
+		method = "task.remove"
+		result = &map[string]any{}
+	case "task.rename":
+		method = "task.rename"
+		result = &map[string]any{}
+	case "task.pin":
+		method = "task.pin"
+		result = &map[string]any{}
+	case "task.move":
+		method = "task.move"
+		result = &map[string]any{}
+	case "task.attach":
+		method = "task.attach"
+		result = &map[string]any{}
+	case "task.detach":
+		method = "task.detach"
+		result = &map[string]any{}
 	case "project.add":
 		method = "project.add"
 		result = &api.Project{}
@@ -609,6 +643,146 @@ func resourceCommand(args []string) error {
 		return err
 	}
 	return printValue(result)
+}
+
+func taskWorkspaceCommand(args []string) error {
+	if len(args) == 0 {
+		return newUsageError("task workspace command is required", taskWorkspaceUsageText(""))
+	}
+	if isHelpArgument(args[0]) {
+		fmt.Print(taskWorkspaceUsageText(""))
+		return nil
+	}
+	action := args[0]
+	if action != "list" && action != "attach" && action != "detach" && action != "create" {
+		return newUsageError(fmt.Sprintf("unsupported command: task workspace %s", action), taskWorkspaceUsageText(""))
+	}
+	help, err := validateTaskWorkspaceArgs(action, args[1:])
+	if err != nil {
+		return newUsageError(err.Error(), taskWorkspaceUsageText(action))
+	}
+	if help {
+		fmt.Print(taskWorkspaceUsageText(action))
+		return nil
+	}
+	params := parseFlags(args[1:])
+	expectedPositionals := 1
+	if action != "list" {
+		expectedPositionals = 2
+	}
+	positionalCount := len(positionals(params))
+	if positionalCount > expectedPositionals {
+		argumentLabel := "arguments"
+		if expectedPositionals == 1 {
+			argumentLabel = "argument"
+		}
+		return newUsageError(
+			fmt.Sprintf("expected exactly %d positional %s, got %d", expectedPositionals, argumentLabel, positionalCount),
+			taskWorkspaceUsageText(action),
+		)
+	}
+	labels := []string{"TASK_ID"}
+	if action == "attach" || action == "detach" {
+		labels = append(labels, "WORKSPACE_ID")
+	}
+	if action == "create" {
+		labels = append(labels, "PROJECT_ID")
+	}
+	if label := missingPositional(params, labels); label != "" {
+		return newUsageError("missing "+label, taskWorkspaceUsageText(action))
+	}
+	if action == "create" && stringValue(params, "branch") == "" {
+		return newUsageError("missing --branch BRANCH", taskWorkspaceUsageText(action))
+	}
+	if action == "list" {
+		limit, err := listLimit(params)
+		if err != nil {
+			return newUsageError(err.Error(), taskWorkspaceUsageText(action))
+		}
+		ctx, c, err := connect()
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		state, err := c.Roster(ctx)
+		if err != nil {
+			return err
+		}
+		rows, err := taskWorkspaceRows(state, positional(params, 0, "task id"), boolValue(params, "available"))
+		if err != nil {
+			return err
+		}
+		return printValue(limitListRows(rows, limit))
+	}
+
+	resource, mutation, request, err := taskWorkspaceMutation(args)
+	if err != nil {
+		return err
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	method := resource + "." + mutation
+	if action == "create" {
+		var result api.WorkspaceCreateResult
+		if err := c.Request(ctx, method, request, &result); err != nil {
+			return err
+		}
+		return printValue(result)
+	}
+	result := map[string]any{}
+	if err := c.Request(ctx, method, request, &result); err != nil {
+		return err
+	}
+	return printValue(result)
+}
+
+func validateTaskWorkspaceArgs(action string, args []string) (bool, error) {
+	valueFlags := map[string]bool{}
+	booleanFlags := map[string]bool{"help": true, "h": true}
+	switch action {
+	case "list":
+		valueFlags["limit"] = true
+		booleanFlags["available"] = true
+		booleanFlags["all"] = true
+	case "create":
+		valueFlags["branch"] = true
+		valueFlags["name"] = true
+		valueFlags["path"] = true
+	}
+	help, present, err := validateStrictFlags(args, valueFlags, booleanFlags)
+	if err != nil {
+		return false, err
+	}
+	return help || present["h"], nil
+}
+
+func taskWorkspaceMutation(args []string) (string, string, map[string]any, error) {
+	if len(args) == 0 {
+		return "", "", nil, errors.New("task workspace command is required")
+	}
+	action := args[0]
+	params := parseFlags(args[1:])
+	positions := positionals(params)
+	switch action {
+	case "attach", "detach":
+		if len(positions) < 2 {
+			return "", "", nil, errors.New("task workspace membership requires TASK_ID and WORKSPACE_ID")
+		}
+		return "task", action, normalizedParams(params, "task", action), nil
+	case "create":
+		if len(positions) < 2 {
+			return "", "", nil, errors.New("task workspace creation requires TASK_ID and PROJECT_ID")
+		}
+		request := normalizedParams(params, "workspace", "create")
+		request["task"] = positions[0]
+		request["project"] = positions[1]
+		return "workspace", "create", request, nil
+	default:
+		return "", "", nil, fmt.Errorf("unsupported task workspace mutation: %s", action)
+	}
 }
 
 func sessionRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
@@ -2123,6 +2297,7 @@ func parseFlags(args []string) map[string]any {
 
 var bareBooleanFlags = map[string]bool{
 	"all":                   true,
+	"available":             true,
 	"ended":                 true,
 	"force":                 true,
 	"full":                  true,
@@ -2160,6 +2335,12 @@ func normalizedParams(values map[string]any, resource, action string) map[string
 			delete(result, "runtime-kind")
 		}
 	}
+	if (action == "create" || action == "add") && resource == "task" {
+		if value, ok := result["external-id"]; ok {
+			result["externalID"] = value
+			delete(result, "external-id")
+		}
+	}
 	if resource == "session" && action == "move" {
 		for _, key := range []string{"expected-workspace", "expected-workspace-id"} {
 			if value, ok := result[key]; ok {
@@ -2184,7 +2365,9 @@ func normalizedParams(values map[string]any, resource, action string) map[string
 	}
 	positions := positionals(values)
 	if len(positions) > 0 {
-		if action == "add" && resource == "project" {
+		if (action == "create" || action == "add") && resource == "task" {
+			// Task creation is flag-only; positional values are never accepted.
+		} else if action == "add" && resource == "project" {
 			result["path"] = positions[0]
 		} else if action == "create" && resource == "workspace" {
 			result["project"] = positions[0]
@@ -2194,6 +2377,9 @@ func normalizedParams(values map[string]any, resource, action string) map[string
 			result["operation"] = positions[0]
 		} else {
 			result["id"] = positions[0]
+		}
+		if resource == "task" && (action == "attach" || action == "detach") && len(positions) > 1 {
+			result["workspace"] = positions[1]
 		}
 	}
 	return result
@@ -2361,6 +2547,25 @@ type currentSessionValue struct {
 	Current         bool   `json:"current"`
 }
 
+type TaskRow struct {
+	api.Task
+	Workspaces int `json:"workspaces,omitempty"`
+}
+
+func taskRows(state api.State) []TaskRow {
+	byTask := make(map[string]int)
+	for _, workspace := range state.Workspaces {
+		if workspace.TaskID != "" {
+			byTask[workspace.TaskID]++
+		}
+	}
+	rows := make([]TaskRow, 0, len(state.Tasks))
+	for _, task := range state.Tasks {
+		rows = append(rows, TaskRow{Task: task, Workspaces: byTask[task.ID]})
+	}
+	return rows
+}
+
 // effectiveSessionTitle is the single display-name rule used everywhere a
 // session name is rendered: a user-set CustomTitle wins, otherwise the
 // generated default Title is shown.
@@ -2395,6 +2600,7 @@ func projectRows(state api.State) []ProjectRow {
 type WorkspaceRow struct {
 	api.Workspace
 	ProjectName string `json:"projectName,omitempty"`
+	TaskName    string `json:"taskName,omitempty"`
 	Sessions    int    `json:"sessions,omitempty"`
 }
 
@@ -2402,6 +2608,10 @@ func workspaceRows(state api.State) []WorkspaceRow {
 	projects := make(map[string]api.Project, len(state.Projects))
 	for _, project := range state.Projects {
 		projects[project.ID] = project
+	}
+	tasks := make(map[string]api.Task, len(state.Tasks))
+	for _, task := range state.Tasks {
+		tasks[task.ID] = task
 	}
 	runningByWorkspace := make(map[string]int)
 	for _, session := range state.Sessions {
@@ -2415,9 +2625,36 @@ func workspaceRows(state api.State) []WorkspaceRow {
 		if project, ok := projects[workspace.ProjectID]; ok {
 			row.ProjectName = project.Name
 		}
+		if task, ok := tasks[workspace.TaskID]; ok {
+			row.TaskName = task.Name
+		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func taskWorkspaceRows(state api.State, taskID string, available bool) ([]WorkspaceRow, error) {
+	taskFound := false
+	for _, task := range state.Tasks {
+		if task.ID == taskID {
+			taskFound = true
+			break
+		}
+	}
+	if !taskFound {
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+	rows := workspaceRows(state)
+	result := make([]WorkspaceRow, 0, len(rows))
+	for _, row := range rows {
+		if available && row.TaskID == "" {
+			result = append(result, row)
+		}
+		if !available && row.TaskID == taskID {
+			result = append(result, row)
+		}
+	}
+	return result, nil
 }
 
 func printValue(value any) error {
@@ -2430,6 +2667,12 @@ func printValue(value any) error {
 		return nil
 	}
 	switch items := value.(type) {
+	case []TaskRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, taskRowCells(item))
+		}
+		printTable([]string{"ID", "NAME", "SOURCE", "EXTERNAL ID", "URL", "WORKSPACES", "PINNED", "CREATED"}, rows...)
 	case []ProjectRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
@@ -2441,7 +2684,7 @@ func printValue(value any) error {
 		for _, item := range items {
 			rows = append(rows, workspaceRowCells(item))
 		}
-		printTable([]string{"ID", "PROJECT", "NAME", "BRANCH", "MERGED", "PATH", "KIND", "SESSIONS", "PINNED", "CREATED"}, rows...)
+		printTable([]string{"ID", "PROJECT", "TASK", "NAME", "BRANCH", "MERGED", "PATH", "KIND", "SESSIONS", "PINNED", "CREATED"}, rows...)
 	case []api.TerminalGroup:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
@@ -2466,6 +2709,10 @@ func printValue(value any) error {
 		printKVTable(projectPairs(items))
 	case *api.Project:
 		printKVTable(projectPairs(*items))
+	case api.Task:
+		printKVTable(taskPairs(items))
+	case *api.Task:
+		printKVTable(taskPairs(*items))
 	case api.TerminalGroup:
 		printKVTable(terminalGroupPairs(items))
 	case *api.TerminalGroup:
@@ -2513,6 +2760,19 @@ func printValue(value any) error {
 	return nil
 }
 
+func taskRowCells(item TaskRow) []string {
+	return []string{
+		item.ID,
+		item.Name,
+		displayValue(item.Source),
+		displayValue(item.ExternalID),
+		displayValue(item.URL),
+		strconv.Itoa(item.Workspaces),
+		displayBool(item.Pinned),
+		formatTime(item.CreatedAt),
+	}
+}
+
 func projectRowCells(item ProjectRow) []string {
 	return []string{
 		item.ID,
@@ -2528,6 +2788,7 @@ func workspaceRowCells(item WorkspaceRow) []string {
 	return []string{
 		item.ID,
 		displayValue(item.ProjectName),
+		displayValue(item.TaskName),
 		item.Name,
 		displayValue(item.Branch),
 		displayMergeState(item.MergeState),
@@ -2536,6 +2797,18 @@ func workspaceRowCells(item WorkspaceRow) []string {
 		strconv.Itoa(item.Sessions),
 		displayBool(item.Pinned),
 		formatTime(item.CreatedAt),
+	}
+}
+
+func taskPairs(value api.Task) [][2]string {
+	return [][2]string{
+		{"ID", value.ID},
+		{"NAME", value.Name},
+		{"SOURCE", displayValue(value.Source)},
+		{"EXTERNAL ID", displayValue(value.ExternalID)},
+		{"URL", displayValue(value.URL)},
+		{"PINNED", displayBool(value.Pinned)},
+		{"CREATED AT", formatTime(value.CreatedAt)},
 	}
 }
 
@@ -2578,9 +2851,14 @@ func sessionRowCells(item SessionRow) []string {
 }
 
 func workspaceCreateResultPairs(value api.WorkspaceCreateResult) [][2]string {
-	return [][2]string{
+	pairs := [][2]string{
 		{"ID", value.ID},
 		{"PROJECT", value.ProjectID},
+	}
+	if value.TaskID != "" {
+		pairs = append(pairs, [2]string{"TASK", value.TaskID})
+	}
+	return append(pairs, [][2]string{
 		{"NAME", value.Name},
 		{"BRANCH", displayValue(value.Branch)},
 		{"PATH", value.Path},
@@ -2589,7 +2867,7 @@ func workspaceCreateResultPairs(value api.WorkspaceCreateResult) [][2]string {
 		{"CREATED AT", formatTime(value.CreatedAt)},
 		{"CREATED", displayBool(value.Created)},
 		{"GIT WORKTREE", displayBool(value.GitWorktree)},
-	}
+	}...)
 }
 
 func projectPairs(value api.Project) [][2]string {
@@ -2802,6 +3080,7 @@ Usage:
 Commands:
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
+  task list|create|remove|rename|pin|move|attach|detach|workspace
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
@@ -2836,6 +3115,7 @@ Examples:
   warren workspace remove WORKSPACE_ID --force
     --keep-worktree keeps the local Git worktree on disk
   warren workspace move WORKSPACE_ID --before OTHER_WORKSPACE_ID
+  warren task workspace create TASK_ID PROJECT_ID --branch release/feature
   warren terminal-group create --name NAME [--home PATH]
   warren terminal-group move GROUP_ID --before OTHER_GROUP_ID
   warren terminal-group remove GROUP_ID --force
@@ -2973,6 +3253,21 @@ func resourceUsageText(commandName string) string {
 		aliasNote = "\ngroup is an alias for terminal-group; use either name.\n"
 	}
 	switch canonicalResource(commandName) {
+	case "task":
+		return `Usage:
+  warren task list [--all] [--limit N]
+  warren task create --name NAME [--source SOURCE --external-id ID] [--url URL]
+  warren task remove TASK_ID
+  warren task rename TASK_ID --name NAME
+  warren task pin TASK_ID --pinned BOOL
+  warren task move TASK_ID [--before OTHER_TASK_ID]
+  warren task attach TASK_ID WORKSPACE_ID
+  warren task detach TASK_ID WORKSPACE_ID
+  warren task workspace list TASK_ID [--available] [--all] [--limit N]
+  warren task workspace attach TASK_ID WORKSPACE_ID
+  warren task workspace detach TASK_ID WORKSPACE_ID
+  warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
+`
 	case "project":
 		return `Usage:
   warren project list [--all] [--limit N]
@@ -3023,16 +3318,46 @@ Trae is only a shell preset and has no Agent transcript/activity semantics.
 	return ""
 }
 
+func taskWorkspaceUsageText(action string) string {
+	switch action {
+	case "list":
+		return "Usage:\n  warren task workspace list TASK_ID [--available] [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all for the complete list.\n"
+	case "attach", "detach":
+		return fmt.Sprintf("Usage:\n  warren task workspace %s TASK_ID WORKSPACE_ID\n", action)
+	case "create":
+		return "Usage:\n  warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]\n"
+	default:
+		return `Usage:
+  warren task workspace list TASK_ID [--available] [--all] [--limit N]
+  warren task workspace attach TASK_ID WORKSPACE_ID
+  warren task workspace detach TASK_ID WORKSPACE_ID
+  warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
+`
+	}
+}
+
 func actionUsageText(commandName, action string) string {
 	name := commandName
 	switch canonicalResource(commandName) + "." + action {
-	case "project.list", "workspace.list", "session.list":
+	case "task.list", "project.list", "workspace.list", "session.list":
 		if canonicalResource(commandName) == "session" {
 			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
 		}
 		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
 	case "terminal-group.list":
 		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
+	case "task.create", "task.add":
+		return fmt.Sprintf("Usage:\n  warren %s create --name NAME [--source SOURCE --external-id ID] [--url URL]\n", name)
+	case "task.remove", "task.delete":
+		return fmt.Sprintf("Usage:\n  warren %s remove TASK_ID\n", name)
+	case "task.rename":
+		return fmt.Sprintf("Usage:\n  warren %s rename TASK_ID --name NAME\n", name)
+	case "task.pin":
+		return fmt.Sprintf("Usage:\n  warren %s pin TASK_ID --pinned BOOL\n", name)
+	case "task.move":
+		return fmt.Sprintf("Usage:\n  warren %s move TASK_ID [--before OTHER_TASK_ID]\n", name)
+	case "task.attach", "task.detach":
+		return fmt.Sprintf("Usage:\n  warren %s %s TASK_ID WORKSPACE_ID\n", name, action)
 	case "project.add":
 		return fmt.Sprintf("Usage:\n  warren %s add PATH [--name NAME] [--auto-import-worktrees]\n", name)
 	case "project.remove", "project.delete":

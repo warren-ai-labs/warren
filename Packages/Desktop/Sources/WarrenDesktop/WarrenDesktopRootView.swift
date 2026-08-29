@@ -36,6 +36,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSelectEndpoint: (String) -> Void
 
     private let actions: WarrenDesktopActions
+    private let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
     private let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     private let onWebStart: () -> Void
     private let onWebTest: ((String, String, String, String) -> Void)?
@@ -63,6 +64,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var chromePopover: WarrenDesktopChromePopover?
     @State private var webDismissalNonce = 0
     @State private var pendingRename: WarrenDesktopRenameRequest?
+    @State private var isTaskCreatorPresented = false
     @State private var renameValue = ""
     @State private var pendingTerminalGroupEditor: WarrenDesktopTerminalGroupEditorMode?
     @State private var terminalGroupName = ""
@@ -101,6 +103,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         updateStatus: WarrenDesktopUpdateStatus = .none,
         onUpdateAction: @escaping () -> Void = {},
         actions: WarrenDesktopActions = WarrenDesktopActions(),
+        onCreateTask: @escaping @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID = { _ in
+            throw URLError(.unsupportedURL)
+        },
         webStatus: WarrenDesktopWebStatus = .init(),
         creatingSessionWorkspaceIDs: Set<WorkspaceID> = [],
         creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = [],
@@ -160,6 +165,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
         self.actions = actions
+        self.onCreateTask = onCreateTask
         self.terminalSurface = terminalSurface
         self.onWebStart = onWebStart
         self.onWebTest = onWebTest
@@ -241,6 +247,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onUpdateAction: onUpdateAction,
             deletingProjectIDs: deletingProjectIDs,
             deletingWorkspaceIDs: deletingWorkspaceIDs,
+            onRequestTaskCreate: presentTaskCreator,
             endpointCapabilities: endpointCapabilities,
             onAction: dispatch,
             onCommandPalette: presentCommandPalette,
@@ -336,6 +343,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .overlay {
             renameDialog
+        }
+        .overlay {
+            taskCreatorDialog
         }
         .overlay {
             terminalGroupEditorDialog
@@ -1240,6 +1250,40 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             dispatch(.setTerminalGroupHome(groupID, home))
         }
         dismissTerminalGroupEditor()
+    }
+
+    private func presentTaskCreator() {
+        guard projection.isConnected else { return }
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            isTaskCreatorPresented = true
+        }
+    }
+
+    private func dismissTaskCreator() {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            isTaskCreatorPresented = false
+        }
+    }
+
+    @ViewBuilder
+    private var taskCreatorDialog: some View {
+        if isTaskCreatorPresented {
+            WarrenModalSurface {
+                WarrenDesktopTaskCreatorView(
+                    onCancel: dismissTaskCreator,
+                    onCreate: onCreateTask,
+                    onCreated: { taskID in
+                        WarrenDesktopTaskCreationPresentation.complete(
+                            taskID: taskID,
+                            tree: &sidebarTree,
+                            onDismiss: dismissTaskCreator
+                        )
+                    }
+                )
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .zIndex(WarrenPresentationLayer.modal)
+        }
     }
 
     private func normalizedTerminalGroupHome(_ home: String) -> String? {

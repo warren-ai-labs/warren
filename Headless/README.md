@@ -1,9 +1,6 @@
 # Warren Headless
 
-Warren Headless holds Projects, Workspaces, Git worktrees, and Terminal
-Sessions on a Host (local Mac or remote VPS). Ghostline is the sole terminal
-runtime. Both the
-Desktop and the CLI are clients; a client disconnecting never ends a Session.
+Warren Headless holds Tasks, Projects, Workspaces, Git worktrees, Terminal Sessions, and ghostline/tmux runtimes on a Host (local Mac or remote VPS). Both the Desktop and the CLI are clients; a client disconnecting never ends a Session.
 
 ## Installation
 
@@ -73,6 +70,13 @@ warren --endpoint my-vps project list
 warren --endpoint my-vps project move PROJECT_ID --before OTHER_PROJECT_ID
 warren --endpoint my-vps workspace create PROJECT_ID --branch release/my-feature
 warren --endpoint my-vps workspace move WORKSPACE_ID --before OTHER_WORKSPACE_ID
+warren --endpoint my-vps task create --name "Cross-repository delivery" --source tapd --external-id 12345 --url https://tapd.example.com/story/12345
+warren --endpoint my-vps task workspace list TASK_ID --available --all
+warren --endpoint my-vps task workspace attach TASK_ID WORKSPACE_ID
+warren --endpoint my-vps task workspace create TASK_ID PROJECT_ID --branch release/cross-repository
+warren --endpoint my-vps task workspace list TASK_ID
+warren --endpoint my-vps task list
+warren --endpoint my-vps task workspace detach TASK_ID WORKSPACE_ID
 warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --prompt "Run the relevant tests"
 warren --endpoint my-vps agent create WORKSPACE_ID --provider codex --command codex-alias --no-prompt
 warren --endpoint my-vps agent create WORKSPACE_ID --provider opencode --prompt "Run the relevant tests"
@@ -123,6 +127,20 @@ Each session row exposes the Warren Session ID separately from the
 agent/thread ID and transcript path. JSON rows also include `current: true`
 when the row's Warren Session ID exactly matches `WARREN_SESSION_ID`; no cwd,
 name, timestamp, or transcript inference is performed.
+
+Tasks are Host-owned work contexts that aggregate Workspaces across Projects.
+`task workspace list TASK_ID` shows attached Workspaces, while `--available`
+shows only Workspaces that do not belong to any Task. Both modes keep the
+normal 10-row limit unless `--all` or `--limit N` is provided. Nested
+`attach` and `detach` are canonical; the flat `task attach` and `task detach`
+commands remain available for compatibility. `task workspace create` creates
+the Git worktree and its Task membership in one `workspace.create` request.
+Each Workspace may belong to at most one Task. A Task's `source` and
+`externalID` are optional but must be provided together; the source is
+provider-neutral and is not restricted to TAPD. Attaching a Workspace that
+already belongs to another Task fails until it is explicitly detached.
+Removing a Task only clears its Workspace memberships; it never deletes a
+Workspace, Session, Git checkout, or worktree.
 
 `project add --auto-import-worktrees` stores automatic Git worktree import on
 that Project and imports every currently existing external checkout without a
@@ -208,7 +226,7 @@ CLI works against the local daemon without extra setup. On a remote host, use
 
 ## API Boundaries
 
-The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `project.move` and `workspace.move` persist the sidebar order on the Host (both accept `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.move` accepts optional `expectedWorkspace` and `expectedAgentSession` guards and returns a mutation operation ID; `session.undo` is compare-and-swap guarded. `session.attach` subscribes to output only. The client that owns UI focus sends `session.focus` with optional `cols/rows` to control the shared terminal size, while background `session.resize` requests are safe no-ops. SSH, Tailscale, and future Relay provide reachability only and do not enter the resource domain model.
+The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `task.create`, `task.remove`, `task.rename`, `task.pin`, and `task.move` manage Task lifecycle; `task.attach` and `task.detach` manage Workspace membership. `workspace.create` accepts an optional `task`; when present, the Workspace is inserted with that membership instead of requiring a later attach request. `task.move`, `project.move`, and `workspace.move` persist sidebar order on the Host (each accepts `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.move` accepts optional `expectedWorkspace` and `expectedAgentSession` guards and returns a mutation operation ID; `session.undo` is compare-and-swap guarded. `session.attach` subscribes to output only. The client that owns UI focus sends `session.focus` with optional `cols/rows` to control the shared terminal size, while background `session.resize` requests are safe no-ops. SSH, Tailscale, and future Relay provide reachability only and do not enter the resource domain model.
 
 Public Access tunnel lifetimes are bound to the daemon: every running adapter is stopped on shutdown, and a gnar process left behind by a crashed daemon is reaped before the next start, so a public endpoint never outlives its owner and a restart cannot leave two clients fighting over one reserved name. The user's intent is persisted in `tunnelEnabled` in `~/.warren/settings.json`; after a restart the daemon restores the adapters that were left enabled, so Public Access recovers until the user explicitly disables it. Release apps may bundle gnar at `Contents/Resources/gnar`; Warren runs that worker with a separate `~/.warren/gnar` credential directory and never migrates the system gnar store. `WARREN_GNAR_PATH` preserves explicit/system selection, while `WARREN_GNAR_CONFIG_DIR` overrides the child credential directory for operators and tests.
 
