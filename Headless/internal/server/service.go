@@ -88,6 +88,11 @@ type Service struct {
 	Settings settings.Settings
 	// SettingsPath persists settings changes made over the API.
 	SettingsPath string
+	// settingsMu serializes settings updates with lifecycle supervisors and
+	// status projections. The public Settings field is retained for backwards
+	// compatibility with embedders; callers that run concurrently should use
+	// the snapshot/update helpers below.
+	settingsMu sync.RWMutex
 	// panelCache lazily caches git panel snapshots per workspace so multiple
 	// clients share one snapshot instead of each loading git state itself.
 	panelCache     *panelCache
@@ -258,8 +263,11 @@ func (s *Service) runtimeKindFor(session api.Session) string {
 	if session.RuntimeKind != "" {
 		return session.RuntimeKind
 	}
-	if s.DefaultRuntime != "" {
-		return s.DefaultRuntime
+	s.settingsMu.RLock()
+	defaultRuntime := s.DefaultRuntime
+	s.settingsMu.RUnlock()
+	if defaultRuntime != "" {
+		return defaultRuntime
 	}
 	return settings.DefaultRuntimeKind
 }
@@ -2164,8 +2172,9 @@ func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, 
 // existing sessions keep the environment they were created with.
 func (s *Service) sessionEnvironment(id, kind string) []string {
 	env := agent.BindEnvironment(id, kind)
-	keys := make([]string, 0, len(s.Settings.RuntimeEnv))
-	for key, value := range s.Settings.RuntimeEnv {
+	runtimeEnv := s.SettingsSnapshot().RuntimeEnv
+	keys := make([]string, 0, len(runtimeEnv))
+	for key, value := range runtimeEnv {
 		if key == "" || value == "" {
 			continue
 		}
@@ -2173,7 +2182,7 @@ func (s *Service) sessionEnvironment(id, kind string) []string {
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
-		env = append(env, key+"="+s.Settings.RuntimeEnv[key])
+		env = append(env, key+"="+runtimeEnv[key])
 	}
 	return env
 }
@@ -2241,10 +2250,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	}
 	sessionKind := runtimeKind
 	if sessionKind == "" {
-		sessionKind = s.DefaultRuntime
-	}
-	if sessionKind == "" {
-		sessionKind = settings.DefaultRuntimeKind
+		sessionKind = s.runtimeKindFor(api.Session{})
 	}
 	adapter := s.runtimeFor(api.Session{RuntimeKind: sessionKind})
 	if adapter == nil {
@@ -2329,7 +2335,88 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 // SetDefaultRuntime changes the engine used for newly created sessions while
 // preserving the configured runtime environment overrides.
 func (s *Service) SetDefaultRuntime(kind string) error {
-	return s.UpdateSettings(kind, s.Settings.RuntimeEnv, s.Settings.GnarEdge)
+	value := s.SettingsSnapshot()
+	return s.UpdateSettings(kind, value.RuntimeEnv, value.GnarEdge)
+}
+
+// SettingsSnapshot returns a detached copy suitable for concurrent readers.
+// Maps are copied so a caller cannot mutate the service's live configuration.
+func (s *Service) SettingsSnapshot() settings.Settings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	value := s.Settings
+	if value.DefaultRuntime == "" {
+		value.DefaultRuntime = s.DefaultRuntime
+	}
+	value.RuntimeEnv = cloneStringMap(value.RuntimeEnv)
+	value.TunnelEnabled = cloneBoolMap(value.TunnelEnabled)
+	return value
+}
+
+func cloneStringMap(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	copy := make(map[string]string, len(value))
+	for key, item := range value {
+		copy[key] = item
+	}
+	return copy
+}
+
+func cloneBoolMap(value map[string]bool) map[string]bool {
+	if value == nil {
+		return nil
+	}
+	copy := make(map[string]bool, len(value))
+	for key, item := range value {
+		copy[key] = item
+	}
+	return copy
+}
+
+// RelaySettingsSnapshot and PublicTunnelSettingsSnapshot are the lifecycle
+// supervisor's narrow read surface; neither returns any Host Secret.
+func (s *Service) RelaySettingsSnapshot() settings.RelaySettings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.Settings.Relay
+}
+
+func (s *Service) PublicTunnelSettingsSnapshot() settings.PublicTunnelSettings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.Settings.PublicTunnel
+}
+
+func (s *Service) UpdateRelaySettings(value settings.RelaySettings) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.Relay = value
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+func (s *Service) UpdatePublicTunnelSettings(value settings.PublicTunnelSettings) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.PublicTunnel = value
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+func (s *Service) SetGnarAccount(value string) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.GnarAccount = value
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
 }
 
 // UpdateSettings changes the engine used for newly created sessions and the
@@ -2342,6 +2429,8 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 			return err
 		}
 	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	if kind == "" {
 		kind = s.DefaultRuntime
 	}
@@ -2356,7 +2445,7 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 	}
 	s.DefaultRuntime = kind
 	s.Settings.DefaultRuntime = kind
-	s.Settings.RuntimeEnv = runtimeEnv
+	s.Settings.RuntimeEnv = cloneStringMap(runtimeEnv)
 	s.Settings.GnarEdge = gnarEdge
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
@@ -2378,6 +2467,8 @@ func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
 	if err != nil {
 		return err
 	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	s.Settings.GnarEdge = edge
 	// An omitted account is intentional: keep the system-name default dynamic
 	// instead of persisting a machine-specific value as a user override.
@@ -2391,24 +2482,34 @@ func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
 // EffectiveGnarAccount returns the account label Warren will pass to gnar for
 // a bootstrap login. The value is never a credential.
 func (s *Service) EffectiveGnarAccount() string {
-	return settings.EffectiveGnarAccount(s.Settings.GnarAccount, s.HostName)
+	s.settingsMu.RLock()
+	configured := s.Settings.GnarAccount
+	s.settingsMu.RUnlock()
+	return settings.EffectiveGnarAccount(configured, s.HostName)
 }
 
 // ConfiguredGnarAccount returns only a user-provided account override.
 func (s *Service) ConfiguredGnarAccount() string {
-	return settings.ConfiguredGnarAccount(s.Settings.GnarAccount)
+	s.settingsMu.RLock()
+	configured := s.Settings.GnarAccount
+	s.settingsMu.RUnlock()
+	return settings.ConfiguredGnarAccount(configured)
 }
 
 // PublicAccessEnabled reports the persisted user intent independently of the
 // current gnar process. This distinction lets recovery retry after a daemon
 // restart without claiming that an endpoint is already live.
 func (s *Service) PublicAccessEnabled() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
 	return s.Settings.TunnelEnabled != nil && s.Settings.TunnelEnabled[tunnel.KindGnar]
 }
 
 // SetAutoOpenShell records whether opening an empty workspace creates a Shell
 // session by default. Explicit session actions are unaffected.
 func (s *Service) SetAutoOpenShell(enabled bool) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	s.Settings.AutoOpenShell = enabled
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
@@ -2419,6 +2520,8 @@ func (s *Service) SetAutoOpenShell(enabled bool) error {
 // SetAutoStartAI records whether entering an empty workspace starts the first
 // AI preset. Explicit session actions are unaffected.
 func (s *Service) SetAutoStartAI(enabled bool) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	s.Settings.AutoStartAI = enabled
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
@@ -2436,6 +2539,8 @@ func (s *Service) UpdateTunnelEnabled(kind string, enabled bool) error {
 	default:
 		return fmt.Errorf("unknown tunnel kind %q", kind)
 	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	if s.Settings.TunnelEnabled == nil {
 		s.Settings.TunnelEnabled = map[string]bool{}
 	}

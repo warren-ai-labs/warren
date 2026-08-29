@@ -20,17 +20,93 @@ const usesControlPlane = !relayHostID.startsWith("__WARREN_");
 const appBase = location.pathname.endsWith("/")
   ? location.pathname
   : `${location.pathname}/`;
-const tokenStorageKey = usesControlPlane
-  ? `warren.accessToken.${relayHostID}`
-  : "warren.accessToken";
 const suppliedToken = authFragment?.get("t") || "";
+const memoryToken = { value: "" };
+const tokenStorageKey = usesControlPlane ? "" : "warren.accessToken";
+if (!usesControlPlane) {
+  memoryToken.value = suppliedToken || (() => {
+    try {
+      return localStorage.getItem(tokenStorageKey) || "";
+    } catch {
+      return "";
+    }
+  })();
+  if (suppliedToken) {
+    try {
+      localStorage.setItem(tokenStorageKey, suppliedToken);
+    } catch {
+      // Storage may be unavailable in private or embedded browser contexts.
+    }
+  }
+}
 
-if (suppliedToken) localStorage.setItem(tokenStorageKey, suppliedToken);
+const relaySessionBase = usesControlPlane
+  ? `/h/${encodeURIComponent(relayHostID)}/v1/session`
+  : "";
+
+// Relay links carry a one-time pairing ticket in the fragment. Exchange it
+// immediately over HTTPS and scrub the URL before rendering or navigating;
+// only the short-lived access capability remains in memory. The fallback keeps
+// old #t=<access-token> links working during the migration window without
+// persisting their value.
+export const tokenReady = usesControlPlane
+  ? (suppliedToken
+      ? fetch(`${relaySessionBase}/exchange`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ pairing_ticket: suppliedToken }),
+        })
+          .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
+          .then(result => {
+            memoryToken.value = result.access_token || "";
+            return memoryToken.value;
+          })
+          .catch(() => {
+            // A pairing ticket is one-use state, not a client capability. Do
+            // not send it to the WebSocket endpoint when exchange fails. The
+            // dotted shape is retained only for the old access-token fragment
+            // compatibility window.
+            memoryToken.value = suppliedToken.includes(".") ? suppliedToken : "";
+            return memoryToken.value;
+          })
+      : refreshRelayToken().catch(() => ""))
+  : Promise.resolve("");
+
+export async function refreshRelayToken() {
+  if (!usesControlPlane) return memoryToken.value;
+  const response = await fetch(`${relaySessionBase}/refresh`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!response.ok) throw new Error("refresh capability failed");
+  const result = await response.json();
+  memoryToken.value = result.access_token || "";
+  return memoryToken.value;
+}
+
+if (typeof history !== "undefined" && suppliedToken) {
+  const clean = `${location.pathname}${location.search}`;
+  history.replaceState(history.state, document.title, clean);
+}
 
 export const runtime = {
   relayHostID,
   usesControlPlane,
-  token: suppliedToken || localStorage.getItem(tokenStorageKey) || "",
+  get token() { return memoryToken.value; },
+  set token(value) {
+    memoryToken.value = value || "";
+    if (!usesControlPlane && tokenStorageKey) {
+      try {
+        if (memoryToken.value) localStorage.setItem(tokenStorageKey, memoryToken.value);
+        else localStorage.removeItem(tokenStorageKey);
+      } catch {
+        // Storage may be unavailable in private or embedded browser contexts.
+      }
+    }
+  },
+  tokenReady,
+  refresh: refreshRelayToken,
 };
 
 export function webSocketURL() {
@@ -43,7 +119,7 @@ export function webSocketURL() {
     : (hostParam || location.hostname || "127.0.0.1");
   const port = usesControlPlane || hostParam ? "" : (location.port || "8789");
   const path = usesControlPlane
-    ? `/v1/client/connect?host_id=${encodeURIComponent(relayHostID)}`
+    ? `/h/${encodeURIComponent(relayHostID)}/v1/client/connect`
     : `${appBase}v1/ws`;
   return `${protocol}//${host}${port ? `:${port}` : ""}${path}`;
 }

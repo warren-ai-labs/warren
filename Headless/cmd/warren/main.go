@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +24,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/client"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
 
 var version = "dev"
@@ -91,12 +96,177 @@ func run(arguments []string) error {
 		return resourceCommand(args)
 	case "headless":
 		return headlessCommand(args[1:])
+	case "relay":
+		return relayCommand(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return nil
 	default:
 		return newUsageError(fmt.Sprintf("unknown command %q; run 'warren help'", args[0]), usageText())
 	}
+}
+
+func relayCommand(args []string) error {
+	if len(args) == 0 || isHelpArgument(args[0]) {
+		fmt.Print(relayUsageText())
+		return nil
+	}
+	flags := parseFlags(args[1:])
+	if boolValue(flags, "help") || boolValue(flags, "h") {
+		fmt.Print(relayUsageText())
+		return nil
+	}
+	base := stringValueDefault(flags, "url", env("WARREN_RELAY_URL", endpointURL))
+	hostID := stringValueDefault(flags, "host", env("WARREN_RELAY_HOST_ID", ""))
+	token := stringValueDefault(flags, "token", env("WARREN_RELAY_TOKEN", endpointToken))
+	if base == "" {
+		return newUsageError("--url RELAY_URL is required", relayUsageText())
+	}
+	base = strings.TrimRight(base, "/")
+	switch args[0] {
+	case "enroll":
+		ticket := stringValue(flags, "ticket")
+		secret := stringValueDefault(flags, "secret", daemonToken())
+		if hostID == "" || ticket == "" || secret == "" {
+			return newUsageError("--host, --ticket, and --secret are required", relayUsageText())
+		}
+		// Enrollment authenticates with the one-time ticket and the existing
+		// daemon token. Do not also send an unrelated admin/endpoint token in
+		// Authorization; doing so makes accidental credential forwarding more
+		// likely when the command is run with global --token.
+		return relayEnroll(base+"/v1/hosts/"+url.PathEscape(hostID)+"/enroll", base, hostID, ticket, secret)
+	case "pair":
+		code := stringValue(flags, "code")
+		if hostID == "" || code == "" {
+			return newUsageError("--host and --code are required", relayUsageText())
+		}
+		return relayRequest(http.MethodPost, base+"/v1/pair", "", map[string]any{"host_id": hostID, "pairing_code": code})
+	case "status":
+		if hostID == "" {
+			return newUsageError("--host HOST_ID is required", relayUsageText())
+		}
+		return relayRequest(http.MethodGet, base+"/v1/hosts/"+url.PathEscape(hostID), token, nil)
+	case "revoke":
+		if hostID == "" || token == "" {
+			return newUsageError("--host and --token are required", relayUsageText())
+		}
+		return relayRequest(http.MethodDelete, base+"/v1/hosts/"+url.PathEscape(hostID), token, nil)
+	case "tunnel":
+		if hostID == "" || token == "" {
+			return newUsageError("--host and --token are required", relayUsageText())
+		}
+		if len(args) < 2 || (args[1] != "enable" && args[1] != "disable") {
+			return newUsageError("tunnel requires enable or disable", relayUsageText())
+		}
+		if args[1] == "disable" {
+			return relayRequest(http.MethodDelete, base+"/v1/hosts/"+url.PathEscape(hostID)+"/route", token, nil)
+		}
+		return relayRequest(http.MethodPost, base+"/v1/hosts/"+url.PathEscape(hostID)+"/route", token, map[string]any{"enabled": true, "auth_mode": stringValueDefault(flags, "auth-mode", "owner")})
+	default:
+		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
+	}
+}
+
+func relayRequest(method, endpoint, token string, body any) error {
+	value, err := doRelayRequest(method, endpoint, token, body)
+	if err != nil {
+		return err
+	}
+	if outputJSON || value != nil {
+		return printValue(value)
+	}
+	return nil
+}
+
+func doRelayRequest(method, endpoint, token string, body any) (any, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(data)
+	}
+	request, err := http.NewRequest(method, endpoint, reader)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	var value any
+	if response.ContentLength != 0 {
+		_ = json.NewDecoder(response.Body).Decode(&value)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("relay returned HTTP %d", response.StatusCode)
+	}
+	return value, nil
+}
+
+func relayEnroll(endpoint, relayURL, hostID, ticket, secret string) error {
+	value, err := doRelayRequest(http.MethodPost, endpoint, "", map[string]any{"enrollment_ticket": ticket, "host_secret": secret})
+	if err != nil {
+		return err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("relay enrollment returned an invalid response")
+	}
+	keyID, _ := object["relay_key_id"].(string)
+	key, _ := object["relay_public_key"].(string)
+	if strings.TrimSpace(keyID) == "" || strings.TrimSpace(key) == "" {
+		return errors.New("relay enrollment did not return a signing key")
+	}
+	settingsPath := env("WARREN_SETTINGS_FILE", settings.DefaultPath())
+	loaded, err := settings.Load(settingsPath)
+	if err != nil {
+		return fmt.Errorf("load Warren settings: %w", err)
+	}
+	loaded.Relay.Enabled = true
+	loaded.Relay.URL = strings.TrimRight(strings.TrimSpace(relayURL), "/")
+	loaded.Relay.HostID = strings.TrimSpace(hostID)
+	loaded.Relay.RelayKeyID = strings.TrimSpace(keyID)
+	loaded.Relay.RelayKey = strings.TrimSpace(key)
+	loaded.Relay.LastError = ""
+	if err := settings.Save(settingsPath, loaded); err != nil {
+		return fmt.Errorf("save Warren Relay settings: %w", err)
+	}
+	if outputJSON {
+		return printValue(value)
+	}
+	return nil
+}
+
+func daemonToken() string {
+	if value := strings.TrimSpace(os.Getenv("WARREN_TOKEN")); value != "" {
+		return value
+	}
+	path := strings.TrimSpace(os.Getenv("WARREN_TOKEN_FILE"))
+	if path == "" {
+		path = filepath.Join(defaultWarrenDirectory(), "token")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func defaultWarrenDirectory() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".warren"
+	}
+	return filepath.Join(home, ".warren")
 }
 
 var globalFlagNames = map[string]bool{
@@ -1978,7 +2148,12 @@ func endpointCommand(args []string) error {
 		if url == "" || token == "" {
 			return newUsageError("--url and --token are required", endpointUsageText())
 		}
-		settings.Endpoints[name] = config.Endpoint{Name: name, URL: url, Token: token, SSH: stringValue(flags, "ssh")}
+		settings.Endpoints[name] = config.Endpoint{
+			Name: name, URL: url, Token: token, SSH: stringValue(flags, "ssh"),
+			Type:    stringValueDefault(flags, "type", "daemon"),
+			HostID:  stringValueDefault(flags, "host-id", stringValue(flags, "host")),
+			RouteID: stringValueDefault(flags, "route-id", ""),
+		}
 		if settings.Current == "" || boolValue(flags, "use") {
 			settings.Current = name
 		}
@@ -2774,13 +2949,27 @@ func env(key, fallback string) string {
 
 func usage() { fmt.Print(usageText()) }
 
+func relayUsageText() string {
+	return `Usage:
+  warren relay enroll --url RELAY_URL --host HOST_ID --ticket TICKET --secret HOST_SECRET
+  warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE
+  warren relay status --url RELAY_URL --host HOST_ID --token HOST_SECRET
+  warren relay tunnel enable|disable --url RELAY_URL --host HOST_ID --token HOST_SECRET
+  warren relay revoke --url RELAY_URL --host HOST_ID --token ADMIN_TOKEN
+
+Relay capabilities are short-lived and are never written to the endpoint
+configuration. The daemon token remains the canonical Host Secret.
+`
+}
+
 func usageText() string {
 	return `Warren CLI
 
 Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
 
-Commands:
+	Commands:
+	  relay enroll|pair|status|tunnel enable|disable|revoke
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   project list|add|remove|rename|pin|move
@@ -3071,7 +3260,7 @@ func actionUsageText(commandName, action string) string {
 func endpointUsageText() string {
 	return `Usage:
   warren endpoint list
-  warren endpoint add NAME --url URL --token TOKEN [--ssh SSH] [--use]
+  warren endpoint add NAME --url URL --token TOKEN [--ssh SSH] [--type daemon|relay] [--host-id HOST_ID] [--route-id ROUTE_ID] [--use]
   warren endpoint use NAME
   warren endpoint remove NAME
   warren endpoint current

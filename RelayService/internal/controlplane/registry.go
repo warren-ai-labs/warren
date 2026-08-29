@@ -9,24 +9,42 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
 
 var hostIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var errHostNotFound = errors.New("host not found")
+var errRouteConflict = errors.New("route hostname already owned")
 
 type hostRecord struct {
-	ID             string      `json:"id"`
-	Name           string      `json:"name"`
-	Online         bool        `json:"online"`
-	ConnectedAt    time.Time   `json:"connected_at,omitempty"`
-	LastSeenAt     time.Time   `json:"last_seen_at,omitempty"`
-	CredentialHash string      `json:"credential_hash,omitempty"`
-	Generation     uint64      `json:"generation"`
-	PairingToken   string      `json:"-"`
-	PairingUntil   time.Time   `json:"-"`
-	Tunnel         *hostTunnel `json:"-"`
+	ID              string       `json:"id"`
+	Name            string       `json:"name"`
+	Online          bool         `json:"online"`
+	ConnectedAt     time.Time    `json:"connected_at,omitempty"`
+	LastSeenAt      time.Time    `json:"last_seen_at,omitempty"`
+	CredentialHash  string       `json:"credential_hash,omitempty"`
+	Generation      uint64       `json:"generation"`
+	PairingToken    string       `json:"-"`
+	PairingUntil    time.Time    `json:"-"`
+	EnrollmentToken string       `json:"-"`
+	EnrollmentUntil time.Time    `json:"-"`
+	Route           *routeRecord `json:"route,omitempty"`
+	Tunnel          *hostTunnel  `json:"-"`
+}
+
+type routeRecord struct {
+	ID               string   `json:"route_id"`
+	PublicHostname   string   `json:"public_hostname"`
+	HostID           string   `json:"host_id"`
+	Generation       uint64   `json:"generation"`
+	PathPrefix       string   `json:"path_prefix"`
+	AuthMode         string   `json:"auth_mode"`
+	Enabled          bool     `json:"enabled"`
+	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+	AllowedMethods   []string `json:"allowed_methods,omitempty"`
+	AllowedPaths     []string `json:"allowed_paths,omitempty"`
 }
 
 type persistedRegistry struct {
@@ -61,6 +79,14 @@ func newRegistry(dataURL string) (*registry, error) {
 		record.Tunnel = nil
 		record.PairingToken = ""
 		record.PairingUntil = time.Time{}
+		record.EnrollmentToken = ""
+		record.EnrollmentUntil = time.Time{}
+		if record.Route != nil {
+			route := *record.Route
+			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+			route.AllowedPaths = append([]string(nil), route.AllowedPaths...)
+			record.Route = &route
+		}
 		registry.hosts[record.ID] = record
 	}
 	return registry, nil
@@ -88,6 +114,13 @@ func (registry *registry) provisionHost(id, name string) (string, error) {
 	record.Tunnel = nil
 	record.Generation++
 	record.CredentialHash = hashCredential(credential)
+	// Keep a compatibility bootstrap credential for the existing CLI. New
+	// enrollment replaces it with the daemon's canonical token.
+	record.EnrollmentToken, err = randomToken(32)
+	if err != nil {
+		return "", err
+	}
+	record.EnrollmentUntil = registry.now().Add(10 * time.Minute)
 	record.PairingToken = ""
 	record.PairingUntil = time.Time{}
 	registry.hosts[id] = record
@@ -103,6 +136,48 @@ func (registry *registry) provisionHost(id, name string) (string, error) {
 		previousTunnel.close()
 	}
 	return credential, nil
+}
+
+func (registry *registry) enrollment(id, ticket, secret string) (uint64, error) {
+	if strings.TrimSpace(secret) == "" || strings.TrimSpace(ticket) == "" {
+		return 0, errors.New("invalid enrollment")
+	}
+	registry.mu.Lock()
+	record := registry.hosts[id]
+	if record == nil || record.EnrollmentToken == "" || registry.now().After(record.EnrollmentUntil) ||
+		!secureEqual(record.EnrollmentToken, ticket) {
+		registry.mu.Unlock()
+		return 0, errors.New("invalid enrollment")
+	}
+	previous := *record
+	previousTunnel := record.Tunnel
+	record.CredentialHash = hashCredential(secret)
+	record.EnrollmentToken = ""
+	record.EnrollmentUntil = time.Time{}
+	record.Generation++
+	record.Online = false
+	record.Tunnel = nil
+	if err := registry.persistLocked(); err != nil {
+		registry.hosts[id] = &previous
+		registry.mu.Unlock()
+		return 0, err
+	}
+	generation := record.Generation
+	registry.mu.Unlock()
+	if previousTunnel != nil {
+		previousTunnel.close()
+	}
+	return generation, nil
+}
+
+func (registry *registry) enrollmentTicket(id string) (string, time.Time, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	record := registry.hosts[id]
+	if record == nil || record.EnrollmentToken == "" {
+		return "", time.Time{}, false
+	}
+	return record.EnrollmentToken, record.EnrollmentUntil, true
 }
 
 func validHostID(id string) bool { return hostIDPattern.MatchString(id) }
@@ -142,6 +217,9 @@ func (registry *registry) revokeHost(id string) error {
 	record.CredentialHash = ""
 	record.PairingToken = ""
 	record.PairingUntil = time.Time{}
+	record.EnrollmentToken = ""
+	record.EnrollmentUntil = time.Time{}
+	record.Route = nil
 	registry.hosts[id] = record
 	if err := registry.persistLocked(); err != nil {
 		registry.hosts[id] = previous
@@ -151,6 +229,92 @@ func (registry *registry) revokeHost(id string) error {
 		previousTunnel.close()
 	}
 	return nil
+}
+
+func (registry *registry) setRoute(id string, route *routeRecord) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	record := registry.hosts[id]
+	if record == nil {
+		return errHostNotFound
+	}
+	previous := *record
+	if route != nil {
+		for otherID, other := range registry.hosts {
+			if otherID != id && other.Route != nil && normalizeRouteHostname(other.Route.PublicHostname) == normalizeRouteHostname(route.PublicHostname) {
+				return errRouteConflict
+			}
+		}
+		copy := *route
+		copy.HostID = id
+		copy.Generation = record.Generation
+		if copy.PathPrefix == "" {
+			copy.PathPrefix = "/"
+		}
+		if copy.AuthMode == "" {
+			copy.AuthMode = "owner"
+		}
+		copy.AllowedMethods = append([]string(nil), copy.AllowedMethods...)
+		copy.AllowedPaths = append([]string(nil), copy.AllowedPaths...)
+		route = &copy
+	}
+	record.Route = route
+	if err := registry.persistLocked(); err != nil {
+		registry.hosts[id] = &previous
+		return err
+	}
+	return nil
+}
+
+func (registry *registry) route(id string) (routeRecord, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	record := registry.hosts[id]
+	if record == nil || record.Route == nil {
+		return routeRecord{}, false
+	}
+	copy := *record.Route
+	copy.AllowedMethods = append([]string(nil), copy.AllowedMethods...)
+	copy.AllowedPaths = append([]string(nil), copy.AllowedPaths...)
+	return copy, true
+}
+
+func (registry *registry) findRoute(hostname, requestPath string) (routeRecord, bool) {
+	hostname = normalizeRouteHostname(hostname)
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	for _, record := range registry.hosts {
+		if record.Route == nil || normalizeRouteHostname(record.Route.PublicHostname) != hostname ||
+			!record.Route.Enabled || record.Route.HostID != record.ID || record.Route.Generation != record.Generation {
+			continue
+		}
+		prefix := record.Route.PathPrefix
+		if prefix == "" {
+			prefix = "/"
+		}
+		if !routePathMatches(prefix, requestPath) {
+			continue
+		}
+		copy := *record.Route
+		copy.AllowedMethods = append([]string(nil), copy.AllowedMethods...)
+		copy.AllowedPaths = append([]string(nil), copy.AllowedPaths...)
+		return copy, true
+	}
+	return routeRecord{}, false
+}
+
+func normalizeRouteHostname(hostname string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+}
+
+func routePathMatches(prefix, requestPath string) bool {
+	if prefix == "" || prefix == "/" {
+		return true
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	return requestPath == prefix || strings.HasPrefix(requestPath, strings.TrimSuffix(prefix, "/")+"/")
 }
 
 func (registry *registry) connectHost(id, name, credential string, tunnel *hostTunnel) bool {
@@ -260,6 +424,14 @@ func (registry *registry) host(id string) (hostRecord, bool) {
 	copy.Tunnel = nil
 	copy.PairingToken = ""
 	copy.PairingUntil = time.Time{}
+	copy.EnrollmentToken = ""
+	copy.EnrollmentUntil = time.Time{}
+	if copy.Route != nil {
+		route := *copy.Route
+		route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+		route.AllowedPaths = append([]string(nil), route.AllowedPaths...)
+		copy.Route = &route
+	}
 	copy.CredentialHash = ""
 	return copy, true
 }
@@ -275,6 +447,14 @@ func (registry *registry) persistLocked() error {
 		copy.Tunnel = nil
 		copy.PairingToken = ""
 		copy.PairingUntil = time.Time{}
+		copy.EnrollmentToken = ""
+		copy.EnrollmentUntil = time.Time{}
+		if copy.Route != nil {
+			route := *copy.Route
+			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
+			route.AllowedPaths = append([]string(nil), route.AllowedPaths...)
+			copy.Route = &route
+		}
 		stored.Hosts = append(stored.Hosts, &copy)
 	}
 	data, err := json.MarshalIndent(stored, "", "  ")

@@ -12,5 +12,6 @@ COPY --from=build /out/warren-relay /warren-relay
 VOLUME ["/data"]
 ENV WARREN_RELAY_LISTEN=:8080
 ENV WARREN_RELAY_DATA=/data/registry.json
+ENV WARREN_RELAY_TUNNEL_BASE_DOMAIN=tunnel.local
 EXPOSE 8080
 ENTRYPOINT ["/warren-relay"]

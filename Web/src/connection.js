@@ -23,6 +23,7 @@ export class WarrenConnection {
   constructor({
     url,
     token,
+    getToken,
     WebSocketClass = WebSocket,
     onMessage = () => {},
     onState = () => {},
@@ -32,6 +33,7 @@ export class WarrenConnection {
   }) {
     this.url = url;
     this.token = token;
+    this.getToken = typeof getToken === "function" ? getToken : null;
     this.WebSocketClass = WebSocketClass;
     this.onMessage = onMessage;
     this.onState = onState;
@@ -118,13 +120,20 @@ export class WarrenConnection {
     socket.onopen = () => {
       if (socket !== this.socket) return;
       this.onState("open");
-      this.sendJSON({
+      const auth = {
         t: "auth",
-        token: this.token,
         version: "2.0",
         capabilities: ["roster-delta"],
         terminalStateFormats: ["ghostline-vt-replay-v1"],
-      });
+      };
+      const currentToken = this.getToken ? this.getToken() : this.token;
+      if (this.url.includes("/v1/client/connect")) {
+        auth.access_token = currentToken;
+        auth.client_id = globalThis.crypto?.randomUUID?.() || `web-${Date.now()}`;
+      } else {
+        auth.token = currentToken;
+      }
+      this.sendJSON(auth);
     };
     socket.onmessage = event => {
       if (socket === this.socket) this.onMessage(event);

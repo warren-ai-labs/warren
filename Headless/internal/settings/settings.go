@@ -58,12 +58,35 @@ type Settings struct {
 	// running. The daemon restores them after a restart so Public Access
 	// recovers until the user explicitly disables it.
 	TunnelEnabled map[string]bool `json:"tunnelEnabled,omitempty"`
+	// Relay contains the non-secret Relay lifecycle and route metadata. The
+	// canonical daemon token remains in token-file/platform credentials and is
+	// never duplicated here.
+	Relay        RelaySettings        `json:"relay,omitempty"`
+	PublicTunnel PublicTunnelSettings `json:"publicTunnel,omitempty"`
 	// AutoOpenShell controls whether opening an empty workspace creates a
 	// default Shell session. Explicit New Session/Shell actions are unaffected.
 	AutoOpenShell bool `json:"autoOpenShell"`
 	// AutoStartAI controls whether entering an empty workspace starts the first
 	// AI preset. Explicit session actions are unaffected.
 	AutoStartAI bool `json:"autoStartAI"`
+}
+
+type RelaySettings struct {
+	Enabled    bool   `json:"enabled"`
+	URL        string `json:"url,omitempty"`
+	HostID     string `json:"hostID,omitempty"`
+	RouteID    string `json:"routeID,omitempty"`
+	RelayKeyID string `json:"relayKeyID,omitempty"`
+	RelayKey   string `json:"relayKey,omitempty"`
+	LastError  string `json:"lastError,omitempty"`
+}
+
+type PublicTunnelSettings struct {
+	Enabled        bool   `json:"enabled"`
+	RouteID        string `json:"routeID,omitempty"`
+	Owner          string `json:"owner,omitempty"`
+	PublicHostname string `json:"publicHostname,omitempty"`
+	AuthMode       string `json:"authMode,omitempty"`
 }
 
 // NormalizedGnarAccount returns a safe account label for the gnar CLI. Empty

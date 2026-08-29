@@ -93,6 +93,28 @@ warren session send SESSION_ID "Run a shell command"
 warren session read SESSION_ID --timeout 8s
 ```
 
+### Owned Relay
+
+The daemon token is the single Host Secret for an owned Relay. Create a Host
+record on Relay, enroll the existing `~/.warren/token` with its one-time ticket,
+then save the non-secret Relay settings (`url`, `hostID`, and the pinned Relay
+signing key) through `PUT /v1/settings` or `settings.put`. The CLI enrollment
+command performs that persistence and enables the supervised connector:
+
+```sh
+warren relay enroll --url https://relay.example.com --host HOST_ID \
+  --ticket ENROLLMENT_TICKET --secret "$(cat ~/.warren/token)"
+```
+
+Set `relay.enabled` (and, for an application route, `publicTunnel.enabled`) to
+start the supervised connector. It opens one outbound WSS connection and
+multiplexes private control, HTTP, and WebSocket Upgrade streams using BRLY/2;
+the connector dispatches those streams to the in-process Headless handler and
+never assumes port `8789`. A Relay disconnect or restart does not stop local
+Sessions or PTYs. `warren relay pair`, `status`, `tunnel enable|disable`, and
+`revoke` expose the corresponding explicit Relay operations. The existing
+local, SSH, and `gnar` adapters remain available during migration.
+
 All commands support `--json`. `worktree` is an alias for `workspace`; help
 and error messages keep the command name you typed instead of rewriting it to
 the canonical name. `warren help`, `warren --help`, and
