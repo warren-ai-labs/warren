@@ -544,8 +544,8 @@ button:disabled {
   background: transparent;
   color: var(--color-status-success);
   cursor: pointer;
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-light);
   line-height: 1;
   place-items: center;
 }

@@ -210,7 +210,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 onSelectTask(taskID)
             } label: {
                 Text("T")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 11, weight: .light))
                     .foregroundStyle(tokens.success)
                     .frame(width: 18, height: 18)
                     .contentShape(.rect)
