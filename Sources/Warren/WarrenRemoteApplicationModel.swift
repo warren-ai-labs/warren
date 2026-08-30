@@ -3220,13 +3220,21 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     continue
                 }
 
-                let restored = self.surfaceManager.restoreSnapshot(
+                let restoreResult = self.surfaceManager.restoreSnapshotResult(
                     pending.payload,
                     for: sessionID,
                     epoch: pending.epoch,
                     sequence: pending.sequence
                 )
-                guard restored else {
+                guard restoreResult == .restored else {
+                    if restoreResult == .feedBusy {
+                        do {
+                            try await Task.sleep(for: .milliseconds(16))
+                        } catch {
+                            return
+                        }
+                        continue
+                    }
                     // At this point all lifecycle prerequisites are true, so
                     // a second failure means the Ghostline payload itself is
                     // invalid rather than a cold-mount race. Reconnect the

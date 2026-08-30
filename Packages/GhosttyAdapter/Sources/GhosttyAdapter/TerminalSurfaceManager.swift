@@ -473,8 +473,23 @@ public final class TerminalSurfaceManager {
         epoch: UInt64,
         sequence: UInt64
     ) -> Bool {
-        guard let entry = entries[sessionID] else { return false }
-        return entry.surface.restoreSnapshot(data, epoch: epoch, sequence: sequence)
+        restoreSnapshotResult(
+            data,
+            for: sessionID,
+            epoch: epoch,
+            sequence: sequence
+        ) == .restored
+    }
+
+    @discardableResult
+    public func restoreSnapshotResult(
+        _ data: Data,
+        for sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64
+    ) -> TerminalSnapshotRestoreResult {
+        guard let entry = entries[sessionID] else { return .rejected }
+        return entry.surface.restoreSnapshotResult(data, epoch: epoch, sequence: sequence)
     }
 
     public func endSearch(in sessionID: TerminalSessionID) {

@@ -1,6 +1,16 @@
 import Foundation
 import GhosttyTerminal
 
+/// Outcome of a non-blocking native snapshot installation attempt.
+public enum TerminalSnapshotRestoreResult: Equatable, Sendable {
+    /// Ghostty accepted the snapshot and the writer advanced its anchor.
+    case restored
+    /// A live output drain owns the feed lock; retry without blocking the main actor.
+    case feedBusy
+    /// The surface or snapshot was rejected by the native restore path.
+    case rejected
+}
+
 /// Feeds Host output into one Ghostty surface off the main thread.
 ///
 /// Ghostty's own terminal reads PTY bytes on a background termio thread and
@@ -104,11 +114,21 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private let yield: Duration
     private var buffer = Buffer()
     private var feedTask: Task<Void, Never>?
+    /// Identifies the drain currently represented by `feedTask`. A task may
+    /// finish after it has atomically handed the slot to a replacement drain,
+    /// so cleanup must match this generation instead of clearing blindly.
+    private var feedTaskGeneration: UInt64?
+    private var nextFeedGeneration: UInt64 = 0
+    /// A writer belongs to one surface lifetime. Once shutdown starts, no
+    /// later transport callback may recreate a drain for the disposed surface.
+    private var isShutdown = false
     private var latestRenderedEpoch: UInt64 = 0
     private var latestRenderedSequence: UInt64 = 0
     private var rawEpoch: UInt64 = 1
     private var rawSequence: UInt64 = 0
     private var shutdownCompletion: (@MainActor @Sendable () -> Void)?
+    private var shutdownWaitingGeneration: UInt64?
+    private var shutdownCompletionDelivered = false
     // Synchronized-output depth: >0 means Ghostty is inside ESC[?2026h ... ESC[?2026l.
     // Foreground should draw at frame boundary (depth==0), not at queue-empty.
     private var syncDepth: Int = 0
@@ -179,6 +199,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     public func reset(epoch: UInt64, sequence: UInt64) {
         terminalFeedLock.withLock {
             lock.withLock {
+                guard !isShutdown else { return }
                 buffer.reset(epoch: epoch, sequence: sequence)
                 syncDepth = 0
                 syncEnteredAt = nil
@@ -196,11 +217,23 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         epoch: UInt64,
         sequence: UInt64
     ) -> Bool {
-        terminalFeedLock.lock()
+        restoreSnapshotResult(data, epoch: epoch, sequence: sequence) == .restored
+    }
+
+    @discardableResult
+    func restoreSnapshotResult(
+        _ data: Data,
+        epoch: UInt64,
+        sequence: UInt64
+    ) -> TerminalSnapshotRestoreResult {
+        // Recovery is retried by the caller when the feed is busy. Waiting on
+        // this lock from the main actor can deadlock if the drain is blocked in
+        // Ghostty while that same run loop is needed to unblock it.
+        guard terminalFeedLock.try() else { return .feedBusy }
         defer { terminalFeedLock.unlock() }
-        guard inMemory.restoreSnapshot(data) else { return false }
+        guard inMemory.restoreSnapshot(data) else { return .rejected }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
-        return true
+        return .restored
     }
 
     /// Installs a native snapshot and reapplies embedder configuration while
@@ -215,13 +248,16 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         epoch: UInt64,
         sequence: UInt64,
         reapplyRuntimeConfig: () -> Bool
-    ) -> Bool {
-        terminalFeedLock.lock()
+    ) -> TerminalSnapshotRestoreResult {
+        // Do not make the main actor wait behind a potentially blocking native
+        // write. The recovery coordinator retries the explicit `feedBusy`
+        // result after the existing surface-ready delay.
+        guard terminalFeedLock.try() else { return .feedBusy }
         defer { terminalFeedLock.unlock() }
-        guard inMemory.restoreSnapshot(data) else { return false }
-        _ = reapplyRuntimeConfig()
+        guard inMemory.restoreSnapshot(data) else { return .rejected }
+        guard reapplyRuntimeConfig() else { return .rejected }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
-        return true
+        return .restored
     }
 
     private func markSnapshotRestored(epoch: UInt64, sequence: UInt64) {
@@ -245,21 +281,25 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
     /// Enqueues a framed output payload and drains it on the background task.
     public func enqueue(epoch: UInt64, sequence: UInt64, payload: Data) {
-        lock.withLock {
+        let accepted = lock.withLock { () -> Bool in
+            guard !isShutdown else { return false }
             buffer.append(epoch: epoch, sequence: sequence, payload: payload)
+            return true
         }
-        startFeedIfNeeded()
+        if accepted { startFeedIfNeeded() }
     }
 
     /// Enqueues raw Host bytes for transports without DENB frame metadata.
     /// All raw bytes share one synthetic epoch so ordering is preserved.
     public func enqueueRaw(_ payload: Data) {
         guard !payload.isEmpty else { return }
-        let sequence = lock.withLock { () -> UInt64 in
+        let sequence = lock.withLock { () -> UInt64? in
+            guard !isShutdown else { return nil }
             let sequence = max(rawSequence, buffer.enqueuedSequence)
             rawSequence = sequence &+ UInt64(payload.count)
-            return sequence
+            return Optional(sequence)
         }
+        guard let sequence else { return }
         enqueue(epoch: rawEpoch, sequence: sequence, payload: payload)
     }
 
@@ -315,37 +355,48 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     public func shutdown(
         completion: (@MainActor @Sendable () -> Void)? = nil
     ) {
-        let hadTask: Bool
+        let completionToNotify: (@MainActor @Sendable () -> Void)?
         lock.lock()
-        hadTask = feedTask != nil
-        feedTask?.cancel()
-        feedTask = nil
-        buffer = Buffer()
-        if let completion {
+        if let completion,
+           !shutdownCompletionDelivered,
+           shutdownCompletion == nil
+        {
             shutdownCompletion = completion
         }
-        lock.unlock()
-        if !hadTask {
-            notifyShutdownCompletion()
+        if !isShutdown {
+            isShutdown = true
+            shutdownWaitingGeneration = feedTaskGeneration
+            feedTask?.cancel()
+            buffer = Buffer()
         }
+        let hasDrainToWaitFor = shutdownWaitingGeneration != nil
+            && feedTaskGeneration == shutdownWaitingGeneration
+        completionToNotify = hasDrainToWaitFor
+            ? nil
+            : takeShutdownCompletionLocked()
+        lock.unlock()
+        notifyShutdownCompletion(completionToNotify)
     }
 
     private func startFeedIfNeeded() {
         lock.lock()
-        guard feedTask == nil, !buffer.isEmpty else {
+        guard !isShutdown, feedTask == nil, !buffer.isEmpty else {
             lock.unlock()
             return
         }
+        nextFeedGeneration &+= 1
+        let generation = nextFeedGeneration
         let task = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            await self.drain()
+            await self.drain(generation: generation)
         }
         feedTask = task
+        feedTaskGeneration = generation
         lock.unlock()
     }
 
-    private func drain() async {
-        defer { finishDrain() }
+    private func drain(generation: UInt64) async {
+        defer { finishDrain(generation: generation) }
         var heldSlice: Slice?
         while !Task.isCancelled {
             if heldSlice == nil {
@@ -354,7 +405,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }
             }
             guard let slice = heldSlice else {
-                if exitIfDrained() { return }
+                if shouldExitDrain(generation: generation) { return }
                 continue
             }
 
@@ -379,7 +430,14 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }
                 ansiObserver.receive(slice.payload)
                 updateSyncDepth(with: slice.payload)
-                return (true, inMemory.receive(slice.payload))
+                let received = inMemory.receive(slice.payload)
+                if received {
+                    lock.withLock {
+                        latestRenderedEpoch = slice.epoch
+                        latestRenderedSequence = slice.endSequence
+                    }
+                }
+                return (true, received)
             }
             guard writeResult.isCurrent else {
                 // A reanchor reset the stream while this slice was in flight;
@@ -393,13 +451,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             }
             heldSlice = nil
 
-            lock.withLock {
-                latestRenderedEpoch = slice.epoch
-                latestRenderedSequence = slice.endSequence
-            }
-
             let hasMore = lock.withLock { !buffer.isEmpty }
-            if !hasMore, exitIfDrained() {
+            if !hasMore, shouldExitDrain(generation: generation) {
                 return
             }
             // Yield only when there is more work; the 200µs quantum keeps a
@@ -416,40 +469,52 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     }
 
     /// Runs the shutdown completion once the drain task has fully returned.
-    private func finishDrain() {
+    private func finishDrain(generation: UInt64) {
         let completion: (@MainActor @Sendable () -> Void)?
         lock.lock()
-        feedTask = nil
-        completion = shutdownCompletion
-        shutdownCompletion = nil
-        lock.unlock()
-        guard let completion else { return }
-        Task { @MainActor in
-            completion()
+        if feedTaskGeneration == generation {
+            feedTask = nil
+            feedTaskGeneration = nil
         }
+        if shutdownWaitingGeneration == generation {
+            shutdownWaitingGeneration = nil
+            completion = takeShutdownCompletionLocked()
+        } else {
+            completion = nil
+        }
+        lock.unlock()
+        notifyShutdownCompletion(completion)
     }
 
     /// Runs the shutdown completion when there was no drain task to wait for.
-    private func notifyShutdownCompletion() {
-        let completion: (@MainActor @Sendable () -> Void)?
-        lock.lock()
-        completion = shutdownCompletion
-        shutdownCompletion = nil
-        lock.unlock()
+    private func notifyShutdownCompletion(
+        _ completion: (@MainActor @Sendable () -> Void)?
+    ) {
         guard let completion else { return }
         Task { @MainActor in
             completion()
         }
     }
 
+    private func takeShutdownCompletionLocked() -> (@MainActor @Sendable () -> Void)? {
+        guard !shutdownCompletionDelivered, let completion = shutdownCompletion else {
+            return nil
+        }
+        shutdownCompletion = nil
+        shutdownCompletionDelivered = true
+        return completion
+    }
+
     /// Atomically decides whether this drain can exit. `feedTask` is cleared
-    /// only while the buffer is empty, so an enqueue that lands at the same
-    /// moment always finds either a live drain or `feedTask == nil` to
-    /// restart one — no enqueued bytes are left behind.
-    private func exitIfDrained() -> Bool {
+    /// only while the matching generation owns it and the buffer is empty, so
+    /// an enqueue that lands at the handoff always finds either the same live
+    /// drain or an empty slot for a replacement drain.
+    private func shouldExitDrain(generation: UInt64) -> Bool {
         lock.withLock {
+            guard feedTaskGeneration == generation else { return true }
             guard buffer.isEmpty else { return false }
             feedTask = nil
+            feedTaskGeneration = nil
             return true
         }
     }
