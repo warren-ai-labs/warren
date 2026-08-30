@@ -178,11 +178,7 @@ public enum WarrenPreferenceKey {
     public static let noticeMuted = "notifications.muted"
     public static let embeddedEditorDefaultIDE = "editor.openByDefault"
     public static let agentCompletionSoundEnabled = "notifications.agentCompletionSoundEnabled"
-    /// Legacy storage key retained so existing desktop preferences keep their
-    /// value while the feature is presented as Public Access.
-    public static let publicAccessEnabled = "web.gnarSharingEnabled"
-    @available(*, deprecated, message: "Use publicAccessEnabled for Public Access.")
-    public static let gnarSharingEnabled = publicAccessEnabled
+    public static let publicAccessEnabled = "web.publicAccessEnabled"
 }
 
 /// User-facing terminal typography shared by renderer adapters.

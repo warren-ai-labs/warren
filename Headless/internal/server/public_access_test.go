@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,44 @@ func TestPublicAccessUsesRelayRouteLifecycle(t *testing.T) {
 	response.Body.Close()
 	if service.PublicAccessEnabled() {
 		t.Fatal("public route intent remained enabled after disable")
+	}
+}
+
+func TestPublicAccessRPCUsesHostRelayRouteClient(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	var route relay.Route
+	relayServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			if err := json.NewDecoder(request.Body).Decode(&map[string]any{}); err != nil {
+				t.Fatal(err)
+			}
+			route = relay.Route{ID: "route-rpc", PublicHostname: "rpc.example.com", HostID: hostID, PathPrefix: "/", AuthMode: "public", Enabled: true}
+			_ = json.NewEncoder(writer).Encode(route)
+			return
+		}
+		if request.Method == http.MethodGet {
+			_ = json.NewEncoder(writer).Encode(route)
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer relayServer.Close()
+
+	service := &Service{
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
+		Settings:     settings.Settings{Relay: settings.RelaySettings{URL: relayServer.URL, HostID: hostID}},
+	}
+	handler := NewHTTPServer(service, "host-secret", nil)
+	handler.RelayStart = func() error { return nil }
+	handler.RelayRouteClient = func() (*relay.RouteClient, error) {
+		return relay.NewRouteClient(relayServer.URL, hostID, "host-secret")
+	}
+	status, err := handler.publicAccessRPC(context.Background(), "enable", "rpc.example.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || !status.Running || status.PublicEndpoint != "http://rpc.example.com/" {
+		t.Fatalf("RPC public access status = %#v", status)
 	}
 }
 

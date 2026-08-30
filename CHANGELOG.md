@@ -6,7 +6,7 @@ All notable changes to Warren are documented here.
 
 ## [0.11.3] - 2026-08-30
 
-> Patch release: makes Codex Working state visibly blink in the agent view and preserves configured terminal colors after snapshot restore. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+> Patch release: makes Codex Working state visibly blink in the agent view and preserves configured terminal colors after snapshot restore. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
 
 ### Changed
 
@@ -19,7 +19,7 @@ All notable changes to Warren are documented here.
 
 ## [0.11.2] - 2026-08-29
 
-> Patch release: adds Host-owned Tasks that aggregate Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+> Patch release: adds Host-owned Tasks that aggregate Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
 
 ### Added
 
@@ -31,7 +31,7 @@ All notable changes to Warren are documented here.
 
 ## [0.11.1] - 2026-08-29
 
-> Patch release: hardens endpoint switching, preserves Public Access state, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+> Patch release: hardens endpoint switching, preserves Public Access state, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
 
 ### Added
 
@@ -44,7 +44,7 @@ All notable changes to Warren are documented here.
 
 ### Fixed
 
-- Persist Public Access authenticated state across daemon restarts by checking the persisted gnar credential store so a valid `~/.warren/gnar/credentials.json` keeps Start instead of Configure.
+- Persist Public Access route state across daemon restarts by checking persisted Relay route metadata so a configured route keeps Start instead of Configure.
 - Preserve the auth fragment when copying web links so pasted links can authenticate the protected WebSocket.
 - Keep warm promotion for remote endpoints and rebuild the connection when endpoint locality changes so local and remote terminal presentation remain correct.
 - Allow initial input for dedicated codex, claude, and opencode sessions before the agent transcript is bound so the first prompt is delivered without requiring a Terminal setup retry.
@@ -53,7 +53,7 @@ All notable changes to Warren are documented here.
 
 ## [0.11.0] - 2026-08-28
 
-> Minor release: refreshes terminal rendering and session handoff, hardens workspace creation, and bundles truecolor terminfo for Ghostline. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
+> Minor release: refreshes terminal rendering and session handoff, hardens workspace creation, and bundles truecolor terminfo for Ghostline. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
 
 ### Added
 
@@ -85,7 +85,7 @@ All notable changes to Warren are documented here.
 
 ## [0.10.0] - 2026-08-28
 
-> Major release: Warren upgrades to a new incompatible Ghostline runtime semantics. Existing sessions are migrated automatically via the verified handoff path. This is a super-major compatibility break from 0.9.x; downgrading without recreating sessions is not supported. This release targets arm64 Apple Silicon Macs running macOS 13 or later; a local Apple Development build may fail Gatekeeper until it is replaced by a notarized Developer ID build. Bundled gnar remains v1.7.2.
+> Major release: Warren upgrades to a new incompatible Ghostline runtime semantics. Existing sessions are migrated automatically via the verified handoff path. This is a super-major compatibility break from 0.9.x; downgrading without recreating sessions is not supported. This release targets arm64 Apple Silicon Macs running macOS 13 or later; a local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build. Public Access uses Relay routes.
 
 ### Added
 
@@ -150,13 +150,13 @@ All notable changes to Warren are documented here.
 
 ## [0.8.2] - 2026-08-23
 
-> Patch release: Warren now embeds gnar v1.7.2 and keeps the onboarding
+> Patch release: Warren aligns Public Access with Relay routes and keeps the onboarding
 > experience at the top of the page until the terminal demo is explicitly
 > requested.
 
 ### Changed
 
-- Update the bundled gnar worker to v1.7.2 so Public Access ships the matching worker release.
+- Align the Public Access route lifecycle with the Relay protocol.
 
 ### Fixed
 
@@ -186,15 +186,15 @@ All notable changes to Warren are documented here.
 
 ## [0.8.0] - 2026-08-22
 
-> Major release: Warren can share a Host through a self-hosted gnar Edge,
+> Major release: Warren can share a Host through a self-hosted Relay,
 > while agent workflows, resource links, and clearer desktop notices make
 > macOS, Web, and CLI easier to control. Public Access enrollment keys stay in
-> memory and go directly to gnar; review the setup-link and key flow before
+> memory and go directly to Relay; review the setup-link and capability flow before
 > sharing one.
 
 ### Added
 
-- Add Public Access through a self-hosted gnar Edge, with Settings-based Save & Test, Invite Key and Approval Key enrollment, start/stop/restart lifecycle controls, restart recovery, and credential-free endpoint reporting.
+- Add Public Access through a self-hosted Relay, with Settings-based Save & Test, pairing, route lifecycle controls, restart recovery, and credential-free endpoint reporting.
 - Add agent-first CLI commands for creating, listing, reading, sending, waiting for, attaching to, and targeting Codex and Claude Agents; keep normalized transcripts separate from raw PTY sessions and support bounded turn waits.
 - Add provider-neutral Agent activity and human-attention status across the Host, Web, Desktop, and CLI, including explicit input, approval, warning, stalled, failed, ready, and exited states with Workspace and Terminal Group aggregation.
 - Add scoped resource links for Project, Workspace, and Session targets through `warren://terminal` and Web hash state, plus `warren://settings` links that can prefill Public Access setup.
@@ -203,14 +203,14 @@ All notable changes to Warren are documented here.
 
 ### Changed
 
-- Bundle a release-selected gnar worker with an isolated `~/.warren/gnar` credential store, inject a public release default Edge at build time, and keep explicit or system gnar paths available.
+- Use Relay route metadata and scoped capabilities without packaging a local reachability worker.
 - Make Agent and roster projections explicit and bounded, promote Agent commands to the primary CLI interface, and keep terminal, Agent, and transcript operations semantically separate.
 - Replace the diagnostic sidebar with stable top-chrome notices and responsive overflow actions while preserving terminal dimensions; clarify pane directory and terminal-tab labels across Desktop and Web.
 - Roll Ghostline runtime upgrades by release tag and require a stable code-signing identity for distributable macOS builds.
 
 ### Fixed
 
-- Harden Public Access enrollment and lifecycle compatibility, route gnar v1.7 Invite and Approval Keys correctly, avoid persisting bootstrap secrets, and append the Web authentication fragment only for an explicit browser open.
+- Harden Public Access Relay enrollment and route lifecycle compatibility, avoid persisting bootstrap secrets, and append the Web authentication fragment only for an explicit browser open.
 - Recover Public Access setup defaults, Web-panel navigation, and endpoint links without blank clients or stale setup state.
 - Preserve Warren terminal colors across appearance changes and restore the Codex composer background.
 - Harden compact chrome spacing, Web input fallback, session labels, and notice controls across reconnect, mobile, and narrow desktop states.

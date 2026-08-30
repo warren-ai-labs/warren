@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   // Relative asset URLs let the same build run at the origin root, behind a
-  // gnar tunnel (/t/<name>), or behind any reverse proxy sub-path.
+  // Relay route (/t/<name>) or behind any reverse-proxy sub-path.
   base: "./",
   plugins: [react()],
   worker: {

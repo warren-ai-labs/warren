@@ -74,27 +74,6 @@ plutil -replace WarrenBuildVersion -string "$build_version" "$staging_path/Conte
 plutil -replace WarrenBuildRevision -string "$build_revision" "$staging_path/Contents/Info.plist"
 plutil -replace WarrenBuildDirty -bool "$build_dirty" "$staging_path/Contents/Info.plist"
 
-# Release builds may ship the gnar worker inside Warren.app. The source tree
-# remains usable without it, while WARREN_GNAR_BINARY gives CI/release jobs an
-# explicit, reproducible input. A sibling ../gnar checkout is accepted for
-# local packaging only; Warren never edits that checkout or its credentials.
-gnar_binary="${WARREN_GNAR_BINARY:-}"
-if [[ -n "$gnar_binary" ]]; then
-    if [[ ! -f "$gnar_binary" || ! -x "$gnar_binary" ]]; then
-        echo "WARREN_GNAR_BINARY must name an executable file: $gnar_binary" >&2
-        exit 66
-    fi
-else
-    for candidate in \
-        "$repository_root/../gnar/target/release/gnar" \
-        "$repository_root/../gnar/gnar"; do
-        if [[ -f "$candidate" && -x "$candidate" ]]; then
-            gnar_binary="$candidate"
-            break
-        fi
-    done
-fi
-
 validate_arm64_artifact() {
     local artifact="$1"
     local architectures
@@ -107,13 +86,6 @@ validate_arm64_artifact() {
         exit 65
     fi
 }
-
-if [[ -n "$gnar_binary" ]]; then
-    validate_arm64_artifact "$gnar_binary"
-    install -m 755 "$gnar_binary" "$staging_path/Contents/Resources/gnar"
-else
-    echo "warning: no gnar binary found; Warren will use WARREN_GNAR_PATH/system discovery" >&2
-fi
 
 compatibility_binary_build="$repository_root/.build/ghostline-v0-compat"
 compatibility_library_build="$repository_root/.build/libghostline-v0-compat.dylib"

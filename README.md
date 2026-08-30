@@ -177,18 +177,18 @@ stable `section` value, for example:
 warren://settings?section=public-access
 ```
 
-The Public Access **Copy setup link** action can include the Edge URL, account
-name, and the selected Invite Key or Approval Key so another Warren Desktop can
-open the right page with the setup fields prefilled:
+The Relay provisioning response includes a one-time Warren setup link with the
+Relay URL, Host ID, enrollment ticket, and pinned Relay signing key. Open it in
+Warren Desktop to prefill the Relay enrollment fields, or pass the same values
+to `warren relay enroll`:
 
 ```text
-warren://settings?section=public-access&edgeUrl=<EDGE_URL>&accountName=<ACCOUNT>&keyKind=invite&inviteKey=<SECRET>
+warren://settings?section=relay&relayUrl=<RELAY_URL>&hostId=<HOST_ID>&enrollmentTicket=<TICKET>&relayKeyId=<KEY_ID>&relayPublicKey=<PUBLIC_KEY>
 ```
 
-Because this link contains the bootstrap secret, treat it like a credential.
-Browser history, chat systems, and macOS LaunchServices may retain it; share it
-only with the intended developer and rotate the key in gnar when it is no
-longer needed.
+Because this link contains a one-time enrollment ticket, treat it like a
+credential. Browser history, chat systems, and macOS LaunchServices may retain
+it; share it only with the intended developer and discard it after enrollment.
 
 Warren checks GitHub Releases in the background at launch, no more than once
 every three hours. When a newer

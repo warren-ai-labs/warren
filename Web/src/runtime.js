@@ -26,7 +26,7 @@ const relayPathPrefix = usesControlPlane
     })()
   : "";
 const relayPath = (value) => `${relayPathPrefix}/${String(value).replace(/^\/+/, "")}`;
-// The daemon can serve the UI from a path prefix (for example gnar's
+// The daemon can serve the UI from a path prefix (for example a Relay route's
 // /t/<name>), so app-level URLs must resolve relative to the current
 // directory instead of the origin root.
 const appBase = location.pathname.endsWith("/")

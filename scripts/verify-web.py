@@ -19,7 +19,7 @@ if not token:
 
 port = 8789
 
-# HTTP page must answer Cloudflare health checks.
+# HTTP page must answer Relay and reverse-proxy health checks.
 http = socket.create_connection(("127.0.0.1", port), timeout=5)
 http.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
 chunks = []
@@ -83,7 +83,13 @@ def read_text_frame():
             return json.loads(payload.decode())
 
 
-send_text(json.dumps({"t": "auth", "token": token, "version": "1.0"}))
+send_text(json.dumps({
+    "t": "auth",
+    "token": token,
+    "version": "2.0",
+    "capabilities": ["roster-delta"],
+    "terminalStateFormats": ["ghostline-vt-replay-v1"],
+}))
 welcome = read_text_frame()
 assert welcome.get("t") == "welcome", welcome
 roster = read_text_frame()
