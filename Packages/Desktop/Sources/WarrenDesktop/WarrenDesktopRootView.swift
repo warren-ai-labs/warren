@@ -34,6 +34,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let selectedEndpointID: String
     private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
+    private let onAddSSHHost: () -> Void
+    private let onRetryConnection: () -> Void
+    private let onStopConnection: () -> Void
 
     private let actions: WarrenDesktopActions
     private let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
@@ -42,6 +45,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebTest: ((String, String, String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebReset: (() -> Void)?
+    private let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
@@ -65,6 +69,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var settingsPresented = false
     @State private var settingsDeepLinkSection: WarrenDesktopSettingsSection?
     @State private var settingsPublicAccessPrefill: WarrenDesktopPublicAccessPrefill?
+    @State private var settingsRelayPrefill: WarrenDesktopRelayPrefill?
     @State private var navigationBeforeSettings: WarrenDesktopNavigationState?
     @State private var chromePopover: WarrenDesktopChromePopover?
     @State private var webDismissalNonce = 0
@@ -127,10 +132,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
+        onAddSSHHost: @escaping () -> Void = {},
+        onRetryConnection: @escaping () -> Void = {},
+        onStopConnection: @escaping () -> Void = {},
         onWebStart: @escaping () -> Void = {},
         onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebReset: (() -> Void)? = nil,
+        onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
@@ -176,6 +185,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             ?? (selectedEndpointID == "local" ? .local : .remote)
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
+        self.onAddSSHHost = onAddSSHHost
+        self.onRetryConnection = onRetryConnection
+        self.onStopConnection = onStopConnection
         self.actions = actions
         self.onCreateTask = onCreateTask
         self.terminalSurface = terminalSurface
@@ -183,6 +195,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebTest = onWebTest
         self.onWebStop = onWebStop
         self.onWebReset = onWebReset
+        self.onRelayEnroll = onRelayEnroll
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
@@ -493,6 +506,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         endpoints: endpointOptions,
                         selectedID: selectedEndpointID,
                         onSelect: onSelectEndpoint,
+                        onAddSSHHost: onAddSSHHost,
+                        onRetry: onRetryConnection,
+                        onStop: onStopConnection,
                         onDismiss: { setChromePopover(nil) }
                     )
                 case .externalIDE:
@@ -609,6 +625,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 closeEmbeddedEditor(for: presentation.workspace)
             },
             onSelectEndpoint: onSelectEndpoint,
+            onRetryConnection: onRetryConnection,
+            onStopConnection: onStopConnection,
             onSelectTab: { selectTab($0, in: presentation) },
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
@@ -749,6 +767,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onWebTest: onWebTest,
                 onWebStop: onWebStop,
                 onWebReset: onWebReset,
+                onRelayEnroll: onRelayEnroll,
                 defaultRuntime: defaultRuntime,
                 onSetRuntime: onSetRuntime,
                 autoOpenShell: autoOpenShell,
@@ -761,7 +780,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
                 initialSettingsSection: settingsDeepLinkSection,
-                publicAccessPrefill: settingsPublicAccessPrefill
+                publicAccessPrefill: settingsPublicAccessPrefill,
+                relayPrefill: settingsRelayPrefill
             )
             .transition(.opacity)
         )
@@ -911,6 +931,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         setCommandPalettePresented(false)
         settingsDeepLinkSection = request?.section
         settingsPublicAccessPrefill = request?.publicAccess
+        settingsRelayPrefill = request?.relay
         navigationBeforeSettings = navigation
         // Settings overlays a still-mounted shell so its Ghostty grid
         // survives the trip; drop keyboard ownership so keystrokes go to
@@ -1004,6 +1025,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         onSelectEndpoint(endpointID)
                         onBack()
                     },
+                    onAddSSHHost: {
+                        onAddSSHHost()
+                        onBack()
+                    },
+                    onRetry: {
+                        onRetryConnection()
+                        onBack()
+                    },
+                    onStop: {
+                        onStopConnection()
+                        onBack()
+                    },
                     onDismiss: onBack
                 )
             )
@@ -1088,6 +1121,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         navigationBeforeSettings = nil
         settingsDeepLinkSection = nil
         settingsPublicAccessPrefill = nil
+        settingsRelayPrefill = nil
         setSettingsPresented(false)
         if let previousNavigation {
             dispatch(.restoreNavigation(previousNavigation))

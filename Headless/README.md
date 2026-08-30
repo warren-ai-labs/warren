@@ -43,13 +43,41 @@ Default files:
 - ghostline socket: `~/.warren/ghostline.sock` (default runtime)
 - Worktrees: `~/.warren/worktrees/`
 
-From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the endpoint, and sets up port forwarding:
+From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the
+SSH endpoint metadata, and sets up port forwarding:
 
 ```sh
 warren ssh user@vps
 ```
 
-Keep that process running. The Desktop reads the endpoint from `~/.warren/config.json` and shows `Local` plus server options in the top-right corner. Endpoint changes made with `warren endpoint add|use|remove` are picked up within about a second, so restarting Warren is not required.
+The CLI owns the SSH client and forwarding connection for that process, so no
+separate OpenSSH tunnel process is required. Keep the command running while
+using that CLI connection. The Desktop reads the durable SSH alias from
+`~/.warren/config.json` and starts its own helper when the endpoint is selected;
+runtime loopback ports and tokens are never written to the catalog. Endpoint
+changes made with `warren endpoint add|use|remove` are picked up within about a
+second, so restarting Warren is not required.
+The CLI chooses an ephemeral loopback port by default; pass `--local-port` only
+when a stable local port is required.
+
+List selectable aliases from the existing OpenSSH configuration before
+connecting:
+
+```sh
+warren ssh list
+warren ssh tenc_sh
+```
+
+In the macOS Desktop, open the execution-server menu, choose **Add SSH
+Host…**, and click an alias to save and activate the same SSH-backed endpoint.
+The list is refreshed each time the picker opens, so edits to `~/.ssh/config`
+take effect without restarting the app.
+
+The embedded client honors `IdentityAgent`/`SSH_AUTH_SOCK` when available,
+otherwise it loads `IdentityFile` entries from `~/.ssh/config`. Host keys are
+always verified against the configured `UserKnownHostsFile`/`GlobalKnownHostsFile`
+(or the OpenSSH user/system defaults); connect once with OpenSSH if a host has
+not been trusted yet.
 
 ## LAN HTTPS
 
@@ -96,6 +124,29 @@ warren agent attach AGENT_ID
 warren session send SESSION_ID "Run a shell command"
 warren session read SESSION_ID --timeout 8s
 ```
+
+### Owned Relay
+
+The daemon token is the single Host Secret for an owned Relay. Create a Host
+record on Relay, enroll the existing `~/.warren/token` with its one-time ticket,
+then save the non-secret Relay settings (`url`, `hostID`, and the pinned Relay
+signing key) through `PUT /v1/settings` or `settings.put`. The CLI enrollment
+command performs that persistence and enables the supervised connector:
+
+```sh
+warren relay enroll --url https://relay.example.com --host HOST_ID \
+  --ticket ENROLLMENT_TICKET --secret "$(cat ~/.warren/token)"
+```
+
+Set `relay.enabled` (and, for an application route, `publicTunnel.enabled`) to
+start the supervised connector. It opens one outbound WSS connection and
+multiplexes private control, HTTP, and WebSocket Upgrade streams using BRLY/2;
+the connector dispatches those streams to the in-process Headless handler and
+never assumes port `8789`. A Relay disconnect or restart does not stop local
+Sessions or PTYs. `warren relay pair`, `status`, `tunnel enable|disable`, and
+`revoke` expose the corresponding explicit Relay operations. The existing
+local, SSH, and `gnar` adapters remain available as independent reachability
+options.
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
 and error messages keep the command name you typed instead of rewriting it to
@@ -232,7 +283,7 @@ Public Access tunnel lifetimes are bound to the daemon: every running adapter is
 
 Daemon events (start/stop with build version, tunnel start, restore, and errors) are appended to `~/.warren/headless.log` with `0600` permissions and rotate at 5 MiB; point `--log-file` or `WARREN_LOG_FILE` elsewhere or set it empty to disable file logging.
 
-The Web UI and `/v1/ws` share port 8789; the local browser uses `http://127.0.0.1:8789/#t=<token>` and LAN devices use `https://<host-LAN-IP>:8788/#t=<token>` after trusting the local CA (see "LAN HTTPS"). Public Access is managed by the daemon: `GET /v1/public-access` reports the effective Edge URL, any saved custom override, effective/configured account label, credential-free authenticated/enabled/running state, and credential-free Public Endpoint; `POST /v1/public-access/test` saves the non-secret Edge/account configuration and verifies the gnar login without enabling the live endpoint. Settings should use this route for Save & Test. `POST /v1/public-access/enable` starts the live endpoint (and still accepts the older one-step Edge/account/key body for compatibility), while `/disable` and `/restart` control the lifecycle. `POST /v1/public-access/reset` stops Warren's local worker, clears the local Edge/account/enabled intent, and removes only the bundled Warren gnar credential directory; it never calls a remote release operation. Approval Key takes precedence when both keys are supplied. An omitted Edge URL keeps the current override; an explicit empty `edgeUrl` clears it and selects the release/launcher default. Approval Keys are sent to `gnar login --edge <EDGE_URL> --account <ACCOUNT_NAME> --enrollment-key-stdin --json`; Invite Keys use `--key-stdin --json`; both travel only through stdin and are never persisted. When account name is omitted, Warren derives a gnar v1.7-compatible value from `--name`/`WARREN_HOST_NAME` (or the system hostname). The lower-level `GET /v1/tunnels` and `POST /v1/tunnels/start|stop` routes remain for compatibility with existing clients; their legacy `web_url` token fragment is retained only for those clients and is not returned by Public Access. Legacy clients may still need that fragment to open a protected URL. Warren's explicit Public Access Open action adds the fragment only for that browser launch; the API, endpoint display, and copy surfaces strip it, so this compatibility path remains a residual credential exposure risk in browser history. The user’s custom Edge override and non-secret account label are configured through `gnarEdge` and `gnarAccount` in `~/.warren/settings.json` (or `WARREN_GNAR_EDGE`) and can be read or updated with `GET/PUT /v1/settings` or the `settings.get` / `settings.put` WebSocket methods. Release builds inject the non-secret default Edge with `WARREN_GNAR_DEFAULT_EDGE`; source builds show `https://tunnel.example.com` until a release replaces it. That value is not persisted, so users without an override follow a new default after upgrading. Empty-workspace entry defaults are host settings: `autoOpenShell` and `autoStartAI` both default to `false`. Git worktree import is project-scoped: `Project.autoImportGitWorktrees` is opt-in, and `project.worktrees` plus `project.worktrees.import` expose the one-time selector path; `project.autoImportGitWorktrees` enables immediate, non-interactive import of all currently existing external worktrees for that project.
+The Web UI and `/v1/ws` share port 8789; the local browser uses `http://127.0.0.1:8789/#t=<token>` and LAN devices use `https://<host-LAN-IP>:8788/#t=<token>` after trusting the local CA (see "LAN HTTPS"). Public Access is managed by the daemon: `GET /v1/public-access` reports the effective Edge URL, any saved custom override, effective/configured account label, credential-free authenticated/enabled/running state, and credential-free Public Endpoint; `POST /v1/public-access/test` saves the non-secret Edge/account configuration and verifies the gnar login without enabling the live endpoint. Settings should use this route for Save & Test. `POST /v1/public-access/enable` starts the live endpoint and accepts the canonical Edge/account/key fields, while `/disable` and `/restart` control the lifecycle. `POST /v1/public-access/reset` stops Warren's local worker, clears the local Edge/account/enabled intent, and removes only the bundled Warren gnar credential directory; it never calls a remote release operation. Approval Key takes precedence when both keys are supplied. An omitted Edge URL keeps the current override; an explicit empty `edgeUrl` clears it and selects the release/launcher default. Approval Keys are sent to `gnar login --edge <EDGE_URL> --account <ACCOUNT_NAME> --enrollment-key-stdin --json`; Invite Keys use `--key-stdin --json`; both travel only through stdin and are never persisted. When account name is omitted, Warren derives a gnar v1.7-compatible value from `--name`/`WARREN_HOST_NAME` (or the system hostname). The lower-level `GET /v1/tunnels` and `POST /v1/tunnels/start|stop` routes control individual local adapters and return credential-free public URLs; Public Access uses its dedicated lifecycle routes. Warren's explicit Public Access Open action adds the daemon token fragment only for that browser launch; status and copy surfaces keep endpoint URLs canonical. The user’s custom Edge override and non-secret account label are configured through `gnarEdge` and `gnarAccount` in `~/.warren/settings.json` (or `WARREN_GNAR_EDGE`) and can be read or updated with `GET/PUT /v1/settings` or the `settings.get` / `settings.put` WebSocket methods. Release builds inject the non-secret default Edge with `WARREN_GNAR_DEFAULT_EDGE`; source builds show `https://tunnel.example.com` until a release replaces it. That value is not persisted, so users without an override follow a new default after upgrading. Empty-workspace entry defaults are host settings: `autoOpenShell` and `autoStartAI` both default to `false`. Git worktree import is project-scoped: `Project.autoImportGitWorktrees` is opt-in, and `project.worktrees` plus `project.worktrees.import` expose the one-time selector path; `project.autoImportGitWorktrees` enables immediate, non-interactive import of all currently existing external worktrees for that project.
 
 Operators can announce a planned restart with `POST /v1/maintenance` (Bearer
 token required). The daemon broadcasts a `{"t":"maintenance","state":"starting","message":...}`
@@ -348,3 +399,14 @@ identified safely.
 The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
+
+Owned Relay enrollment is a separate lifecycle from Public Access. A Relay
+admin can open the canonical `settings_url` returned by
+`POST /v1/hosts` in Warren Desktop; the link carries only the Relay URL, Host
+UUID, pinned signing key, and one-time enrollment ticket. A local client may
+also `POST /v1/relay/enroll` with the Relay URL, Host UUID, and ticket while
+authenticating with the daemon token. Headless sends that canonical token to
+Relay, validates and pins the returned signing key, and persists only Relay
+metadata. The request body and settings never accept or store a second Relay
+secret. Discard the setup link after enrollment because its ticket is valid
+for ten minutes and can be consumed only once.
