@@ -14,3 +14,4 @@ Frameworks/
 .local/
 __pycache__/
 *.pyc
+.envrc
