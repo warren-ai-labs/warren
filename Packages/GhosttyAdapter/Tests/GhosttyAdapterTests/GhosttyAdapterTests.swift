@@ -506,6 +506,32 @@ final class GhosttyAdapterTests: XCTestCase {
         surface.outputWriter.shutdown()
     }
 
+    func testOutputWriterRejectsEnqueueAfterShutdown() async throws {
+        let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+        let writer = WarrenGhosttyOutputWriter(
+            inMemory: session,
+            ansiObserver: TerminalANSIObserver(),
+            budgetBytes: 1,
+            yield: .milliseconds(1)
+        )
+
+        // Without a mounted surface the drain keeps its slice pending, which
+        // gives shutdown a real in-flight task to cancel without entering the
+        // native Ghostty path.
+        writer.enqueue(epoch: 1, sequence: 0, payload: Data("before".utf8))
+        await Task.yield()
+        writer.shutdown()
+
+        // A late transport callback belongs to the disposed surface and must
+        // not recreate a drain or repopulate the pending buffer.
+        writer.enqueue(epoch: 2, sequence: 0, payload: Data("after".utf8))
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertNil(writer.bufferEpoch)
+        XCTAssertEqual(writer.enqueuedSequence, 0)
+        XCTAssertEqual(writer.renderedSequence, 0)
+    }
+
     @MainActor
     func testOutputReceivedBeforeSurfaceMountIsFlushedAfterAttach() async throws {
         let recorder = LockedInputRecorder()

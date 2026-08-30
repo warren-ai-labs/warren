@@ -142,6 +142,15 @@ public final class GhosttySurface: Identifiable {
         epoch: UInt64,
         sequence: UInt64
     ) -> Bool {
+        restoreSnapshotResult(payload, epoch: epoch, sequence: sequence) == .restored
+    }
+
+    @discardableResult
+    public func restoreSnapshotResult(
+        _ payload: Data,
+        epoch: UInt64,
+        sequence: UInt64
+    ) -> TerminalSnapshotRestoreResult {
         outputWriter.restoreSnapshotAndReapplyRuntimeConfig(
             payload,
             epoch: epoch,
