@@ -64,6 +64,30 @@ enum WarrenEndpointCatalog {
 }
 
 struct RemoteRoster: Decodable, Sendable, Equatable {
+    struct GhostlineMigration: Decodable, Sendable, Equatable {
+        let sessionID: String
+        let phase: String
+        let skippedSessions: [String]
+        let skipReasons: [String: String]
+        let updatedAt: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case sessionID = "sessionId"
+            case phase
+            case skippedSessions
+            case skipReasons
+            case updatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            sessionID = try container.decode(String.self, forKey: .sessionID)
+            phase = try container.decodeIfPresent(String.self, forKey: .phase) ?? ""
+            skippedSessions = try container.decodeIfPresent([String].self, forKey: .skippedSessions) ?? []
+            skipReasons = try container.decodeIfPresent([String: String].self, forKey: .skipReasons) ?? [:]
+            updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        }
+    }
     struct Host: Decodable, Sendable, Equatable { let id: String; let name: String }
     struct Task: Decodable, Sendable, Equatable {
         let id: String
@@ -177,6 +201,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let workspaces: EntityChanges<Workspace>?
         let terminalGroups: EntityChanges<TerminalGroup>?
         let sessions: EntityChanges<Session>?
+        let ghostlineMigration: GhostlineMigration?
     }
 
     struct StreamMessage: Decodable, Sendable {
@@ -204,6 +229,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     let workspaces: [Workspace]
     let terminalGroups: [TerminalGroup]
     let sessions: [Session]
+    let ghostlineMigration: GhostlineMigration?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -214,6 +240,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
+        ghostlineMigration = try container.decodeIfPresent(GhostlineMigration.self, forKey: .ghostlineMigration)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -224,6 +251,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         case workspaces
         case terminalGroups
         case sessions
+        case ghostlineMigration
     }
 
     private init(
@@ -233,7 +261,8 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         projects: [Project],
         workspaces: [Workspace],
         terminalGroups: [TerminalGroup],
-        sessions: [Session]
+        sessions: [Session],
+        ghostlineMigration: GhostlineMigration?
     ) {
         self.revision = revision
         self.host = host
@@ -242,6 +271,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
         self.sessions = sessions
+        self.ghostlineMigration = ghostlineMigration
     }
 
     func applying(_ delta: Delta) -> RemoteRoster? {
@@ -257,7 +287,8 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
-            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id)
+            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id),
+            ghostlineMigration: delta.ghostlineMigration ?? ghostlineMigration
         )
     }
 
@@ -1065,6 +1096,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private let inputRouter = WarrenTerminalInputRouter()
     private var initialRefreshPending = false
     private var currentRoster: RemoteRoster?
+    private var lastGhostlineMigrationNoticeID: String?
     private var rosterApplicationGeneration: UInt64 = 0
     private var resizeTask: Task<Void, Never>?
     private var resizeBuffer = WarrenResizeRequestBuffer()
@@ -3569,6 +3601,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         loadSettings()
         clearMaintenance()
+        presentGhostlineMigrationNotice(roster.ghostlineMigration)
         guard let hostID = HostID(uuidString: roster.host.id) else { return }
         let host = WarrenDomain.Host(id: hostID, name: roster.host.name)
         let tasks = roster.tasks.enumerated().compactMap { index, value -> WarrenDomain.WarrenTask? in
@@ -3795,6 +3828,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 turnID: turn.id
             ))
         }
+    }
+
+    private func presentGhostlineMigrationNotice(_ migration: RemoteRoster.GhostlineMigration?) {
+        guard let migration, !migration.skippedSessions.isEmpty,
+              migration.sessionID != lastGhostlineMigrationNoticeID else { return }
+        lastGhostlineMigrationNoticeID = migration.sessionID
+        let count = migration.skippedSessions.count
+        let names = migration.skippedSessions.sorted().joined(separator: ", ")
+        addNotice(
+            title: "adopt runtime failed",
+            message: "\(count) session\(count == 1 ? "" : "s") skipped during Ghostline handoff.",
+            detail: names,
+            kind: .error
+        )
     }
 
     /// Entry point for every navigation that makes a session visible.
