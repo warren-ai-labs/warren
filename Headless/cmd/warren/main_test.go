@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,6 +16,28 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/config"
 )
+
+func TestDoRelayRequestDoesNotFollowRedirect(t *testing.T) {
+	targetHit := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		targetHit <- struct{}{}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	if _, err := doRelayRequest(http.MethodPost, redirect.URL, "host-secret", map[string]string{"secret": "host-secret"}); err == nil {
+		t.Fatal("redirect response was treated as a successful Relay request")
+	}
+	select {
+	case <-targetHit:
+		t.Fatal("Relay client followed a redirect and replayed the request")
+	default:
+	}
+}
 
 func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	now := time.Now().UTC()

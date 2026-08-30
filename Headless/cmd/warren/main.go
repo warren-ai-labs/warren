@@ -34,6 +34,15 @@ var endpointURL string
 var endpointToken string
 var configPath string
 
+var relayHTTPClient = &http.Client{
+	// Relay enrollment carries the canonical Host Secret in the request body.
+	// Never follow a redirect to an untrusted origin where that body (or an
+	// Authorization header on another Relay operation) could be replayed.
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		var usageErr *usageError
@@ -197,7 +206,7 @@ func doRelayRequest(method, endpoint, token string, body any) (any, error) {
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := relayHTTPClient.Do(request)
 	if err != nil {
 		return nil, err
 	}

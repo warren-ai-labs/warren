@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -16,11 +17,12 @@ import (
 func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000001"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
-		PairingTTL: time.Minute,
-		AccessTTL:  time.Hour,
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+		PairingTTL:    time.Minute,
+		AccessTTL:     time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,14 +32,7 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
-	hostHeaders := http.Header{"Authorization": []string{"Bearer " + hostCredential}}
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID+"&name=Mac",
-		hostHeaders,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "Mac")
 	defer host.Close()
 	waitForHost(t, httpServer.URL, server, hostID)
 
@@ -134,9 +129,10 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000007"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,9 +215,10 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000009"
 	const otherHostID = "00000000-0000-4000-8000-00000000000a"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,13 +228,7 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
 	_ = provisionHost(t, httpServer.URL, otherHostID)
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID,
-		http.Header{"Authorization": []string{"Bearer " + hostCredential}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "")
 	defer host.Close()
 	waitForHost(t, httpServer.URL, server, hostID)
 
@@ -269,9 +260,10 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 
 func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -287,6 +279,41 @@ func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
 		t.Fatalf("non-UUID Host ID was accepted: response=%v err=%v", response, err)
 	}
 	response.Body.Close()
+}
+
+func TestRelayRequiresBRLY2HostConnection(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-00000000000b"
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	credential := provisionHost(t, httpServer.URL, hostID)
+	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	_, response, err := websocket.DefaultDialer.Dial(
+		websocketBase+"/v1/host/connect?host_id="+hostID,
+		http.Header{"Authorization": []string{"Bearer " + credential}},
+	)
+	if err == nil || response == nil || response.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("legacy host connection was accepted: response=%v err=%v", response, err)
+	}
+	response.Body.Close()
+}
+
+func TestNewServerRequiresAllowedOrigin(t *testing.T) {
+	if _, err := NewServer(Config{
+		PublicURL:  "https://relay.example.test",
+		AdminToken: "admin-bootstrap",
+		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+	}); err == nil {
+		t.Fatal("server accepted an empty AllowedOrigin")
+	}
 }
 
 func TestBrowserOriginRestrictionDoesNotBlockHostConnector(t *testing.T) {
@@ -305,13 +332,7 @@ func TestBrowserOriginRestrictionDoesNotBlockHostConnector(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID,
-		http.Header{"Authorization": []string{"Bearer " + hostCredential}},
-	)
-	if err != nil {
-		t.Fatalf("Host connector was incorrectly subject to browser Origin: %v", err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "")
 	defer host.Close()
 
 	client, response, err := websocket.DefaultDialer.Dial(
@@ -332,12 +353,13 @@ func TestRegistryPersistsCredentialsAndRevocationInvalidatesAccess(t *testing.T)
 	const otherHostID = "00000000-0000-4000-8000-000000000003"
 	dataURL := t.TempDir() + "/registry.json"
 	config := Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
-		DataURL:    dataURL,
-		PairingTTL: time.Minute,
-		AccessTTL:  time.Hour,
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+		DataURL:       dataURL,
+		PairingTTL:    time.Minute,
+		AccessTTL:     time.Hour,
 	}
 	server, err := NewServer(config)
 	if err != nil {
@@ -487,6 +509,51 @@ func provisionHost(t *testing.T, base, hostID string) string {
 		t.Fatal("missing host credential")
 	}
 	return result.Credential
+}
+
+func dialV2Host(t *testing.T, websocketBase, hostID, credential, name string) *websocket.Conn {
+	t.Helper()
+	endpoint := websocketBase + "/v1/host/connect?host_id=" + hostID + "&version=2.0"
+	if name != "" {
+		endpoint += "&name=" + url.QueryEscape(name)
+	}
+	host, _, err := websocket.DefaultDialer.Dial(endpoint, http.Header{"Authorization": []string{"Bearer " + credential}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := host.ReadMessage()
+	if err != nil || typ != websocket.TextMessage {
+		host.Close()
+		t.Fatalf("relay challenge: type=%d err=%v", typ, err)
+	}
+	var challenge relayChallenge
+	if err := json.Unmarshal(payload, &challenge); err != nil || challenge.Type != "relay_challenge" || challenge.Version != "2.0" {
+		host.Close()
+		t.Fatalf("invalid relay challenge: %v %s", err, payload)
+	}
+	if err := host.WriteJSON(relayHello{
+		Type: "host_hello", Version: "2.0", HostID: hostID,
+		Capabilities: []string{"control", "http", "upgrade"},
+		Proof:        challengeProof(credential, canonicalChallenge(challenge, hostID)),
+	}); err != nil {
+		host.Close()
+		t.Fatal(err)
+	}
+	typ, payload, err = host.ReadMessage()
+	if err != nil || typ != websocket.TextMessage {
+		host.Close()
+		t.Fatalf("relay welcome: type=%d err=%v", typ, err)
+	}
+	var welcome struct {
+		Type       string `json:"t"`
+		Version    string `json:"version"`
+		Generation uint64 `json:"generation"`
+	}
+	if err := json.Unmarshal(payload, &welcome); err != nil || welcome.Type != "host_welcome" || welcome.Version != "2.0" {
+		host.Close()
+		t.Fatalf("invalid relay welcome: %v %s", err, payload)
+	}
+	return host
 }
 
 func waitForHost(t *testing.T, base string, server *Server, hostID string) {

@@ -47,7 +47,7 @@ Or build a container:
 
 ```bash
 docker build -f RelayService/Dockerfile -t warren-relay .
-docker run --read-only --tmpfs /tmp -p 8080:8080 -v warren-relay-data:/data \
+docker run --read-only --tmpfs /tmp -p 127.0.0.1:8080:8080 -v warren-relay-data:/data \
   -e WARREN_RELAY_ADMIN_TOKEN \
   -e WARREN_RELAY_SIGNING_KEY \
   -e WARREN_RELAY_PUBLIC_URL=https://relay.example.com \
