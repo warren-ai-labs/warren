@@ -32,7 +32,6 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/abcdlsj/warren/Headless/internal/tlscert"
-	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 )
 
 var (
@@ -88,11 +87,6 @@ func main() {
 	logFile := flag.String("log-file", env("WARREN_LOG_FILE", filepath.Join(configDir, "headless.log")), "daemon log file (empty disables file logging)")
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
 	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
-	cloudflaredPath := flag.String("cloudflared-path", os.Getenv("WARREN_CLOUDFLARED_PATH"), "cloudflared binary path")
-	tailscalePath := flag.String("tailscale-path", os.Getenv("WARREN_TAILSCALE_PATH"), "tailscale binary path")
-	gnarPath := flag.String("gnar-path", os.Getenv("WARREN_GNAR_PATH"), "gnar binary path")
-	gnarConfigDir := flag.String("gnar-config-dir", os.Getenv("WARREN_GNAR_CONFIG_DIR"), "gnar credential directory (bundled gnar defaults to ~/.warren/gnar)")
-	gnarEdge := flag.String("gnar-edge", env("WARREN_GNAR_EDGE", ""), "gnar edge URL (overrides settings.json and the release default)")
 	relayURL := flag.String("relay-url", env("WARREN_RELAY_URL", ""), "owned Relay URL (optional)")
 	relayHostID := flag.String("relay-host-id", env("WARREN_RELAY_HOST_ID", ""), "Relay Host UUID (optional)")
 	relayKeyID := flag.String("relay-key-id", env("WARREN_RELAY_KEY_ID", ""), "pinned Relay signing key ID (optional)")
@@ -102,24 +96,6 @@ func main() {
 	if *showVersion {
 		fmt.Println(version)
 		return
-	}
-	gnarPathExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_PATH")) != ""
-	gnarConfigDirExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_CONFIG_DIR")) != ""
-	flag.Visit(func(entry *flag.Flag) {
-		switch entry.Name {
-		case "gnar-path":
-			gnarPathExplicit = true
-		case "gnar-config-dir":
-			gnarConfigDirExplicit = true
-		}
-	})
-	if !gnarPathExplicit {
-		if bundled := bundledGnarPath(); bundled != "" {
-			*gnarPath = bundled
-			if !gnarConfigDirExplicit && strings.TrimSpace(*gnarConfigDir) == "" {
-				*gnarConfigDir = filepath.Join(configDir, "gnar")
-			}
-		}
 	}
 	ghostlineSocketExplicit := os.Getenv("WARREN_GHOSTLINE_SOCKET") != ""
 	flag.Visit(func(entry *flag.Flag) {
@@ -142,33 +118,6 @@ func main() {
 	loadedSettings, err := settings.Load(*settingsFile)
 	if err != nil {
 		fatal(err)
-	}
-	builtInGnarEdge := settings.BuiltInGnarEdge()
-	if builtInGnarEdge != "" {
-		if err := tunnel.ValidateEdgeURL(builtInGnarEdge); err != nil {
-			fatal(fmt.Errorf("invalid release gnar Edge: %w", err))
-		}
-	}
-	// A launcher override remains useful for development and operators. When
-	// it is absent, the release-injected Edge is the non-persisted fallback.
-	gnarDefaultEdge := strings.TrimSpace(*gnarEdge)
-	if gnarDefaultEdge == "" {
-		gnarDefaultEdge = builtInGnarEdge
-	}
-	gnarEdgeValue := loadedSettings.GnarEdge
-	gnarEdgeExplicit := false
-	flag.Visit(func(entry *flag.Flag) {
-		if entry.Name == "gnar-edge" {
-			gnarEdgeExplicit = true
-		}
-	})
-	if gnarEdgeExplicit {
-		gnarEdgeValue = *gnarEdge
-	} else if gnarEdgeValue == "" {
-		// Fall back to the launcher environment, then the release default, when
-		// settings.json does not pin an Edge. The source-build default is a safe
-		// documented placeholder and release builds may replace it at link time.
-		gnarEdgeValue = gnarDefaultEdge
 	}
 	// Strip launcher-only pager/TERM semantics (agent/CI shells export
 	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline children
@@ -302,44 +251,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	webBaseURL := "http://127.0.0.1:" + listenerPort(listener)
-	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
-	tunnelManager.SetGnarConfigDir(*gnarConfigDir)
-	// Only the bundled worker's default store belongs to Warren. An explicit
-	// gnar path/config directory may be a system installation and must survive
-	// Public Access reset.
-	tunnelManager.SetGnarConfigDirOwned(!gnarPathExplicit && !gnarConfigDirExplicit)
-	tunnelManager.SetGnarDefaultEdge(gnarDefaultEdge)
-	tunnelManager.SetGnarEdge(gnarEdgeValue)
-	// Restore the tunnels the user left running before the previous daemon
-	// exited, so the Public Endpoint survives Warren restarts and upgrades. Start is
-	// asynchronous: the daemon must not block readiness on a slow edge.
-	for _, kind := range []string{tunnel.KindGnar, tunnel.KindCloudflared, tunnel.KindTailscale} {
-		// A Relay public route is the persisted owner for application traffic;
-		// do not restore gnar alongside it after a daemon restart.
-		if kind == tunnel.KindGnar && loadedSettings.PublicTunnel.Enabled {
-			continue
-		}
-		if !loadedSettings.TunnelEnabled[kind] {
-			continue
-		}
-		go func() {
-			status, err := tunnelManager.Start(kind)
-			if err != nil {
-				logger.Warn("restore tunnel failed", "kind", kind, "error", err)
-				return
-			}
-			if kind == tunnel.KindGnar && (!status.Running || status.URL == "") {
-				logger.Warn("restore tunnel did not produce a public endpoint", "kind", kind, "error", status.Error)
-				return
-			}
-			logger.Info("restored tunnel", "kind", kind)
-		}()
-	}
-	httpHandler.Tunnels = tunnelManager
 	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), strings.TrimSpace(*relayHostID), logger)
 	httpHandler.RelayStart = relaySupervisor.Start
 	httpHandler.RelayStop = relaySupervisor.Stop
+	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
 	if service.Settings.Relay.Enabled || service.Settings.PublicTunnel.Enabled || strings.TrimSpace(*relayURL) != "" {
 		if err := relaySupervisor.Start(); err != nil {
 			logger.Warn("relay connector disabled", "error", err)
@@ -387,9 +302,6 @@ func main() {
 	if lanHTTPServer != nil {
 		_ = lanHTTPServer.Close()
 	}
-	// A public tunnel must never outlive its daemon: stop every reachability
-	// adapter so the Public Endpoint stops working as soon as the owner exits.
-	tunnelManager.StopAll()
 	relaySupervisor.Stop()
 	stopService()
 	service.Shutdown()
@@ -511,6 +423,25 @@ func (supervisor *relaySupervisor) Stop() {
 	}
 }
 
+// RouteClient returns a short-lived authenticated client for Relay's route
+// lifecycle API. Route changes use the same Host Secret as the single BRLY/2
+// connector; no second credential or transport is created.
+func (supervisor *relaySupervisor) RouteClient() (*relay.RouteClient, error) {
+	value, _, err := supervisor.desiredSettings()
+	if err != nil {
+		return nil, err
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	return relay.NewRouteClient(urlValue, hostID, supervisor.token)
+}
+
 func listenerPort(listener net.Listener) string {
 	if address, ok := listener.Addr().(*net.TCPAddr); ok {
 		return strconv.Itoa(address.Port)
@@ -523,7 +454,7 @@ const maxLogFileBytes = 5 * 1024 * 1024
 
 // newLogger writes structured logs to stderr and, when a path is configured,
 // to a 0600 append-only file. Only high-signal events reach the file: daemon
-// start/stop, tunnel starts, restores, and errors. The file rotates once it
+// start/stop, Relay route changes, and errors. The file rotates once it
 // exceeds maxLogFileBytes so a long-running daemon never grows without bound.
 func newLogger(path string) *slog.Logger {
 	writers := []io.Writer{os.Stderr}
@@ -675,35 +606,6 @@ func writeTokenFile(path, token string) error {
 func defaultConfigDirectory() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".warren")
-}
-
-// bundledGnarPath returns the gnar binary shipped beside the headless daemon
-// in a Warren.app bundle. Development checkouts intentionally fall back to
-// normal system discovery, so a missing release asset never makes source
-// builds unusable.
-func bundledGnarPath() string {
-	executable, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return bundledGnarPathFor(executable)
-}
-
-func bundledGnarPathFor(executable string) string {
-	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
-		executable = resolved
-	}
-	macOSDirectory := filepath.Dir(executable)
-	if filepath.Base(macOSDirectory) != "MacOS" ||
-		filepath.Base(filepath.Dir(macOSDirectory)) != "Contents" {
-		return ""
-	}
-	candidate := filepath.Join(macOSDirectory, "..", "Resources", "gnar")
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return ""
-	}
-	return candidate
 }
 
 // validateGhostlinePaths prevents a temporary or alternate Warren state from

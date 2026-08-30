@@ -549,55 +549,33 @@ type GitDiff struct {
 	ContentTruncated bool   `json:"contentTruncated,omitempty"`
 }
 
-// PublicAccessStatus is the credential-free projection of the self-hosted
-// gnar Edge lifecycle. Invite/Approval Keys, gnar account tokens, and the
-// Warren daemon token are deliberately absent from this type.
+// PublicAccessStatus is the credential-free projection of the Relay-owned
+// public route. The Host Secret and any Relay access capability are never
+// included in this type.
 type PublicAccessStatus struct {
-	// EdgeURL is the effective Edge currently selected after applying the
-	// release default, launcher override, and user override.
-	EdgeURL string `json:"edgeUrl"`
-	// ConfiguredEdgeURL is the user's persisted override. It is empty when the
-	// release/launcher default is in use.
-	ConfiguredEdgeURL string `json:"configuredEdgeUrl"`
-	// DefaultEdgeURL is the non-secret fallback shipped by the release or
-	// supplied by the launcher.
-	DefaultEdgeURL   string `json:"defaultEdgeUrl"`
-	UsingDefaultEdge bool   `json:"usingDefaultEdge"`
-	// AccountName is the effective non-secret account label, including the
-	// system-name default used when no override is configured.
-	AccountName           string `json:"accountName"`
-	ConfiguredAccountName string `json:"configuredAccountName,omitempty"`
-	UsingDefaultAccount   bool   `json:"usingDefaultAccount"`
-	Enabled               bool   `json:"enabled"`
-	// Authenticated reports that Warren has completed a gnar login or a
-	// successful token-backed connection test in this daemon lifetime. It is a
-	// credential-free presentation hint; gnar remains the source of truth for
-	// its persisted account token.
+	RelayURL       string `json:"relayUrl,omitempty"`
+	HostID         string `json:"hostId,omitempty"`
+	RouteID        string `json:"routeId,omitempty"`
+	PublicHostname string `json:"publicHostname,omitempty"`
+	PathPrefix     string `json:"pathPrefix,omitempty"`
+	AuthMode       string `json:"authMode,omitempty"`
+	Enabled        bool   `json:"enabled"`
 	Authenticated  bool   `json:"authenticated"`
 	Running        bool   `json:"running"`
-	PublicEndpoint string `json:"publicEndpoint"`
-	Error          string `json:"error"`
+	PublicEndpoint string `json:"publicEndpoint,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
-// PublicAccessEnableRequest contains the one-time bootstrap input for a
-// self-hosted gnar Edge. InviteKey and ApprovalKey are consumed in memory and
-// are never persisted or included in a URL or command-line argument.
-// ApprovalKey takes precedence when both are supplied.
+// PublicAccessEnableRequest configures the Relay-owned public route. Relay
+// allocates a safe hostname and path when both values are omitted.
 type PublicAccessEnableRequest struct {
-	// A nil EdgeURL keeps the existing configured override. An explicit empty
-	// string clears that override and selects the release/launcher default.
-	EdgeURL     *string `json:"edgeUrl,omitempty"`
-	AccountName *string `json:"accountName,omitempty"`
-	InviteKey   string  `json:"inviteKey,omitempty"`
-	ApprovalKey string  `json:"approvalKey,omitempty"`
+	PublicHostname *string `json:"publicHostname,omitempty"`
+	PathPrefix     *string `json:"pathPrefix,omitempty"`
 }
 
-// PublicAccessTestRequest saves the non-secret Public Access configuration
-// and verifies the gnar Edge connection. Keys are bootstrap-only and are
-// consumed from memory; they are never persisted or returned.
+// PublicAccessTestRequest validates Relay connectivity and route metadata
+// without enabling the public route.
 type PublicAccessTestRequest struct {
-	EdgeURL     *string `json:"edgeUrl,omitempty"`
-	AccountName *string `json:"accountName,omitempty"`
-	InviteKey   string  `json:"inviteKey,omitempty"`
-	ApprovalKey string  `json:"approvalKey,omitempty"`
+	PublicHostname *string `json:"publicHostname,omitempty"`
+	PathPrefix     *string `json:"pathPrefix,omitempty"`
 }
