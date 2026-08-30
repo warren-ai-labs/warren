@@ -31,6 +31,7 @@ func TestRequestClientIPNormalizesRemoteAddress(t *testing.T) {
 	for remote, want := range map[string]string{
 		"192.0.2.10:443":     "192.0.2.10",
 		"[2001:db8::10]:443": "2001:db8::10",
+		"2001:db8::10":       "2001:db8::10",
 		"192.0.2.10":         "192.0.2.10",
 		"":                   "unknown",
 	} {

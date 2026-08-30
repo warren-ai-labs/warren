@@ -106,6 +106,9 @@ func requestClientIP(request *http.Request) string {
 	if host, _, err := net.SplitHostPort(remote); err == nil && host != "" {
 		return host
 	}
+	if net.ParseIP(remote) != nil {
+		return remote
+	}
 	if remote != "" && !strings.Contains(remote, ":") {
 		return remote
 	}
