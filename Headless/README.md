@@ -320,8 +320,11 @@ so several agents in the same workspace never mix transcripts:
   (user entries are preserved). `SessionStart` writes the CLI's
   `session_id`/`transcript_path` to
   `~/.warren/agent-bind/<warren-session-id>.json` and resets the state file;
-  `SessionEnd` marks the state file exited so the status light returns to
-  the surrounding shell. The daemon starts the watcher from the exact file.
+  `SessionEnd` records the provider session ID with its exited marker. The
+  daemon starts the watcher from the exact file. Codex may unload an individual
+  thread while its TUI process remains alive, so that marker only ends a
+  matching shell overlay; a dedicated Codex session stays live until its
+  runtime exits.
 - Every Warren session, including a plain Shell tab, inherits the same
   binding environment. A Codex/Claude CLI started manually inside that shell
   is bound by the same hooks: the tab shows agent activity while it runs and

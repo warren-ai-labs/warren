@@ -3403,10 +3403,15 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
-		agentState, stateErr := agent.ReadAgentStatus(agent.StatePath(session.ID))
-		if stateErr == nil && agentState.Activity == api.AgentActivityExited {
-			s.clearShellAgentWithState(session, state)
-			return nil, nil
+		agentState, stateErr := agent.ReadAgentState(agent.StatePath(session.ID))
+		if stateErr == nil && agentState.Status.Activity == api.AgentActivityExited {
+			// Codex emits SessionEnd when an individual thread runtime is
+			// unloaded. Only a matching thread ID can end a shell overlay;
+			// otherwise a late event from an older thread must be ignored.
+			if binding.Provider != "codex" || agent.StateMatchesBinding(agentState, binding) {
+				s.clearShellAgentWithState(session, state)
+				return nil, nil
+			}
 		}
 		if binding.Provider == "opencode" {
 			// Shell overlay for OpenCode uses the same SQLite binding as dedicated
@@ -3467,10 +3472,10 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	s.lazyInit()
 	s.agentsMu.Lock()
 	existing := s.agents[sessionID]
-	state, _ := agent.ReadAgentStatus(agent.StatePath(sessionID))
+	state, _ := agent.ReadAgentState(agent.StatePath(sessionID))
 	if existing != nil && existing.watcher != nil && existing.watcher.Path() == transcriptPath &&
 		(provider != "opencode" || existing.tailer != nil) {
-		if seedReady && state.Activity != api.AgentActivityExited {
+		if seedReady && state.Status.Activity != api.AgentActivityExited {
 			existing.mu.Lock()
 			if existing.status.Activity == api.AgentActivityExited {
 				existing.status = api.AgentStatus{Activity: api.AgentActivityReady}
@@ -3517,9 +3522,17 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		}
 		existing.mu.Unlock()
 	}
-	if state.Activity == api.AgentActivityExited {
+	applyExitedState := state.Status.Activity == api.AgentActivityExited
+	if provider == "codex" {
+		// A dedicated Codex TUI owns several thread runtimes. Its
+		// SessionEnd hook is therefore not a process-exit signal. Shell
+		// overlays still accept a matching end event so they can fall back
+		// to the plain terminal when the current CLI exits.
+		applyExitedState = seedReady && agentStateMatchesBinding(sessionID, state)
+	}
+	if applyExitedState {
 		existing.mu.Lock()
-		existing.status = state
+		existing.status = state.Status
 		existing.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
@@ -4279,25 +4292,39 @@ func (s *Service) applyAgentState(session api.Session) {
 	if kind != "codex" && kind != "claude" && kind != "opencode" {
 		return
 	}
-	state, err := agent.ReadAgentStatus(agent.StatePath(session.ID))
-	if err != nil || state.Activity == "" {
+	state, err := agent.ReadAgentState(agent.StatePath(session.ID))
+	if err != nil || state.Status.Activity == "" {
 		return
 	}
+	if state.Status.Activity == api.AgentActivityExited && kind == "codex" {
+		// Codex's SessionEnd is scoped to a thread runtime. A dedicated TUI
+		// can keep running with another thread, so its hook must not gray the
+		// Warren session. Shell overlays require an exact binding match before
+		// accepting the event for the current CLI thread.
+		if session.Kind == "codex" || !agentStateMatchesBinding(session.ID, state) {
+			return
+		}
+	}
 	current := s.agentStatus(session.ID)
-	switch state.Activity {
+	switch state.Status.Activity {
 	case api.AgentActivityExited:
-		if current.Activity != state.Activity {
-			s.recordAgentStatus(session.ID, state)
+		if current.Activity != state.Status.Activity {
+			s.recordAgentStatus(session.ID, state.Status)
 		}
 	case api.AgentActivityReady:
 		if current.Activity == api.AgentActivityExited || current.Activity == api.AgentActivityFailed {
-			s.forceAgentStatus(session.ID, state)
+			s.forceAgentStatus(session.ID, state.Status)
 		}
 	case api.AgentActivityFailed:
-		if current.Activity != state.Activity {
-			s.recordAgentStatus(session.ID, state)
+		if current.Activity != state.Status.Activity {
+			s.recordAgentStatus(session.ID, state.Status)
 		}
 	}
+}
+
+func agentStateMatchesBinding(sessionID string, state agent.AgentState) bool {
+	binding, err := agent.ReadBinding(agent.BindPath(sessionID))
+	return err == nil && agent.StateMatchesBinding(state, binding)
 }
 
 func (s *Service) stopAgent(sessionID string) {

@@ -151,34 +151,51 @@ func RemoveBinding(warrenSessionID string) {
 	_ = os.Remove(StatePath(warrenSessionID))
 }
 
-// ReadAgentStatus returns the status recorded by the managed hook, or a zero
-// status when the file is missing or malformed.
-func ReadAgentStatus(path string) (api.AgentStatus, error) {
+// AgentState is the lifecycle status reported by a managed hook together with
+// the provider conversation that produced it. The ID prevents a late
+// SessionEnd from an older Codex thread from changing the current projection.
+type AgentState struct {
+	SessionID string          `json:"sessionId,omitempty"`
+	Status    api.AgentStatus `json:"status"`
+}
+
+// ReadAgentState returns the state recorded by the managed hook, or a zero
+// state when the file is missing or malformed.
+func ReadAgentState(path string) (AgentState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return api.AgentStatus{}, nil
+			return AgentState{}, nil
 		}
-		return api.AgentStatus{}, err
+		return AgentState{}, err
 	}
-	var state struct {
-		Status api.AgentStatus `json:"status"`
-	}
+	var state AgentState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return api.AgentStatus{}, nil
+		return AgentState{}, nil
 	}
-	return state.Status, nil
+	return state, nil
 }
 
-// WriteAgentStatus persists a status reported by a hook. The write is atomic
+// ReadAgentStatus returns only the status recorded by the managed hook. It is
+// kept as a compatibility helper for callers that do not need the provider ID.
+func ReadAgentStatus(path string) (api.AgentStatus, error) {
+	state, err := ReadAgentState(path)
+	return state.Status, err
+}
+
+// StateMatchesBinding reports whether a provider state belongs to the current
+// binding. An empty state ID is deliberately not considered a match.
+func StateMatchesBinding(state AgentState, binding *Binding) bool {
+	return state.SessionID != "" && binding != nil && state.SessionID == binding.SessionID
+}
+
+// WriteAgentState persists a status reported by a hook. The write is atomic
 // so the daemon never reads a half-written status file.
-func WriteAgentStatus(path string, status api.AgentStatus) error {
+func WriteAgentState(path, sessionID string, status api.AgentStatus) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	data, err := json.Marshal(struct {
-		Status api.AgentStatus `json:"status"`
-	}{Status: status})
+	data, err := json.Marshal(AgentState{SessionID: sessionID, Status: status})
 	if err != nil {
 		return err
 	}
@@ -187,6 +204,12 @@ func WriteAgentStatus(path string, status api.AgentStatus) error {
 		return err
 	}
 	return os.Rename(temporary, path)
+}
+
+// WriteAgentStatus persists a status without a provider ID for callers that
+// only need the legacy status-file format.
+func WriteAgentStatus(path string, status api.AgentStatus) error {
+	return WriteAgentState(path, "", status)
 }
 
 // InjectClaudeSessionID makes Claude's transcript path deterministic for a
@@ -432,20 +455,24 @@ const agentBindHookScript = `#!/bin/sh
 [ -n "$WARREN_BIND_FILE" ] || [ -n "$WARREN_STATE_FILE" ] || exit 0
 input=$(cat)
 hook_event=$(printf '%s' "$input" | sed -nE 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+session_id=$(printf '%s' "$input" | sed -nE 's/.*"session_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 if [ "$hook_event" = "SessionEnd" ]; then
   [ -n "$WARREN_STATE_FILE" ] || exit 0
   dir=$(dirname "$WARREN_STATE_FILE")
   mkdir -p "$dir" 2>/dev/null || exit 0
   temporary="$WARREN_STATE_FILE.tmp.$$"
-  printf '%s\n' '{"status":{"activity":"exited","attention":null}}' > "$temporary" 2>/dev/null || exit 0
+  if [ -n "$session_id" ]; then
+    printf '{"sessionId":"%s","status":{"activity":"exited","attention":null}}\n' "$session_id" > "$temporary" 2>/dev/null || exit 0
+  else
+    printf '%s\n' '{"status":{"activity":"exited","attention":null}}' > "$temporary" 2>/dev/null || exit 0
+  fi
   mv -f "$temporary" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
   printf '%s\n' '{"continue":true}'
   exit 0
 fi
-session_id=$(printf '%s' "$input" | sed -nE 's/.*"session_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
-[ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || exit 0
 provider=${2:-${WARREN_AGENT_KIND:-codex}}
 [ -n "$WARREN_BIND_FILE" ] || exit 0
@@ -462,7 +489,7 @@ if [ -n "$WARREN_STATE_FILE" ]; then
   state_dir=$(dirname "$WARREN_STATE_FILE")
   mkdir -p "$state_dir" 2>/dev/null || exit 0
   state_tmp="$WARREN_STATE_FILE.tmp.$$"
-  printf '%s\n' '{"status":{"activity":"ready","attention":null}}' > "$state_tmp" 2>/dev/null || exit 0
+  printf '{"sessionId":"%s","status":{"activity":"ready","attention":null}}\n' "$session_id" > "$state_tmp" 2>/dev/null || exit 0
   mv -f "$state_tmp" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
 fi
 printf '%s\n' '{"continue":true}'

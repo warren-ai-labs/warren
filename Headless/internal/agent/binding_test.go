@@ -199,6 +199,13 @@ func TestCodexBindHookScriptWritesBinding(t *testing.T) {
 	if state.Activity != api.AgentActivityReady || state.Attention != nil {
 		t.Fatalf("hook state = %#v, want ready", state)
 	}
+	fullState, err := ReadAgentState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullState.SessionID != "thread-9" {
+		t.Fatalf("hook state session ID = %q, want thread-9", fullState.SessionID)
+	}
 }
 
 func TestHookScriptInfersProviderFromHookCommand(t *testing.T) {
@@ -232,6 +239,13 @@ func TestHookScriptInfersProviderFromHookCommand(t *testing.T) {
 	}
 	if state.Activity != api.AgentActivityReady || state.Attention != nil {
 		t.Fatalf("hook state = %#v, want ready", state)
+	}
+	fullState, err := ReadAgentState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullState.SessionID != "thread-9" {
+		t.Fatalf("hook state session ID = %q, want thread-9", fullState.SessionID)
 	}
 }
 
@@ -310,12 +324,12 @@ func TestAgentBindHookScriptMarksSessionEnd(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("end hook failed: %v: %s", err, output)
 	}
-	state, err := ReadAgentStatus(statePath)
+	state, err := ReadAgentState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Activity != api.AgentActivityExited || state.Attention != nil {
-		t.Fatalf("hook state = %#v, want exited", state)
+	if state.SessionID != "thread-9" || state.Status.Activity != api.AgentActivityExited || state.Status.Attention != nil {
+		t.Fatalf("hook state = %#v, want thread-9 exited", state)
 	}
 }
 
@@ -336,12 +350,12 @@ func TestAgentBindHookScriptMarksSessionEndWithoutSessionID(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("end hook without session id failed: %v: %s", err, output)
 	}
-	state, err := ReadAgentStatus(statePath)
+	state, err := ReadAgentState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Activity != api.AgentActivityExited || state.Attention != nil {
-		t.Fatalf("hook state = %#v, want exited", state)
+	if state.SessionID != "" || state.Status.Activity != api.AgentActivityExited || state.Status.Attention != nil {
+		t.Fatalf("hook state = %#v, want legacy exited without session ID", state)
 	}
 }
 
