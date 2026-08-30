@@ -189,6 +189,9 @@ export default function App() {
   const [hiddenPresets, setHiddenPresets] = useState(() => loadHiddenPresets());
   const [autoOpenShell, setAutoOpenShell] = useState(false);
   const [autoStartAI, setAutoStartAI] = useState(false);
+  const [openaiBaseURL, setOpenaiBaseURL] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("");
+  const [openaiTitleEnabled, setOpenaiTitleEnabled] = useState(false);
   const [agentCompletionSoundEnabled, setAgentCompletionSoundEnabled] = useState(() => (
     loadAgentCompletionSoundEnabled()
   ));
@@ -389,6 +392,9 @@ export default function App() {
     if (typeof result.autoStartAI === "boolean") {
       setAutoStartAI(result.autoStartAI);
     }
+    if (typeof result.openaiBaseURL === "string") setOpenaiBaseURL(result.openaiBaseURL);
+    if (typeof result.openaiModel === "string") setOpenaiModel(result.openaiModel);
+    if (typeof result.openaiTitleEnabled === "boolean") setOpenaiTitleEnabled(result.openaiTitleEnabled);
   }, []);
 
   const loadRemoteSettings = useCallback(() => {
@@ -2619,6 +2625,14 @@ export default function App() {
     }
   }, [applyRemoteSettings, autoStartAI, request]);
 
+  const updateOpenAISetting = useCallback((key, value) => {
+    const params = { [key]: value };
+    request("settings.put", params, applyRemoteSettings);
+    if (key === "openaiBaseURL") setOpenaiBaseURL(value);
+    if (key === "openaiModel") setOpenaiModel(value);
+    if (key === "openaiTitleEnabled") setOpenaiTitleEnabled(value);
+  }, [applyRemoteSettings, request]);
+
   const updateAgentCompletionSound = useCallback(enabled => {
     const next = Boolean(enabled);
     setAgentCompletionSoundEnabled(next);
@@ -2882,6 +2896,9 @@ export default function App() {
         hiddenPresets={hiddenPresets}
         autoOpenShell={autoOpenShell}
         autoStartAI={autoStartAI}
+        openaiBaseURL={openaiBaseURL}
+        openaiModel={openaiModel}
+        openaiTitleEnabled={openaiTitleEnabled}
         agentCompletionSoundEnabled={agentCompletionSoundEnabled}
         titlePreview={titlePreview}
         placeholders={Object.entries(titlePlaceholders)}
@@ -2893,6 +2910,7 @@ export default function App() {
         onPresetVisibilityChange={updatePresetVisibility}
         onAutoOpenShellChange={updateAutoOpenShell}
         onAutoStartAIChange={updateAutoStartAI}
+        onOpenAISettingChange={updateOpenAISetting}
         onAgentCompletionSoundChange={updateAgentCompletionSound}
         onPreviewAgentCompletionSound={previewAgentCompletionSound}
         onMovePreset={movePreset}

@@ -64,6 +64,13 @@ type Settings struct {
 	// AutoStartAI controls whether entering an empty workspace starts the first
 	// AI preset. Explicit session actions are unaffected.
 	AutoStartAI bool `json:"autoStartAI"`
+	// OpenAIBaseURL, OpenAIModel, and OpenAIKey configure the optional
+	// capability used for automatic session titles. The key is never returned
+	// by the settings APIs.
+	OpenAIBaseURL      string `json:"openaiBaseURL,omitempty"`
+	OpenAIModel        string `json:"openaiModel,omitempty"`
+	OpenAIKey          string `json:"openaiKey,omitempty"`
+	OpenAITitleEnabled bool   `json:"openaiTitleEnabled"`
 }
 
 // NormalizedGnarAccount returns a safe account label for the gnar CLI. Empty
