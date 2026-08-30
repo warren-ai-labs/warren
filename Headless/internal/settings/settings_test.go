@@ -23,13 +23,17 @@ func TestNormalizedDefaultsToGhostline(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	value := Settings{
-		DefaultRuntime: RuntimeGhostline,
-		RuntimeEnv:     map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
-		GnarEdge:       "https://gnar.example.com",
-		GnarAccount:    "personal",
-		TunnelEnabled:  map[string]bool{"gnar": true},
-		AutoOpenShell:  true,
-		AutoStartAI:    true,
+		DefaultRuntime:     RuntimeGhostline,
+		RuntimeEnv:         map[string]string{"GIT_PAGER": "less", "TERM": "xterm-256color"},
+		GnarEdge:           "https://gnar.example.com",
+		GnarAccount:        "personal",
+		TunnelEnabled:      map[string]bool{"gnar": true},
+		AutoOpenShell:      true,
+		AutoStartAI:        true,
+		OpenAIBaseURL:      "https://api.openai.com/v1",
+		OpenAIModel:        "gpt-4.1-mini",
+		OpenAIKey:          "test-key",
+		OpenAITitleEnabled: true,
 	}
 	if err := Save(path, value); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -58,6 +62,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.AutoStartAI {
 		t.Fatal("loaded autoStartAI = false, want true")
+	}
+	if loaded.OpenAIBaseURL != "https://api.openai.com/v1" || loaded.OpenAIModel != "gpt-4.1-mini" || loaded.OpenAIKey != "test-key" || !loaded.OpenAITitleEnabled {
+		t.Fatalf("loaded OpenAI title settings = %#v", loaded)
 	}
 }
 

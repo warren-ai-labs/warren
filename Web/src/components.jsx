@@ -1246,6 +1246,9 @@ export function SettingsPage({
   hiddenPresets = [],
   autoOpenShell,
   autoStartAI,
+  openaiBaseURL = "",
+  openaiModel = "",
+  openaiTitleEnabled = false,
   agentCompletionSoundEnabled,
   titlePreview,
   placeholders,
@@ -1257,6 +1260,7 @@ export function SettingsPage({
   onPresetVisibilityChange,
   onAutoOpenShellChange,
   onAutoStartAIChange,
+  onOpenAISettingChange,
   onAgentCompletionSoundChange,
   onPreviewAgentCompletionSound,
   onMovePreset,
@@ -1296,6 +1300,12 @@ export function SettingsPage({
       label: "Notifications",
       description: "Choose how Warren alerts you when an Agent completes.",
       keywords: ["notification", "sound", "audio", "chime", "agent", "complete", "background"],
+    },
+    {
+      id: "openai",
+      label: "AI titles",
+      description: "Generate session titles with an OpenAI-compatible endpoint.",
+      keywords: ["openai", "ai", "title", "model", "base", "key", "summary"],
     },
   ], []);
 
@@ -1366,7 +1376,7 @@ export function SettingsPage({
                 ? terminalIcon
                 : section.id === "title"
                   ? <TitleIcon />
-                  : section.id === "workspaces"
+              : section.id === "workspaces"
                     ? <BranchIcon />
                     : <PresetIcon />}
               <span>{section.label}</span>
@@ -1544,6 +1554,22 @@ export function SettingsPage({
                   </button>
                   <p className="settings-note">Your browser must allow audio after an interaction. The chime uses the system output volume.</p>
                 </div>
+              </section>
+            ) : activeSection === "openai" ? (
+              <section className="settings-section">
+                <header className="settings-page-heading">
+                  <h2>AI session titles</h2>
+                  <p>Use an OpenAI-compatible API to suggest a concise title from the opening exchange.</p>
+                </header>
+                <div className="settings-fields">
+                  <label>API base URL<input value={openaiBaseURL} onChange={event => onOpenAISettingChange("openaiBaseURL", event.target.value)} placeholder="https://api.openai.com/v1" autoComplete="off" /></label>
+                  <label>Model<input value={openaiModel} onChange={event => onOpenAISettingChange("openaiModel", event.target.value)} placeholder="gpt-4o-mini" autoComplete="off" /></label>
+                  <label>API key<input type="password" onChange={event => onOpenAISettingChange("openaiKey", event.target.value)} placeholder="Leave blank to keep the saved key" autoComplete="off" /></label>
+                </div>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={openaiTitleEnabled} onChange={event => onOpenAISettingChange("openaiTitleEnabled", event.target.checked)} />
+                  <span><strong>Generate titles automatically</strong><small>Disabled by default. The key is stored only by the Warren host and is never sent back to clients.</small></span>
+                </label>
               </section>
             ) : (
               <section className="settings-section">
