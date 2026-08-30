@@ -156,8 +156,8 @@ func (s *HTTPServer) Handler() http.Handler {
 			rpcVersion = s.GhostlineVersion
 		}
 		skippedSessions := 0
-		if s.Service != nil {
-			if migration := s.Service.Roster(request.Context()).GhostlineMigration; migration != nil {
+		if s.Service != nil && s.Service.Store != nil {
+			if migration := s.Service.Store.Snapshot().GhostlineMigration; migration != nil {
 				skippedSessions = len(migration.SkippedSessions)
 			}
 		}
