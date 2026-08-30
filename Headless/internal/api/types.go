@@ -388,8 +388,8 @@ type State struct {
 	Operations []OperationAudit `json:"operations,omitempty"`
 	// WorktreeOwnershipMigrated records that legacy workspace ownership has
 	// been reconciled against the configured Warren worktree root.
-	WorktreeOwnershipMigrated bool `json:"worktreeOwnershipMigrated,omitempty"`
-	WarrenVersion string `json:"warrenVersion,omitempty"`
+	WorktreeOwnershipMigrated bool   `json:"worktreeOwnershipMigrated,omitempty"`
+	WarrenVersion             string `json:"warrenVersion,omitempty"`
 }
 
 const (
@@ -404,14 +404,16 @@ const (
 // migration transaction, not a terminal session. Socket paths are local-only
 // control-plane data; clients always attach through Warren's current route.
 type GhostlineMigration struct {
-	SessionID      string    `json:"sessionId"`
-	SourceSocket   string    `json:"sourceSocket"`
-	TargetSocket   string    `json:"targetSocket"`
-	SourceProtocol string    `json:"sourceProtocol"`
-	HandoffVersion string    `json:"handoffVersion,omitempty"`
-	Phase          string    `json:"phase"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	SessionID       string            `json:"sessionId"`
+	SourceSocket    string            `json:"sourceSocket"`
+	TargetSocket    string            `json:"targetSocket"`
+	SourceProtocol  string            `json:"sourceProtocol"`
+	HandoffVersion  string            `json:"handoffVersion,omitempty"`
+	Phase           string            `json:"phase"`
+	SkippedSessions []string          `json:"skippedSessions,omitempty"`
+	SkipReasons     map[string]string `json:"skipReasons,omitempty"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
 // OperationAudit records a reversible session move (or its reversal). The

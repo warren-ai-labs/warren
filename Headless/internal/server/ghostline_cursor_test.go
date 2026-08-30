@@ -71,10 +71,12 @@ func TestRosterOmitsGhostlineInternalRecoveryData(t *testing.T) {
 	if err := state.Update(func(value *api.State) error {
 		value.Sessions[0].OutputCursor = "opaque-v1-cursor"
 		value.GhostlineMigration = &api.GhostlineMigration{
-			SessionID:    "migration",
-			SourceSocket: "/private/source.sock",
-			TargetSocket: "/private/target.sock",
-			Phase:        api.GhostlineMigrationCommitted,
+			SessionID:       "migration",
+			SourceSocket:    "/private/source.sock",
+			TargetSocket:    "/private/target.sock",
+			Phase:           api.GhostlineMigrationCommitted,
+			SkippedSessions: []string{"session-cursor"},
+			SkipReasons:     map[string]string{"session-cursor": "adopt runtime failed"},
 		}
 		return nil
 	}); err != nil {
@@ -82,8 +84,11 @@ func TestRosterOmitsGhostlineInternalRecoveryData(t *testing.T) {
 	}
 
 	roster := (&Service{Store: state}).Roster(context.Background())
-	if roster.GhostlineMigration != nil {
-		t.Fatalf("roster exposed migration: %#v", roster.GhostlineMigration)
+	if roster.GhostlineMigration == nil || len(roster.GhostlineMigration.SkippedSessions) != 1 {
+		t.Fatalf("roster omitted skipped migration report: %#v", roster.GhostlineMigration)
+	}
+	if roster.GhostlineMigration.SourceSocket != "" || roster.GhostlineMigration.TargetSocket != "" {
+		t.Fatalf("roster exposed migration socket paths: %#v", roster.GhostlineMigration)
 	}
 	if got := roster.Sessions[0].OutputCursor; got != "" {
 		t.Fatalf("roster exposed output cursor %q", got)
@@ -92,7 +97,7 @@ func TestRosterOmitsGhostlineInternalRecoveryData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal roster: %v", err)
 	}
-	for _, internal := range [][]byte{[]byte("outputCursor"), []byte("ghostlineMigration"), []byte("/private/source.sock")} {
+	for _, internal := range [][]byte{[]byte("outputCursor"), []byte("/private/source.sock"), []byte("/private/target.sock")} {
 		if bytes.Contains(encoded, internal) {
 			t.Fatalf("serialized roster exposed internal value %q: %s", internal, encoded)
 		}

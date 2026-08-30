@@ -409,21 +409,29 @@ func runGhostlineServe(socketPath, outputDir, adoptFrom string, probeForeground 
 	}
 	if adoptFrom != "" {
 		adoptContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		adopted, adoptErr := server.Adopt(adoptContext, adoptFrom)
+		report, adoptErr := server.AdoptWithReport(adoptContext, adoptFrom)
+		adopted := report.Adopted
 		cancel()
 		if adoptErr != nil {
 			fmt.Fprintf(os.Stderr, "ghostline serve: adopt from %s: %v\n", adoptFrom, adoptErr)
+			if len(report.Skipped) > 0 {
+				fmt.Fprintf(os.Stderr, "ghostline serve: skipped %d session(s): %v\n", len(report.Skipped), report.Skipped)
+			}
 			// Commit transfers ownership before Adopt performs the old server's
 			// best-effort retirement. The old endpoint may close the admin socket
 			// without replying, so an error can still mean that sessions are
 			// already safely owned by this process. Never tear down a server that
 			// has adopted sessions just because retirement confirmation failed.
-			if ghostlineAdoptionFatal(adopted, adoptErr) {
+			if ghostlineAdoptionFatal(adopted, len(report.Skipped), adoptErr) {
 				os.Exit(1)
 			}
 			fmt.Fprintf(os.Stderr, "ghostline serve: continuing with %d adopted session(s) despite retirement error\n", adopted)
-		} else if adopted > 0 {
-			fmt.Fprintf(os.Stderr, "ghostline serve: adopted %d session(s)\n", adopted)
+		} else {
+			if len(report.Skipped) > 0 {
+				fmt.Fprintf(os.Stderr, "ghostline serve: adopted %d session(s), skipped %d: %v\n", adopted, len(report.Skipped), report.Skipped)
+			} else if adopted > 0 {
+				fmt.Fprintf(os.Stderr, "ghostline serve: adopted %d session(s)\n", adopted)
+			}
 		}
 	}
 	if err := server.Serve(context.Background(), socketPath); err != nil {
@@ -432,12 +440,10 @@ func runGhostlineServe(socketPath, outputDir, adoptFrom string, probeForeground 
 	}
 }
 
-// ghostlineAdoptionFatal reports whether an adoption error happened before
-// any session was committed. Once at least one session was committed, the
-// new server must stay alive even if the old server's retirement handshake
-// failed.
-func ghostlineAdoptionFatal(adopted int, adoptErr error) bool {
-	return adoptErr != nil && adopted <= 0
+// ghostlineAdoptionFatal reports errors that happened before any session was
+// committed and were not classified as per-session adoption failures.
+func ghostlineAdoptionFatal(adopted, skipped int, adoptErr error) bool {
+	return adoptErr != nil && adopted <= 0 && skipped == 0
 }
 
 func loadOrCreateToken(path string) (string, error) {
