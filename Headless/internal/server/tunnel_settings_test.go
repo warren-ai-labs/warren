@@ -289,7 +289,7 @@ sleep 30
 	server := httptest.NewServer(handler.Handler())
 	defer server.Close()
 
-	body := bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","accountName":"warren","enrollmentKey":"memorable-key"}`)
+	body := bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","accountName":"warren","approvalKey":"memorable-key"}`)
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/public-access/enable", body)
 	if err != nil {
 		t.Fatal(err)
@@ -604,7 +604,7 @@ func TestPublicAccessEnableRejectsInvalidEdgeBeforePersisting(t *testing.T) {
 	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9878", "", "", "/missing/gnar")
 	server := httptest.NewServer(handler.Handler())
 	defer server.Close()
-	body := bytes.NewBufferString(`{"edgeUrl":"https://user:pass@example.com","enrollmentKey":"key"}`)
+	body := bytes.NewBufferString(`{"edgeUrl":"https://user:pass@example.com","approvalKey":"key"}`)
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/public-access/enable", body)
 	if err != nil {
 		t.Fatal(err)
@@ -620,6 +620,33 @@ func TestPublicAccessEnableRejectsInvalidEdgeBeforePersisting(t *testing.T) {
 	}
 	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
 		t.Fatalf("invalid Edge unexpectedly persisted settings: %v", err)
+	}
+}
+
+func TestPublicAccessRejectsEnrollmentKeyAlias(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	service := &Service{SettingsPath: settingsPath}
+	handler := NewHTTPServer(service, "secret", nil)
+	handler.Tunnels = tunnel.NewManager(nil, "http://127.0.0.1:9878", "", "", "/missing/gnar")
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	for _, path := range []string{"enable", "test"} {
+		body := bytes.NewBufferString(`{"edgeUrl":"https://edge.example.com","enrollmentKey":"key"}`)
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/public-access/"+path, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer secret")
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s alias status = %d, want %d", path, response.StatusCode, http.StatusBadRequest)
+		}
 	}
 }
 
@@ -895,7 +922,7 @@ sleep 30
 	}
 }
 
-func TestLegacyTunnelRouteRemainsAvailableForExistingClients(t *testing.T) {
+func TestTunnelRouteReportsPublicURL(t *testing.T) {
 	gnar := writeExecutableScript(t, `#!/bin/sh
 printf '%s\n' '{"type":"tunnel_ready","public_url":"https://legacy.example.com"}'
 sleep 30
@@ -920,27 +947,18 @@ sleep 30
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("legacy start status = %d", response.StatusCode)
+		t.Fatalf("tunnel start status = %d", response.StatusCode)
 	}
 	var payload struct {
 		Tunnels map[string]struct {
-			WebURL string `json:"web_url"`
+			URL string `json:"url"`
 		} `json:"tunnels"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if got := payload.Tunnels[tunnel.KindGnar].WebURL; !strings.Contains(got, "#t=daemon-secret") {
-		t.Fatalf("legacy web_url = %q, want compatibility token fragment", got)
-	}
-}
-
-func TestLegacyTunnelURLEscapesBase64DaemonToken(t *testing.T) {
-	if got := authenticatedWebURL("https://legacy.example.com/t/warren/", "a+/="); got != "https://legacy.example.com/t/warren/#t=a%2B%2F%3D" {
-		t.Fatalf("legacy web URL = %q", got)
-	}
-	if got := authenticatedWebURL("https://legacy.example.com/t/warren/#old", "token"); got != "https://legacy.example.com/t/warren/#t=token" {
-		t.Fatalf("legacy web URL did not replace fragment: %q", got)
+	if got := payload.Tunnels[tunnel.KindGnar].URL; got != "https://legacy.example.com" {
+		t.Fatalf("tunnel URL = %q, want public endpoint", got)
 	}
 }
 

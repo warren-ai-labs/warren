@@ -1,17 +1,24 @@
 package controlplane
 
 import (
+	"bufio"
+	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	relayassets "github.com/abcdlsj/warren"
@@ -19,23 +26,74 @@ import (
 )
 
 type Config struct {
-	PublicURL     string
-	AdminToken    string
-	SigningKey    []byte
-	DataURL       string
-	PairingTTL    time.Duration
-	AccessTTL     time.Duration
-	AllowedOrigin string
-	Logger        *slog.Logger
+	PublicURL        string
+	AdminToken       string
+	SigningKey       []byte
+	DataURL          string
+	PairingTTL       time.Duration
+	AccessTTL        time.Duration
+	AllowedOrigin    string
+	TunnelBaseDomain string
+	RefreshTTL       time.Duration
+	MaxBodyBytes     int64
+	// RateLimitWindow and the operation limits are fixed-window admission
+	// controls. A zero operation limit selects the secure default; negative
+	// values are rejected rather than silently disabling abuse protection.
+	RateLimitWindow  time.Duration
+	PairingRateLimit int
+	ClientRateLimit  int
+	PublicRateLimit  int
+	UpgradeRateLimit int
+	Logger           *slog.Logger
 }
 
 type Server struct {
-	config   Config
-	registry *registry
-	signer   *tokenSigner
-	web      fs.FS
-	upgrader websocket.Upgrader
-	mux      *http.ServeMux
+	config          Config
+	basePath        string
+	registry        *registry
+	signer          *tokenSigner
+	web             fs.FS
+	upgrader        websocket.Upgrader
+	mux             *http.ServeMux
+	sessionMu       sync.Mutex
+	pairingTickets  map[string]pairingTicket
+	refreshTokens   map[string]refreshRecord
+	usedRefresh     map[string]string
+	revokedFamilies map[string]bool
+	pairingLimiter  *rateLimiter
+	clientLimiter   *rateLimiter
+	publicLimiter   *rateLimiter
+	upgradeLimiter  *rateLimiter
+}
+
+type pairingTicket struct {
+	HostID     string
+	Generation uint64
+	Expires    time.Time
+}
+
+type refreshRecord struct {
+	Family     string
+	HostID     string
+	Generation uint64
+	ClientID   string
+	Expires    time.Time
+}
+
+type httpHeadersMessage struct {
+	Status    int         `json:"status,omitempty"`
+	Method    string      `json:"method,omitempty"`
+	Scheme    string      `json:"scheme,omitempty"`
+	Authority string      `json:"authority,omitempty"`
+	Path      string      `json:"path,omitempty"`
+	BodyLimit int64       `json:"body_limit,omitempty"`
+	Headers   [][2]string `json:"headers,omitempty"`
+	Trailers  [][2]string `json:"trailers,omitempty"`
+}
+
+type httpErrorMessage struct {
+	Code    string `json:"code"`
+	Message string `json:"message,omitempty"`
 }
 
 var webStaticResources = map[string]string{
@@ -53,11 +111,60 @@ func NewServer(config Config) (*Server, error) {
 	if config.AdminToken == "" {
 		return nil, errors.New("admin bootstrap token is required")
 	}
+	if strings.TrimSpace(config.AllowedOrigin) == "" {
+		return nil, errors.New("allowed origin is required")
+	}
+	config.AllowedOrigin = strings.TrimSpace(config.AllowedOrigin)
 	if config.PairingTTL == 0 {
 		config.PairingTTL = 10 * time.Minute
 	}
+	if config.PairingTTL < 0 {
+		return nil, errors.New("pairing TTL must be positive")
+	}
 	if config.AccessTTL == 0 {
-		config.AccessTTL = 30 * 24 * time.Hour
+		config.AccessTTL = 15 * time.Minute
+	}
+	if config.AccessTTL < 0 {
+		return nil, errors.New("access TTL must be positive")
+	}
+	if config.AccessTTL > time.Hour {
+		config.AccessTTL = time.Hour
+	}
+	if config.RefreshTTL == 0 {
+		config.RefreshTTL = 30 * 24 * time.Hour
+	}
+	if config.RefreshTTL < 0 {
+		return nil, errors.New("refresh TTL must be positive")
+	}
+	if config.MaxBodyBytes == 0 {
+		config.MaxBodyBytes = 64 * 1024 * 1024
+	}
+	if config.MaxBodyBytes < 0 {
+		return nil, errors.New("maximum body size must be positive")
+	}
+	if config.RateLimitWindow == 0 {
+		config.RateLimitWindow = time.Minute
+	}
+	if config.RateLimitWindow < 0 {
+		return nil, errors.New("rate limit window must be positive")
+	}
+	if config.PairingRateLimit == 0 {
+		config.PairingRateLimit = 10
+	}
+	if config.ClientRateLimit == 0 {
+		config.ClientRateLimit = 30
+	}
+	if config.PublicRateLimit == 0 {
+		config.PublicRateLimit = 120
+	}
+	if config.UpgradeRateLimit == 0 {
+		config.UpgradeRateLimit = 30
+	}
+	if config.PairingRateLimit < 0 || config.ClientRateLimit < 0 || config.PublicRateLimit < 0 || config.UpgradeRateLimit < 0 {
+		return nil, errors.New("rate limits must not be negative")
+	}
+	if config.TunnelBaseDomain == "" {
+		config.TunnelBaseDomain = "tunnel.local"
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -75,12 +182,21 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 	server := &Server{
-		config:   config,
-		registry: registry,
-		signer:   signer,
-		web:      web,
-		upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
-		mux:      http.NewServeMux(),
+		config:          config,
+		basePath:        relayPathPrefix(config.PublicURL),
+		registry:        registry,
+		signer:          signer,
+		web:             web,
+		upgrader:        websocket.Upgrader{Subprotocols: []string{"brly/2"}, CheckOrigin: func(*http.Request) bool { return true }},
+		mux:             http.NewServeMux(),
+		pairingTickets:  make(map[string]pairingTicket),
+		refreshTokens:   make(map[string]refreshRecord),
+		usedRefresh:     make(map[string]string),
+		revokedFamilies: make(map[string]bool),
+		pairingLimiter:  newRateLimiter(config.PairingRateLimit, config.RateLimitWindow),
+		clientLimiter:   newRateLimiter(config.ClientRateLimit, config.RateLimitWindow),
+		publicLimiter:   newRateLimiter(config.PublicRateLimit, config.RateLimitWindow),
+		upgradeLimiter:  newRateLimiter(config.UpgradeRateLimit, config.RateLimitWindow),
 	}
 	server.routes()
 	return server, nil
@@ -95,12 +211,21 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 func (server *Server) routes() {
 	server.mux.HandleFunc("GET /healthz", server.health)
 	server.mux.HandleFunc("POST /v1/hosts", server.provisionHost)
+	server.mux.HandleFunc("POST /v1/hosts/{hostID}/enroll", server.enrollHost)
 	server.mux.HandleFunc("GET /v1/host/connect", server.connectHost)
 	server.mux.HandleFunc("POST /v1/hosts/{hostID}/pairing", server.beginPairing)
 	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}", server.revokeHost)
 	server.mux.HandleFunc("GET /v1/hosts/{hostID}", server.getHost)
 	server.mux.HandleFunc("POST /v1/pair", server.pair)
+	server.mux.HandleFunc("POST /v1/session/exchange", server.exchangeSession)
+	server.mux.HandleFunc("POST /v1/session/refresh", server.refreshSession)
+	server.mux.HandleFunc("POST /h/{hostID}/v1/session/exchange", server.exchangeSession)
+	server.mux.HandleFunc("POST /h/{hostID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("GET /v1/client/connect", server.connectClient)
+	server.mux.HandleFunc("GET /h/{hostID}/v1/client/connect", server.connectClient)
+	server.mux.HandleFunc("POST /v1/hosts/{hostID}/route", server.configureRoute)
+	server.mux.HandleFunc("GET /v1/hosts/{hostID}/route", server.getRoute)
+	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}/route", server.disableRoute)
 	server.mux.HandleFunc("GET /h/{hostID}/", server.webPage)
 	server.mux.HandleFunc("GET /h/{hostID}/manifest.webmanifest", server.hostManifest)
 	server.mux.HandleFunc("GET /h/{hostID}/service-worker.js", server.hostServiceWorker)
@@ -113,6 +238,10 @@ func (server *Server) routes() {
 		server.mux.HandleFunc("GET /"+name, handler)
 		server.mux.HandleFunc("GET /h/{hostID}/"+name, handler)
 	}
+	// Public routes are selected by exact Host/SNI and are deliberately last;
+	// all control-plane patterns above retain their normal authentication
+	// boundary.
+	server.mux.HandleFunc("/", server.publicRoute)
 }
 
 func (server *Server) health(response http.ResponseWriter, _ *http.Request) {
@@ -120,9 +249,21 @@ func (server *Server) health(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (server *Server) connectHost(response http.ResponseWriter, request *http.Request) {
+	if version := strings.TrimSpace(request.URL.Query().Get("version")); version != "" && version != "2.0" {
+		http.Error(response, "unsupported relay version", http.StatusUpgradeRequired)
+		return
+	}
+	if !hostWantsV2(request) {
+		http.Error(response, "BRLY/2 is required", http.StatusUpgradeRequired)
+		return
+	}
 	hostID := strings.TrimSpace(request.URL.Query().Get("host_id"))
 	if !validHostID(hostID) {
 		http.Error(response, "invalid host_id", http.StatusBadRequest)
+		return
+	}
+	if len(request.URL.Query().Get("name")) > 256 {
+		http.Error(response, "invalid host name", http.StatusBadRequest)
 		return
 	}
 	credential := bearerToken(request)
@@ -135,6 +276,10 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 		return
 	}
 	tunnel := newHostTunnel(connection)
+	if err := server.hostHandshake(connection, hostID, credential); err != nil {
+		tunnel.close()
+		return
+	}
 	if !server.registry.connectHost(hostID, strings.TrimSpace(request.URL.Query().Get("name")), credential, tunnel) {
 		tunnel.close()
 		return
@@ -147,6 +292,135 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 	_ = tunnel.readLoop(func() { server.registry.touchHost(hostID, tunnel) })
 }
 
+func hostWantsV2(request *http.Request) bool {
+	if strings.TrimSpace(request.URL.Query().Get("version")) == "2.0" {
+		return true
+	}
+	for _, value := range request.Header.Values("Sec-WebSocket-Protocol") {
+		for _, protocol := range strings.Split(value, ",") {
+			if strings.TrimSpace(strings.ToLower(protocol)) == "brly/2" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type relayChallenge struct {
+	Type         string   `json:"t"`
+	Version      string   `json:"version"`
+	Nonce        string   `json:"nonce"`
+	RelayID      string   `json:"relay_id"`
+	KeyID        string   `json:"key_id,omitempty"`
+	Capabilities []string `json:"capabilities"`
+}
+
+type relayHello struct {
+	Type         string   `json:"t"`
+	Version      string   `json:"version"`
+	HostID       string   `json:"host_id"`
+	Capabilities []string `json:"capabilities"`
+	Proof        string   `json:"proof"`
+}
+
+func (server *Server) hostHandshake(connection *websocket.Conn, hostID, credential string) error {
+	nonce, err := randomToken(24)
+	if err != nil {
+		return err
+	}
+	challenge := relayChallenge{
+		Type: "relay_challenge", Version: "2.0", Nonce: nonce,
+		RelayID: relayID(server.config.PublicURL), KeyID: server.signer.currentKeyID(),
+		Capabilities: []string{"control", "http", "upgrade", "p2p-signal"},
+	}
+	if err := connection.WriteJSON(challenge); err != nil {
+		return err
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	messageType, payload, err := connection.ReadMessage()
+	if err != nil || messageType != websocket.TextMessage {
+		return errors.New("invalid host hello")
+	}
+	var hello relayHello
+	if json.Unmarshal(payload, &hello) != nil || hello.Type != "host_hello" || hello.Version != "2.0" || hello.HostID != hostID {
+		return errors.New("invalid host hello")
+	}
+	if !hasAllCapabilities(hello.Capabilities, []string{"control", "http", "upgrade"}) {
+		return errors.New("host capabilities do not satisfy relay")
+	}
+	canonical := canonicalChallenge(challenge, hostID)
+	if !verifyChallengeProof(credential, canonical, hello.Proof) {
+		return errors.New("invalid host challenge proof")
+	}
+	generation, ok := server.registry.generation(hostID)
+	if !ok {
+		return errHostNotFound
+	}
+	welcome := map[string]any{
+		"t": "host_welcome", "version": "2.0", "generation": generation,
+		"limits": map[string]any{"frame_bytes": maxRelayMessageBytes, "window_bytes": initialStreamWindow},
+	}
+	if route, ok := server.registry.route(hostID); ok {
+		welcome["route"] = route
+	}
+	if err := connection.WriteJSON(welcome); err != nil {
+		return err
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	return nil
+}
+
+func hasAllCapabilities(advertised, required []string) bool {
+	set := make(map[string]struct{}, len(advertised))
+	for _, value := range advertised {
+		set[strings.TrimSpace(value)] = struct{}{}
+	}
+	for _, value := range required {
+		if _, ok := set[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func relayID(publicURL string) string {
+	digest := sha256.Sum256([]byte(publicURL))
+	return base64.RawURLEncoding.EncodeToString(digest[:8])
+}
+
+func relayPathPrefix(publicURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil {
+		return ""
+	}
+	prefix := strings.TrimRight(parsed.EscapedPath(), "/")
+	if prefix == "" || prefix == "." || prefix == "/" || !strings.HasPrefix(prefix, "/") {
+		return ""
+	}
+	return prefix
+}
+
+func relayPublicOrigin(publicURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func (server *Server) publicPath(value string) string {
+	value = "/" + strings.TrimLeft(value, "/")
+	return strings.TrimRight(server.basePath, "/") + value
+}
+
+func canonicalChallenge(challenge relayChallenge, hostID string) string {
+	return strings.Join([]string{challenge.Version, challenge.RelayID, challenge.Nonce, hostID, strings.Join(challenge.Capabilities, ",")}, "|")
+}
+
 func (server *Server) provisionHost(response http.ResponseWriter, request *http.Request) {
 	if !secureEqual(bearerToken(request), server.config.AdminToken) {
 		http.Error(response, "unauthorized", http.StatusUnauthorized)
@@ -156,16 +430,71 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil || !validHostID(strings.TrimSpace(body.ID)) {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || !validHostID(strings.TrimSpace(body.ID)) {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
-	credential, err := server.registry.provisionHost(strings.TrimSpace(body.ID), strings.TrimSpace(body.Name))
-	if err != nil {
+	if err := server.registry.provisionHost(strings.TrimSpace(body.ID), strings.TrimSpace(body.Name)); err != nil {
 		http.Error(response, "provision failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(response, http.StatusCreated, map[string]any{"host_id": body.ID, "host_credential": credential})
+	ticket, expires, _ := server.registry.enrollmentTicket(strings.TrimSpace(body.ID))
+	keyID, publicKey := server.signer.currentPublicKey()
+	settingsURL := server.relaySettingsURL(strings.TrimSpace(body.ID), ticket, keyID, publicKey)
+	writeJSON(response, http.StatusCreated, map[string]any{
+		"host_id":           body.ID,
+		"enrollment_ticket": ticket,
+		"expires_at":        expires.UTC().Format(time.RFC3339),
+		"relay_key_id":      keyID,
+		"relay_public_key":  base64.RawStdEncoding.EncodeToString(publicKey),
+		// The setup link contains only the one-time enrollment ticket and
+		// public Relay metadata. It never carries the Host Secret.
+		"settings_url": settingsURL,
+	})
+}
+
+// relaySettingsURL builds the canonical Warren desktop setup link. The
+// configured PublicURL may include a reverse-proxy path prefix; preserve that
+// prefix while dropping query and fragment components so deployment metadata
+// can never accidentally smuggle a secret into the link.
+func (server *Server) relaySettingsURL(hostID, enrollmentTicket, keyID string, publicKey []byte) string {
+	base := strings.TrimRight(relayPublicOrigin(server.config.PublicURL), "/") + strings.TrimRight(server.basePath, "/")
+	values := url.Values{}
+	values.Set("section", "relay")
+	values.Set("relayUrl", base)
+	values.Set("hostId", hostID)
+	values.Set("enrollmentTicket", enrollmentTicket)
+	values.Set("relayKeyId", keyID)
+	values.Set("relayPublicKey", base64.RawStdEncoding.EncodeToString(publicKey))
+	return (&url.URL{Scheme: "warren", Host: "settings", RawQuery: values.Encode()}).String()
+}
+
+func (server *Server) enrollHost(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	if !server.pairingLimiter.allow("enroll-ip:"+requestClientIP(request), "enroll-host:"+hostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
+	var body struct {
+		EnrollmentTicket string `json:"enrollment_ticket"`
+		HostSecret       string `json:"host_secret"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
+		http.Error(response, "invalid request", http.StatusBadRequest)
+		return
+	}
+	secret := strings.TrimSpace(body.HostSecret)
+	generation, err := server.registry.enrollment(hostID, body.EnrollmentTicket, secret)
+	if err != nil {
+		http.Error(response, "invalid enrollment", http.StatusUnauthorized)
+		return
+	}
+	keyID, publicKey := server.signer.currentPublicKey()
+	writeJSON(response, http.StatusOK, map[string]any{"host_id": hostID, "generation": generation, "enrolled": true, "relay_key_id": keyID, "relay_public_key": base64.RawStdEncoding.EncodeToString(publicKey)})
 }
 
 func (server *Server) revokeHost(response http.ResponseWriter, request *http.Request) {
@@ -181,7 +510,19 @@ func (server *Server) revokeHost(response http.ResponseWriter, request *http.Req
 		}
 		return
 	}
+	server.revokeRefreshFamilies(request.PathValue("hostID"))
 	response.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) revokeRefreshFamilies(hostID string) {
+	server.sessionMu.Lock()
+	defer server.sessionMu.Unlock()
+	for hash, entry := range server.refreshTokens {
+		if entry.HostID == hostID {
+			server.revokedFamilies[entry.Family] = true
+			delete(server.refreshTokens, hash)
+		}
+	}
 }
 
 func (server *Server) beginPairing(response http.ResponseWriter, request *http.Request) {
@@ -189,6 +530,10 @@ func (server *Server) beginPairing(response http.ResponseWriter, request *http.R
 	credential := bearerToken(request)
 	if !secureEqual(credential, server.config.AdminToken) && !server.registry.authenticateHost(hostID, credential) {
 		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+hostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
 	code, err := server.registry.beginPairing(hostID, server.config.PairingTTL)
@@ -204,12 +549,22 @@ func (server *Server) beginPairing(response http.ResponseWriter, request *http.R
 }
 
 func (server *Server) pair(response http.ResponseWriter, request *http.Request) {
+	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
+		http.Error(response, "origin not allowed", http.StatusForbidden)
+		return
+	}
 	var body struct {
 		HostID string `json:"host_id"`
 		Code   string `json:"pairing_code"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+strings.TrimSpace(body.HostID)) {
+		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
 	generation, err := server.registry.consumePairing(body.HostID, body.Code)
@@ -222,12 +577,211 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		http.Error(response, "token issue failed", http.StatusInternalServerError)
 		return
 	}
-	base := strings.TrimSuffix(server.config.PublicURL, "/")
-	writeJSON(response, http.StatusCreated, map[string]any{
-		"host_id":      body.HostID,
-		"access_token": token,
-		"web_url":      fmt.Sprintf("%s/h/%s/#t=%s", base, url.PathEscape(body.HostID), url.QueryEscape(token)),
-		"expires_in":   int(server.config.AccessTTL.Seconds()),
+	ticket, err := randomToken(32)
+	if err != nil {
+		http.Error(response, "ticket issue failed", http.StatusInternalServerError)
+		return
+	}
+	server.sessionMu.Lock()
+	server.pairingTickets[ticket] = pairingTicket{HostID: body.HostID, Generation: generation, Expires: time.Now().Add(5 * time.Minute)}
+	server.sessionMu.Unlock()
+	base := relayPublicOrigin(server.config.PublicURL)
+	result := map[string]any{
+		"host_id":        body.HostID,
+		"access_token":   token,
+		"pairing_ticket": ticket,
+		// The browser receives only a one-time pairing ticket. The access
+		// capability remains available to native callers in the response but is
+		// never copied into browser history or a URL fragment.
+		"web_url":    fmt.Sprintf("%s%s/#t=%s", base, server.publicPath("/h/"+url.PathEscape(body.HostID)), url.QueryEscape(ticket)),
+		"expires_in": int(server.config.AccessTTL.Seconds()),
+	}
+	if route, ok := server.registry.route(body.HostID); ok {
+		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: body.HostID, Scope: []string{"tunnel"}, Generation: generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
+			result["tunnel_token"] = tunnelToken
+		}
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (server *Server) exchangeSession(response http.ResponseWriter, request *http.Request) {
+	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
+		http.Error(response, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		PairingTicket string `json:"pairing_ticket"`
+		ClientID      string `json:"client_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
+		http.Error(response, "invalid request", http.StatusBadRequest)
+		return
+	}
+	ticket := strings.TrimSpace(body.PairingTicket)
+	server.sessionMu.Lock()
+	entry, ok := server.pairingTickets[ticket]
+	if ok && strings.TrimSpace(request.PathValue("hostID")) != "" && strings.TrimSpace(request.PathValue("hostID")) != entry.HostID {
+		server.sessionMu.Unlock()
+		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+		return
+	}
+	if ok && time.Now().After(entry.Expires) {
+		delete(server.pairingTickets, ticket)
+		ok = false
+	} else if ok {
+		delete(server.pairingTickets, ticket)
+	}
+	server.sessionMu.Unlock()
+	if !ok || ticket == "" || time.Now().After(entry.Expires) {
+		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+		return
+	}
+	access, err := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"control"}, Generation: entry.Generation, ClientID: strings.TrimSpace(body.ClientID), Expiry: time.Now().Add(server.config.AccessTTL).Unix()})
+	if err != nil {
+		http.Error(response, "token issue failed", http.StatusInternalServerError)
+		return
+	}
+	refresh, err := server.newRefresh(entry.HostID, entry.Generation, strings.TrimSpace(body.ClientID))
+	if err != nil {
+		http.Error(response, "refresh issue failed", http.StatusInternalServerError)
+		return
+	}
+	server.setRefreshCookie(response, request, entry.HostID, refresh)
+	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds())}
+	if route, ok := server.registry.route(entry.HostID); ok {
+		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"tunnel"}, Generation: entry.Generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
+			result["tunnel_token"] = tunnelToken
+			server.setTunnelCookie(response, request, tunnelToken)
+		}
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (server *Server) refreshSession(response http.ResponseWriter, request *http.Request) {
+	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
+		http.Error(response, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if request.Body != nil {
+		decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil && err != io.EOF {
+			http.Error(response, "invalid request", http.StatusBadRequest)
+			return
+		}
+	}
+	refresh := strings.TrimSpace(body.RefreshToken)
+	if refresh == "" {
+		if cookie, err := request.Cookie("warren_refresh"); err == nil {
+			refresh = cookie.Value
+		}
+	}
+	hash := hashRefresh(refresh)
+	server.sessionMu.Lock()
+	entry, ok := server.refreshTokens[hash]
+	if ok {
+		delete(server.refreshTokens, hash)
+		server.usedRefresh[hash] = entry.Family
+	}
+	if !ok {
+		if family, reused := server.usedRefresh[hash]; reused {
+			server.revokedFamilies[family] = true
+		}
+	}
+	familyRevoked := ok && server.revokedFamilies[entry.Family]
+	if ok && server.revokedFamilies[entry.Family] {
+		familyRevoked = true
+	}
+	server.sessionMu.Unlock()
+	if !ok || familyRevoked || refresh == "" || time.Now().After(entry.Expires) {
+		http.Error(response, "invalid refresh capability", http.StatusUnauthorized)
+		return
+	}
+	if generation, exists := server.registry.generation(entry.HostID); !exists || generation != entry.Generation {
+		http.Error(response, "invalid refresh capability", http.StatusUnauthorized)
+		return
+	}
+	access, err := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"control"}, Generation: entry.Generation, ClientID: entry.ClientID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()})
+	if err != nil {
+		http.Error(response, "token issue failed", http.StatusInternalServerError)
+		return
+	}
+	next, err := server.newRefreshInFamily(entry.HostID, entry.Generation, entry.Family, entry.ClientID)
+	if err != nil {
+		http.Error(response, "refresh issue failed", http.StatusInternalServerError)
+		return
+	}
+	server.setRefreshCookie(response, request, entry.HostID, next)
+	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds())}
+	if route, ok := server.registry.route(entry.HostID); ok {
+		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"tunnel"}, Generation: entry.Generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
+			result["tunnel_token"] = tunnelToken
+			server.setTunnelCookie(response, request, tunnelToken)
+		}
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func hashRefresh(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func (server *Server) newRefresh(hostID string, generation uint64, clientID ...string) (string, error) {
+	family, err := randomToken(16)
+	if err != nil {
+		return "", err
+	}
+	id := ""
+	if len(clientID) > 0 {
+		id = clientID[0]
+	}
+	return server.newRefreshInFamily(hostID, generation, family, id)
+}
+
+func (server *Server) newRefreshInFamily(hostID string, generation uint64, family string, clientID ...string) (string, error) {
+	value, err := randomToken(32)
+	if err != nil {
+		return "", err
+	}
+	server.sessionMu.Lock()
+	id := ""
+	if len(clientID) > 0 {
+		id = clientID[0]
+	}
+	server.refreshTokens[hashRefresh(value)] = refreshRecord{Family: family, HostID: hostID, Generation: generation, ClientID: id, Expires: time.Now().Add(server.config.RefreshTTL)}
+	server.sessionMu.Unlock()
+	return value, nil
+}
+
+func (server *Server) setRefreshCookie(response http.ResponseWriter, request *http.Request, hostID, value string) {
+	secure := request.TLS != nil || strings.HasPrefix(strings.ToLower(server.config.PublicURL), "https://")
+	cookiePath := "/"
+	// The host-scoped Web alias keeps the refresh cookie within one host
+	// namespace. Native clients use the unscoped endpoint and must be able to
+	// rotate the cookie at /v1/session/refresh, so do not issue a cookie whose
+	// Path excludes that endpoint.
+	if validHostID(hostID) && strings.TrimSpace(request.PathValue("hostID")) != "" {
+		cookiePath = server.publicPath("/h/" + url.PathEscape(hostID) + "/")
+	}
+	http.SetCookie(response, &http.Cookie{Name: "warren_refresh", Value: value, Path: cookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, MaxAge: int(server.config.RefreshTTL.Seconds())})
+}
+
+func (server *Server) setTunnelCookie(response http.ResponseWriter, request *http.Request, value string) {
+	secure := request.TLS != nil || strings.HasPrefix(strings.ToLower(server.config.PublicURL), "https://")
+	http.SetCookie(response, &http.Cookie{
+		Name:     "warren_tunnel",
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(server.config.AccessTTL.Seconds()),
 	})
 }
 
@@ -249,11 +803,22 @@ func (server *Server) getHost(response http.ResponseWriter, request *http.Reques
 }
 
 func (server *Server) connectClient(response http.ResponseWriter, request *http.Request) {
-	if server.config.AllowedOrigin != "" && request.Header.Get("Origin") != server.config.AllowedOrigin {
+	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
 		http.Error(response, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	hostID := request.URL.Query().Get("host_id")
+	if !server.clientLimiter.allow("ip:" + requestClientIP(request)) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
+	requestedHostID := ""
+	if scopedHostID := strings.TrimSpace(request.PathValue("hostID")); scopedHostID != "" {
+		if !validHostID(scopedHostID) {
+			http.Error(response, "invalid host_id", http.StatusBadRequest)
+			return
+		}
+		requestedHostID = scopedHostID
+	}
 	client, err := server.upgrader.Upgrade(response, request, nil)
 	if err != nil {
 		return
@@ -263,16 +828,31 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
 	messageType, authPayload, err := client.ReadMessage()
 	var auth struct {
-		Type  string `json:"t"`
-		Token string `json:"token"`
+		Type        string `json:"t"`
+		AccessToken string `json:"access_token"`
+		ClientID    string `json:"client_id"`
+		Version     string `json:"version"`
 	}
-	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" {
+	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" || auth.Version != "2.0" || strings.TrimSpace(auth.AccessToken) == "" {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
 		return
 	}
-	claims, err := server.verifyAccess(auth.Token, hostID)
+	claims, err := server.signer.verify(auth.AccessToken, requestedHostID, "control")
 	if err != nil {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		return
+	}
+	hostID := claims.HostID
+	if requestedHostID != "" && requestedHostID != hostID {
+		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		return
+	}
+	if claims.ClientID != "" && (auth.ClientID == "" || auth.ClientID != claims.ClientID) {
+		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		return
+	}
+	if !server.clientLimiter.allow("host:" + hostID) {
+		_ = client.WriteJSON(map[string]string{"t": "error", "message": "rate limit exceeded"})
 		return
 	}
 	tunnel := server.registry.authorizedTunnel(hostID, claims.Generation)
@@ -284,7 +864,7 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	client.SetPongHandler(func(string) error {
 		return client.SetReadDeadline(time.Now().Add(75 * time.Second))
 	})
-	connectionID, route, err := tunnel.openClient()
+	connectionID, route, err := tunnel.openStream(&streamOpen{Class: "control", Version: "2.0", HostID: hostID, ClientID: claims.ClientID, Token: auth.AccessToken})
 	if err != nil {
 		return
 	}
@@ -337,7 +917,7 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	for {
 		select {
 		case frame := <-route.frames:
-			if frame.Kind == frameClose {
+			if frame.Kind == frameClose || frame.Kind == frameError {
 				return
 			}
 			messageType := websocket.TextMessage
@@ -348,16 +928,977 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 			if client.WriteMessage(messageType, frame.Payload) != nil {
 				return
 			}
+			if frame.Kind == frameText || frame.Kind == frameBinary {
+				if tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: connectionID, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}) != nil {
+					return
+				}
+			}
 		case <-route.done:
 			return
 		case frame := <-clientFrames:
-			if tunnel.send(frame) != nil {
+			if tunnel.sendStream(connectionID, frame) != nil {
 				return
 			}
 		case <-clientErrors:
 			return
 		}
 	}
+}
+
+func originAllowed(configured, origin string) bool {
+	if strings.TrimSpace(origin) == "" {
+		// Native clients and Host connectors do not send a browser Origin.
+		return true
+	}
+	for _, allowed := range strings.Split(configured, ",") {
+		if strings.TrimSpace(allowed) != "" && secureEqual(strings.TrimSpace(allowed), origin) {
+			return true
+		}
+	}
+	return false
+}
+
+func (server *Server) configureRoute(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	credential := bearerToken(request)
+	if !secureEqual(credential, server.config.AdminToken) && !server.registry.authenticateHost(hostID, credential) {
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		PublicHostname   string   `json:"public_hostname"`
+		PathPrefix       string   `json:"path_prefix"`
+		AuthMode         string   `json:"auth_mode"`
+		Enabled          *bool    `json:"enabled"`
+		AllowedMethods   []string `json:"allowed_methods"`
+		AllowedPaths     []string `json:"allowed_paths"`
+		AllowCredentials *bool    `json:"allow_credentials"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(response, request.Body, 64*1024)).Decode(&body); err != nil && err != io.EOF {
+		http.Error(response, "invalid request", http.StatusBadRequest)
+		return
+	}
+	generation, ok := server.registry.generation(hostID)
+	if !ok {
+		http.Error(response, "not found", http.StatusNotFound)
+		return
+	}
+	route, exists := server.registry.route(hostID)
+	if !exists {
+		routeID, err := randomToken(16)
+		if err != nil {
+			http.Error(response, "route issue failed", http.StatusInternalServerError)
+			return
+		}
+		// Raw URL base64 may contain '_' or a leading/trailing '-' which are not
+		// valid in a DNS label. Keep route IDs URL-safe while making the
+		// generated default hostname valid without requiring a caller-provided
+		// public hostname.
+		routeID = "r" + strings.NewReplacer("_", "-", "=", "").Replace(routeID) + "r"
+		hostname := strings.ToLower(strings.TrimSpace(body.PublicHostname))
+		pathPrefix := "/"
+		if hostname == "" {
+			hostname, pathPrefix = server.defaultRouteAddress(routeID)
+		} else if hostnameUsesPathFallback(hostname) {
+			// An IP/port Relay has no wildcard DNS to allocate a hostname for
+			// every Host. Keep the route on the configured authority and use an
+			// opaque path segment as the route discriminator instead.
+			pathPrefix = "/t/" + routeID
+		}
+		route = routeRecord{ID: routeID, PublicHostname: hostname, HostID: hostID, Generation: generation, PathPrefix: pathPrefix, AuthMode: "owner", Enabled: true}
+		exists = true
+	}
+	if body.PublicHostname != "" {
+		route.PublicHostname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(body.PublicHostname), "."))
+		if body.PathPrefix == "" && hostnameUsesPathFallback(route.PublicHostname) && route.PathPrefix == "/" {
+			route.PathPrefix = "/t/" + route.ID
+		}
+	}
+	if !validRouteHostname(route.PublicHostname) {
+		http.Error(response, "invalid public_hostname", http.StatusBadRequest)
+		return
+	}
+	if body.PathPrefix != "" {
+		if !strings.HasPrefix(body.PathPrefix, "/") {
+			http.Error(response, "invalid path_prefix", http.StatusBadRequest)
+			return
+		}
+		route.PathPrefix = path.Clean(body.PathPrefix)
+	}
+	if body.AuthMode != "" {
+		if body.AuthMode != "public" && body.AuthMode != "owner" {
+			http.Error(response, "invalid auth_mode", http.StatusBadRequest)
+			return
+		}
+		route.AuthMode = body.AuthMode
+	}
+	if body.Enabled != nil {
+		route.Enabled = *body.Enabled
+	}
+	if body.AllowedMethods != nil {
+		route.AllowedMethods = normalizePolicyValues(body.AllowedMethods)
+	}
+	if body.AllowedPaths != nil {
+		route.AllowedPaths = normalizePolicyValues(body.AllowedPaths)
+	}
+	if body.AllowCredentials != nil {
+		route.AllowCredentials = *body.AllowCredentials
+	}
+	route.Generation = generation
+	if err := server.registry.setRoute(hostID, &route); err != nil {
+		if errors.Is(err, errRouteConflict) {
+			http.Error(response, "route hostname already owned", http.StatusConflict)
+		} else {
+			http.Error(response, "route update failed", http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, route)
+}
+
+// defaultRouteAddress returns the route authority and path for a newly
+// created route. Domain deployments keep the historical per-route hostname;
+// IP/localhost deployments use the Relay authority and an opaque path so a
+// single listener can host multiple routes without wildcard DNS.
+func (server *Server) defaultRouteAddress(routeID string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(server.config.PublicURL))
+	if err == nil && parsed.Hostname() != "" {
+		hostname := normalizeRouteHostname(parsed.Hostname())
+		if hostnameUsesPathFallback(hostname) {
+			return hostname, "/t/" + routeID
+		}
+	}
+	base := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(server.config.TunnelBaseDomain)), ".")
+	if base == "" {
+		base = "tunnel.local"
+	}
+	return routeID + "." + base, "/"
+}
+
+func hostnameUsesPathFallback(hostname string) bool {
+	hostname = normalizeRouteHostname(hostname)
+	return net.ParseIP(hostname) != nil || strings.EqualFold(hostname, "localhost")
+}
+
+func validRouteHostname(hostname string) bool {
+	hostname = normalizeRouteHostname(hostname)
+	if hostname == "" || len(hostname) > 253 || strings.ContainsAny(hostname, "/@") {
+		return false
+	}
+	if net.ParseIP(hostname) != nil {
+		return true
+	}
+	if strings.Contains(hostname, ":") || strings.HasPrefix(hostname, "[") || strings.HasSuffix(hostname, "]") {
+		return false
+	}
+	for _, label := range strings.Split(strings.ToLower(hostname), ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, character := range label {
+			if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func normalizePolicyValues(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func (server *Server) getRoute(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	credential := bearerToken(request)
+	if !secureEqual(credential, server.config.AdminToken) && !server.registry.authenticateHost(hostID, credential) && !server.authorizeAccess(credential, hostID) {
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	route, ok := server.registry.route(hostID)
+	if !ok {
+		http.Error(response, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(response, http.StatusOK, route)
+}
+
+func (server *Server) disableRoute(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	credential := bearerToken(request)
+	if !secureEqual(credential, server.config.AdminToken) && !server.registry.authenticateHost(hostID, credential) {
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	route, ok := server.registry.route(hostID)
+	if !ok {
+		http.Error(response, "not found", http.StatusNotFound)
+		return
+	}
+	route.Enabled = false
+	if err := server.registry.setRoute(hostID, &route); err != nil {
+		http.Error(response, "route update failed", http.StatusInternalServerError)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) publicRoute(response http.ResponseWriter, request *http.Request) {
+	// Public application routes never become a backdoor into Relay or the
+	// daemon control API, even when the route policy is public.
+	if request.URL.Path == "/v1" || strings.HasPrefix(request.URL.Path, "/v1/") ||
+		request.URL.Path == "/h" || strings.HasPrefix(request.URL.Path, "/h/") {
+		http.NotFound(response, request)
+		return
+	}
+	hostname := requestHostname(request.Host)
+	route, ok := server.registry.findRoute(hostname, request.URL.Path)
+	if !ok {
+		http.NotFound(response, request)
+		return
+	}
+	forwardRequest := request
+	if strippedPath, stripped := stripRoutePath(route, request.URL.Path); stripped {
+		clone := request.Clone(request.Context())
+		clone.URL.Path = strippedPath
+		clone.URL.RawPath = ""
+		forwardRequest = clone
+	}
+	if !routeAllows(route, forwardRequest) {
+		http.Error(response, "route policy denied", http.StatusForbidden)
+		return
+	}
+	upgrade := isUpgradeRequest(request)
+	limiter := server.publicLimiter
+	if upgrade {
+		limiter = server.upgradeLimiter
+	}
+	if !limiter.allow("ip:"+requestClientIP(request), "host:"+route.HostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
+	if err := validateRequestHeaders(request, upgrade); err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if route.AuthMode == "owner" {
+		token := bearerToken(request)
+		if token == "" {
+			if cookie, cookieErr := request.Cookie("warren_tunnel"); cookieErr == nil {
+				token = cookie.Value
+			}
+		}
+		claims, err := server.verifyScopedAccess(token, route.HostID, "tunnel", route.ID)
+		if err != nil || claims.RouteID != route.ID || claims.Generation != route.Generation {
+			http.Error(response, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	if upgrade {
+		server.forwardUpgrade(response, forwardRequest, route)
+		return
+	}
+	server.forwardHTTP(response, forwardRequest, route)
+}
+
+func requestHostname(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return normalizeRouteHostname(host)
+	}
+	return normalizeRouteHostname(raw)
+}
+
+func stripRoutePath(route routeRecord, requestPath string) (string, bool) {
+	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
+	if prefix == "." || prefix == "/" || !routeUsesPathFallback(route) {
+		return requestPath, false
+	}
+	if requestPath == prefix {
+		return "/", true
+	}
+	if strings.HasPrefix(requestPath, prefix+"/") {
+		trimmed := strings.TrimPrefix(requestPath, prefix)
+		if trimmed == "" {
+			trimmed = "/"
+		}
+		return trimmed, true
+	}
+	return requestPath, false
+}
+
+func routeUsesPathFallback(route routeRecord) bool {
+	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
+	expected := path.Clean("/t/" + strings.TrimSpace(route.ID))
+	return route.ID != "" && prefix == expected
+}
+
+func routeAllows(route routeRecord, request *http.Request) bool {
+	if len(route.AllowedMethods) > 0 {
+		allowed := false
+		for _, method := range route.AllowedMethods {
+			if strings.EqualFold(method, request.Method) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	if len(route.AllowedPaths) > 0 {
+		allowed := false
+		for _, prefix := range route.AllowedPaths {
+			if routePathMatches(prefix, request.URL.Path) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
+}
+
+func isUpgradeRequest(request *http.Request) bool {
+	return strings.EqualFold(request.Method, http.MethodGet) &&
+		headerTokenContains(request.Header.Values("Connection"), "upgrade") &&
+		strings.EqualFold(request.Header.Get("Upgrade"), "websocket")
+}
+
+func headerTokenContains(values []string, wanted string) bool {
+	for _, value := range values {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), wanted) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateRequestHeaders(request *http.Request, upgrade bool) error {
+	total := 0
+	for name, values := range request.Header {
+		if !validHeaderName(name) || len(name) > 8*1024 {
+			return errors.New("header name too large")
+		}
+		for _, value := range values {
+			if len(value) > 8*1024 || strings.ContainsAny(value, "\r\n\x00") {
+				return errors.New("header value too large")
+			}
+			total += len(name) + len(value)
+		}
+	}
+	if total > 64*1024 {
+		return errors.New("header block too large")
+	}
+	if len(request.Header.Values("Transfer-Encoding")) > 0 {
+		return errors.New("transfer-encoding is not allowed")
+	}
+	contentLengths := request.Header.Values("Content-Length")
+	if len(contentLengths) > 1 {
+		return errors.New("duplicate content-length headers")
+	}
+	connectionUpgrade := headerTokenContains(request.Header.Values("Connection"), "upgrade")
+	upgradeHeader := strings.TrimSpace(request.Header.Get("Upgrade"))
+	if connectionUpgrade != upgrade || (upgradeHeader != "" && !strings.EqualFold(upgradeHeader, "websocket")) {
+		return errors.New("invalid upgrade headers")
+	}
+	if upgrade {
+		if !strings.EqualFold(request.Header.Get("Sec-WebSocket-Version"), "13") {
+			return errors.New("unsupported websocket version")
+		}
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return errors.New("websocket upgrade requires GET")
+		}
+		keys := request.Header.Values("Sec-WebSocket-Key")
+		if len(keys) != 1 || !validWebSocketKey(keys[0]) {
+			return errors.New("invalid websocket key")
+		}
+		// The first release forwards raw post-101 bytes and deliberately does
+		// not negotiate per-message compression at the public edge.
+		if strings.TrimSpace(request.Header.Get("Sec-WebSocket-Extensions")) != "" {
+			return errors.New("websocket extensions are not supported")
+		}
+	}
+	return nil
+}
+
+func validWebSocketKey(value string) bool {
+	value = strings.TrimSpace(value)
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	return err == nil && len(decoded) == 16
+}
+
+func validWebSocketAccept(key, accept string) bool {
+	key = strings.TrimSpace(key)
+	accept = strings.TrimSpace(accept)
+	if !validWebSocketKey(key) || accept == "" {
+		return false
+	}
+	digest := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	expected := base64.StdEncoding.EncodeToString(digest[:])
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(accept)) == 1
+}
+
+func filterHeaders(header http.Header, includeUpgrade bool) [][2]string {
+	hop := map[string]bool{"connection": true, "keep-alive": true, "proxy-authenticate": true, "proxy-authorization": true, "te": true, "trailer": true, "transfer-encoding": true}
+	if !includeUpgrade {
+		hop["upgrade"] = true
+	} else {
+		// A WebSocket handshake is the one case where Connection and Upgrade
+		// are end-to-end material: the in-process Host handler must see both
+		// headers for net/http's upgrader to accept the request. The public
+		// route validates the tokens before this function is called, so this
+		// preserves only a bounded, syntactically valid handshake header.
+		delete(hop, "connection")
+	}
+	result := make([][2]string, 0, len(header))
+	for key, values := range header {
+		lower := strings.ToLower(strings.TrimSpace(key))
+		if hop[lower] || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-warren-") || lower == "host" || lower == "content-length" {
+			continue
+		}
+		for _, value := range values {
+			if len(lower) > 8*1024 || len(value) > 8*1024 {
+				continue
+			}
+			result = append(result, [2]string{lower, value})
+		}
+	}
+	return result
+}
+
+func (server *Server) openHTTPStream(request *http.Request, route routeRecord, upgrade bool) (connectionID, *clientRoute, *hostTunnel, error) {
+	tunnel := server.registry.authorizedTunnel(route.HostID, route.Generation)
+	if tunnel == nil {
+		return connectionID{}, nil, nil, errors.New("host offline")
+	}
+	requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
+	if requestID == "" || len(requestID) > 256 {
+		requestID, _ = randomToken(16)
+	}
+	open := &streamOpen{Class: "http", Version: "2.0", RequestID: requestID, DeadlineMS: 60_000, RouteID: route.ID, HostID: route.HostID}
+	if upgrade {
+		open.Class = "upgrade"
+	}
+	capability, issueErr := server.signer.issueCapability(tokenClaims{HostID: route.HostID, Scope: []string{"tunnel"}, Generation: route.Generation, RouteID: route.ID, Expiry: time.Now().Add(time.Minute).Unix()})
+	if issueErr != nil {
+		return connectionID{}, nil, nil, errors.New("unable to issue route capability")
+	}
+	open.Token = capability
+	id, stream, err := tunnel.openStream(open)
+	if err != nil {
+		return connectionID{}, nil, nil, err
+	}
+	filteredHeaders := filterHeaders(request.Header, upgrade)
+	// Relay admission credentials are never application credentials by
+	// default. This applies to owner routes as well as public routes: without
+	// an explicit policy opt-in, do not forward the tunnel capability, refresh
+	// cookie, or a caller's Authorization header to the Host handler.
+	if !route.AllowCredentials {
+		kept := filteredHeaders[:0]
+		for _, header := range filteredHeaders {
+			if header[0] != "authorization" && header[0] != "cookie" {
+				kept = append(kept, header)
+			}
+		}
+		filteredHeaders = kept
+	}
+	headers, _ := json.Marshal(httpHeadersMessage{Method: request.Method, Scheme: effectiveRequestScheme(request), Authority: request.Host, Path: request.URL.RequestURI(), BodyLimit: server.config.MaxBodyBytes, Headers: filteredHeaders})
+	if err := tunnel.send(relayFrame{Kind: frameHTTPHeaders, ConnectionID: id, Payload: headers}); err != nil {
+		tunnel.removeClient(id)
+		return connectionID{}, nil, nil, err
+	}
+	return id, stream, tunnel, nil
+}
+
+func effectiveRequestScheme(request *http.Request) string {
+	if request.TLS != nil || strings.EqualFold(request.Header.Get("X-Forwarded-Proto"), "https") {
+		return "https"
+	}
+	return "http"
+}
+
+func (server *Server) forwardHTTP(response http.ResponseWriter, request *http.Request, route routeRecord) {
+	if request.Body == nil {
+		request.Body = http.NoBody
+	}
+	if request.Body != nil {
+		request.Body = http.MaxBytesReader(response, request.Body, server.config.MaxBodyBytes)
+	}
+	id, stream, tunnel, err := server.openHTTPStream(request, route, false)
+	if err != nil {
+		if strings.Contains(err.Error(), "BRLY/2") {
+			http.Error(response, "host requires BRLY/2", http.StatusUpgradeRequired)
+			return
+		}
+		response.Header().Set("Retry-After", "5")
+		http.Error(response, "host offline", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { tunnel.removeClient(id); _ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: id}) }()
+	buffer := make([]byte, 64*1024)
+	for {
+		count, readErr := request.Body.Read(buffer)
+		if count > 0 {
+			if err := tunnel.sendStreamContext(request.Context().Done(), id, relayFrame{Kind: frameData, ConnectionID: id, Payload: append([]byte(nil), buffer[:count]...)}); err != nil {
+				_ = tunnel.send(relayFrame{Kind: frameError, ConnectionID: id, Payload: mustJSON(httpErrorMessage{Code: "backpressure", Message: "request stream window exhausted"})})
+				http.Error(response, "request stream backpressure", http.StatusTooManyRequests)
+				return
+			}
+		}
+		if readErr == io.EOF {
+			if err := tunnel.send(relayFrame{Kind: frameEnd, ConnectionID: id}); err != nil {
+				http.Error(response, "host unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			break
+		}
+		if readErr != nil {
+			code := http.StatusBadRequest
+			message := "unable to read request body"
+			if errors.As(readErr, new(*http.MaxBytesError)) {
+				code = http.StatusRequestEntityTooLarge
+				message = "request body exceeds limit"
+			}
+			_ = tunnel.send(relayFrame{Kind: frameError, ConnectionID: id, Payload: mustJSON(httpErrorMessage{Code: "request_body", Message: message})})
+			http.Error(response, message, code)
+			return
+		}
+	}
+	headerDeadline := time.NewTimer(10 * time.Second)
+	defer headerDeadline.Stop()
+	idleDeadline := time.NewTimer(60 * time.Second)
+	defer idleDeadline.Stop()
+	headersSent := false
+	for {
+		var timeout <-chan time.Time
+		if headersSent {
+			timeout = idleDeadline.C
+		} else {
+			timeout = headerDeadline.C
+		}
+		select {
+		case frame := <-stream.frames:
+			switch frame.Kind {
+			case frameHTTPHeaders:
+				if headersSent {
+					_ = tunnel.send(relayFrame{Kind: frameError, ConnectionID: id, Payload: mustJSON(httpErrorMessage{Code: "duplicate_headers"})})
+					return
+				}
+				var message httpHeadersMessage
+				if json.Unmarshal(frame.Payload, &message) != nil {
+					http.Error(response, "invalid host response", http.StatusBadGateway)
+					return
+				}
+				if err := validateHeaderPairs(message.Headers); err != nil {
+					http.Error(response, "invalid host response headers", http.StatusBadGateway)
+					return
+				}
+				status := message.Status
+				if status == 0 {
+					status = http.StatusOK
+				}
+				if status < 100 || status > 999 {
+					http.Error(response, "invalid host response status", http.StatusBadGateway)
+					return
+				}
+				for _, header := range message.Headers {
+					if strings.EqualFold(header[0], "trailer") {
+						response.Header().Add("Trailer", header[1])
+					}
+				}
+				for _, header := range filterResponseHeaders(message.Headers) {
+					response.Header().Add(header[0], header[1])
+				}
+				response.WriteHeader(status)
+				headersSent = true
+				if !idleDeadline.Stop() {
+					select {
+					case <-idleDeadline.C:
+					default:
+					}
+				}
+				idleDeadline.Reset(60 * time.Second)
+			case frameData:
+				if !headersSent {
+					http.Error(response, "host sent body before response headers", http.StatusBadGateway)
+					return
+				}
+				if _, err := response.Write(frame.Payload); err != nil {
+					return
+				}
+				if err := tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: id, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}); err != nil {
+					return
+				}
+				if !idleDeadline.Stop() {
+					select {
+					case <-idleDeadline.C:
+					default:
+					}
+				}
+				idleDeadline.Reset(60 * time.Second)
+			case frameEnd:
+				if !headersSent {
+					http.Error(response, "host ended before response headers", http.StatusBadGateway)
+					return
+				}
+				var message httpHeadersMessage
+				if len(frame.Payload) > 0 && json.Unmarshal(frame.Payload, &message) == nil {
+					for _, header := range filterResponseHeaders(message.Trailers) {
+						response.Header().Add(header[0], header[1])
+					}
+				}
+				return
+			case frameClose:
+				if !headersSent {
+					http.Error(response, "host closed before response headers", http.StatusBadGateway)
+				}
+				return
+			case frameError:
+				if !headersSent {
+					status, message := relayErrorStatus(frame.Payload)
+					http.Error(response, message, status)
+				}
+				return
+			}
+		case <-stream.done:
+			if !headersSent {
+				http.Error(response, "host closed before response headers", http.StatusBadGateway)
+			}
+			return
+		case <-timeout:
+			if headersSent {
+				http.Error(response, "host response timeout", http.StatusGatewayTimeout)
+			} else {
+				http.Error(response, "host response headers timeout", http.StatusGatewayTimeout)
+			}
+			return
+		}
+	}
+}
+
+func relayErrorStatus(payload []byte) (int, string) {
+	var message httpErrorMessage
+	if json.Unmarshal(payload, &message) == nil {
+		switch message.Code {
+		case "request_body", "body_limit":
+			if message.Message == "" {
+				message.Message = "request body exceeds limit"
+			}
+			return http.StatusRequestEntityTooLarge, message.Message
+		case "rate_limit", "backpressure":
+			if message.Message == "" {
+				message.Message = "stream rate limit exceeded"
+			}
+			return http.StatusTooManyRequests, message.Message
+		case "timeout":
+			if message.Message == "" {
+				message.Message = "host stream timed out"
+			}
+			return http.StatusGatewayTimeout, message.Message
+		}
+		if message.Message != "" {
+			return http.StatusBadGateway, message.Message
+		}
+	}
+	return http.StatusBadGateway, "host stream failed"
+}
+
+func (server *Server) forwardUpgrade(response http.ResponseWriter, request *http.Request, route routeRecord) {
+	id, stream, tunnel, err := server.openHTTPStream(request, route, true)
+	if err != nil {
+		if strings.Contains(err.Error(), "BRLY/2") {
+			http.Error(response, "host requires BRLY/2", http.StatusUpgradeRequired)
+			return
+		}
+		response.Header().Set("Retry-After", "5")
+		http.Error(response, "host offline", http.StatusServiceUnavailable)
+		return
+	}
+	cleanup := func() {
+		tunnel.removeClient(id)
+		_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: id})
+	}
+	readDeadline := time.NewTimer(10 * time.Second)
+	defer readDeadline.Stop()
+	var first relayFrame
+	select {
+	case first = <-stream.frames:
+	case <-stream.done:
+		http.Error(response, "host closed", http.StatusBadGateway)
+		cleanup()
+		return
+	case <-readDeadline.C:
+		http.Error(response, "host upgrade timeout", http.StatusGatewayTimeout)
+		cleanup()
+		return
+	}
+	if first.Kind != frameHTTPHeaders {
+		http.Error(response, "host rejected upgrade", http.StatusBadGateway)
+		cleanup()
+		return
+	}
+	var headers httpHeadersMessage
+	if json.Unmarshal(first.Payload, &headers) != nil || headers.Status != http.StatusSwitchingProtocols {
+		status := headers.Status
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		http.Error(response, http.StatusText(status), status)
+		cleanup()
+		return
+	}
+	if err := validateHeaderPairs(headers.Headers); err != nil {
+		http.Error(response, "invalid host upgrade headers", http.StatusBadGateway)
+		cleanup()
+		return
+	}
+	for _, header := range filterResponseHeaders(headers.Headers) {
+		response.Header().Add(header[0], header[1])
+	}
+	for _, header := range headers.Headers {
+		if strings.EqualFold(header[0], "sec-websocket-protocol") && header[1] != "" {
+			response.Header().Set("Sec-WebSocket-Protocol", header[1])
+		}
+	}
+	if accept := strings.TrimSpace(headerValue(headers.Headers, "Sec-WebSocket-Accept")); accept == "" {
+		http.Error(response, "host did not complete websocket handshake", http.StatusBadGateway)
+		cleanup()
+		return
+	}
+	if !validWebSocketAccept(request.Header.Get("Sec-WebSocket-Key"), headerValue(headers.Headers, "Sec-WebSocket-Accept")) {
+		http.Error(response, "host returned an invalid websocket handshake", http.StatusBadGateway)
+		cleanup()
+		return
+	}
+	if protocol := strings.TrimSpace(headerValue(headers.Headers, "Sec-WebSocket-Protocol")); protocol != "" && !offeredSubprotocol(request, protocol) {
+		http.Error(response, "host selected an unrequested websocket subprotocol", http.StatusBadGateway)
+		cleanup()
+		return
+	}
+	if hijacker, ok := response.(http.Hijacker); ok {
+		connection, buffered, hijackErr := hijacker.Hijack()
+		if hijackErr != nil {
+			http.Error(response, "websocket upgrade unavailable", http.StatusBadGateway)
+			cleanup()
+			return
+		}
+		if err := writeRawUpgradeResponse(buffered, headers.Headers); err != nil {
+			_ = connection.Close()
+			cleanup()
+			return
+		}
+		server.proxyRawUpgrade(connection, buffered, id, stream, tunnel)
+		return
+	}
+	// A real HTTP/1.1 server response is hijackable. Falling back to a second
+	// Gorilla WebSocket handshake would manufacture message boundaries and
+	// violate BRLY/2's raw post-101 byte contract, so fail closed for adapters
+	// that cannot expose the underlying connection.
+	http.Error(response, "websocket upgrade unavailable", http.StatusBadGateway)
+	cleanup()
+}
+
+// proxyRawUpgrade forwards the bytes after an HTTP/1.1 101 response without
+// parsing or manufacturing WebSocket message boundaries. This is important
+// for extensions and clients that use fragmented frames: BRLY/2 DATA is the
+// only framing Relay is allowed to add.
+func (server *Server) proxyRawUpgrade(connection net.Conn, buffered *bufio.ReadWriter, id connectionID, stream *clientRoute, tunnel *hostTunnel) {
+	defer func() {
+		_ = connection.Close()
+		tunnel.removeClient(id)
+		_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: id})
+	}()
+	_ = connection.SetDeadline(time.Now().Add(60 * time.Second))
+	clientEOF := make(chan struct{})
+	clientErrors := make(chan error, 1)
+	go func() {
+		defer close(clientEOF)
+		buffer := make([]byte, 64*1024)
+		for {
+			count, err := buffered.Read(buffer)
+			if count > 0 {
+				_ = connection.SetDeadline(time.Now().Add(60 * time.Second))
+				if sendErr := tunnel.sendStream(id, relayFrame{Kind: frameData, ConnectionID: id, Payload: append([]byte(nil), buffer[:count]...)}); sendErr != nil {
+					clientErrors <- sendErr
+					return
+				}
+			}
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					_ = tunnel.send(relayFrame{Kind: frameEnd, ConnectionID: id})
+					return
+				}
+				clientErrors <- err
+				return
+			}
+		}
+	}()
+	clientInputDone := (<-chan struct{})(clientEOF)
+	hostOutputDone := false
+	for {
+		select {
+		case frame := <-stream.frames:
+			if frame.Kind == frameClose || frame.Kind == frameError {
+				return
+			}
+			switch frame.Kind {
+			case frameData, frameText, frameBinary:
+				if _, err := buffered.Write(frame.Payload); err != nil || buffered.Flush() != nil {
+					return
+				}
+				_ = connection.SetDeadline(time.Now().Add(60 * time.Second))
+				if tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: id, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}) != nil {
+					return
+				}
+			case frameEnd:
+				halfCloseWrite(connection)
+				hostOutputDone = true
+			}
+		case <-stream.done:
+			return
+		case <-clientInputDone:
+			clientInputDone = nil
+			if hostOutputDone {
+				return
+			}
+		case <-clientErrors:
+			return
+		}
+	}
+}
+
+func writeRawUpgradeResponse(buffered *bufio.ReadWriter, headers [][2]string) error {
+	if _, err := buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\n"); err != nil {
+		return err
+	}
+	seenConnection, seenUpgrade := false, false
+	for _, header := range filterResponseHeaders(headers) {
+		name := strings.TrimSpace(header[0])
+		value := strings.TrimSpace(header[1])
+		if strings.EqualFold(name, "connection") {
+			seenConnection = true
+			continue
+		}
+		if strings.EqualFold(name, "upgrade") {
+			seenUpgrade = true
+			continue
+		}
+		if _, err := fmt.Fprintf(buffered, "%s: %s\r\n", name, value); err != nil {
+			return err
+		}
+	}
+	if !seenConnection {
+		if _, err := buffered.WriteString("Connection: Upgrade\r\n"); err != nil {
+			return err
+		}
+	}
+	if !seenUpgrade {
+		if _, err := buffered.WriteString("Upgrade: websocket\r\n"); err != nil {
+			return err
+		}
+	}
+	if _, err := buffered.WriteString("\r\n"); err != nil {
+		return err
+	}
+	return buffered.Flush()
+}
+
+func halfCloseWrite(connection net.Conn) {
+	if value, ok := connection.(interface{ CloseWrite() error }); ok {
+		_ = value.CloseWrite()
+	}
+}
+
+func offeredSubprotocol(request *http.Request, selected string) bool {
+	for _, value := range request.Header.Values("Sec-WebSocket-Protocol") {
+		for _, offered := range strings.Split(value, ",") {
+			if strings.TrimSpace(offered) == selected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mustJSON(value any) []byte { data, _ := json.Marshal(value); return data }
+
+func filterResponseHeaders(headers [][2]string) [][2]string {
+	hop := map[string]bool{"connection": true, "keep-alive": true, "proxy-authenticate": true, "proxy-authorization": true, "te": true, "trailer": true, "transfer-encoding": true, "upgrade": true, "content-length": true}
+	result := make([][2]string, 0, len(headers))
+	for _, header := range headers {
+		name := strings.ToLower(strings.TrimSpace(header[0]))
+		if name == "" || hop[name] || name == "sec-websocket-extensions" || strings.HasPrefix(name, "x-forwarded-") || strings.HasPrefix(name, "x-warren-") {
+			continue
+		}
+		if len(name) > 8*1024 || len(header[1]) > 8*1024 {
+			continue
+		}
+		result = append(result, [2]string{name, header[1]})
+	}
+	return result
+}
+
+func headerValue(headers [][2]string, wanted string) string {
+	for _, header := range headers {
+		if strings.EqualFold(strings.TrimSpace(header[0]), wanted) {
+			return strings.TrimSpace(header[1])
+		}
+	}
+	return ""
+}
+
+func validateHeaderPairs(headers [][2]string) error {
+	total := 0
+	seen := make(map[string]struct{}, len(headers))
+	for _, header := range headers {
+		name := strings.ToLower(strings.TrimSpace(header[0]))
+		value := header[1]
+		if !validHeaderName(name) || len(name) > 8*1024 || len(value) > 8*1024 || strings.ContainsAny(value, "\r\n\x00") {
+			return errors.New("invalid header size")
+		}
+		total += len(name) + len(value)
+		if total > 64*1024 {
+			return errors.New("header block too large")
+		}
+		if name == "content-length" || name == "transfer-encoding" {
+			if _, exists := seen[name]; exists {
+				return errors.New("duplicate framing headers")
+			}
+			seen[name] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, character := range name {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("!#$%&'*+-.^_`|~", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (server *Server) authorizeAccess(token, hostID string) bool {
@@ -373,6 +1914,21 @@ func (server *Server) verifyAccess(token, hostID string) (tokenClaims, error) {
 	return server.signer.verify(token, hostID, "control")
 }
 
+func (server *Server) verifyScopedAccess(token, hostID, scope, routeID string) (tokenClaims, error) {
+	claims, err := server.signer.verify(token, hostID, scope)
+	if err != nil {
+		return tokenClaims{}, err
+	}
+	if routeID != "" && claims.RouteID != routeID {
+		return tokenClaims{}, errors.New("invalid route capability")
+	}
+	generation, ok := server.registry.generation(claims.HostID)
+	if !ok || generation != claims.Generation {
+		return tokenClaims{}, errors.New("stale capability")
+	}
+	return claims, nil
+}
+
 func (server *Server) webPage(response http.ResponseWriter, request *http.Request) {
 	data, err := fs.ReadFile(server.web, "index.html")
 	if err != nil {
@@ -380,7 +1936,7 @@ func (server *Server) webPage(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	hostID, _ := json.Marshal(request.PathValue("hostID"))
-	prefix := "/h/" + url.PathEscape(request.PathValue("hostID"))
+	prefix := server.publicPath("/h/" + url.PathEscape(request.PathValue("hostID")))
 	page := strings.Replace(string(data), "content=\"__WARREN_RELAY_HOST_ID__\"", fmt.Sprintf("content=%s", string(hostID)), 1)
 	page = scopeWebPage(page, prefix)
 	response.Header().Set("Cache-Control", "no-store")
@@ -420,15 +1976,16 @@ func (server *Server) hostManifest(response http.ResponseWriter, request *http.R
 		http.Error(response, "invalid manifest", http.StatusInternalServerError)
 		return
 	}
-	manifest["start_url"] = "/h/" + host + "/"
-	manifest["scope"] = "/h/" + host + "/"
-	manifest["icons"] = []map[string]any{{"src": "/h/" + host + "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}}
+	prefix := server.publicPath("/h/" + host)
+	manifest["start_url"] = prefix + "/"
+	manifest["scope"] = prefix + "/"
+	manifest["icons"] = []map[string]any{{"src": prefix + "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}}
 	writeJSON(response, http.StatusOK, manifest)
 }
 
 func (server *Server) hostServiceWorker(response http.ResponseWriter, request *http.Request) {
 	host := url.PathEscape(request.PathValue("hostID"))
-	prefix := "/h/" + host
+	prefix := server.publicPath("/h/" + host)
 	shell := []string{prefix + "/", prefix + "/manifest.webmanifest", prefix + "/assets/app.js", prefix + "/assets/app.css"}
 	for name := range webStaticResources {
 		shell = append(shell, prefix+"/"+name)
@@ -438,9 +1995,9 @@ func (server *Server) hostServiceWorker(response http.ResponseWriter, request *h
 const SHELL=%s;
 self.addEventListener("install",e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)));self.skipWaiting()});
 self.addEventListener("activate",e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x.startsWith("warren-relay-")&&x!==CACHE).map(x=>caches.delete(x)))));self.clients.claim()});
-self.addEventListener("fetch",e=>{if(e.request.method!=="GET"||new URL(e.request.url).pathname==="/v1/client/connect")return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`, host, encodedShell)
+self.addEventListener("fetch",e=>{const p=new URL(e.request.url).pathname;if(e.request.method!=="GET"||p.includes("/v1/client/connect"))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`, host, encodedShell)
 	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	response.Header().Set("Service-Worker-Allowed", "/h/"+host+"/")
+	response.Header().Set("Service-Worker-Allowed", prefix+"/")
 	response.Header().Set("Cache-Control", "no-cache")
 	_, _ = response.Write([]byte(script))
 }

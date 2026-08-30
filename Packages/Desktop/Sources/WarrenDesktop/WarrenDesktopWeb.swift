@@ -11,9 +11,6 @@ public enum WarrenPublicAccessCopy {
     public static let edgeURL = "Edge URL"
     public static let inviteKey = "Invite Key (one time)"
     public static let approvalKey = "Approval Key (one time)"
-    /// Compatibility label for callers that still refer to the old approval
-    /// key name. New UI uses `approvalKey` explicitly.
-    public static let enrollmentKey = "Enrollment Key (one time)"
     public static let publicEndpoint = "Public Endpoint"
     public static let resetLocalSetup = "Reset local setup"
     public static let gnarProjectURL = "https://github.com/abcdlsj/gnar"
@@ -22,8 +19,7 @@ public enum WarrenPublicAccessCopy {
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var isRunning: Bool
     public var localURL: URL?
-    /// The same Web UI reachable from devices on the local network, for
-    /// example `http://192.168.1.23:8789/#t=<token>`.
+    /// The same Web UI reachable from devices on the local network.
     public var lanURL: URL?
     public var secureURL: URL?
     /// Configured self-hosted gnar Edge, without credentials.
@@ -156,12 +152,7 @@ public struct WarrenDesktopWebPanel: View {
     public let status: WarrenDesktopWebStatus
     public let canControl: Bool
     public let canCopyLocalWebURL: Bool
-    @available(*, deprecated, message: "Use canControl for Public Access controls.")
-    public var canShare: Bool { canControl }
     public let onStart: () -> Void
-    /// Deprecated callback for callers that already have a signed-in gnar
-    /// installation. New callers should configure Public Access in Settings.
-    public let onEnable: ((String, String, String) -> Void)?
     /// Opens the canonical Public Access setup page in Settings.
     public let onOpenSettings: (() -> Void)?
     public let onStop: () -> Void
@@ -176,7 +167,6 @@ public struct WarrenDesktopWebPanel: View {
         canControl: Bool = true,
         canCopyLocalWebURL: Bool = true,
         onStart: @escaping () -> Void,
-        onEnable: ((String, String, String) -> Void)? = nil,
         onOpenSettings: (() -> Void)? = nil,
         onStop: @escaping () -> Void,
         onOpenURL: @escaping (URL) -> Void,
@@ -187,34 +177,11 @@ public struct WarrenDesktopWebPanel: View {
         self.canControl = canControl
         self.canCopyLocalWebURL = canCopyLocalWebURL
         self.onStart = onStart
-        self.onEnable = onEnable
         self.onOpenSettings = onOpenSettings
         self.onStop = onStop
         self.onOpenURL = onOpenURL
         self.onCopyURL = onCopyURL
         self.onDismiss = onDismiss
-    }
-
-    @available(*, deprecated, message: "Use the canControl initializer for Public Access.")
-    public init(
-        status: WarrenDesktopWebStatus,
-        canShare: Bool = true,
-        onStart: @escaping () -> Void,
-        onStop: @escaping () -> Void,
-        onOpenURL: @escaping (URL) -> Void,
-        onCopyURL: @escaping (URL) -> Void,
-        onDismiss: @escaping () -> Void = {}
-    ) {
-        self.init(
-            status: status,
-            canControl: canShare,
-            onStart: onStart,
-            onOpenSettings: nil,
-            onStop: onStop,
-            onOpenURL: onOpenURL,
-            onCopyURL: onCopyURL,
-            onDismiss: onDismiss
-        )
     }
 
     public var body: some View {
@@ -332,10 +299,6 @@ public struct WarrenDesktopWebPanel: View {
                         onStart()
                     } else if let onOpenSettings {
                         onOpenSettings()
-                    } else if let onEnable {
-                        // Preserve the old signed-in gnar path for clients
-                        // that have not yet adopted the Settings callback.
-                        onEnable("", "", "")
                     }
                 },
                 onStop: onStop

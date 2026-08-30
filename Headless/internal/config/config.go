@@ -20,6 +20,9 @@ type Endpoint struct {
 	Token     string `json:"token"`
 	SSH       string `json:"ssh,omitempty"`
 	SSHRemote string `json:"sshRemote,omitempty"`
+	Type      string `json:"type,omitempty"`
+	HostID    string `json:"host_id,omitempty"`
+	RouteID   string `json:"route_id,omitempty"`
 }
 type Config struct {
 	Current   string              `json:"current"`
