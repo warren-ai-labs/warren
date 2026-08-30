@@ -128,6 +128,12 @@ struct WarrenCompositionRoot: View {
             onSetAutoOpenShell: { remoteModel.setAutoOpenShell($0) },
             autoStartAI: remoteModel.autoStartAI,
             onSetAutoStartAI: { remoteModel.setAutoStartAI($0) },
+            openAIBaseURL: remoteModel.openAIBaseURL,
+            openAIModel: remoteModel.openAIModel,
+            openAITitleEnabled: remoteModel.openAITitleEnabled,
+            onSetOpenAISetting: { key, value in
+                remoteModel.setOpenAISetting(key, value)
+            },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(

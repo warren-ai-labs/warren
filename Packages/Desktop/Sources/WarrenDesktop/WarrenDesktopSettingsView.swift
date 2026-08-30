@@ -10,6 +10,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: "terminal"
         case .terminalTitle: "textformat"
         case .terminalRuntime: "cpu"
+        case .aiTitles: "sparkles"
         case .presets: "hammer"
         case .workspaces: "arrow.triangle.branch"
         case .notifications: "bell"
@@ -23,6 +24,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: "Applied to every terminal surface."
         case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
+        case .aiTitles: "Generate concise titles from the opening exchange."
         case .presets: "Choose visible presets and customize every launch command."
         case .workspaces: "How projects import worktrees and enter sessions."
         case .notifications: "Choose how Warren alerts you when background Agents finish."
@@ -36,6 +38,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
+        case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
@@ -65,6 +68,10 @@ struct WarrenDesktopSettingsView: View {
     let onSetAutoOpenShell: (Bool) -> Void
     let autoStartAI: Bool
     let onSetAutoStartAI: (Bool) -> Void
+    let openAIBaseURL: String
+    let openAIModel: String
+    let openAITitleEnabled: Bool
+    let onSetOpenAISetting: (String, String) -> Void
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -90,6 +97,9 @@ struct WarrenDesktopSettingsView: View {
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
     private var agentCompletionSoundEnabled = true
+    @State private var openAIBaseURLDraft = ""
+    @State private var openAIModelDraft = ""
+    @State private var openAIKeyDraft = ""
     @State private var publicAccessEdgeURL = ""
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
@@ -345,6 +355,8 @@ struct WarrenDesktopSettingsView: View {
                     terminalTitleSection(tokens: tokens)
                 case .terminalRuntime:
                     terminalRuntimeSection(tokens: tokens)
+                case .aiTitles:
+                    aiTitlesSection(tokens: tokens)
                 case .presets:
                     presetsSection(tokens: tokens)
                 case .workspaces:
@@ -1355,6 +1367,92 @@ struct WarrenDesktopSettingsView: View {
             .fixedSize(horizontal: false, vertical: true)
 
         }
+    }
+
+    private func aiTitlesSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("AI session titles", section: .aiTitles, tokens: tokens) {
+            Text(
+                "Use an OpenAI-compatible API to suggest a concise title from the opening exchange."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
+                WarrenInputField(
+                    "API base URL",
+                    text: $openAIBaseURLDraft,
+                    placeholder: "https://api.openai.com/v1",
+                    onSubmit: { saveOpenAIField("openaiBaseURL", openAIBaseURLDraft) }
+                )
+                WarrenInputField(
+                    "Model",
+                    text: $openAIModelDraft,
+                    placeholder: "gpt-4o-mini",
+                    onSubmit: { saveOpenAIField("openaiModel", openAIModelDraft) }
+                )
+                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                    Text("API key")
+                        .font(WarrenTypography.settingsBody)
+                        .foregroundStyle(tokens.mutedForeground)
+                    SecureField("Leave blank to keep the saved key", text: $openAIKeyDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WarrenTypography.settingsControl)
+                        .accessibilityLabel("API key")
+                }
+                HStack(spacing: WarrenSpacing.compact) {
+                    Button("Save API settings") {
+                        saveOpenAISettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(WarrenTypography.settingsAction)
+                    .accessibilityIdentifier("settings.ai-titles.save")
+                    Text("The key is stored only by the Warren host and is never returned to clients.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Toggle(
+                isOn: Binding(
+                    get: { openAITitleEnabled },
+                    set: { onSetOpenAISetting("openaiTitleEnabled", $0 ? "true" : "false") }
+                )
+            ) {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    Text("Generate titles automatically")
+                        .font(WarrenTypography.settingsControl)
+                    Text("Disabled by default. Warren generates a title after the opening exchange when enabled.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("settings.ai-titles.enabled")
+        }
+        .onAppear(perform: seedOpenAIFields)
+    }
+
+    private func saveOpenAIField(_ key: String, _ value: String) {
+        onSetOpenAISetting(key, value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func saveOpenAISettings() {
+        saveOpenAIField("openaiBaseURL", openAIBaseURLDraft)
+        saveOpenAIField("openaiModel", openAIModelDraft)
+        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty {
+            onSetOpenAISetting("openaiKey", key)
+            openAIKeyDraft = ""
+        }
+    }
+
+    private func seedOpenAIFields() {
+        openAIBaseURLDraft = openAIBaseURL
+        openAIModelDraft = openAIModel
+        openAIKeyDraft = ""
     }
 
     private func settingsSection<Content: View>(

@@ -50,6 +50,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetAutoOpenShell: (Bool) -> Void
     private let autoStartAI: Bool
     private let onSetAutoStartAI: (Bool) -> Void
+    private let openAIBaseURL: String
+    private let openAIModel: String
+    private let openAITitleEnabled: Bool
+    private let onSetOpenAISetting: (String, String) -> Void
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -134,6 +138,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSetAutoOpenShell: @escaping (Bool) -> Void = { _ in },
         autoStartAI: Bool = false,
         onSetAutoStartAI: @escaping (Bool) -> Void = { _ in },
+        openAIBaseURL: String = "",
+        openAIModel: String = "",
+        openAITitleEnabled: Bool = false,
+        onSetOpenAISetting: @escaping (String, String) -> Void = { _, _ in },
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
@@ -179,6 +187,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onSetAutoOpenShell = onSetAutoOpenShell
         self.autoStartAI = autoStartAI
         self.onSetAutoStartAI = onSetAutoStartAI
+        self.openAIBaseURL = openAIBaseURL
+        self.openAIModel = openAIModel
+        self.openAITitleEnabled = openAITitleEnabled
+        self.onSetOpenAISetting = onSetOpenAISetting
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
@@ -738,6 +750,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onSetAutoOpenShell: onSetAutoOpenShell,
                 autoStartAI: autoStartAI,
                 onSetAutoStartAI: onSetAutoStartAI,
+                openAIBaseURL: openAIBaseURL,
+                openAIModel: openAIModel,
+                openAITitleEnabled: openAITitleEnabled,
+                onSetOpenAISetting: onSetOpenAISetting,
                 initialSettingsSection: settingsDeepLinkSection,
                 publicAccessPrefill: settingsPublicAccessPrefill
             )
