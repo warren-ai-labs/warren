@@ -346,3 +346,10 @@ identified safely.
 The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
+
+Owned Relay enrollment is a separate lifecycle from Public Access. A local
+client may `POST /v1/relay/enroll` with the Relay URL, Host UUID, and one-time
+enrollment ticket while authenticating with the daemon token. Headless sends
+that canonical token to Relay, validates and pins the returned signing key,
+and persists only Relay metadata. The request body and settings never accept
+or store a second Relay secret.

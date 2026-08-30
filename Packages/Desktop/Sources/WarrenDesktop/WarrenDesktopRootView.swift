@@ -41,6 +41,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebTest: ((String, String, String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebReset: (() -> Void)?
+    private let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
@@ -59,6 +60,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var settingsPresented = false
     @State private var settingsDeepLinkSection: WarrenDesktopSettingsSection?
     @State private var settingsPublicAccessPrefill: WarrenDesktopPublicAccessPrefill?
+    @State private var settingsRelayPrefill: WarrenDesktopRelayPrefill?
     @State private var navigationBeforeSettings: WarrenDesktopNavigationState?
     @State private var chromePopover: WarrenDesktopChromePopover?
     @State private var webDismissalNonce = 0
@@ -121,6 +123,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebReset: (() -> Void)? = nil,
+        onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
@@ -165,6 +168,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebTest = onWebTest
         self.onWebStop = onWebStop
         self.onWebReset = onWebReset
+        self.onRelayEnroll = onRelayEnroll
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
@@ -722,6 +726,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onWebTest: onWebTest,
                 onWebStop: onWebStop,
                 onWebReset: onWebReset,
+                onRelayEnroll: onRelayEnroll,
                 defaultRuntime: defaultRuntime,
                 onSetRuntime: onSetRuntime,
                 autoOpenShell: autoOpenShell,
@@ -729,7 +734,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 autoStartAI: autoStartAI,
                 onSetAutoStartAI: onSetAutoStartAI,
                 initialSettingsSection: settingsDeepLinkSection,
-                publicAccessPrefill: settingsPublicAccessPrefill
+                publicAccessPrefill: settingsPublicAccessPrefill,
+                relayPrefill: settingsRelayPrefill
             )
             .transition(.opacity)
         )
@@ -879,6 +885,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         setCommandPalettePresented(false)
         settingsDeepLinkSection = request?.section
         settingsPublicAccessPrefill = request?.publicAccess
+        settingsRelayPrefill = request?.relay
         navigationBeforeSettings = navigation
         // Settings overlays a still-mounted shell so its Ghostty grid
         // survives the trip; drop keyboard ownership so keystrokes go to
@@ -1056,6 +1063,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         navigationBeforeSettings = nil
         settingsDeepLinkSection = nil
         settingsPublicAccessPrefill = nil
+        settingsRelayPrefill = nil
         setSettingsPresented(false)
         if let previousNavigation {
             dispatch(.restoreNavigation(previousNavigation))

@@ -12,6 +12,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case workspaces = "Workspaces"
     case notifications = "Notifications"
     case externalIDEs = "External IDEs"
+    case relay = "Relay"
     case publicAccess = "Public Access"
 
     public var id: String { rawValue }
@@ -25,6 +26,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .workspaces: "workspaces"
         case .notifications: "notifications"
         case .externalIDEs: "external-ides"
+        case .relay: "relay"
         case .publicAccess: "public-access"
         }
     }
@@ -38,6 +40,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "workspaces", "workspace": self = .workspaces
         case "notifications", "notification": self = .notifications
         case "external-ides", "external-ide", "ides": self = .externalIDEs
+        case "relay", "owned-relay": self = .relay
         case "public-access", "publicaccess", "public": self = .publicAccess
         default: return nil
         }
@@ -47,6 +50,38 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
 public enum WarrenDesktopPublicAccessKeyKind: String, Sendable {
     case invite
     case approval
+}
+
+/// Relay enrollment metadata carried by a Warren settings link. The URL and
+/// key are public metadata; the enrollment ticket is short-lived and one-time
+/// but still acts as a credential until consumed, so callers must not log or
+/// persist the URL.
+public struct WarrenDesktopRelayPrefill: Equatable, Sendable {
+    public let relayURL: String?
+    public let hostID: String?
+    public let enrollmentTicket: String?
+    public let relayKeyID: String?
+    public let relayPublicKey: String?
+
+    public init(
+        relayURL: String? = nil,
+        hostID: String? = nil,
+        enrollmentTicket: String? = nil,
+        relayKeyID: String? = nil,
+        relayPublicKey: String? = nil
+    ) {
+        self.relayURL = Self.nonEmpty(relayURL)
+        self.hostID = Self.nonEmpty(hostID)
+        self.enrollmentTicket = Self.nonEmpty(enrollmentTicket)
+        self.relayKeyID = Self.nonEmpty(relayKeyID)
+        self.relayPublicKey = Self.nonEmpty(relayPublicKey)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 /// Values that may be carried by a Public Access setup link.
@@ -85,21 +120,25 @@ public struct WarrenDesktopPublicAccessPrefill: Equatable, Sendable {
 
 /// The canonical `warren://settings` deep link.
 ///
-/// Only Public Access links carry setup values. Other section links contain a
-/// section selector and no configuration data.
+/// Public Access and owned Relay links carry different setup values. They are
+/// intentionally separate sections so a gnar credential can never be
+/// mistaken for a Relay enrollment ticket (or vice versa).
 public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
     public static let scheme = "warren"
     public static let host = "settings"
 
     public let section: WarrenDesktopSettingsSection
     public let publicAccess: WarrenDesktopPublicAccessPrefill?
+    public let relay: WarrenDesktopRelayPrefill?
 
     public init(
         section: WarrenDesktopSettingsSection,
-        publicAccess: WarrenDesktopPublicAccessPrefill? = nil
+        publicAccess: WarrenDesktopPublicAccessPrefill? = nil,
+        relay: WarrenDesktopRelayPrefill? = nil
     ) {
         self.section = section
         self.publicAccess = section == .publicAccess ? publicAccess : nil
+        self.relay = section == .relay ? relay : nil
     }
 
     public init?(url: URL) {
@@ -129,10 +168,33 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         }
 
         self.section = section
-        guard section == .publicAccess else {
+        guard section == .publicAccess || section == .relay else {
+            self.publicAccess = nil
+            self.relay = nil
+            return
+        }
+
+        if section == .relay {
+            let relayURL = Self.nonEmpty(query["relayurl"] ?? query["url"])
+            let hostID = Self.nonEmpty(query["hostid"] ?? query["host"])
+            let enrollmentTicket = Self.nonEmpty(query["enrollmentticket"] ?? query["ticket"])
+            let relayKeyID = Self.nonEmpty(query["relaykeyid"] ?? query["keyid"])
+            let relayPublicKey = Self.nonEmpty(query["relaypublickey"] ?? query["publickey"])
+            let hasRelayValues = [relayURL, hostID, enrollmentTicket, relayKeyID, relayPublicKey].contains { $0 != nil }
+            self.relay = hasRelayValues
+                ? WarrenDesktopRelayPrefill(
+                    relayURL: relayURL,
+                    hostID: hostID,
+                    enrollmentTicket: enrollmentTicket,
+                    relayKeyID: relayKeyID,
+                    relayPublicKey: relayPublicKey
+                )
+                : nil
             self.publicAccess = nil
             return
         }
+
+        self.relay = nil
 
         let inviteKey = Self.nonEmpty(query["invitekey"])
         let approvalKey = Self.nonEmpty(query["approvalkey"])
@@ -166,7 +228,23 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         components.host = Self.host
         var items = [URLQueryItem(name: "section", value: section.deepLinkValue)]
 
-        if section == .publicAccess, let publicAccess {
+        if section == .relay, let relay {
+            if let relayURL = relay.relayURL {
+                items.append(URLQueryItem(name: "relayUrl", value: relayURL))
+            }
+            if let hostID = relay.hostID {
+                items.append(URLQueryItem(name: "hostId", value: hostID))
+            }
+            if let enrollmentTicket = relay.enrollmentTicket {
+                items.append(URLQueryItem(name: "enrollmentTicket", value: enrollmentTicket))
+            }
+            if let relayKeyID = relay.relayKeyID {
+                items.append(URLQueryItem(name: "relayKeyId", value: relayKeyID))
+            }
+            if let relayPublicKey = relay.relayPublicKey {
+                items.append(URLQueryItem(name: "relayPublicKey", value: relayPublicKey))
+            }
+        } else if section == .publicAccess, let publicAccess {
             if let edgeURL = publicAccess.edgeURL {
                 items.append(URLQueryItem(name: "edgeUrl", value: edgeURL))
             }

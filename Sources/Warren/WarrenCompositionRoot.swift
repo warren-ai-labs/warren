@@ -114,6 +114,14 @@ struct WarrenCompositionRoot: View {
             },
             onWebStop: { remoteModel.stopWeb() },
             onWebReset: { remoteModel.resetPublicAccess() },
+            onRelayEnroll: { relayURL, hostID, enrollmentTicket, completion in
+                remoteModel.enrollRelay(
+                    relayURL: relayURL,
+                    hostID: hostID,
+                    enrollmentTicket: enrollmentTicket,
+                    completion: completion
+                )
+            },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,
