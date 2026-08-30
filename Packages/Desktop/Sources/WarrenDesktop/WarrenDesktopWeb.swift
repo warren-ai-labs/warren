@@ -2,18 +2,14 @@ import SwiftUI
 import Foundation
 import WarrenDesignSystem
 
-/// Stable user-facing terminology for the owner-only reachability feature.
-/// Keeping copy in one place prevents the resource-granting concept
-/// from leaking into Public Access controls.
+/// Stable user-facing terminology for the Relay-owned public route.
 public enum WarrenPublicAccessCopy {
     public static let title = "Public Access"
-    public static let defaultTunnel = "Use default tunnel (gnar)"
-    public static let edgeURL = "Edge URL"
-    public static let inviteKey = "Invite Key (one time)"
-    public static let approvalKey = "Approval Key (one time)"
+    public static let relayURL = "Relay URL"
+    public static let publicHostname = "Public hostname"
+    public static let pathPrefix = "Path prefix"
     public static let publicEndpoint = "Public Endpoint"
-    public static let resetLocalSetup = "Reset local setup"
-    public static let gnarProjectURL = "https://github.com/abcdlsj/gnar"
+    public static let resetLocalSetup = "Reset local route"
 }
 
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
@@ -22,28 +18,22 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
     /// The same Web UI reachable from devices on the local network.
     public var lanURL: URL?
     public var secureURL: URL?
-    /// Configured self-hosted gnar Edge, without credentials.
-    public var configuredEdgeURL: URL?
-    /// Release/launcher fallback used when no custom Edge override is saved.
-    public var defaultEdgeURL: URL?
-    /// True when the effective Edge comes from the release/launcher fallback.
-    public var usingDefaultEdge: Bool
-    /// Configured non-secret gnar account label.
-    public var configuredAccountName: String?
-    /// Effective account label, including the system-name default.
-    public var effectiveAccountName: String?
-    /// True when the effective account comes from the Warren Host/system name.
-    public var usingDefaultAccount: Bool
+    /// Relay origin used for the public route.
+    public var relayURL: URL?
+    /// Relay Host identity and route metadata.
+    public var relayHostID: String?
+    public var routeID: String?
+    public var publicHostname: String?
+    public var pathPrefix: String?
+    public var authMode: String?
     /// The persisted user intent reported by the headless daemon. This is
     /// distinct from `canControl`, which only gates the Desktop controls.
     public var publicAccessEnabled: Bool
-    /// True after Warren has completed a gnar login or a token-backed
-    /// connection test. This is a presentation hint, not a token-store query.
+    /// True after Warren has authenticated to Relay and read the route.
     public var publicAccessAuthenticated: Bool
     public var canControl: Bool
-    /// True while the daemon reports a live public tunnel
-    /// (gnar/cloudflared/tailscale). Independent of `isRunning`, which only
-    /// reflects local Web reachability.
+    /// True while Relay reports an enabled public route. Independent of
+    /// `isRunning`, which only reflects local Web reachability.
     public var tunnelRunning: Bool
     public var publicAccessBusy: Bool
     public var publicAccessError: String?
@@ -55,12 +45,12 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         secureURL: URL? = nil,
         canControl: Bool = true,
         tunnelRunning: Bool = false,
-        configuredEdgeURL: URL? = nil,
-        defaultEdgeURL: URL? = nil,
-        usingDefaultEdge: Bool = false,
-        configuredAccountName: String? = nil,
-        effectiveAccountName: String? = nil,
-        usingDefaultAccount: Bool = false,
+        relayURL: URL? = nil,
+        relayHostID: String? = nil,
+        routeID: String? = nil,
+        publicHostname: String? = nil,
+        pathPrefix: String? = nil,
+        authMode: String? = nil,
         publicAccessEnabled: Bool = false,
         publicAccessAuthenticated: Bool = false,
         publicAccessBusy: Bool = false,
@@ -70,12 +60,12 @@ public struct WarrenDesktopWebStatus: Hashable, Sendable {
         self.localURL = localURL
         self.lanURL = lanURL
         self.secureURL = secureURL
-        self.configuredEdgeURL = configuredEdgeURL
-        self.defaultEdgeURL = defaultEdgeURL
-        self.usingDefaultEdge = usingDefaultEdge
-        self.configuredAccountName = configuredAccountName
-        self.effectiveAccountName = effectiveAccountName
-        self.usingDefaultAccount = usingDefaultAccount
+        self.relayURL = relayURL
+        self.relayHostID = relayHostID
+        self.routeID = routeID
+        self.publicHostname = publicHostname
+        self.pathPrefix = pathPrefix
+        self.authMode = authMode
         self.publicAccessEnabled = publicAccessEnabled
         self.publicAccessAuthenticated = publicAccessAuthenticated
         self.canControl = canControl
