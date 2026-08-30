@@ -220,51 +220,12 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             if showsPaneHeader, !displayTitle.isEmpty {
                 HStack(spacing: WarrenSpacing.xs) {
                     // Auxiliary context bar: Tab owns the primary title.
-                    // Default template renders workspace · branch · directory
-                    // as structured chips; custom title or custom template
-                    // falls back to the single templated string.
-                    if normalizedCustomTitle != nil || shouldShowTemplatedAuxiliary {
-                        Text(displayTitle)
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(tokens.mutedForeground.opacity(0.75))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                    } else {
-                        if let workspace {
-                            Label(workspace.name, systemImage: "folder")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.85))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        } else if let terminalGroup {
-                            Label(terminalGroup.name, systemImage: "terminal")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.85))
-                                .lineLimit(1)
-                        }
-                        if let branch = workspace?.branch, !branch.isEmpty {
-                            Text("·")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.5))
-                            Label(branch, systemImage: "arrow.triangle.branch")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.85))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        if !auxiliaryDirectory.isEmpty {
-                            Text("·")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.5))
-                            Text(auxiliaryDirectory)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.75))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                        }
-                    }
+                    Text(displayTitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(tokens.mutedForeground.opacity(0.75))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
                     Spacer(minLength: 0)
                     Button {
                         NSPasteboard.general.clearContents()
@@ -286,7 +247,7 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 .background(tokens.tertiaryWash.opacity(0.03))
                 .help(fullDisplayTitle)
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel("Workspace context \(fullDisplayTitle)")
+                .accessibilityLabel("Pane context \(fullDisplayTitle)")
             }
 
             ZStack {
@@ -308,29 +269,11 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     }
 
     private var displayTitle: String {
-        if let customTitle = normalizedCustomTitle {
-            return customTitle
-        }
         return titleTemplate.renderCompact(titleContext)
     }
 
     private var fullDisplayTitle: String {
-        if let customTitle = normalizedCustomTitle {
-            return customTitle
-        }
         return titleTemplate.render(titleContext)
-    }
-
-    private var auxiliaryDirectory: String {
-        TerminalDisplayTitleTemplate.abbreviateDirectory(titleContext.directory)
-    }
-
-    private var isDefaultTemplate: Bool {
-        titleTemplate.rawValue == TerminalDisplayTitleTemplate.defaultValue.rawValue
-    }
-
-    private var shouldShowTemplatedAuxiliary: Bool {
-        !isDefaultTemplate && normalizedCustomTitle == nil
     }
 
     private var normalizedCustomTitle: String? {
@@ -344,7 +287,9 @@ private struct WarrenDesktopPaneView<TerminalSurface: View>: View {
 
     private var titleContext: TerminalDisplayTitleContext {
         TerminalDisplayTitleContext(
-            session: session?.title ?? tab.title,
+            // A generated or manually renamed session is one placeholder
+            // value. It must not replace the complete auxiliary template.
+            session: normalizedCustomTitle ?? session?.title ?? tab.title,
             command: session?.runtimeProcess ?? tab.kind.displayName,
             directory: session?.workingDirectory.isEmpty == false
                 ? session!.workingDirectory

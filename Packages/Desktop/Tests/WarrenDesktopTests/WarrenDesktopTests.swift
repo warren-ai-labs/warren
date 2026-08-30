@@ -1792,6 +1792,11 @@ final class WarrenDesktopTests: XCTestCase {
                 .resolvedRequest(commandOverride: "claude --model sonnet").command,
             "claude --model sonnet"
         )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.pinned.first { $0.id == "codex" }?
+                .resolvedRequest(commandOverride: "codex --model gpt-5").title,
+            "Codex"
+        )
     }
 
     func testPresetOrderNormalizesPersistedIdentifiers() {

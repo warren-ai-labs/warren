@@ -1575,7 +1575,7 @@ export function SettingsPage({
               <section className="settings-section">
                 <header className="settings-page-heading">
                   <h2>Pane auxiliary title</h2>
-                  <p>Tab owns the primary title. This template drives the auxiliary bar below the preset row (workspace · branch · directory by default).</p>
+                  <p>Tab owns the primary title. This template drives the auxiliary bar below the preset row (session name · directory · command by default). Custom session names fill the {"{session}"} placeholder; each value is shortened to fit the pane.</p>
                 </header>
                 <label>
                   Auxiliary template

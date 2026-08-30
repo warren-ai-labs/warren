@@ -197,13 +197,26 @@ final class WarrenDomainTests: XCTestCase {
 
         XCTAssertEqual(
             TerminalDisplayTitleTemplate.defaultValue.render(context),
-            "warren · main · /Users/me/Workspace/warren"
+            "Claude · /Users/me/Workspace/warren · claude"
         )
         XCTAssertEqual(
             TerminalDisplayTitleTemplate(
                 rawValue: "{session} · {workspace}/{branch} · {user}@{host} · {os}"
             ).render(context),
             "Claude · warren/main · me@studio · macOS 15"
+        )
+    }
+
+    func testTerminalDisplayTitleUsesCustomSessionNameAsOnePlaceholder() {
+        let context = TerminalDisplayTitleContext(
+            session: "Generated session summary",
+            command: "codex",
+            directory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            TerminalDisplayTitleTemplate.defaultValue.render(context),
+            "Generated session summary · /Users/me/Workspace/warren · codex"
         )
     }
 
@@ -234,6 +247,29 @@ final class WarrenDomainTests: XCTestCase {
             TerminalDisplayTitleTemplate.abbreviateDirectory(veryLongDirectory).count,
             TerminalDisplayTitleTemplate.compactDirectoryMaxLength
         )
+    }
+
+    func testTerminalDisplayTitleCompactsEachPlaceholderIndependently() {
+        let longValue = String(repeating: "x", count: 40)
+        let context = TerminalDisplayTitleContext(
+            session: longValue,
+            command: longValue,
+            directory: "/" + (0..<40).map { "segment-\($0)" }.joined(separator: "/"),
+            workspace: longValue,
+            branch: longValue,
+            host: longValue,
+            user: longValue,
+            os: longValue
+        )
+        let template = TerminalDisplayTitleTemplate(
+            rawValue: "{session}|{command}|{directory}|{directoryName}|{workspace}|{branch}|{host}|{user}|{os}"
+        )
+        let values = template.renderCompact(context).split(separator: "|", omittingEmptySubsequences: false)
+
+        XCTAssertEqual(values.count, 9)
+        XCTAssertTrue(values.allSatisfy {
+            $0.count <= TerminalDisplayTitleTemplate.compactPlaceholderMaxLength
+        })
     }
 
     func testTerminalDisplayTitleCleansMissingValuesAndFallsBackToSession() {

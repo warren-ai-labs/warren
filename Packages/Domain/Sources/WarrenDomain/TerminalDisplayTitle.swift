@@ -41,9 +41,12 @@ public struct TerminalDisplayTitleContext: Hashable, Sendable {
 }
 
 public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable {
+    /// Maximum length applied independently to every placeholder when a title
+    /// is rendered in the constrained pane header.
+    public static let compactPlaceholderMaxLength = 32
     public static let compactDirectoryMaxLength = 32
 
-    public static let defaultValue = Self(rawValue: "{workspace} · {branch} · {directory}")
+    public static let defaultValue = Self(rawValue: "{session} · {directory} · {command}")
 
     public static let placeholders: [(token: String, description: String)] = [
         ("{session}", "Session name"),
@@ -68,22 +71,12 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
         return renderTemplate(values: values(for: context))
     }
 
-    /// Render a pane title with a bounded, scannable directory path.
+    /// Render a pane title with bounded, scannable placeholder values.
     ///
     /// The full title remains available from `render(_:)` for tooltips and
     /// copy actions; this presentation is only for the constrained pane bar.
     public func renderCompact(_ context: TerminalDisplayTitleContext) -> String {
-        let compactContext = TerminalDisplayTitleContext(
-            session: context.session,
-            command: context.command,
-            directory: Self.abbreviateDirectory(context.directory),
-            workspace: context.workspace,
-            branch: context.branch,
-            host: context.host,
-            user: context.user,
-            os: context.os
-        )
-        return render(compactContext)
+        return renderTemplate(values: compactValues(for: context))
     }
 
     public static func abbreviateDirectory(
@@ -121,6 +114,31 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
             "{user}": context.user,
             "{os}": context.os,
         ]
+    }
+
+    private func compactValues(for context: TerminalDisplayTitleContext) -> [String: String] {
+        [
+            "{session}": Self.abbreviate(context.session),
+            "{command}": Self.abbreviate(context.command),
+            "{directory}": Self.abbreviateDirectory(
+                context.directory,
+                maxLength: Self.compactDirectoryMaxLength
+            ),
+            "{directoryName}": Self.abbreviate(context.directoryName),
+            "{workspace}": Self.abbreviate(context.workspace),
+            "{branch}": Self.abbreviate(context.branch),
+            "{host}": Self.abbreviate(context.host),
+            "{user}": Self.abbreviate(context.user),
+            "{os}": Self.abbreviate(context.os),
+        ]
+    }
+
+    private static func abbreviate(
+        _ value: String,
+        maxLength: Int = compactPlaceholderMaxLength
+    ) -> String {
+        guard maxLength > 0, value.count > maxLength else { return value }
+        return middleEllipsis(value, maxLength: maxLength)
     }
 
     private func renderTemplate(values: [String: String]) -> String {

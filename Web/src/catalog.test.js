@@ -14,6 +14,8 @@ import {
 } from "./navigation.js";
 import {
   abbreviateDirectory,
+  compactPlaceholderMaxLength,
+  defaultTitleTemplate,
   renderCompactTerminalTitle,
   renderTerminalTitle,
   sessionDisplayTitle,
@@ -269,6 +271,16 @@ test("terminal title removes empty separators", () => {
   );
 });
 
+test("default pane title uses session, directory, and command", () => {
+  assert.equal(
+    renderTerminalTitle(
+      defaultTitleTemplate,
+      { title: "Codex", customTitle: "Generated summary", process: "codex", directory: "/work/warren" },
+    ),
+    "Generated summary · /work/warren · codex",
+  );
+});
+
 test("compact pane titles abbreviate parent directories and preserve full titles", () => {
   const directory = "/Users/lisongjian/Workspace/gh/abcdlsj/warren";
   assert.equal(abbreviateDirectory(directory), "/U/l/W/g/a/warren");
@@ -290,6 +302,32 @@ test("compact directory titles stay within the hard limit", () => {
   const compact = abbreviateDirectory(directory);
   assert.ok(compact.length <= 32);
   assert.match(compact, /^\/.+….+$/);
+});
+
+test("compact pane titles bound every placeholder independently", () => {
+  const longValue = "x".repeat(40);
+  const directory = `/${Array.from({ length: 40 }, (_, index) => `segment-${index}`).join("/")}`;
+  const compact = renderCompactTerminalTitle(
+    "{session}|{command}|{directory}|{directoryName}|{workspace}|{branch}|{host}|{user}|{os}",
+    {
+      title: longValue,
+      process: longValue,
+      directory,
+    },
+    {
+      name: longValue,
+      branch: longValue,
+    },
+    {
+      name: longValue,
+      user: longValue,
+      os: longValue,
+    },
+  );
+
+  const values = compact.split("|");
+  assert.equal(values.length, 9);
+  assert.ok(values.every(value => Array.from(value).length <= compactPlaceholderMaxLength));
 });
 
 test("terminal tab title uses directory name for interactive shells", () => {
