@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WarrenDesignSystem
 import WarrenDomain
+import WarrenObservation
 
 private extension WarrenDesktopSettingsSection {
     var iconName: String {
@@ -72,6 +73,7 @@ struct WarrenDesktopSettingsView: View {
     let openAIModel: String
     let openAITitleEnabled: Bool
     let onSetOpenAISetting: (String, String) -> Void
+    let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -100,6 +102,7 @@ struct WarrenDesktopSettingsView: View {
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
+    @State private var openAITestStatus: OpenAITestStatus = .idle
     @State private var publicAccessEdgeURL = ""
     @State private var publicAccessAccountName = ""
     @State private var publicAccessInviteKey = ""
@@ -131,6 +134,18 @@ struct WarrenDesktopSettingsView: View {
         }
 
         var accessibilityTitle: String { title }
+    }
+
+    private enum OpenAITestStatus {
+        case idle
+        case testing
+        case succeeded
+        case failed(String)
+
+        var isTesting: Bool {
+            if case .testing = self { return true }
+            return false
+        }
     }
 
     private typealias SettingsSection = WarrenDesktopSettingsSection
@@ -1407,9 +1422,40 @@ struct WarrenDesktopSettingsView: View {
                     .buttonStyle(.bordered)
                     .font(WarrenTypography.settingsAction)
                     .accessibilityIdentifier("settings.ai-titles.save")
+
+                    Button(openAITestStatus.isTesting ? "Testing…" : "Test connection") {
+                        testOpenAISettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(WarrenTypography.settingsAction)
+                    .disabled(openAITestStatus.isTesting)
+                    .accessibilityIdentifier("settings.ai-titles.test")
+                    .warrenSemanticElement(
+                        id: "settings.ai-titles.test",
+                        role: .button,
+                        label: "Test AI title connection",
+                        isEnabled: !openAITestStatus.isTesting,
+                        action: testOpenAISettings
+                    )
+
                     Text("The key is stored only by the Warren host and is never returned to clients.")
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                switch openAITestStatus {
+                case .idle, .testing:
+                    EmptyView()
+                case .succeeded:
+                    Text("Connection succeeded. Save the settings to use this endpoint for new titles.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.success)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .failed(let message):
+                    Text("Connection failed: \(message)")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1446,6 +1492,22 @@ struct WarrenDesktopSettingsView: View {
         if !key.isEmpty {
             onSetOpenAISetting("openaiKey", key)
             openAIKeyDraft = ""
+        }
+    }
+
+    private func testOpenAISettings() {
+        guard !openAITestStatus.isTesting else { return }
+        let baseURL = openAIBaseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = openAIModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        openAITestStatus = .testing
+        Task { @MainActor in
+            do {
+                try await onTestOpenAI(baseURL, model, key.isEmpty ? nil : key)
+                openAITestStatus = .succeeded
+            } catch {
+                openAITestStatus = .failed(error.localizedDescription)
+            }
         }
     }
 

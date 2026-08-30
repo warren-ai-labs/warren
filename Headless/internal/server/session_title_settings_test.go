@@ -8,10 +8,92 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
+
+func TestSettingsTestOpenAIUsesDraftCredentialWithoutPersisting(t *testing.T) {
+	type requestDetails struct {
+		authorization string
+		model         string
+	}
+	var requestsMu sync.Mutex
+	requests := make([]requestDetails, 0, 2)
+	requestSeen := make(chan struct{}, 2)
+	openAIServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode title test request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requestsMu.Lock()
+		requests = append(requests, requestDetails{
+			authorization: request.Header.Get("Authorization"),
+			model:         body.Model,
+		})
+		requestsMu.Unlock()
+		requestSeen <- struct{}{}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"Connection test title"}}]}`))
+	}))
+	defer openAIServer.Close()
+
+	state, _ := newSessionTitleStore(t)
+	service := &Service{
+		Store: state,
+		Runtime: &memoryRuntime{
+			sessions: map[string][]byte{},
+		},
+		Settings: settings.Settings{
+			OpenAIKey: "saved-key",
+		},
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
+	}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	result := requestResult[map[string]bool](t, connection, "settings.testOpenAI", map[string]any{
+		"openaiBaseURL": openAIServer.URL + "/v1",
+		"openaiModel":   "draft-model",
+		"openaiKey":     "draft-key",
+	})
+	if !result["ok"] {
+		t.Fatalf("test OpenAI result = %#v", result)
+	}
+	<-requestSeen
+
+	result = requestResult[map[string]bool](t, connection, "settings.testOpenAI", map[string]any{
+		"openaiBaseURL": openAIServer.URL + "/v1",
+		"openaiModel":   "saved-model",
+	})
+	if !result["ok"] {
+		t.Fatalf("saved-key test OpenAI result = %#v", result)
+	}
+	<-requestSeen
+
+	requestsMu.Lock()
+	gotRequests := append([]requestDetails(nil), requests...)
+	requestsMu.Unlock()
+	if len(gotRequests) != 2 {
+		t.Fatalf("OpenAI requests = %d, want two", len(gotRequests))
+	}
+	if gotRequests[0].authorization != "Bearer draft-key" || gotRequests[0].model != "draft-model" {
+		t.Fatalf("draft request = %#v", gotRequests[0])
+	}
+	if gotRequests[1].authorization != "Bearer saved-key" || gotRequests[1].model != "saved-model" {
+		t.Fatalf("saved request = %#v", gotRequests[1])
+	}
+	if service.Settings.OpenAIKey != "saved-key" {
+		t.Fatalf("test changed saved key to %q", service.Settings.OpenAIKey)
+	}
+}
 
 func TestHTTPSettingsPersistOpenAITitleConfigWithoutReturningKey(t *testing.T) {
 	settingsPath := filepath.Join(t.TempDir(), "settings.json")

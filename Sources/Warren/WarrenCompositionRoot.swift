@@ -134,6 +134,13 @@ struct WarrenCompositionRoot: View {
             onSetOpenAISetting: { key, value in
                 remoteModel.setOpenAISetting(key, value)
             },
+            onTestOpenAI: { baseURL, model, apiKey in
+                try await remoteModel.testOpenAITitle(
+                    baseURL: baseURL,
+                    model: model,
+                    apiKey: apiKey
+                )
+            },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(

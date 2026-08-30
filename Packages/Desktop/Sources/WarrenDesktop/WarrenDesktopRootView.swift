@@ -54,6 +54,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let openAIModel: String
     private let openAITitleEnabled: Bool
     private let onSetOpenAISetting: (String, String) -> Void
+    private let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -142,6 +143,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         openAIModel: String = "",
         openAITitleEnabled: Bool = false,
         onSetOpenAISetting: @escaping (String, String) -> Void = { _, _ in },
+        onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void = { _, _, _ in
+            throw URLError(.unsupportedURL)
+        },
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
@@ -191,6 +195,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.openAIModel = openAIModel
         self.openAITitleEnabled = openAITitleEnabled
         self.onSetOpenAISetting = onSetOpenAISetting
+        self.onTestOpenAI = onTestOpenAI
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
@@ -754,6 +759,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 openAIModel: openAIModel,
                 openAITitleEnabled: openAITitleEnabled,
                 onSetOpenAISetting: onSetOpenAISetting,
+                onTestOpenAI: onTestOpenAI,
                 initialSettingsSection: settingsDeepLinkSection,
                 publicAccessPrefill: settingsPublicAccessPrefill
             )

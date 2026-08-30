@@ -3906,6 +3906,26 @@ func (s *Service) titleGenerationConfigured() bool {
 		strings.TrimSpace(s.Settings.OpenAIKey) != ""
 }
 
+// TestOpenAITitle makes one best-effort title request without changing
+// settings or session state. An empty key uses the key already held by the
+// Host so clients can test a saved credential without downloading it.
+func (s *Service) TestOpenAITitle(ctx context.Context, baseURL, model, apiKey string) error {
+	if strings.TrimSpace(apiKey) == "" {
+		apiKey = s.Settings.OpenAIKey
+	}
+	requestContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := (sessiontitle.Generator{Config: sessiontitle.Config{
+		BaseURL: baseURL,
+		Model:   model,
+		APIKey:  apiKey,
+	}}).Generate(requestContext, sessiontitle.Input{
+		User:      "Verify that this coding session title endpoint is reachable.",
+		Assistant: "The endpoint is responding.",
+	})
+	return err
+}
+
 // isTitleSystemContext filters provider-injected scaffolding that can arrive
 // as a user-role event. It must not become the subject of an automatic title.
 func isTitleSystemContext(content string) bool {

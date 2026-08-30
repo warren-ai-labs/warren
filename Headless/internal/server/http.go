@@ -1028,7 +1028,7 @@ func isSlowMutation(method string) bool {
 
 func isBackgroundRequest(method string) bool {
 	switch method {
-	case "git.panel", "git.diff", "session.subscribe":
+	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI":
 		return true
 	default:
 		return false
@@ -1672,6 +1672,16 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiModel":           p.server.Service.Settings.OpenAIModel,
 			"openaiTitleEnabled":    p.server.Service.Settings.OpenAITitleEnabled,
 		})
+	case "settings.testOpenAI":
+		if err := p.server.Service.TestOpenAITitle(
+			ctx,
+			stringParam(params, "openaiBaseURL"),
+			stringParam(params, "openaiModel"),
+			stringParam(params, "openaiKey"),
+		); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"ok": true})
 	case "settings.put":
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
 		if runtimeEnv == nil {

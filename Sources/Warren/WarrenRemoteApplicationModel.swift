@@ -924,7 +924,7 @@ private actor WarrenRemoteWire {
 
 private enum WarrenRemoteDiagnostics {
     private static let sensitiveParameterNames = [
-        "authorization", "cookie", "password", "secret", "token",
+        "authorization", "cookie", "password", "secret", "token", "key",
     ]
 
     static func text(
@@ -1542,6 +1542,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self?.present(error)
             }
         }
+    }
+
+    func testOpenAITitle(
+        baseURL: String,
+        model: String,
+        apiKey: String?
+    ) async throws {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        var params = [
+            "openaiBaseURL": baseURL,
+            "openaiModel": model,
+        ]
+        let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !key.isEmpty {
+            params["openaiKey"] = key
+        }
+        _ = try await wire.request("settings.testOpenAI", params: params)
     }
 
     func setProjectAutoImportGitWorktrees(_ projectID: ProjectID, enabled: Bool) {
