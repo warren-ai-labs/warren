@@ -1,9 +1,9 @@
-- 注释、面向用户的文案、文档和提交信息使用英文。
-- 修改前先阅读相关实现、测试和文档，确认现有不变量；保持改动聚焦，不擅自扩展需求。
-- 定位问题时沿完整链路寻找根因，优先做最小因果修复，不通过更换协议、绕开原路径或牺牲用户体验来掩盖问题。
-- 涉及 UI、安装包或 TUI 时，必须验证真实运行产物；测试数据变化不能替代真实行为验证。
-- 按改动范围运行相关检查；无法运行时说明原因和未验证风险。
-- 不提交凭据、个人路径、私有主机名或敏感终端输出。
-- 多人修改同一文件时尽量保留已有改动，必要时说明冲突或取舍。
-- 实际产生代码或文档修改后，使用带类型前缀的英文提交信息及时提交，例如 `fix:`、`feat:`、`refactor:`、`test:`、`docs:`，保持提交信息简洁清晰，多次反复试错提交后自觉 squash。
-- 代码审查遵循 [`REVIEW.md`](REVIEW.md)；发布版本遵循 [`RELEASE.md`](RELEASE.md)。
+- Use English for comments, user-facing copy, documentation, and commit messages.
+- Before editing, read the relevant implementation, tests, and documentation to confirm existing invariants. Keep changes focused and do not expand the scope.
+- When diagnosing an issue, trace the full chain to find its root cause and prefer the smallest causal fix. Do not hide problems by changing protocols, bypassing the original path, or sacrificing user experience.
+- For UI, installers/packages, or TUI, verify the real running artifact; test-data changes cannot replace real behavior validation.
+- Run checks relevant to the change scope. If a check cannot run, explain why and note the unverified risks.
+- Do not commit credentials, personal paths, private hostnames, or sensitive terminal output.
+- When multiple people edit the same file, preserve existing changes where possible and explain conflicts or trade-offs when needed.
+- After making code or documentation changes, promptly commit with a concise English message using a typed prefix such as `fix:`, `feat:`, `refactor:`, `test:`, or `docs:`. Squash repeated trial commits yourself.
+- Follow [`REVIEW.md`](REVIEW.md) for code reviews and [`RELEASE.md`](RELEASE.md) for releases.
