@@ -894,14 +894,23 @@ func (server *Server) configureRoute(response http.ResponseWriter, request *http
 		// public hostname.
 		routeID = "r" + strings.NewReplacer("_", "-", "=", "").Replace(routeID) + "r"
 		hostname := strings.ToLower(strings.TrimSpace(body.PublicHostname))
+		pathPrefix := "/"
 		if hostname == "" {
-			hostname = routeID + "." + strings.TrimSuffix(strings.ToLower(server.config.TunnelBaseDomain), ".")
+			hostname, pathPrefix = server.defaultRouteAddress(routeID)
+		} else if hostnameUsesPathFallback(hostname) {
+			// An IP/port Relay has no wildcard DNS to allocate a hostname for
+			// every Host. Keep the route on the configured authority and use an
+			// opaque path segment as the route discriminator instead.
+			pathPrefix = "/t/" + routeID
 		}
-		route = routeRecord{ID: routeID, PublicHostname: hostname, HostID: hostID, Generation: generation, PathPrefix: "/", AuthMode: "owner", Enabled: true}
+		route = routeRecord{ID: routeID, PublicHostname: hostname, HostID: hostID, Generation: generation, PathPrefix: pathPrefix, AuthMode: "owner", Enabled: true}
 		exists = true
 	}
 	if body.PublicHostname != "" {
 		route.PublicHostname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(body.PublicHostname), "."))
+		if body.PathPrefix == "" && hostnameUsesPathFallback(route.PublicHostname) && route.PathPrefix == "/" {
+			route.PathPrefix = "/t/" + route.ID
+		}
 	}
 	if !validRouteHostname(route.PublicHostname) {
 		http.Error(response, "invalid public_hostname", http.StatusBadRequest)
@@ -945,9 +954,39 @@ func (server *Server) configureRoute(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, route)
 }
 
+// defaultRouteAddress returns the route authority and path for a newly
+// created route. Domain deployments keep the historical per-route hostname;
+// IP/localhost deployments use the Relay authority and an opaque path so a
+// single listener can host multiple routes without wildcard DNS.
+func (server *Server) defaultRouteAddress(routeID string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(server.config.PublicURL))
+	if err == nil && parsed.Hostname() != "" {
+		hostname := normalizeRouteHostname(parsed.Hostname())
+		if hostnameUsesPathFallback(hostname) {
+			return hostname, "/t/" + routeID
+		}
+	}
+	base := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(server.config.TunnelBaseDomain)), ".")
+	if base == "" {
+		base = "tunnel.local"
+	}
+	return routeID + "." + base, "/"
+}
+
+func hostnameUsesPathFallback(hostname string) bool {
+	hostname = normalizeRouteHostname(hostname)
+	return net.ParseIP(hostname) != nil || strings.EqualFold(hostname, "localhost")
+}
+
 func validRouteHostname(hostname string) bool {
-	hostname = strings.TrimSpace(hostname)
-	if hostname == "" || len(hostname) > 253 || strings.ContainsAny(hostname, "/:@[]") {
+	hostname = normalizeRouteHostname(hostname)
+	if hostname == "" || len(hostname) > 253 || strings.ContainsAny(hostname, "/@") {
+		return false
+	}
+	if net.ParseIP(hostname) != nil {
+		return true
+	}
+	if strings.Contains(hostname, ":") || strings.HasPrefix(hostname, "[") || strings.HasSuffix(hostname, "]") {
 		return false
 	}
 	for _, label := range strings.Split(strings.ToLower(hostname), ".") {
@@ -1017,16 +1056,20 @@ func (server *Server) publicRoute(response http.ResponseWriter, request *http.Re
 		http.NotFound(response, request)
 		return
 	}
-	hostname := request.Host
-	if host, _, err := net.SplitHostPort(hostname); err == nil {
-		hostname = host
-	}
+	hostname := requestHostname(request.Host)
 	route, ok := server.registry.findRoute(hostname, request.URL.Path)
 	if !ok {
 		http.NotFound(response, request)
 		return
 	}
-	if !routeAllows(route, request) {
+	forwardRequest := request
+	if strippedPath, stripped := stripRoutePath(route, request.URL.Path); stripped {
+		clone := request.Clone(request.Context())
+		clone.URL.Path = strippedPath
+		clone.URL.RawPath = ""
+		forwardRequest = clone
+	}
+	if !routeAllows(route, forwardRequest) {
 		http.Error(response, "route policy denied", http.StatusForbidden)
 		return
 	}
@@ -1048,10 +1091,42 @@ func (server *Server) publicRoute(response http.ResponseWriter, request *http.Re
 		}
 	}
 	if isUpgradeRequest(request) {
-		server.forwardUpgrade(response, request, route)
+		server.forwardUpgrade(response, forwardRequest, route)
 		return
 	}
-	server.forwardHTTP(response, request, route)
+	server.forwardHTTP(response, forwardRequest, route)
+}
+
+func requestHostname(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return normalizeRouteHostname(host)
+	}
+	return normalizeRouteHostname(raw)
+}
+
+func stripRoutePath(route routeRecord, requestPath string) (string, bool) {
+	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
+	if prefix == "." || prefix == "/" || !routeUsesPathFallback(route) {
+		return requestPath, false
+	}
+	if requestPath == prefix {
+		return "/", true
+	}
+	if strings.HasPrefix(requestPath, prefix+"/") {
+		trimmed := strings.TrimPrefix(requestPath, prefix)
+		if trimmed == "" {
+			trimmed = "/"
+		}
+		return trimmed, true
+	}
+	return requestPath, false
+}
+
+func routeUsesPathFallback(route routeRecord) bool {
+	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
+	expected := path.Clean("/t/" + strings.TrimSpace(route.ID))
+	return route.ID != "" && prefix == expected
 }
 
 func routeAllows(route routeRecord, request *http.Request) bool {

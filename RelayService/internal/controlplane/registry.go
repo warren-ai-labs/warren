@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -241,7 +242,9 @@ func (registry *registry) setRoute(id string, route *routeRecord) error {
 	previous := *record
 	if route != nil {
 		for otherID, other := range registry.hosts {
-			if otherID != id && other.Route != nil && normalizeRouteHostname(other.Route.PublicHostname) == normalizeRouteHostname(route.PublicHostname) {
+			if otherID != id && other.Route != nil &&
+				normalizeRouteHostname(other.Route.PublicHostname) == normalizeRouteHostname(route.PublicHostname) &&
+				routePrefixesOverlap(other.Route.PathPrefix, route.PathPrefix) {
 				return errRouteConflict
 			}
 		}
@@ -283,6 +286,8 @@ func (registry *registry) findRoute(hostname, requestPath string) (routeRecord, 
 	hostname = normalizeRouteHostname(hostname)
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
+	var matched routeRecord
+	matchedLength := -1
 	for _, record := range registry.hosts {
 		if record.Route == nil || normalizeRouteHostname(record.Route.PublicHostname) != hostname ||
 			!record.Route.Enabled || record.Route.HostID != record.ID || record.Route.Generation != record.Generation {
@@ -295,16 +300,36 @@ func (registry *registry) findRoute(hostname, requestPath string) (routeRecord, 
 		if !routePathMatches(prefix, requestPath) {
 			continue
 		}
+		if len(prefix) < matchedLength {
+			continue
+		}
 		copy := *record.Route
 		copy.AllowedMethods = append([]string(nil), copy.AllowedMethods...)
 		copy.AllowedPaths = append([]string(nil), copy.AllowedPaths...)
-		return copy, true
+		matched = copy
+		matchedLength = len(prefix)
 	}
-	return routeRecord{}, false
+	return matched, matchedLength >= 0
 }
 
 func normalizeRouteHostname(hostname string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	hostname = strings.TrimSpace(hostname)
+	if strings.HasPrefix(hostname, "[") && strings.HasSuffix(hostname, "]") {
+		hostname = strings.TrimSuffix(strings.TrimPrefix(hostname, "["), "]")
+	}
+	return strings.TrimSuffix(strings.ToLower(hostname), ".")
+}
+
+func routePrefixesOverlap(left, right string) bool {
+	left = path.Clean(strings.TrimSpace(left))
+	right = path.Clean(strings.TrimSpace(right))
+	if left == "." {
+		left = "/"
+	}
+	if right == "." {
+		right = "/"
+	}
+	return routePathMatches(left, right) || routePathMatches(right, left)
 }
 
 func routePathMatches(prefix, requestPath string) bool {

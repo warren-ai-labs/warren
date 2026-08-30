@@ -58,6 +58,25 @@ docker run --read-only --tmpfs /tmp -p 8080:8080 -v warren-relay-data:/data \
 
 If using `--read-only`, the runtime also needs a writable temporary directory (for example `--tmpfs /tmp`); persistent data is only written to `/data`.
 
+### IP and port deployments
+
+`WARREN_RELAY_PUBLIC_URL` may be an ordinary `http://` or `https://` URL with
+an IPv4/IPv6 literal and port, for example `http://192.0.2.10:8080` or
+`https://[2001:db8::10]:8443`. A DNS name and wildcard certificate are not
+required for the Relay control plane. When a route is created without an
+explicit `public_hostname`, an IP-based Relay keeps the listener authority and
+assigns an opaque path, such as:
+
+```text
+http://192.0.2.10:8080/t/<route-id>/
+```
+
+The `/t/<route-id>` prefix is removed before the request reaches Headless, so
+`/t/<route-id>/api/status` is delivered to the Host as `/api/status`. Multiple
+Hosts can share one IP and port because their route paths are independent. A
+DNS deployment continues to use the per-route hostname form; an explicit
+`path_prefix` can be used in either deployment.
+
 ## Host Registration and Connection
 
 The daemon token in `~/.warren/token` is the canonical Host Secret. Create a Host record to obtain a one-time enrollment ticket, then enroll that existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or revocation bumps the Host generation, disconnects the old socket, and invalidates capabilities from the previous generation.
