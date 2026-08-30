@@ -14,7 +14,7 @@ import (
 
 func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000010"
-	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef")})
+	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 
 func TestOwnedRelayV2HostHandshake(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000011"
-	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef")})
+	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestOwnedRelayV2HostHandshake(t *testing.T) {
 
 func TestOwnedRelayPublicHTTPRouteForwardsBRLY2Stream(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000012"
-	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), TunnelBaseDomain: "tunnel.example"})
+	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test", TunnelBaseDomain: "tunnel.example"})
 	if err != nil {
 		t.Fatal(err)
 	}

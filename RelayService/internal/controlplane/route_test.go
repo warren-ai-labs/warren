@@ -13,9 +13,10 @@ import (
 
 func TestRouteAddressUsesPathFallbackForIPRelay(t *testing.T) {
 	server, err := NewServer(Config{
-		PublicURL:  "http://192.0.2.10:8080",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "http://192.0.2.10:8080",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "http://192.0.2.10:8080",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +30,27 @@ func TestRouteAddressUsesPathFallbackForIPRelay(t *testing.T) {
 	host, prefix = server.defaultRouteAddress("route-opaque")
 	if host != "route-opaque.tunnel.local" || prefix != "/" {
 		t.Fatalf("domain Relay route address = %q %q", host, prefix)
+	}
+}
+
+func TestRelayPublicPathPrefixIsPreservedInGeneratedURLs(t *testing.T) {
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test/relay/",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.basePath != "/relay" {
+		t.Fatalf("base path = %q, want /relay", server.basePath)
+	}
+	if got := server.publicPath("/h/host-id/"); got != "/relay/h/host-id/" {
+		t.Fatalf("publicPath = %q", got)
+	}
+	if got := relayPublicOrigin(server.config.PublicURL); got != "https://relay.example.test" {
+		t.Fatalf("public origin = %q", got)
 	}
 }
 
@@ -121,9 +143,10 @@ func TestIPRelayPathRouteForwardsApplicationPath(t *testing.T) {
 	server, err := NewServer(Config{
 		// The listener's actual port is intentionally absent here. The route
 		// matches the request Host after its port is normalized.
-		PublicURL:  "http://127.0.0.1",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "http://127.0.0.1",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "http://127.0.0.1",
 	})
 	if err != nil {
 		t.Fatal(err)

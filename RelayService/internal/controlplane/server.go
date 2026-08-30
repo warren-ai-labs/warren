@@ -36,11 +36,20 @@ type Config struct {
 	TunnelBaseDomain string
 	RefreshTTL       time.Duration
 	MaxBodyBytes     int64
+	// RateLimitWindow and the operation limits are fixed-window admission
+	// controls. A zero operation limit selects the secure default; negative
+	// values are rejected rather than silently disabling abuse protection.
+	RateLimitWindow  time.Duration
+	PairingRateLimit int
+	ClientRateLimit  int
+	PublicRateLimit  int
+	UpgradeRateLimit int
 	Logger           *slog.Logger
 }
 
 type Server struct {
 	config          Config
+	basePath        string
 	registry        *registry
 	signer          *tokenSigner
 	web             fs.FS
@@ -51,6 +60,10 @@ type Server struct {
 	refreshTokens   map[string]refreshRecord
 	usedRefresh     map[string]string
 	revokedFamilies map[string]bool
+	pairingLimiter  *rateLimiter
+	clientLimiter   *rateLimiter
+	publicLimiter   *rateLimiter
+	upgradeLimiter  *rateLimiter
 }
 
 type pairingTicket struct {
@@ -98,6 +111,10 @@ func NewServer(config Config) (*Server, error) {
 	if config.AdminToken == "" {
 		return nil, errors.New("admin bootstrap token is required")
 	}
+	if strings.TrimSpace(config.AllowedOrigin) == "" {
+		return nil, errors.New("allowed origin is required")
+	}
+	config.AllowedOrigin = strings.TrimSpace(config.AllowedOrigin)
 	if config.PairingTTL == 0 {
 		config.PairingTTL = 10 * time.Minute
 	}
@@ -125,6 +142,27 @@ func NewServer(config Config) (*Server, error) {
 	if config.MaxBodyBytes < 0 {
 		return nil, errors.New("maximum body size must be positive")
 	}
+	if config.RateLimitWindow == 0 {
+		config.RateLimitWindow = time.Minute
+	}
+	if config.RateLimitWindow < 0 {
+		return nil, errors.New("rate limit window must be positive")
+	}
+	if config.PairingRateLimit == 0 {
+		config.PairingRateLimit = 10
+	}
+	if config.ClientRateLimit == 0 {
+		config.ClientRateLimit = 30
+	}
+	if config.PublicRateLimit == 0 {
+		config.PublicRateLimit = 120
+	}
+	if config.UpgradeRateLimit == 0 {
+		config.UpgradeRateLimit = 30
+	}
+	if config.PairingRateLimit < 0 || config.ClientRateLimit < 0 || config.PublicRateLimit < 0 || config.UpgradeRateLimit < 0 {
+		return nil, errors.New("rate limits must not be negative")
+	}
 	if config.TunnelBaseDomain == "" {
 		config.TunnelBaseDomain = "tunnel.local"
 	}
@@ -145,6 +183,7 @@ func NewServer(config Config) (*Server, error) {
 	}
 	server := &Server{
 		config:          config,
+		basePath:        relayPathPrefix(config.PublicURL),
 		registry:        registry,
 		signer:          signer,
 		web:             web,
@@ -154,6 +193,10 @@ func NewServer(config Config) (*Server, error) {
 		refreshTokens:   make(map[string]refreshRecord),
 		usedRefresh:     make(map[string]string),
 		revokedFamilies: make(map[string]bool),
+		pairingLimiter:  newRateLimiter(config.PairingRateLimit, config.RateLimitWindow),
+		clientLimiter:   newRateLimiter(config.ClientRateLimit, config.RateLimitWindow),
+		publicLimiter:   newRateLimiter(config.PublicRateLimit, config.RateLimitWindow),
+		upgradeLimiter:  newRateLimiter(config.UpgradeRateLimit, config.RateLimitWindow),
 	}
 	server.routes()
 	return server, nil
@@ -210,6 +253,10 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 		http.Error(response, "unsupported relay version", http.StatusUpgradeRequired)
 		return
 	}
+	if !hostWantsV2(request) {
+		http.Error(response, "BRLY/2 is required", http.StatusUpgradeRequired)
+		return
+	}
 	hostID := strings.TrimSpace(request.URL.Query().Get("host_id"))
 	if !validHostID(hostID) {
 		http.Error(response, "invalid host_id", http.StatusBadRequest)
@@ -228,13 +275,10 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 	if err != nil {
 		return
 	}
-	v2 := hostWantsV2(request)
-	tunnel := newHostTunnel(connection, v2)
-	if v2 {
-		if err := server.hostHandshake(connection, hostID, credential); err != nil {
-			tunnel.close()
-			return
-		}
+	tunnel := newHostTunnel(connection, true)
+	if err := server.hostHandshake(connection, hostID, credential); err != nil {
+		tunnel.close()
+		return
 	}
 	if !server.registry.connectHost(hostID, strings.TrimSpace(request.URL.Query().Get("name")), credential, tunnel) {
 		tunnel.close()
@@ -344,6 +388,35 @@ func relayID(publicURL string) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:8])
 }
 
+func relayPathPrefix(publicURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil {
+		return ""
+	}
+	prefix := strings.TrimRight(parsed.EscapedPath(), "/")
+	if prefix == "" || prefix == "." || prefix == "/" || !strings.HasPrefix(prefix, "/") {
+		return ""
+	}
+	return prefix
+}
+
+func relayPublicOrigin(publicURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func (server *Server) publicPath(value string) string {
+	value = "/" + strings.TrimLeft(value, "/")
+	return strings.TrimRight(server.basePath, "/") + value
+}
+
 func canonicalChallenge(challenge relayChallenge, hostID string) string {
 	return strings.Join([]string{challenge.Version, challenge.RelayID, challenge.Nonce, hostID, strings.Join(challenge.Capabilities, ",")}, "|")
 }
@@ -382,6 +455,10 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 
 func (server *Server) enrollHost(response http.ResponseWriter, request *http.Request) {
 	hostID := request.PathValue("hostID")
+	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+hostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
 	var body struct {
 		EnrollmentTicket string `json:"enrollment_ticket"`
 		HostSecret       string `json:"host_secret"`
@@ -439,6 +516,10 @@ func (server *Server) beginPairing(response http.ResponseWriter, request *http.R
 		http.Error(response, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+hostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
 	code, err := server.registry.beginPairing(hostID, server.config.PairingTTL)
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusConflict)
@@ -464,6 +545,10 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+strings.TrimSpace(body.HostID)) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
 	generation, err := server.registry.consumePairing(body.HostID, body.Code)
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusUnauthorized)
@@ -482,7 +567,7 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 	server.sessionMu.Lock()
 	server.pairingTickets[ticket] = pairingTicket{HostID: body.HostID, Generation: generation, Expires: time.Now().Add(5 * time.Minute)}
 	server.sessionMu.Unlock()
-	base := strings.TrimSuffix(server.config.PublicURL, "/")
+	base := relayPublicOrigin(server.config.PublicURL)
 	result := map[string]any{
 		"host_id":        body.HostID,
 		"access_token":   token,
@@ -490,7 +575,7 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		// The browser receives only a one-time pairing ticket. The access
 		// capability remains available to native callers in the response but is
 		// never copied into browser history or a URL fragment.
-		"web_url":    fmt.Sprintf("%s/h/%s/#t=%s", base, url.PathEscape(body.HostID), url.QueryEscape(ticket)),
+		"web_url":    fmt.Sprintf("%s%s/#t=%s", base, server.publicPath("/h/"+url.PathEscape(body.HostID)), url.QueryEscape(ticket)),
 		"expires_in": int(server.config.AccessTTL.Seconds()),
 	}
 	if route, ok := server.registry.route(body.HostID); ok {
@@ -661,7 +746,7 @@ func (server *Server) setRefreshCookie(response http.ResponseWriter, request *ht
 	// rotate the cookie at /v1/session/refresh, so do not issue a cookie whose
 	// Path excludes that endpoint.
 	if validHostID(hostID) && strings.TrimSpace(request.PathValue("hostID")) != "" {
-		cookiePath = "/h/" + url.PathEscape(hostID) + "/"
+		cookiePath = server.publicPath("/h/" + url.PathEscape(hostID) + "/")
 	}
 	http.SetCookie(response, &http.Cookie{Name: "warren_refresh", Value: value, Path: cookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, MaxAge: int(server.config.RefreshTTL.Seconds())})
 }
@@ -699,6 +784,10 @@ func (server *Server) getHost(response http.ResponseWriter, request *http.Reques
 func (server *Server) connectClient(response http.ResponseWriter, request *http.Request) {
 	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
 		http.Error(response, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	if !server.clientLimiter.allow("ip:" + requestClientIP(request)) {
+		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
 	requestedHostID := strings.TrimSpace(request.URL.Query().Get("host_id"))
@@ -751,6 +840,10 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	}
 	if claims.ClientID != "" && (auth.ClientID == "" || auth.ClientID != claims.ClientID) {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		return
+	}
+	if !server.clientLimiter.allow("host:" + hostID) {
+		_ = client.WriteJSON(map[string]string{"t": "error", "message": "rate limit exceeded"})
 		return
 	}
 	tunnel := server.registry.authorizedTunnel(hostID, claims.Generation)
@@ -1073,7 +1166,16 @@ func (server *Server) publicRoute(response http.ResponseWriter, request *http.Re
 		http.Error(response, "route policy denied", http.StatusForbidden)
 		return
 	}
-	if err := validateRequestHeaders(request, isUpgradeRequest(request)); err != nil {
+	upgrade := isUpgradeRequest(request)
+	limiter := server.publicLimiter
+	if upgrade {
+		limiter = server.upgradeLimiter
+	}
+	if !limiter.allow("ip:"+requestClientIP(request), "host:"+route.HostID) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
+	if err := validateRequestHeaders(request, upgrade); err != nil {
 		http.Error(response, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1090,7 +1192,7 @@ func (server *Server) publicRoute(response http.ResponseWriter, request *http.Re
 			return
 		}
 	}
-	if isUpgradeRequest(request) {
+	if upgrade {
 		server.forwardUpgrade(response, forwardRequest, route)
 		return
 	}
@@ -1821,7 +1923,7 @@ func (server *Server) webPage(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	hostID, _ := json.Marshal(request.PathValue("hostID"))
-	prefix := "/h/" + url.PathEscape(request.PathValue("hostID"))
+	prefix := server.publicPath("/h/" + url.PathEscape(request.PathValue("hostID")))
 	page := strings.Replace(string(data), "content=\"__WARREN_RELAY_HOST_ID__\"", fmt.Sprintf("content=%s", string(hostID)), 1)
 	page = scopeWebPage(page, prefix)
 	response.Header().Set("Cache-Control", "no-store")
@@ -1861,15 +1963,16 @@ func (server *Server) hostManifest(response http.ResponseWriter, request *http.R
 		http.Error(response, "invalid manifest", http.StatusInternalServerError)
 		return
 	}
-	manifest["start_url"] = "/h/" + host + "/"
-	manifest["scope"] = "/h/" + host + "/"
-	manifest["icons"] = []map[string]any{{"src": "/h/" + host + "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}}
+	prefix := server.publicPath("/h/" + host)
+	manifest["start_url"] = prefix + "/"
+	manifest["scope"] = prefix + "/"
+	manifest["icons"] = []map[string]any{{"src": prefix + "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}}
 	writeJSON(response, http.StatusOK, manifest)
 }
 
 func (server *Server) hostServiceWorker(response http.ResponseWriter, request *http.Request) {
 	host := url.PathEscape(request.PathValue("hostID"))
-	prefix := "/h/" + host
+	prefix := server.publicPath("/h/" + host)
 	shell := []string{prefix + "/", prefix + "/manifest.webmanifest", prefix + "/assets/app.js", prefix + "/assets/app.css"}
 	for name := range webStaticResources {
 		shell = append(shell, prefix+"/"+name)
@@ -1881,7 +1984,7 @@ self.addEventListener("install",e=>{e.waitUntil(caches.open(CACHE).then(c=>c.add
 self.addEventListener("activate",e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x.startsWith("warren-relay-")&&x!==CACHE).map(x=>caches.delete(x)))));self.clients.claim()});
 self.addEventListener("fetch",e=>{const p=new URL(e.request.url).pathname;if(e.request.method!=="GET"||p.includes("/v1/client/connect"))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`, host, encodedShell)
 	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	response.Header().Set("Service-Worker-Allowed", "/h/"+host+"/")
+	response.Header().Set("Service-Worker-Allowed", prefix+"/")
 	response.Header().Set("Cache-Control", "no-cache")
 	_, _ = response.Write([]byte(script))
 }
