@@ -11,15 +11,16 @@ import (
 // client-known Store revision. Order is sent separately because an entity can
 // move without any of its visible fields changing.
 type rosterDeltaMessage struct {
-	Type         string                                `json:"t"`
-	BaseRevision uint64                                `json:"baseRevision"`
-	Revision     uint64                                `json:"revision"`
-	Host         *api.Host                             `json:"host,omitempty"`
-	Tasks        *rosterEntityDelta[api.Task]          `json:"tasks,omitempty"`
-	Projects     *rosterEntityDelta[api.Project]       `json:"projects,omitempty"`
-	Workspaces   *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
-	Groups       *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
-	Sessions     *rosterEntityDelta[api.Session]       `json:"sessions,omitempty"`
+	Type               string                                `json:"t"`
+	BaseRevision       uint64                                `json:"baseRevision"`
+	Revision           uint64                                `json:"revision"`
+	Host               *api.Host                             `json:"host,omitempty"`
+	Tasks              *rosterEntityDelta[api.Task]          `json:"tasks,omitempty"`
+	Projects           *rosterEntityDelta[api.Project]       `json:"projects,omitempty"`
+	Workspaces         *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
+	Groups             *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
+	Sessions           *rosterEntityDelta[api.Session]       `json:"sessions,omitempty"`
+	GhostlineMigration *api.GhostlineMigration               `json:"ghostlineMigration,omitempty"`
 }
 
 type rosterEntityDelta[T any] struct {
@@ -53,11 +54,14 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 	if delta := rosterEntries(before.Sessions, after.Sessions, func(value api.Session) string { return value.ID }); delta.hasChanges() {
 		result.Sessions = &delta
 	}
+	if !reflect.DeepEqual(before.GhostlineMigration, after.GhostlineMigration) {
+		result.GhostlineMigration = after.GhostlineMigration
+	}
 	return result
 }
 
 func (m rosterDeltaMessage) hasChanges() bool {
-	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil
+	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil || m.GhostlineMigration != nil
 }
 
 func (d rosterEntityDelta[T]) hasChanges() bool {

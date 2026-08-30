@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -229,6 +230,17 @@ func handoffGhostline(config ghostlineMigrationConfig, sourceSocket string, sour
 		return err
 	}
 	record.Phase = api.GhostlineMigrationPrepared
+	sourceClient := ghostline.NewClient(sourceSocket)
+	listContext, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sourceSessions, err := sourceClient.List(listContext)
+	listCancel()
+	if err != nil {
+		return fmt.Errorf("list ghostline source sessions: %w", err)
+	}
+	sourceNames := make(map[string]struct{}, len(sourceSessions))
+	for _, session := range sourceSessions {
+		sourceNames[session.Name()] = struct{}{}
+	}
 
 	client, err := startGhostline(config, record.TargetSocket, append(append([]string{}, spawn...), "--adopt-from", sourceSocket+".admin"))
 	if err != nil {
@@ -238,6 +250,40 @@ func handoffGhostline(config ghostlineMigrationConfig, sourceSocket string, sour
 			return fmt.Errorf("start ghostline migration target: %w", err)
 		}
 		client = ghostline.NewClient(record.TargetSocket)
+	}
+	targetContext, targetCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	targetSessions, targetListErr := client.List(targetContext)
+	targetCancel()
+	if targetListErr != nil {
+		return fmt.Errorf("list ghostline target sessions: %w", targetListErr)
+	}
+	targetNames := make(map[string]struct{}, len(targetSessions))
+	for _, session := range targetSessions {
+		targetNames[session.Name()] = struct{}{}
+	}
+	skipped := make(map[string]string)
+	for name := range sourceNames {
+		if _, ok := targetNames[name]; !ok {
+			skipped[name] = "adopt runtime failed"
+		}
+	}
+	if len(skipped) > 0 {
+		if err := setGhostlineMigrationSkipped(config.state, record.SessionID, skipped); err != nil {
+			return fmt.Errorf("record skipped ghostline sessions: %w", err)
+		}
+		record.SkippedSessions = make([]string, 0, len(skipped))
+		for name := range skipped {
+			record.SkippedSessions = append(record.SkippedSessions, name)
+		}
+		sort.Strings(record.SkippedSessions)
+		if len(skipped) == len(sourceNames) && len(sourceNames) > 0 {
+			_ = stopGhostlineServer(record.TargetSocket)
+			if err := setGhostlineMigrationPhase(config.state, record.SessionID, api.GhostlineMigrationRetired); err != nil {
+				return fmt.Errorf("record skipped ghostline migration: %w", err)
+			}
+			config.logger.Warn("ghostline adoption skipped all sessions; retaining source", "count", len(skipped))
+			return nil
+		}
 	}
 	if pid := client.PID(); pid > 0 {
 		if err := writeGhostlinePID(record.TargetSocket, pid); err != nil {
@@ -364,6 +410,27 @@ func createGhostlineMigration(state *store.Store, sourceSocket, targetSocket, so
 		return nil
 	})
 	return record, err
+}
+
+func setGhostlineMigrationSkipped(state *store.Store, sessionID string, skipped map[string]string) error {
+	if len(skipped) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	names := make([]string, 0, len(skipped))
+	for k := range skipped {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return state.Update(func(value *api.State) error {
+		if value.GhostlineMigration == nil || value.GhostlineMigration.SessionID != sessionID {
+			return fmt.Errorf("ghostline migration not found: %s", sessionID)
+		}
+		value.GhostlineMigration.SkippedSessions = names
+		value.GhostlineMigration.SkipReasons = skipped
+		value.GhostlineMigration.UpdatedAt = now
+		return nil
+	})
 }
 
 func setGhostlineMigrationPhase(state *store.Store, sessionID, phase string) error {

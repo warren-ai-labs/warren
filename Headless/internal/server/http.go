@@ -155,15 +155,22 @@ func (s *HTTPServer) Handler() http.Handler {
 		if rpcVersion == "" {
 			rpcVersion = s.GhostlineVersion
 		}
+		skippedSessions := 0
+		if s.Service != nil {
+			if migration := s.Service.Roster(request.Context()).GhostlineMigration; migration != nil {
+				skippedSessions = len(migration.SkippedSessions)
+			}
+		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"ok":                  true,
-			"version":             api.Version,
-			"build":               s.BuildVersion,
-			"revision":            s.BuildRevision,
-			"dirty":               s.BuildDirty,
-			"ghostlineVersion":    rpcVersion,
-			"ghostlineRPCVersion": rpcVersion,
-			"ghostlineTagVersion": s.GhostlineTagVersion,
+			"ok":                       true,
+			"version":                  api.Version,
+			"build":                    s.BuildVersion,
+			"revision":                 s.BuildRevision,
+			"dirty":                    s.BuildDirty,
+			"ghostlineVersion":         rpcVersion,
+			"ghostlineRPCVersion":      rpcVersion,
+			"ghostlineTagVersion":      s.GhostlineTagVersion,
+			"ghostlineSkippedSessions": skippedSessions,
 		})
 	})
 	mux.HandleFunc("GET /v1/state", s.handleState)

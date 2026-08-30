@@ -35,6 +35,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     private var buildVersion: String?
     private var ghostlineRPCVersion: String?
     private var ghostlineTagVersion: String?
+    private var ghostlineSkippedSessions = 0
     private var state: DaemonState = .checking {
         didSet { updateStatusItem() }
     }
@@ -257,6 +258,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             buildVersion = (object["build"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ghostlineRPCVersion = ((object["ghostlineRPCVersion"] as? String) ?? (object["ghostlineVersion"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
             ghostlineTagVersion = (object["ghostlineTagVersion"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ghostlineSkippedSessions = (object["ghostlineSkippedSessions"] as? NSNumber)?.intValue ?? 0
             updateStatusItem()
         } catch {
             return
@@ -431,6 +433,18 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func setStatusDotBreathing(_ breathing: Bool) {
         guard let dot = statusDot, let layer = dot.layer else { return }
+        if ghostlineSkippedSessions > 0 {
+            layer.removeAnimation(forKey: statusDotPulseKey)
+            let red = NSColor.systemRed
+            layer.backgroundColor = red.cgColor
+            layer.shadowColor = red.cgColor
+            layer.opacity = 1
+            dot.isHidden = false
+            return
+        }
+        let green = NSColor(srgbRed: 126 / 255, green: 198 / 255, blue: 153 / 255, alpha: 1)
+        layer.backgroundColor = green.cgColor
+        layer.shadowColor = green.cgColor
         guard breathing else {
             layer.removeAnimation(forKey: statusDotPulseKey)
             layer.opacity = 1
@@ -509,6 +523,9 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         if let ghostlineTagVersion {
             toolTip += " · ghostline tag \(ghostlineTagVersion)"
         }
+        if ghostlineSkippedSessions > 0 {
+            toolTip += " · Adopt runtime failed: \(ghostlineSkippedSessions) session(s) skipped"
+        }
         button.toolTip = toolTip
         if let status = statusItem.menu?.item(withTag: 1) {
             switch state {
@@ -516,6 +533,9 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             case .running: status.title = "Headless: Running"
             case .stopped: status.title = "Headless: Stopped"
             case .failed(let reason): status.title = "Headless: \(reason)"
+            }
+            if ghostlineSkippedSessions > 0 {
+                status.title += " · Adopt runtime failed (\(ghostlineSkippedSessions) skipped)"
             }
         }
         if let endpoint = statusItem.menu?.item(withTag: 2) {

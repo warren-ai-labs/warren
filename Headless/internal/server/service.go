@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -726,10 +727,24 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		state.Workspaces[index].CreationRequestID = ""
 		state.Workspaces[index].CreationRequestHash = ""
 	}
-	// The store also carries Ghostline's local recovery data. Browser and CLI
-	// clients only need logical Warren identities, never a daemon socket path
-	// or an opaque output cursor.
-	state.GhostlineMigration = nil
+	// The store also carries Ghostline's local recovery data. Expose only the
+	// logical skipped-session report; daemon socket paths and output cursors are
+	// local control-plane details and must never leave the headless process.
+	if migration := state.GhostlineMigration; migration != nil {
+		if len(migration.SkippedSessions) == 0 {
+			state.GhostlineMigration = nil
+		} else {
+			state.GhostlineMigration = &api.GhostlineMigration{
+				SessionID:       migration.SessionID,
+				HandoffVersion:  migration.HandoffVersion,
+				Phase:           migration.Phase,
+				SkippedSessions: append([]string(nil), migration.SkippedSessions...),
+				SkipReasons:     maps.Clone(migration.SkipReasons),
+				CreatedAt:       migration.CreatedAt,
+				UpdatedAt:       migration.UpdatedAt,
+			}
+		}
+	}
 	// Store revisions begin at zero, while an omitted JSON field means an old
 	// server did not support revisioned roster snapshots. Offset the opaque
 	// wire token so every current snapshot carries a non-zero revision without
