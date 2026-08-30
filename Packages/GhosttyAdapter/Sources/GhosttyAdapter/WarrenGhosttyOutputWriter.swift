@@ -21,6 +21,11 @@ public enum TerminalSnapshotRestoreResult: Equatable, Sendable {
 /// pending buffer and drains it on a utility-priority detached task, matching
 /// Ghostty's real-world input-to-render pipeline.
 public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
+    /// Called after bytes are accepted by the in-memory terminal. The surface
+    /// uses this hook to request a display tick when output arrives while the
+    /// view is being remounted.
+    public var onOutputReceived: (@Sendable () -> Void)?
+
     private struct Chunk: Sendable {
         let epoch: UInt64
         let sequence: UInt64
@@ -306,11 +311,13 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// Writes bytes into Ghostty synchronously (used by tests and initial
     /// snapshots where ordering with in-flight feed work is not a concern).
     public func receive(_ payload: Data) {
-        terminalFeedLock.withLock {
-            ansiObserver.receive(payload)
-            updateSyncDepth(with: payload)
-            inMemory.receive(payload)
-        }
+		terminalFeedLock.withLock {
+			ansiObserver.receive(payload)
+			updateSyncDepth(with: payload)
+			if inMemory.receive(payload) {
+				onOutputReceived?()
+			}
+		}
     }
 
     // MARK: - Synchronized output tracking
@@ -430,9 +437,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }
                 ansiObserver.receive(slice.payload)
                 updateSyncDepth(with: slice.payload)
-                let received = inMemory.receive(slice.payload)
-                if received {
-                    lock.withLock {
+				let received = inMemory.receive(slice.payload)
+				if received {
+					onOutputReceived?()
+					lock.withLock {
                         latestRenderedEpoch = slice.epoch
                         latestRenderedSequence = slice.endSequence
                     }

@@ -50,11 +50,6 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     }
 }
 
-public enum WarrenDesktopPublicAccessKeyKind: String, Sendable {
-    case invite
-    case approval
-}
-
 /// Relay enrollment metadata carried by a Warren settings link. The URL and
 /// key are public metadata; the enrollment ticket is short-lived and one-time
 /// but still acts as a credential until consumed, so callers must not log or
@@ -87,31 +82,17 @@ public struct WarrenDesktopRelayPrefill: Equatable, Sendable {
     }
 }
 
-/// Values that may be carried by a Public Access setup link.
-///
-/// The bootstrap key is intentionally included only because the setup link is
-/// an explicitly shareable credential in the current product flow. Treat the
-/// resulting URL like the key itself: browser history, chat systems, and
-/// launch services may retain it. Warren never logs this value.
+/// Values that may be carried by a Public Access route setup link.
 public struct WarrenDesktopPublicAccessPrefill: Equatable, Sendable {
-    public let edgeURL: String?
-    public let accountName: String?
-    public let keyKind: WarrenDesktopPublicAccessKeyKind?
-    public let inviteKey: String?
-    public let approvalKey: String?
+    public let publicHostname: String?
+    public let pathPrefix: String?
 
     public init(
-        edgeURL: String? = nil,
-        accountName: String? = nil,
-        keyKind: WarrenDesktopPublicAccessKeyKind? = nil,
-        inviteKey: String? = nil,
-        approvalKey: String? = nil
+        publicHostname: String? = nil,
+        pathPrefix: String? = nil
     ) {
-        self.edgeURL = Self.nonEmpty(edgeURL)
-        self.accountName = Self.nonEmpty(accountName)
-        self.keyKind = keyKind
-        self.inviteKey = Self.nonEmpty(inviteKey)
-        self.approvalKey = Self.nonEmpty(approvalKey)
+        self.publicHostname = Self.nonEmpty(publicHostname)
+        self.pathPrefix = Self.nonEmpty(pathPrefix)
     }
 
     private static func nonEmpty(_ value: String?) -> String? {
@@ -123,9 +104,9 @@ public struct WarrenDesktopPublicAccessPrefill: Equatable, Sendable {
 
 /// The canonical `warren://settings` deep link.
 ///
-/// Public Access and owned Relay links carry different setup values. They are
-/// intentionally separate sections so a gnar credential can never be
-/// mistaken for a Relay enrollment ticket (or vice versa).
+/// Public Access and Relay links carry different setup values. They remain
+/// separate sections so a route address cannot be mistaken for an enrollment
+/// ticket.
 public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
     public static let scheme = "warren"
     public static let host = "settings"
@@ -199,28 +180,13 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
 
         self.relay = nil
 
-        let inviteKey = Self.nonEmpty(query["invitekey"])
-        let approvalKey = Self.nonEmpty(query["approvalkey"])
-        let keyKind: WarrenDesktopPublicAccessKeyKind?
-        switch query["keykind"]?.lowercased() {
-        case "invite": keyKind = .invite
-        case "approval": keyKind = .approval
-        default:
-            if approvalKey != nil { keyKind = .approval }
-            else if inviteKey != nil { keyKind = .invite }
-            else { keyKind = nil }
-        }
-        let hasPublicAccessValues = [
-            query["edgeurl"], query["edge"], query["accountname"], query["account"],
-            query["keykind"], inviteKey, approvalKey,
-        ].contains { $0 != nil }
+        let publicHostname = Self.nonEmpty(query["publichostname"] ?? query["hostname"])
+        let pathPrefix = Self.nonEmpty(query["pathprefix"] ?? query["path"])
+        let hasPublicAccessValues = [publicHostname, pathPrefix].contains { $0 != nil }
         self.publicAccess = hasPublicAccessValues
             ? WarrenDesktopPublicAccessPrefill(
-                edgeURL: query["edgeurl"] ?? query["edge"],
-                accountName: query["accountname"] ?? query["account"],
-                keyKind: keyKind,
-                inviteKey: inviteKey,
-                approvalKey: approvalKey
+                publicHostname: publicHostname,
+                pathPrefix: pathPrefix
             )
             : nil
     }
@@ -248,20 +214,11 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
                 items.append(URLQueryItem(name: "relayPublicKey", value: relayPublicKey))
             }
         } else if section == .publicAccess, let publicAccess {
-            if let edgeURL = publicAccess.edgeURL {
-                items.append(URLQueryItem(name: "edgeUrl", value: edgeURL))
+            if let publicHostname = publicAccess.publicHostname {
+                items.append(URLQueryItem(name: "publicHostname", value: publicHostname))
             }
-            if let accountName = publicAccess.accountName {
-                items.append(URLQueryItem(name: "accountName", value: accountName))
-            }
-            if let keyKind = publicAccess.keyKind {
-                items.append(URLQueryItem(name: "keyKind", value: keyKind.rawValue))
-            }
-            if let inviteKey = publicAccess.inviteKey {
-                items.append(URLQueryItem(name: "inviteKey", value: inviteKey))
-            }
-            if let approvalKey = publicAccess.approvalKey {
-                items.append(URLQueryItem(name: "approvalKey", value: approvalKey))
+            if let pathPrefix = publicAccess.pathPrefix {
+                items.append(URLQueryItem(name: "pathPrefix", value: pathPrefix))
             }
         }
 
