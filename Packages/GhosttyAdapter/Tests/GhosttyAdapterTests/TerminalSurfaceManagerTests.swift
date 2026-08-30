@@ -192,9 +192,8 @@ final class TerminalSurfaceManagerTests: XCTestCase {
                 && manager.isDisplayVisible(first.id)
         }
 
-        // Warm promotion captures a fixed boundary and keeps the view
-        // transparent until the writer has consumed that boundary. This
-        // prevents a half-consumed TUI frame from being exposed on promotion.
+        // Warm promotion now jumps to latest: even with a backlog the
+        // display reveals immediately without visible fast-forward.
         first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 500_000))
         try await waitUntil {
             first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
@@ -209,22 +208,10 @@ final class TerminalSurfaceManagerTests: XCTestCase {
             manager.snapshot().activeSessionID == first.id
                 && first.terminalViewIsPresentable
         }
-        XCTAssertFalse(
-            manager.isDisplayVisible(first.id),
-            "warm promotion must keep the display hidden while queued output drains"
-        )
         try await waitUntil(timeout: 5) {
             manager.isDisplayVisible(first.id)
         }
         XCTAssertTrue(manager.isDisplayVisible(first.id))
-        try await waitUntil(timeout: 5) {
-            first.outputWriter.renderedSequence == first.outputWriter.enqueuedSequence
-        }
-        XCTAssertEqual(
-            first.outputWriter.renderedSequence,
-            first.outputWriter.enqueuedSequence,
-            "promotion should reveal only after the captured output boundary is rendered"
-        )
     }
 
     func testWarmPromotionDoesNotWaitForAContinuouslyGrowingQueue() async throws {
