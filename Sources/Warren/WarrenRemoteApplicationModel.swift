@@ -1035,6 +1035,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published private(set) var autoOpenShell = false
     /// Whether entering an empty workspace starts the first AI preset.
     @Published private(set) var autoStartAI = false
+    /// OpenAI-compatible endpoint used for automatic session titles.
+    @Published private(set) var openAIBaseURL = ""
+    @Published private(set) var openAIModel = ""
+    @Published private(set) var openAITitleEnabled = false
     private var settingsLoaded = false
     /// Set while the daemon has announced an operator-initiated maintenance
     /// window (for example an app install that restarts the daemon). Clients
@@ -1203,6 +1207,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         defaultRuntime = nil
         autoOpenShell = false
         autoStartAI = false
+        openAIBaseURL = ""
+        openAIModel = ""
+        openAITitleEnabled = false
         if configuration.url.hasPrefix("http://127.0.0.1:8789"),
            !configuration.token.isEmpty,
            let localBaseURL = URL(string: "http://127.0.0.1:8789/") {
@@ -1467,6 +1474,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 if let enabled = result["autoStartAI"] as? Bool {
                     self.autoStartAI = enabled
                 }
+                if let baseURL = result["openaiBaseURL"] as? String {
+                    self.openAIBaseURL = baseURL
+                }
+                if let model = result["openaiModel"] as? String {
+                    self.openAIModel = model
+                }
+                if let enabled = result["openaiTitleEnabled"] as? Bool {
+                    self.openAITitleEnabled = enabled
+                }
             } catch {
                 // Settings are not critical; the picker keeps its default.
             }
@@ -1503,6 +1519,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             do {
                 _ = try await wire.request("settings.put", params: ["autoStartAI": enabled ? "true" : "false"])
                 self?.autoStartAI = enabled
+            } catch {
+                self?.present(error)
+            }
+        }
+    }
+
+    func setOpenAISetting(_ key: String, _ value: String) {
+        guard ["openaiBaseURL", "openaiModel", "openaiKey", "openaiTitleEnabled"].contains(key),
+              let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await wire.request("settings.put", params: [key: value])
+                guard let self else { return }
+                switch key {
+                case "openaiBaseURL": self.openAIBaseURL = value
+                case "openaiModel": self.openAIModel = value
+                case "openaiTitleEnabled": self.openAITitleEnabled = value == "true"
+                default: break // The API key is intentionally never retained by clients.
+                }
             } catch {
                 self?.present(error)
             }

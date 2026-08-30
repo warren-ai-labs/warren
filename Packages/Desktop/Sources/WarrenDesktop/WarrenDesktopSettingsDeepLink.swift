@@ -8,6 +8,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case terminalFont = "Font"
     case terminalTitle = "Title"
     case terminalRuntime = "Terminal runtime"
+    case aiTitles = "AI titles"
     case presets = "Presets"
     case workspaces = "Workspaces"
     case notifications = "Notifications"
@@ -21,6 +22,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .terminalFont: "terminal-font"
         case .terminalTitle: "terminal-title"
         case .terminalRuntime: "terminal-runtime"
+        case .aiTitles: "ai-titles"
         case .presets: "presets"
         case .workspaces: "workspaces"
         case .notifications: "notifications"
@@ -34,6 +36,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "terminal-font", "font": self = .terminalFont
         case "terminal-title", "title": self = .terminalTitle
         case "terminal-runtime", "runtime": self = .terminalRuntime
+        case "ai-titles", "ai-title", "openai", "openai-titles": self = .aiTitles
         case "presets": self = .presets
         case "workspaces", "workspace": self = .workspaces
         case "notifications", "notification": self = .notifications
