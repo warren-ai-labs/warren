@@ -441,6 +441,7 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 	}
 	ticket, expires, _ := server.registry.enrollmentTicket(strings.TrimSpace(body.ID))
 	keyID, publicKey := server.signer.currentPublicKey()
+	settingsURL := server.relaySettingsURL(strings.TrimSpace(body.ID), ticket, keyID, publicKey)
 	writeJSON(response, http.StatusCreated, map[string]any{
 		"host_id": body.ID,
 		// host_credential is retained for one compatibility window. New clients
@@ -450,7 +451,30 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 		"expires_at":        expires.UTC().Format(time.RFC3339),
 		"relay_key_id":      keyID,
 		"relay_public_key":  base64.RawStdEncoding.EncodeToString(publicKey),
+		// The setup link contains only the one-time enrollment ticket and
+		// public Relay metadata. It never carries the Host Secret or the
+		// compatibility bootstrap credential.
+		"settings_url": settingsURL,
+		// Keep the shorter name as an additive alias for API clients that call
+		// this a setup link rather than a settings link.
+		"setup_url": settingsURL,
 	})
+}
+
+// relaySettingsURL builds the canonical Warren desktop setup link. The
+// configured PublicURL may include a reverse-proxy path prefix; preserve that
+// prefix while dropping query and fragment components so deployment metadata
+// can never accidentally smuggle a secret into the link.
+func (server *Server) relaySettingsURL(hostID, enrollmentTicket, keyID string, publicKey []byte) string {
+	base := strings.TrimRight(relayPublicOrigin(server.config.PublicURL), "/") + strings.TrimRight(server.basePath, "/")
+	values := url.Values{}
+	values.Set("section", "relay")
+	values.Set("relayUrl", base)
+	values.Set("hostId", hostID)
+	values.Set("enrollmentTicket", enrollmentTicket)
+	values.Set("relayKeyId", keyID)
+	values.Set("relayPublicKey", base64.RawStdEncoding.EncodeToString(publicKey))
+	return (&url.URL{Scheme: "warren", Host: "settings", RawQuery: values.Encode()}).String()
 }
 
 func (server *Server) enrollHost(response http.ResponseWriter, request *http.Request) {

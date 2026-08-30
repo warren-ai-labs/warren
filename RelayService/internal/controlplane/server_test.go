@@ -126,6 +126,64 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	}
 }
 
+func TestProvisionReturnsRelaySettingsLinkWithoutHostSecret(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000009"
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test/relay/?ignored=deployment-metadata",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	body, _ := json.Marshal(map[string]string{"id": hostID, "name": "Mac"})
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("provision host: response=%v err=%v", response, err)
+	}
+	defer response.Body.Close()
+	var result struct {
+		Credential string `json:"host_credential"`
+		Ticket     string `json:"enrollment_ticket"`
+		KeyID      string `json:"relay_key_id"`
+		PublicKey  string `json:"relay_public_key"`
+		Settings   string `json:"settings_url"`
+		Setup      string `json:"setup_url"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Credential == "" || result.Ticket == "" || result.KeyID == "" || result.PublicKey == "" {
+		t.Fatalf("incomplete provision response: %#v", result)
+	}
+	if result.Settings == "" || result.Setup != result.Settings {
+		t.Fatalf("setup link aliases differ: settings=%q setup=%q", result.Settings, result.Setup)
+	}
+	if strings.Contains(result.Settings, result.Credential) {
+		t.Fatal("settings link contains the compatibility host credential")
+	}
+	parsed, err := url.Parse(result.Settings)
+	if err != nil || parsed.Scheme != "warren" || parsed.Host != "settings" {
+		t.Fatalf("invalid settings link: %q (%v)", result.Settings, err)
+	}
+	query := parsed.Query()
+	if query.Get("section") != "relay" || query.Get("relayUrl") != "https://relay.example.test/relay" ||
+		query.Get("hostId") != hostID || query.Get("enrollmentTicket") != result.Ticket ||
+		query.Get("relayKeyId") != result.KeyID || query.Get("relayPublicKey") != result.PublicKey {
+		t.Fatalf("settings link query mismatch: %v", query)
+	}
+	if parsed.RawQuery == "" || strings.Contains(parsed.RawQuery, "ignored") {
+		t.Fatalf("settings link retained deployment query: %q", parsed.RawQuery)
+	}
+}
+
 func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000007"
 	server, err := NewServer(Config{

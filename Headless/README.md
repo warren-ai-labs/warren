@@ -347,9 +347,13 @@ The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
 
-Owned Relay enrollment is a separate lifecycle from Public Access. A local
-client may `POST /v1/relay/enroll` with the Relay URL, Host UUID, and one-time
-enrollment ticket while authenticating with the daemon token. Headless sends
-that canonical token to Relay, validates and pins the returned signing key,
-and persists only Relay metadata. The request body and settings never accept
-or store a second Relay secret.
+Owned Relay enrollment is a separate lifecycle from Public Access. A Relay
+admin can open the `settings_url` (or its `setup_url` alias) returned by
+`POST /v1/hosts` in Warren Desktop; the link carries only the Relay URL, Host
+UUID, pinned signing key, and one-time enrollment ticket. A local client may
+also `POST /v1/relay/enroll` with the Relay URL, Host UUID, and ticket while
+authenticating with the daemon token. Headless sends that canonical token to
+Relay, validates and pins the returned signing key, and persists only Relay
+metadata. The request body and settings never accept or store a second Relay
+secret. Discard the setup link after enrollment because its ticket is valid
+for ten minutes and can be consumed only once.
