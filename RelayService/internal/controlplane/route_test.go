@@ -11,6 +11,33 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestFilterHeadersPreservesWebSocketHopHeadersForUpgrade(t *testing.T) {
+	header := http.Header{
+		"Connection":            []string{"Upgrade"},
+		"Upgrade":               []string{"websocket"},
+		"Sec-WebSocket-Key":     []string{"dGhlIHNhbXBsZSBub25jZQ=="},
+		"Sec-WebSocket-Version": []string{"13"},
+		"X-Request-ID":          []string{"request-1"},
+	}
+	regular := filterHeaders(header, false)
+	if hasHeaderPair(regular, "connection") || hasHeaderPair(regular, "upgrade") {
+		t.Fatalf("regular HTTP forwarding retained hop headers: %#v", regular)
+	}
+	upgrade := filterHeaders(header, true)
+	if !hasHeaderPair(upgrade, "connection") || !hasHeaderPair(upgrade, "upgrade") {
+		t.Fatalf("WebSocket forwarding dropped required hop headers: %#v", upgrade)
+	}
+}
+
+func hasHeaderPair(headers [][2]string, name string) bool {
+	for _, header := range headers {
+		if strings.EqualFold(header[0], name) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRouteAddressUsesPathFallbackForIPRelay(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "http://192.0.2.10:8080",
