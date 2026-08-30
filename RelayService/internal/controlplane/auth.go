@@ -39,40 +39,6 @@ type tokenClaims struct {
 	KeyID      string   `json:"kid,omitempty"`
 }
 
-// UnmarshalJSON accepts the pre-RFC single-string scope for a bounded
-// compatibility window while always exposing an array to callers.
-func (claims *tokenClaims) UnmarshalJSON(data []byte) error {
-	var value struct {
-		Issuer     string          `json:"iss,omitempty"`
-		Audience   string          `json:"aud,omitempty"`
-		HostID     string          `json:"host_id"`
-		Scope      json.RawMessage `json:"scope"`
-		Generation uint64          `json:"generation"`
-		RouteID    string          `json:"route_id,omitempty"`
-		ClientID   string          `json:"client_id,omitempty"`
-		JTI        string          `json:"jti,omitempty"`
-		Expiry     int64           `json:"exp"`
-		KeyID      string          `json:"kid,omitempty"`
-	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	var scopes []string
-	if len(value.Scope) > 0 && string(value.Scope) != "null" {
-		if err := json.Unmarshal(value.Scope, &scopes); err != nil {
-			var scope string
-			if err := json.Unmarshal(value.Scope, &scope); err != nil {
-				return err
-			}
-			if scope != "" {
-				scopes = []string{scope}
-			}
-		}
-	}
-	*claims = tokenClaims{Issuer: value.Issuer, Audience: value.Audience, HostID: value.HostID, Scope: scopes, Generation: value.Generation, RouteID: value.RouteID, ClientID: value.ClientID, JTI: value.JTI, Expiry: value.Expiry, KeyID: value.KeyID}
-	return nil
-}
-
 func (claims tokenClaims) hasScope(scope string) bool {
 	for _, value := range claims.Scope {
 		if value == scope {
@@ -152,8 +118,7 @@ func (signer *tokenSigner) removeKey(keyID string) {
 	delete(signer.public, keyID)
 }
 
-// issue retains the small historical helper used by Relay tests while
-// emitting a complete control capability under the v2 claims contract.
+// issue emits a complete capability under the v2 claims contract.
 func (signer *tokenSigner) issue(hostID, scope string, generation uint64, ttl time.Duration) (string, error) {
 	if _, ok := supportedCapabilityScopes[scope]; !ok {
 		return "", errors.New("unsupported capability scope")
@@ -231,11 +196,6 @@ func (signer *tokenSigner) verify(token, hostID, scope string) (tokenClaims, err
 	}
 	signer.mu.RLock()
 	public := append(ed25519.PublicKey(nil), signer.public[claims.KeyID]...)
-	// Tokens issued before key IDs were persisted are checked against the
-	// current key only; all newly issued capabilities carry kid.
-	if len(public) == 0 && claims.KeyID == "" {
-		public = append(ed25519.PublicKey(nil), signer.public[signer.keyID]...)
-	}
 	signer.mu.RUnlock()
 	if len(public) != ed25519.PublicKeySize || !ed25519.Verify(public, []byte(parts[0]), provided) {
 		return tokenClaims{}, errors.New("invalid token signature")

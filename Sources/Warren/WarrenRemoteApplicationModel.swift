@@ -813,7 +813,7 @@ private actor WarrenRemoteWire {
         } else if type == "welcome" {
             let version = object["version"] as? String ?? "unknown"
             daemonProtocolVersion = version
-            guard Self.compatibleProtocolVersion(version, with: "2.0") else {
+            guard version == "2.0" else {
                 return await eventBuffer.send(.disconnected(
                     "Warren Desktop is incompatible with the daemon protocol "
                         + "(desktop=2.0, daemon=\(version)); update both together."
@@ -854,10 +854,6 @@ private actor WarrenRemoteWire {
             ))
         }
         return true
-    }
-
-    private nonisolated static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
-        lhs.split(separator: ".", maxSplits: 1).first == rhs.split(separator: ".", maxSplits: 1).first
     }
 
     private nonisolated static func json(_ value: [String: Any]) -> String {
@@ -1882,17 +1878,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 )
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
-                if inviteKey.isEmpty, approvalKey.isEmpty, isMissingPublicAccessEndpoint(error) {
-                    do {
-                        try await tunnelRequest(.start, kind: "gnar")
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 present(error)
             }
         }
@@ -1921,31 +1906,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     approvalKey: approvalKey
                 )
             } catch {
-                // Older headless builds do not know the first-class test
-                // route. A token-only check can still use the compatibility
-                // tunnel lifecycle; bootstrap keys cannot be forwarded to an
-                // old daemon because it has no enrollment contract.
-                if isMissingPublicAccessEndpoint(error) {
-                    if !inviteKey.isEmpty || !approvalKey.isEmpty {
-                        let unsupported = NSError(domain: "WarrenRemote", code: 404, userInfo: [
-                            NSLocalizedDescriptionKey: "This Warren daemon does not support Public Access enrollment. Upgrade the daemon or sign in to gnar first, then retry without a key.",
-                        ])
-                        webStatus.publicAccessError = unsupported.localizedDescription
-                        present(unsupported)
-                        return
-                    }
-                    do {
-                        try await tunnelRequest(.start, kind: "gnar")
-                        try await tunnelRequest(.stop, kind: "gnar")
-                        webStatus.publicAccessAuthenticated = true
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 webStatus.publicAccessError = error.localizedDescription
                 present(error)
             }
@@ -1986,17 +1946,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 try await publicAccessRequest(action)
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
-                if isMissingPublicAccessEndpoint(error) {
-                    do {
-                        try await tunnelRequest(action == .disable ? .stop : .start, kind: "gnar")
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 present(error)
             }
         }
@@ -2057,8 +2006,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     /// Relay endpoints authenticate the control WebSocket with a short-lived
     /// capability; that value must never be copied into a public URL fragment.
-    /// Only the legacy/local daemon path still needs the compatibility token
-    /// fragment when explicitly opening a protected Web URL.
+    /// Only the local daemon path needs a token fragment when explicitly
+    /// opening a protected Web URL. Relay capabilities stay in memory.
     private var webAuthToken: String {
         guard endpointConfiguration?.type.lowercased() != "relay" else { return "" }
         return endpointConfiguration?.token ?? ""
@@ -2068,8 +2017,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Public Access responses stay canonical and credential-free; explicit
     /// browser and clipboard actions add the existing Warren fragment at the
     /// last possible moment so the protected WebSocket can authenticate. This
-    /// compatibility mechanism remains a residual risk for browser history
-    /// and is never persisted or sent through analytics.
+    /// Local daemon authentication remains a residual browser-history risk and
+    /// is never persisted or sent through analytics.
     static func publicAccessBrowserURL(
         _ url: URL,
         currentEndpoint: URL?,
@@ -2087,7 +2036,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return authenticatedWebURL(components.url ?? url, daemonToken: daemonToken)
     }
 
-    /// Adds the legacy Warren Web authentication fragment only to a URL being
+    /// Adds the local daemon authentication fragment only to a URL being
     /// opened in a browser. The value is encoded as an RFC3986 fragment field
     /// so base64 tokens containing `+`, `/`, or `=` survive URLSearchParams.
     static func authenticatedWebURL(_ url: URL, daemonToken: String) -> URL {
@@ -2171,14 +2120,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func refreshTunnelStatus() async {
         guard let configuration = endpointConfiguration else { return }
+        // Relay routes are controlled by RelayService, not by the daemon's
+        // local adapter API. Never probe `/v1/tunnels` on a Relay endpoint.
+        guard configuration.type.lowercased() != "relay" else { return }
         let publicAccessAvailable = await refreshPublicAccessStatus(configuration: configuration)
         if publicAccessAvailable && webStatus.tunnelRunning {
             return
         }
-        await refreshLegacyTunnelStatus(configuration: configuration)
+        await refreshAdapterTunnelStatus(configuration: configuration)
     }
 
-    private func refreshLegacyTunnelStatus(configuration: WarrenRemoteEndpointConfiguration) async {
+    private func refreshAdapterTunnelStatus(configuration: WarrenRemoteEndpointConfiguration) async {
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
@@ -2223,8 +2175,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 edgeURL: edgeURL.isEmpty ? nil : edgeURL,
                 accountName: accountName.isEmpty ? nil : accountName,
                 inviteKey: inviteKey,
-                approvalKey: approvalKey,
-                enrollmentKey: approvalKey
+                approvalKey: approvalKey
             ))
         } else if action == .test {
             request.httpBody = try JSONEncoder().encode(PublicAccessTestRequest(
@@ -2248,10 +2199,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             ])
         }
         applyPublicAccessStatus(from: data)
-    }
-
-    private func isMissingPublicAccessEndpoint(_ error: Error) -> Bool {
-        (error as NSError).code == 404
     }
 
     private func refreshPublicAccessStatus(configuration: WarrenRemoteEndpointConfiguration) async -> Bool {
@@ -2280,17 +2227,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let accountName: String?
         let inviteKey: String
         let approvalKey: String
-        /// Legacy Warren daemons called the approval key an enrollment key.
-        /// Sending the alias only on the compatibility enable request keeps
-        /// older headless clients usable without changing the v1.7 gnar call.
-        let enrollmentKey: String
 
         enum CodingKeys: String, CodingKey {
             case edgeURL = "edgeUrl"
             case accountName
             case inviteKey
             case approvalKey
-            case enrollmentKey
         }
     }
 
@@ -2381,12 +2323,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         struct Tunnel: Decodable {
             let running: Bool
-            let webURL: String?
-
-            enum CodingKeys: String, CodingKey {
-                case running
-                case webURL = "web_url"
-            }
+            let url: String?
         }
         guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
             webStatus.secureURL = nil
@@ -2394,10 +2331,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             return
         }
         let active = response.tunnels.first(where: { kind, tunnel in
-            kind == "gnar" && tunnel.running && tunnel.webURL != nil
-        }) ?? response.tunnels.first(where: { $0.value.running && $0.value.webURL != nil })
+            kind == "gnar" && tunnel.running && tunnel.url != nil
+        }) ?? response.tunnels.first(where: { $0.value.running && $0.value.url != nil })
         guard let active,
-              let rawURL = active.value.webURL,
+              let rawURL = active.value.url,
               let url = URL(string: rawURL) else {
             webStatus.secureURL = nil
             webStatus.tunnelRunning = false

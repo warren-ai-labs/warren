@@ -10,7 +10,6 @@ import (
 
 type hostTunnel struct {
 	connection *websocket.Conn
-	v2         bool
 	writes     sync.Mutex
 	clientsMu  sync.RWMutex
 	clients    map[connectionID]*clientRoute
@@ -39,14 +38,12 @@ func newClientRoute() *clientRoute {
 
 func (route *clientRoute) close() { route.once.Do(func() { close(route.done) }) }
 
-func newHostTunnel(connection *websocket.Conn, v2 ...bool) *hostTunnel {
+func newHostTunnel(connection *websocket.Conn) *hostTunnel {
 	if connection != nil {
 		connection.SetReadLimit(maxRelayMessageBytes + headerSize)
 	}
-	protocolV2 := len(v2) > 0 && v2[0]
 	return &hostTunnel{
 		connection: connection,
-		v2:         protocolV2,
 		clients:    make(map[connectionID]*clientRoute),
 		closed:     make(chan struct{}),
 	}

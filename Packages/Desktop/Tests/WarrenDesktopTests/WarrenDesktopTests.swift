@@ -90,7 +90,6 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(WarrenPublicAccessCopy.edgeURL, "Edge URL")
         XCTAssertEqual(WarrenPublicAccessCopy.inviteKey, "Invite Key (one time)")
         XCTAssertEqual(WarrenPublicAccessCopy.approvalKey, "Approval Key (one time)")
-        XCTAssertEqual(WarrenPublicAccessCopy.enrollmentKey, "Enrollment Key (one time)")
         XCTAssertEqual(WarrenPublicAccessCopy.publicEndpoint, "Public Endpoint")
         XCTAssertFalse(WarrenPublicAccessCopy.title.localizedCaseInsensitiveContains("sharing"))
     }

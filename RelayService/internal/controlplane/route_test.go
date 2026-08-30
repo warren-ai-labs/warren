@@ -111,10 +111,10 @@ func TestIPRelayAllowsDistinctPathRoutesAndRejectsOverlap(t *testing.T) {
 	}
 	const hostOne = "00000000-0000-4000-8000-000000000021"
 	const hostTwo = "00000000-0000-4000-8000-000000000022"
-	if _, err := registry.provisionHost(hostOne, "one"); err != nil {
+	if err := registry.provisionHost(hostOne, "one"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.provisionHost(hostTwo, "two"); err != nil {
+	if err := registry.provisionHost(hostTwo, "two"); err != nil {
 		t.Fatal(err)
 	}
 	one := routeRecord{ID: "route-one", PublicHostname: "192.0.2.10", HostID: hostOne, Generation: 1, PathPrefix: "/t/route-one", AuthMode: "public", Enabled: true}

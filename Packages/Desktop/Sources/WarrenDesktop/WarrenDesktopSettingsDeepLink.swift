@@ -40,7 +40,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "workspaces", "workspace": self = .workspaces
         case "notifications", "notification": self = .notifications
         case "external-ides", "external-ide", "ides": self = .externalIDEs
-        case "relay", "owned-relay": self = .relay
+        case "relay": self = .relay
         case "public-access", "publicaccess", "public": self = .publicAccess
         default: return nil
         }
@@ -175,11 +175,11 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         }
 
         if section == .relay {
-            let relayURL = Self.nonEmpty(query["relayurl"] ?? query["url"])
-            let hostID = Self.nonEmpty(query["hostid"] ?? query["host"])
-            let enrollmentTicket = Self.nonEmpty(query["enrollmentticket"] ?? query["ticket"])
-            let relayKeyID = Self.nonEmpty(query["relaykeyid"] ?? query["keyid"])
-            let relayPublicKey = Self.nonEmpty(query["relaypublickey"] ?? query["publickey"])
+            let relayURL = Self.nonEmpty(query["relayurl"])
+            let hostID = Self.nonEmpty(query["hostid"])
+            let enrollmentTicket = Self.nonEmpty(query["enrollmentticket"])
+            let relayKeyID = Self.nonEmpty(query["relaykeyid"])
+            let relayPublicKey = Self.nonEmpty(query["relaypublickey"])
             let hasRelayValues = [relayURL, hostID, enrollmentTicket, relayKeyID, relayPublicKey].contains { $0 != nil }
             self.relay = hasRelayValues
                 ? WarrenDesktopRelayPrefill(

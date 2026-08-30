@@ -93,16 +93,12 @@ func newRegistry(dataURL string) (*registry, error) {
 	return registry, nil
 }
 
-func (registry *registry) provisionHost(id, name string) (string, error) {
+func (registry *registry) provisionHost(id, name string) error {
 	if !validHostID(id) {
-		return "", errors.New("invalid host ID")
+		return errors.New("invalid host ID")
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	credential, err := randomToken(32)
-	if err != nil {
-		return "", err
-	}
 	previous := registry.hosts[id]
 	record := &hostRecord{ID: id}
 	if previous != nil {
@@ -114,12 +110,11 @@ func (registry *registry) provisionHost(id, name string) (string, error) {
 	record.Online = false
 	record.Tunnel = nil
 	record.Generation++
-	record.CredentialHash = hashCredential(credential)
-	// Keep a compatibility bootstrap credential for the existing CLI. New
-	// enrollment replaces it with the daemon's canonical token.
+	record.CredentialHash = ""
+	var err error
 	record.EnrollmentToken, err = randomToken(32)
 	if err != nil {
-		return "", err
+		return err
 	}
 	record.EnrollmentUntil = registry.now().Add(10 * time.Minute)
 	record.PairingToken = ""
@@ -131,12 +126,12 @@ func (registry *registry) provisionHost(id, name string) (string, error) {
 		} else {
 			registry.hosts[id] = previous
 		}
-		return "", err
+		return err
 	}
 	if previousTunnel != nil {
 		previousTunnel.close()
 	}
-	return credential, nil
+	return nil
 }
 
 func (registry *registry) enrollment(id, ticket, secret string) (uint64, error) {

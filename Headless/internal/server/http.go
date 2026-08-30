@@ -76,7 +76,7 @@ type HTTPServer struct {
 	// tunnelMu serializes configuration persistence with all lifecycle routes.
 	// Manager has its own process-operation lock, but this server-level lock also
 	// keeps an enable/test/restart from observing half-written Edge/account
-	// settings while a legacy route is changing the enabled intent.
+	// settings while an adapter route is changing the enabled intent.
 	tunnelMu sync.Mutex
 }
 
@@ -229,24 +229,18 @@ func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http
 	}
 	var body struct {
 		RelayURL         string `json:"relayUrl"`
-		URL              string `json:"url"`
 		HostID           string `json:"hostId"`
 		EnrollmentTicket string `json:"enrollmentTicket"`
-		Ticket           string `json:"ticket"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
 	}
 	relayURL := strings.TrimSpace(body.RelayURL)
-	if relayURL == "" {
-		relayURL = strings.TrimSpace(body.URL)
-	}
 	hostID := strings.ToLower(strings.TrimSpace(body.HostID))
 	ticket := strings.TrimSpace(body.EnrollmentTicket)
-	if ticket == "" {
-		ticket = strings.TrimSpace(body.Ticket)
-	}
 	if !relayHostIDPattern.MatchString(hostID) || ticket == "" {
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
@@ -574,7 +568,7 @@ func (s *HTTPServer) handleTunnels(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status(), s.Token))
+	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status()))
 }
 
 func (s *HTTPServer) handleTunnelStart(writer http.ResponseWriter, request *http.Request) {
@@ -618,7 +612,7 @@ func (s *HTTPServer) handleTunnelControl(writer http.ResponseWriter, request *ht
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status(), s.Token))
+	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status()))
 }
 
 func (s *HTTPServer) handlePublicAccess(writer http.ResponseWriter, request *http.Request) {
@@ -643,7 +637,9 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		return
 	}
 	var body api.PublicAccessEnableRequest
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
 		return
 	}
@@ -661,10 +657,6 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		}
 	}
 	approvalKey := body.ApprovalKey
-	if strings.TrimSpace(approvalKey) == "" {
-		// enrollmentKey is the legacy JSON spelling for an approval key.
-		approvalKey = body.EnrollmentKey
-	}
 	inviteKey := body.InviteKey
 	keyKind := tunnel.LoginKeyKind("")
 	keyValue := ""
@@ -708,7 +700,7 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 	if body.EdgeURL != nil {
 		// An explicit empty edge clears the persisted override and returns to
 		// the release/launcher default. An omitted edge keeps the current
-		// configured override for compatibility with existing callers.
+		// configured override when no new value is supplied.
 		s.Tunnels.SetGnarEdgeOverride(edge)
 	} else if edge != "" {
 		s.Tunnels.SetGnarEdge(edge)
@@ -728,7 +720,6 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 	// stdin buffer. The manager clears this byte slice after login returns.
 	body.InviteKey = ""
 	body.ApprovalKey = ""
-	body.EnrollmentKey = ""
 	status, err := s.Tunnels.StartPublicAccessWithKey(edge, account, keyKind, key)
 	if err != nil {
 		projected := s.publicAccessStatus()
@@ -755,7 +746,9 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 		return
 	}
 	var body api.PublicAccessTestRequest
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access test request"))
 		return
 	}
@@ -787,9 +780,6 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 	// is intentionally idempotent, so testing first would otherwise reuse the old
 	// Edge/account connection and report a false success.
 	approvalKey := body.ApprovalKey
-	if strings.TrimSpace(approvalKey) == "" {
-		approvalKey = body.EnrollmentKey
-	}
 	inviteKey := body.InviteKey
 	keyKind := tunnel.LoginKeyKind("")
 	keyValue := ""
@@ -841,7 +831,6 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 	// manager. The manager clears the byte slice after gnar consumes it.
 	body.InviteKey = ""
 	body.ApprovalKey = ""
-	body.EnrollmentKey = ""
 	status, err := s.Tunnels.TestPublicAccess(effectiveEdge, account, keyKind, key)
 	if err != nil {
 		projected := s.publicAccessStatus()
@@ -1060,13 +1049,12 @@ func (s *HTTPServer) writePublicAccessError(writer http.ResponseWriter, code int
 	s.writePublicAccessStatus(writer, code, status)
 }
 
-func tunnelResponse(status map[string]tunnel.Status, token string) map[string]any {
+func tunnelResponse(status map[string]tunnel.Status) map[string]any {
 	result := make(map[string]any, len(status))
 	for kind, value := range status {
 		item := map[string]any{"running": value.Running}
 		if value.URL != "" {
 			item["url"] = value.URL
-			item["web_url"] = authenticatedWebURL(value.URL, token)
 		}
 		if value.Error != "" {
 			item["error"] = value.Error
@@ -1074,22 +1062,6 @@ func tunnelResponse(status map[string]tunnel.Status, token string) map[string]an
 		result[kind] = item
 	}
 	return map[string]any{"tunnels": result}
-}
-
-// authenticatedWebURL is retained only for the lower-level legacy tunnel
-// routes. Public Access responses stay credential-free; browser-open code adds
-// the same fragment at the last possible moment. QueryEscape gives the Web UI
-// a form-safe value, while replacing its space encoding keeps arbitrary legacy
-// tokens RFC3986-compatible as well.
-func authenticatedWebURL(raw, token string) string {
-	if token == "" {
-		return raw
-	}
-	base := raw
-	if fragment := strings.IndexByte(base, '#'); fragment >= 0 {
-		base = base[:fragment]
-	}
-	return base + "#t=" + strings.ReplaceAll(url.QueryEscape(token), "+", "%20")
 }
 
 func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.Request) {
@@ -1245,7 +1217,6 @@ func (s *HTTPServer) HandleRelayControl(
 		var auth struct {
 			Type         string   `json:"t"`
 			AccessToken  string   `json:"access_token"`
-			Token        string   `json:"token"`
 			ClientID     string   `json:"client_id"`
 			Version      string   `json:"version"`
 			Capabilities []string `json:"capabilities"`
@@ -1254,11 +1225,7 @@ func (s *HTTPServer) HandleRelayControl(
 		if err := json.Unmarshal(value.Payload, &auth); err != nil || auth.Type != "auth" || auth.Version != api.Version {
 			return errors.New("invalid Relay control authentication")
 		}
-		capability := auth.AccessToken
-		if capability == "" {
-			capability = auth.Token
-		}
-		if capability == "" || open.Token == "" || capability != open.Token {
+		if auth.AccessToken == "" || open.Token == "" || auth.AccessToken != open.Token {
 			return errors.New("Relay control capability mismatch")
 		}
 		if open.ClientID != "" && auth.ClientID != open.ClientID {
@@ -1419,12 +1386,6 @@ func (s *HTTPServer) peerCount() int {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 	return len(s.peers)
-}
-
-func compatibleProtocolVersion(client, server string) bool {
-	clientMajor := strings.SplitN(client, ".", 2)[0]
-	serverMajor := strings.SplitN(server, ".", 2)[0]
-	return clientMajor != "" && clientMajor == serverMajor
 }
 
 func supportsRosterDeltas(capabilities []string) bool {

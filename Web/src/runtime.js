@@ -34,23 +34,7 @@ const appBase = location.pathname.endsWith("/")
   : `${location.pathname}/`;
 const suppliedToken = authFragment?.get("t") || "";
 const memoryToken = { value: "" };
-const tokenStorageKey = usesControlPlane ? "" : "warren.accessToken";
-if (!usesControlPlane) {
-  memoryToken.value = suppliedToken || (() => {
-    try {
-      return localStorage.getItem(tokenStorageKey) || "";
-    } catch {
-      return "";
-    }
-  })();
-  if (suppliedToken) {
-    try {
-      localStorage.setItem(tokenStorageKey, suppliedToken);
-    } catch {
-      // Storage may be unavailable in private or embedded browser contexts.
-    }
-  }
-}
+if (!usesControlPlane) memoryToken.value = suppliedToken;
 
 const relaySessionBase = usesControlPlane
   ? relayPath(`${relayHostPath}/v1/session`)
@@ -58,9 +42,7 @@ const relaySessionBase = usesControlPlane
 
 // Relay links carry a one-time pairing ticket in the fragment. Exchange it
 // immediately over HTTPS and scrub the URL before rendering or navigating;
-// only the short-lived access capability remains in memory. The fallback keeps
-// old #t=<access-token> links working during the migration window without
-// persisting their value.
+// only the short-lived access capability remains in memory.
 export const tokenReady = usesControlPlane
   ? (suppliedToken
       ? fetch(`${relaySessionBase}/exchange`, {
@@ -75,11 +57,7 @@ export const tokenReady = usesControlPlane
             return memoryToken.value;
           })
           .catch(() => {
-            // A pairing ticket is one-use state, not a client capability. Do
-            // not send it to the WebSocket endpoint when exchange fails. The
-            // dotted shape is retained only for the old access-token fragment
-            // compatibility window.
-            memoryToken.value = suppliedToken.includes(".") ? suppliedToken : "";
+            memoryToken.value = "";
             return memoryToken.value;
           })
       : refreshRelayToken().catch(() => ""))
@@ -108,14 +86,6 @@ export const runtime = {
   get token() { return memoryToken.value; },
   set token(value) {
     memoryToken.value = value || "";
-    if (!usesControlPlane && tokenStorageKey) {
-      try {
-        if (memoryToken.value) localStorage.setItem(tokenStorageKey, memoryToken.value);
-        else localStorage.removeItem(tokenStorageKey);
-      } catch {
-        // Storage may be unavailable in private or embedded browser contexts.
-      }
-    }
   },
   tokenReady,
   refresh: refreshRelayToken,
