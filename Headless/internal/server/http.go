@@ -294,15 +294,22 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
 			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
 			"autoStartAI":           s.Service.Settings.AutoStartAI,
+			"openaiBaseURL":         s.Service.Settings.OpenAIBaseURL,
+			"openaiModel":           s.Service.Settings.OpenAIModel,
+			"openaiTitleEnabled":    s.Service.Settings.OpenAITitleEnabled,
 		})
 	case http.MethodPut:
 		var body struct {
-			DefaultRuntime string            `json:"defaultRuntime"`
-			RuntimeEnv     map[string]string `json:"runtimeEnv"`
-			GnarEdge       *string           `json:"gnarEdge"`
-			GnarAccount    *string           `json:"gnarAccount"`
-			AutoOpenShell  *bool             `json:"autoOpenShell"`
-			AutoStartAI    *bool             `json:"autoStartAI"`
+			DefaultRuntime     string            `json:"defaultRuntime"`
+			RuntimeEnv         map[string]string `json:"runtimeEnv"`
+			GnarEdge           *string           `json:"gnarEdge"`
+			GnarAccount        *string           `json:"gnarAccount"`
+			AutoOpenShell      *bool             `json:"autoOpenShell"`
+			AutoStartAI        *bool             `json:"autoStartAI"`
+			OpenAIBaseURL      *string           `json:"openaiBaseURL"`
+			OpenAIModel        *string           `json:"openaiModel"`
+			OpenAIKey          *string           `json:"openaiKey"`
+			OpenAITitleEnabled *bool             `json:"openaiTitleEnabled"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
 			http.Error(writer, "invalid settings", http.StatusBadRequest)
@@ -350,6 +357,26 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 				return
 			}
 		}
+		if body.OpenAIBaseURL != nil {
+			s.Service.Settings.OpenAIBaseURL = strings.TrimSpace(*body.OpenAIBaseURL)
+		}
+		if body.OpenAIModel != nil {
+			s.Service.Settings.OpenAIModel = strings.TrimSpace(*body.OpenAIModel)
+		}
+		if body.OpenAIKey != nil {
+			s.Service.Settings.OpenAIKey = strings.TrimSpace(*body.OpenAIKey)
+		}
+		if body.OpenAITitleEnabled != nil {
+			s.Service.Settings.OpenAITitleEnabled = *body.OpenAITitleEnabled
+		}
+		if body.OpenAIBaseURL != nil || body.OpenAIModel != nil || body.OpenAIKey != nil || body.OpenAITitleEnabled != nil {
+			if s.Service.SettingsPath != "" {
+				if err := settings.Save(s.Service.SettingsPath, s.Service.Settings); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+		}
 		if s.Tunnels != nil {
 			s.Tunnels.SetGnarEdgeOverride(s.Service.Settings.GnarEdge)
 		}
@@ -363,6 +390,9 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
 			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
 			"autoStartAI":           s.Service.Settings.AutoStartAI,
+			"openaiBaseURL":         s.Service.Settings.OpenAIBaseURL,
+			"openaiModel":           s.Service.Settings.OpenAIModel,
+			"openaiTitleEnabled":    s.Service.Settings.OpenAITitleEnabled,
 		})
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -1638,6 +1668,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
 			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
 			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
+			"openaiBaseURL":         p.server.Service.Settings.OpenAIBaseURL,
+			"openaiModel":           p.server.Service.Settings.OpenAIModel,
+			"openaiTitleEnabled":    p.server.Service.Settings.OpenAITitleEnabled,
 		})
 	case "settings.put":
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
@@ -1669,6 +1702,25 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 				return err
 			}
 		}
+		if _, specified := params["openaiBaseURL"]; specified {
+			p.server.Service.Settings.OpenAIBaseURL = strings.TrimSpace(stringParam(params, "openaiBaseURL"))
+		}
+		if _, specified := params["openaiModel"]; specified {
+			p.server.Service.Settings.OpenAIModel = strings.TrimSpace(stringParam(params, "openaiModel"))
+		}
+		if _, specified := params["openaiKey"]; specified {
+			p.server.Service.Settings.OpenAIKey = strings.TrimSpace(stringParam(params, "openaiKey"))
+		}
+		if _, specified := params["openaiTitleEnabled"]; specified {
+			p.server.Service.Settings.OpenAITitleEnabled = boolParam(params, "openaiTitleEnabled")
+		}
+		if _, specified := params["openaiBaseURL"]; specified || params["openaiModel"] != nil || params["openaiKey"] != nil || params["openaiTitleEnabled"] != nil {
+			if p.server.Service.SettingsPath != "" {
+				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
+					return err
+				}
+			}
+		}
 		if p.server.Tunnels != nil {
 			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.Settings.GnarEdge)
 		}
@@ -1690,6 +1742,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
 			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
 			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
+			"openaiBaseURL":         p.server.Service.Settings.OpenAIBaseURL,
+			"openaiModel":           p.server.Service.Settings.OpenAIModel,
+			"openaiTitleEnabled":    p.server.Service.Settings.OpenAITitleEnabled,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(

@@ -25,6 +25,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
+	sessiontitle "github.com/abcdlsj/warren/Headless/internal/title"
 	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 )
 
@@ -202,6 +203,17 @@ type agentSession struct {
 	events []api.AgentEvent
 	status api.AgentStatus
 	turn   api.AgentTurn
+	// titleUser and titleAssistant retain only the first real text messages
+	// needed for one automatic title suggestion. They are intentionally kept
+	// separate from the public transcript projection.
+	titleUser              string
+	titleUserProvider      string
+	titleUserID            string
+	titleAssistant         string
+	titleAssistantProvider string
+	titleAssistantID       string
+	titleAssistantComplete bool
+	titleGenerationStarted bool
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -3480,6 +3492,14 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.events = nil
 		existing.status = api.AgentStatus{}
 		existing.turn = api.AgentTurn{}
+		existing.titleUser = ""
+		existing.titleUserProvider = ""
+		existing.titleUserID = ""
+		existing.titleAssistant = ""
+		existing.titleAssistantProvider = ""
+		existing.titleAssistantID = ""
+		existing.titleAssistantComplete = false
+		existing.titleGenerationStarted = false
 		existing.mu.Unlock()
 	} else if existing != nil {
 		existing.mu.Lock()
@@ -3743,6 +3763,7 @@ func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, s
 	s.lazyInit()
 	s.agentsMu.Lock()
 	effectiveStatus := status
+	shouldTryTitle := false
 	if entry := s.agents[sessionID]; entry != nil {
 		entry.mu.Lock()
 		entry.events = append(entry.events, events...)
@@ -3755,10 +3776,36 @@ func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, s
 			entry.status = status
 			effectiveStatus = entry.status
 		}
+		for _, event := range events {
+			if event.Sidechain {
+				continue
+			}
+			switch event.Type {
+			case "user":
+				content := strings.TrimSpace(event.Content)
+				if content == "" || isTitleSystemContext(content) {
+					continue
+				}
+				appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event)
+			case "assistant":
+				appendTitleMessage(&entry.titleAssistant, &entry.titleAssistantProvider, &entry.titleAssistantID, event)
+				// Codex and Claude emit complete assistant messages as ordinary
+				// events. OpenCode emits an initial snapshot followed by deltas;
+				// its turn-complete callback is the completion boundary unless a
+				// terminal finish reason is attached directly to this event.
+				if entry.titleAssistant != "" && (event.StopReason != "" || (!event.ContentDelta && event.Provider != "opencode")) {
+					entry.titleAssistantComplete = true
+				}
+			}
+		}
+		shouldTryTitle = entry.titleAssistantComplete
 		entry.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
 	s.broadcastAgentIncrements(sessionID, events, effectiveStatus)
+	if shouldTryTitle {
+		s.tryStartSessionTitle(sessionID)
+	}
 }
 
 // recordAgentStatus forwards a status change that arrived without new
@@ -3784,11 +3831,146 @@ func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broa
 		}
 		entry.mu.Lock()
 		entry.turn = turn
+		if turn.Status == api.AgentTurnCompleted && strings.TrimSpace(entry.titleAssistant) != "" {
+			entry.titleAssistantComplete = true
+		}
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
 		if broadcast {
 			s.broadcastAgentTurn(sessionID, turn)
 		}
+		if turn.Status == api.AgentTurnCompleted {
+			s.tryStartSessionTitle(sessionID)
+		}
+	}
+}
+
+// tryStartSessionTitle atomically claims the one automatic title request for a
+// session once its first user and assistant texts are complete. The request is
+// intentionally asynchronous: an unavailable model must never delay terminal
+// or agent event delivery.
+func (s *Service) tryStartSessionTitle(sessionID string) {
+	if !s.titleGenerationConfigured() || s.Store == nil {
+		return
+	}
+	state := s.Store.Snapshot()
+	found := false
+	for _, session := range state.Sessions {
+		if session.ID != sessionID {
+			continue
+		}
+		found = true
+		// Do not spend a request for a session that already has a manual or
+		// previously generated title, or whose runtime has already ended.
+		if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
+			return
+		}
+		break
+	}
+	if !found {
+		return
+	}
+	var input sessiontitle.Input
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	if entry == nil {
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	if entry.titleGenerationStarted || !entry.titleAssistantComplete ||
+		strings.TrimSpace(entry.titleUser) == "" || strings.TrimSpace(entry.titleAssistant) == "" {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.titleGenerationStarted = true
+	input = sessiontitle.Input{
+		User:      entry.titleUser,
+		Assistant: entry.titleAssistant,
+	}
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+
+	config := sessiontitle.Config{
+		BaseURL: s.Settings.OpenAIBaseURL,
+		Model:   s.Settings.OpenAIModel,
+		APIKey:  s.Settings.OpenAIKey,
+	}
+	go s.generateSessionTitle(sessionID, config, input)
+}
+
+func (s *Service) titleGenerationConfigured() bool {
+	return s.Settings.OpenAITitleEnabled &&
+		strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
+		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+}
+
+// isTitleSystemContext filters provider-injected scaffolding that can arrive
+// as a user-role event. It must not become the subject of an automatic title.
+func isTitleSystemContext(content string) bool {
+	content = strings.TrimSpace(content)
+	return strings.HasPrefix(strings.ToLower(content), "# agents.md") ||
+		strings.HasPrefix(content, "<environment_context>") ||
+		strings.HasPrefix(content, "<collaboration_mode>") ||
+		strings.Contains(content, "<permissions instructions>")
+}
+
+// appendTitleMessage keeps the first real text message and only appends
+// deltas that belong to that same provider message. Provider message IDs are
+// present for OpenCode; the empty-ID fallback keeps normalized test and legacy
+// events usable without allowing a later complete message to replace it.
+func appendTitleMessage(value, provider, messageID *string, event api.AgentEvent) bool {
+	content := strings.TrimSpace(event.Content)
+	if content == "" {
+		return false
+	}
+	if *value == "" {
+		*value = content
+		*provider = event.Provider
+		*messageID = event.ID
+		return true
+	}
+	if !event.ContentDelta || event.Provider != *provider {
+		return false
+	}
+	if *messageID != "" {
+		if event.ID != *messageID {
+			return false
+		}
+	} else if event.ID != "" {
+		return false
+	}
+	*value = strings.TrimSpace(*value + event.Content)
+	return true
+}
+
+func (s *Service) generateSessionTitle(sessionID string, config sessiontitle.Config, input sessiontitle.Input) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	titleValue, err := (sessiontitle.Generator{Config: config}).Generate(ctx, input)
+	if err != nil {
+		s.logWarn("generate session title", "session", sessionID, "error", err)
+		return
+	}
+	err = s.Store.Update(func(state *api.State) error {
+		for index := range state.Sessions {
+			session := &state.Sessions[index]
+			if session.ID != sessionID {
+				continue
+			}
+			// CustomTitle is also the durable automatic display override. A
+			// manual rename that wins the race must never be overwritten.
+			if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
+				return nil
+			}
+			session.CustomTitle = titleValue
+			return nil
+		}
+		return fmt.Errorf("session not found: %s", sessionID)
+	})
+	if err != nil {
+		s.logWarn("persist session title", "session", sessionID, "error", err)
 	}
 }
 
