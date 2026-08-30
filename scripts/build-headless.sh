@@ -13,11 +13,6 @@ if [[ -n "$(git -C "$repository_root" status --porcelain --untracked-files=no 2>
     build_dirty=true
 fi
 headless_ldflags="-X main.version=$build_version -X main.revision=$build_revision -X main.dirty=$build_dirty"
-if [[ -n "${WARREN_GNAR_DEFAULT_EDGE:-}" ]]; then
-    # The value is a public URL, not a credential. It is embedded only in the
-    # release binary; user settings continue to store custom overrides.
-    headless_ldflags+=" -X github.com/abcdlsj/warren/Headless/internal/releaseconfig.DefaultGnarEdge=${WARREN_GNAR_DEFAULT_EDGE}"
-fi
 
 build_non_macos() {
     go build \

@@ -115,7 +115,7 @@ Desktop and other local clients can use the equivalent Headless endpoint
 `POST /v1/relay/enroll` with `relayUrl`, `hostId`, and `enrollmentTicket`.
 Headless supplies the daemon token itself, validates the returned signing key,
 and persists the Relay metadata. This endpoint is intentionally unrelated to
-Public Access/gnar settings.
+Public Access route settings.
 
 ## Pairing, Discovery, and Revocation
 

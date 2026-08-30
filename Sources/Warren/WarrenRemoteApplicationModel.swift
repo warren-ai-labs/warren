@@ -898,6 +898,23 @@ private actor WarrenRemoteWire {
     private var latestRosterSignal = WarrenLatestValueSignal<RemoteRoster>()
     private let eventBuffer = WarrenLosslessAsyncBuffer<RemoteWireEvent>(capacity: 64)
 
+    private static func relayHostIDPathSegment(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let bytes = Array(value.utf8)
+        guard bytes.count == 36,
+              [8, 13, 18, 23].allSatisfy({ bytes[$0] == 45 }),
+              bytes[14] >= 49, bytes[14] <= 53,
+              [56, 57, 97, 98].contains(bytes[19]) else {
+            return nil
+        }
+        for (index, byte) in bytes.enumerated() where ![8, 13, 18, 23].contains(index) {
+            guard (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102) else {
+                return nil
+            }
+        }
+        return value
+    }
+
     init(configuration: WarrenRemoteEndpointConfiguration) { self.configuration = configuration }
 
     nonisolated func events() -> AsyncStream<RemoteWireEvent> { eventBuffer.stream }
@@ -927,13 +944,20 @@ private actor WarrenRemoteWire {
         components.fragment = nil
         let isRelay = configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
         if isRelay {
-            guard let hostID = configuration.hostID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !hostID.isEmpty,
-                  let escapedHostID = hostID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            guard let configuredHostID = configuration.hostID,
+                  let hostID = Self.relayHostIDPathSegment(configuredHostID)
             else { throw URLError(.badURL) }
+            if components.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) {
+                throw URLError(.badURL)
+            }
             let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let path = "/h/\(escapedHostID)/v1/client/connect"
-            components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
+            let suffix = "/h/\(hostID)/v1/client/connect"
+            let normalizedPath = prefix.isEmpty ? "/" : "/\(prefix)"
+            if normalizedPath.hasSuffix(suffix) {
+                components.path = normalizedPath
+            } else {
+                components.path = prefix.isEmpty ? suffix : "\(normalizedPath)\(suffix)"
+            }
         } else {
             components.path = "/v1/ws"
         }
@@ -2777,6 +2801,21 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 NSLocalizedDescriptionKey: "The selected SSH endpoint is still connecting.",
             ])
         }
+        if configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay" {
+            guard let wire else { throw URLError(.notConnectedToInternet) }
+            var params: [String: String] = [:]
+            if action == .enable || action == .test {
+                if !publicHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    params["publicHostname"] = publicHostname
+                }
+                if !pathPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    params["pathPrefix"] = pathPrefix
+                }
+            }
+            let data = try await wire.request("public-access.\(action.rawValue)", params: params)
+            applyPublicAccessStatus(from: data)
+            return
+        }
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
@@ -2812,6 +2851,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func refreshPublicAccessStatus(configuration: WarrenRemoteEndpointConfiguration) async -> Bool {
+        if configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay" {
+            guard let wire else { return false }
+            do {
+                let data = try await wire.request("public-access.status")
+                applyPublicAccessStatus(from: data)
+                return true
+            } catch {
+                return false
+            }
+        }
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url

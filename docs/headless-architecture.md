@@ -10,7 +10,7 @@ Warren is split into three layers: Host, Transport, and Client:
 ```text
 Desktop / CLI
       ↓ versioned WebSocket API
-Endpoint (Local, SSH tunnel, Tailscale, Relay)
+Endpoint (Local, SSH tunnel, Relay)
       ↓
 warren-headless
 ├── Project / Workspace / Session authority
@@ -47,7 +47,7 @@ Local and Server are two independent Host resource trees. Switching endpoints on
   version are rejected during authentication with an explicit upgrade error,
   before the daemon sends a roster or session data.
 - HTTP state endpoints require a Bearer token.
-- Public connections should go through SSH, Tailscale, or a TLS-terminating Relay.
+- Public connections should go through SSH or a TLS-terminating Relay.
 
 ## Extension Points
 

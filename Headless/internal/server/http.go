@@ -146,7 +146,7 @@ func sameOrigin(request *http.Request, origin string) bool {
 }
 
 // effectiveScheme returns the scheme the browser actually used, honoring TLS
-// termination by cloudflared or Tailscale Serve.
+// termination by the Relay or another trusted reverse proxy.
 func effectiveScheme(request *http.Request) string {
 	if forwarded := request.Header.Get("X-Forwarded-Proto"); forwarded != "" {
 		if fields := strings.Fields(forwarded); len(fields) > 0 {
@@ -761,6 +761,141 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
+// publicAccessRPC exposes the same Relay-owned route lifecycle to clients
+// connected through the Relay control WebSocket. The daemon performs route
+// mutations with its locally held Host Secret; neither that secret nor the
+// Relay route capability is placed on the control stream.
+func (s *HTTPServer) publicAccessRPC(ctx context.Context, action, publicHostname, pathPrefix string) (api.PublicAccessStatus, error) {
+	if action == "status" {
+		return s.publicAccessStatus(), nil
+	}
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	switch action {
+	case "enable":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if s.RelayStart != nil {
+			if err := s.RelayStart(); err != nil {
+				return api.PublicAccessStatus{}, err
+			}
+		}
+		route := relay.Route{
+			ID:             current.RouteID,
+			PublicHostname: current.PublicHostname,
+			PathPrefix:     current.PathPrefix,
+			AuthMode:       "public",
+			Enabled:        true,
+		}
+		if strings.TrimSpace(publicHostname) != "" {
+			route.PublicHostname = strings.TrimSpace(publicHostname)
+		}
+		if strings.TrimSpace(pathPrefix) != "" {
+			route.PathPrefix = strings.TrimSpace(pathPrefix)
+		}
+		configured, err := client.Configure(ctx, route)
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        true,
+			RouteID:        configured.ID,
+			Owner:          configured.HostID,
+			PublicHostname: configured.PublicHostname,
+			PathPrefix:     configured.PathPrefix,
+			AuthMode:       configured.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "test":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		route := relay.Route{
+			ID:             current.RouteID,
+			PublicHostname: current.PublicHostname,
+			PathPrefix:     current.PathPrefix,
+			AuthMode:       "public",
+			Enabled:        current.Enabled,
+		}
+		provided := strings.TrimSpace(publicHostname) != "" || strings.TrimSpace(pathPrefix) != ""
+		if strings.TrimSpace(publicHostname) != "" {
+			route.PublicHostname = strings.TrimSpace(publicHostname)
+		}
+		if strings.TrimSpace(pathPrefix) != "" {
+			route.PathPrefix = strings.TrimSpace(pathPrefix)
+		}
+		if provided {
+			route.Enabled = false
+			route, err = client.Configure(ctx, route)
+		} else {
+			route, err = client.Get(ctx)
+		}
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        current.Enabled,
+			RouteID:        route.ID,
+			Owner:          route.HostID,
+			PublicHostname: route.PublicHostname,
+			PathPrefix:     route.PathPrefix,
+			AuthMode:       route.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "disable":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := client.Disable(ctx); err != nil && !errors.Is(err, relay.ErrRouteNotFound) {
+			return api.PublicAccessStatus{}, err
+		}
+		current.Enabled = false
+		if err := s.Service.UpdatePublicTunnelSettings(current); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "reset":
+		if client, err := s.routeClient(); err == nil {
+			if disableErr := client.Disable(ctx); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
+				return api.PublicAccessStatus{}, disableErr
+			}
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "restart":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		route := relay.Route{ID: current.RouteID, PublicHostname: current.PublicHostname, PathPrefix: current.PathPrefix, AuthMode: "public", Enabled: true}
+		configured, err := client.Configure(ctx, route)
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        true,
+			RouteID:        configured.ID,
+			Owner:          configured.HostID,
+			PublicHostname: configured.PublicHostname,
+			PathPrefix:     configured.PathPrefix,
+			AuthMode:       configured.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	default:
+		return api.PublicAccessStatus{}, fmt.Errorf("unknown public access action: %s", action)
+	}
+	return s.publicAccessStatus(), nil
+}
+
 func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
 	current := s.Service.SettingsSnapshot()
 	status := api.PublicAccessStatus{
@@ -1055,7 +1190,9 @@ func (s *HTTPServer) removeRelayControl(id relay.ConnectionID, entry *relayContr
 
 func isSlowMutation(method string) bool {
 	switch method {
-	case "project.remove", "workspace.remove":
+	case "project.remove", "workspace.remove",
+		"public-access.enable", "public-access.test", "public-access.disable",
+		"public-access.reset", "public-access.restart":
 		return true
 	default:
 		return false
@@ -1721,6 +1858,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
 		})
+	case "public-access.status", "public-access.enable", "public-access.test", "public-access.disable", "public-access.reset", "public-access.restart":
+		action := strings.TrimPrefix(command.Method, "public-access.")
+		value, err := p.server.publicAccessRPC(ctx, action, stringParam(params, "publicHostname"), stringParam(params, "pathPrefix"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "settings.testOpenAI":
 		if err := p.server.Service.TestOpenAITitle(
 			ctx,

@@ -98,7 +98,7 @@ const messages = {
     "architecture.clientLine": "macOS app · Web/PWA · CLI",
     "architecture.hostLine": "warren-headless",
     "architecture.runtimeLine": "Ghostline",
-    "architecture.note": "SSH, Tailscale and Cloudflare Tunnel only get you there. They are not the product model.",
+    "architecture.note": "SSH and Relay only provide reachability. They are not the product model.",
     "principle.quote":
       "Closing a tab is the only way to end a session. Quitting, switching workspaces, losing Wi-Fi — that's just walking away.",
     "principle.cite": "Warren product design, §5",
@@ -123,7 +123,7 @@ const messages = {
         date: "August 30, 2026",
         title: "Warren makes Codex Working visibly blink.",
         summary:
-          "A patch release that adds a visible blinking Working indicator, preserves configured terminal colors after snapshot restore, and marks interrupted agent messages consistently. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+          "A patch release that adds a visible blinking Working indicator, preserves configured terminal colors after snapshot restore, and marks interrupted agent messages consistently. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
         sections: [
           {
             title: "Changed",
@@ -144,7 +144,7 @@ const messages = {
         date: "August 29, 2026",
         title: "Warren adds Host-owned Tasks and a durable Host schema.",
         summary:
-          "A patch release that adds Host-owned Tasks aggregating Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+          "A patch release that adds Host-owned Tasks aggregating Workspaces across Projects and migrates Host state to schema 2 so Task data is durable. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
         sections: [
           {
             title: "Added",
@@ -166,7 +166,7 @@ const messages = {
         date: "August 29, 2026",
         title: "Warren hardens endpoint switching and Public Access state.",
         summary:
-          "A patch release that hardens endpoint switching, preserves Public Access state across restarts, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+          "A patch release that hardens endpoint switching, preserves Public Access state across restarts, fixes web-link auth and mobile scrolling, and improves Linux terminfo handling. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
         sections: [
           {
             title: "Added",
@@ -184,7 +184,7 @@ const messages = {
           {
             title: "Fixed",
             items: [
-              "Persist Public Access authenticated state across daemon restarts by checking the persisted gnar credential store.",
+              "Persist Public Access route state across daemon restarts by checking the Relay route metadata.",
               "Preserve the auth fragment when copying web links so pasted links can authenticate the protected WebSocket.",
               "Keep warm promotion for remote endpoints and rebuild the connection when endpoint locality changes.",
               "Allow initial input for dedicated codex, claude, and opencode sessions before the agent transcript is bound.",
@@ -200,7 +200,7 @@ const messages = {
         date: "August 28, 2026",
         title: "Warren refreshes terminal rendering and workspace creation.",
         summary:
-          "A minor release that bundles xterm-ghostty truecolor terminfo, tightens terminal rendering around warm promotion and resize, and hardens Ghostline handoff and workspace creation. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+          "A minor release that bundles xterm-ghostty truecolor terminfo, tightens terminal rendering around warm promotion and resize, and hardens Ghostline handoff and workspace creation. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
         sections: [
           {
             title: "Added",
@@ -251,7 +251,7 @@ const messages = {
         date: "August 28, 2026",
         title: "Warren upgrades Ghostline semantics.",
         summary:
-          "A super-major release that upgrades to incompatible Ghostline runtime semantics with automatic session handoff. Downgrading without recreating sessions is not supported. Targets arm64 Apple Silicon on macOS 13+; bundled gnar remains v1.7.2.",
+          "A super-major release that upgrades to incompatible Ghostline runtime semantics with automatic session handoff. Downgrading without recreating sessions is not supported. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
         sections: [
           {
             title: "Added",
@@ -322,14 +322,14 @@ const messages = {
         version: "0.8.2",
         dateISO: "2026-08-23",
         date: "August 23, 2026",
-        title: "Warren ships the latest gnar worker.",
+        title: "Warren ships Relay route support.",
         summary:
-          "A maintenance release that embeds gnar v1.7.2 and keeps the onboarding page at the top until the terminal demo is explicitly requested.",
+          "A maintenance release that aligns Public Access with Relay routes and keeps the onboarding page at the top until the terminal demo is explicitly requested.",
         sections: [
           {
             title: "Changed",
             items: [
-              "Update the bundled gnar worker to v1.7.2 so Public Access ships the matching worker release.",
+              "Align Public Access route lifecycle with the Relay protocol.",
             ],
           },
           {
@@ -383,7 +383,7 @@ const messages = {
           {
             title: "Added",
             items: [
-              "Add Public Access through a self-hosted gnar Edge with Save & Test, Invite Key and Approval Key enrollment, lifecycle controls, restart recovery, and credential-free endpoint reporting.",
+              "Add Public Access through a self-hosted Relay with Save & Test, pairing, lifecycle controls, restart recovery, and credential-free endpoint reporting.",
               "Add agent-first CLI commands for Codex and Claude Agents, normalized transcript reads, bounded turn waits, and explicit targeting.",
               "Add provider-neutral Agent activity and human-attention status across Host, Web, Desktop, and CLI with Workspace and Terminal Group aggregation.",
               "Add scoped warren://terminal and Web links for Project, Workspace, and Session targets, plus warren://settings links for Public Access setup.",
@@ -393,7 +393,7 @@ const messages = {
           {
             title: "Changed",
             items: [
-              "Bundle release-selected gnar with an isolated credential store, inject a public default Edge at build time, and keep explicit or system gnar paths available.",
+              "Use Relay route metadata and scoped capabilities without packaging a local reachability worker.",
               "Keep Agent, roster, terminal, and transcript projections explicit and bounded while preserving terminal dimensions through responsive chrome and notices.",
               "Roll Ghostline upgrades by release tag and require stable code signing for distributable macOS builds.",
             ],
@@ -401,7 +401,7 @@ const messages = {
           {
             title: "Fixed",
             items: [
-              "Harden Public Access enrollment, gnar v1.7 key routing, lifecycle recovery, secret handling, setup defaults, and explicit browser authentication links.",
+              "Harden Public Access Relay enrollment, route lifecycle recovery, secret handling, setup defaults, and explicit browser authentication links.",
               "Preserve Warren terminal colors across appearance changes and restore the Codex composer background.",
               "Harden compact chrome, Web input fallback, session labels, and notice controls across reconnect, mobile, and narrow desktop states.",
             ],
@@ -873,7 +873,7 @@ const messages = {
     "architecture.clientLine": "macOS 应用 · Web/PWA · CLI",
     "architecture.hostLine": "warren-headless",
     "architecture.runtimeLine": "Ghostline",
-    "architecture.note": "SSH、Tailscale 和 Cloudflare Tunnel 只负责把你带到那里，不属于产品模型。",
+    "architecture.note": "SSH 和 Relay 只负责提供访问路径，不属于产品模型。",
     "principle.quote":
       "关闭 Tab 是结束会话的唯一方式。退出、切换工作区、Wi-Fi 断了——那只是离开而已。",
     "principle.cite": "Warren 产品设计，§5",
@@ -897,7 +897,7 @@ const messages = {
         date: "2026 年 8 月 30 日",
         title: "Warren 让 Codex Working 明显闪烁。",
         summary:
-          "修复版本：新增可见的 Working 闪烁指示器，在快照恢复后保持终端颜色配置，并在 Web 界面统一标记被中断的 agent 消息。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+          "修复版本：新增可见的 Working 闪烁指示器，在快照恢复后保持终端颜色配置，并在 Web 界面统一标记被中断的 agent 消息。面向 arm64 macOS 13+，Public Access 使用 Relay 路由。",
         sections: [
           {
             title: "调整",
@@ -918,7 +918,7 @@ const messages = {
         date: "2026 年 8 月 29 日",
         title: "Warren 加固端点切换与 Public Access 状态。",
         summary:
-          "修复版本：加固端点切换、重启后保持 Public Access 已认证状态、修复网页链接鉴权与移动端滚动，并在 Linux 上改进 terminfo 安装。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+          "修复版本：加固端点切换、重启后保持 Public Access 状态、修复网页链接鉴权与移动端滚动，并在 Linux 上改进 terminfo 安装。面向 arm64 macOS 13+，Public Access 使用 Relay 路由。",
         sections: [
           {
             title: "新增",
@@ -936,7 +936,7 @@ const messages = {
           {
             title: "修复",
             items: [
-              "重启后通过已持久化的 gnar 凭据保持 Public Access 已认证状态。",
+              "重启后通过已持久化的 Relay 路由元数据保持 Public Access 状态。",
               "复制网页链接时保留鉴权 fragment，使粘贴链接可认证受保护的 WebSocket。",
               "为远端端点保留 warm promotion，并在端点本地/远端变化时重建连接。",
               "在 agent transcript 绑定前允许 codex/claude/opencode 专属会话的初始输入。",
@@ -952,7 +952,7 @@ const messages = {
         date: "2026 年 8 月 28 日",
         title: "Warren 刷新终端渲染与工作区创建。",
         summary:
-          "次版本：内置 xterm-ghostty truecolor，收紧 warm promotion 与 resize 渲染，并加固 Ghostline handoff 与工作区创建。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+          "次版本：内置 xterm-ghostty truecolor，收紧 warm promotion 与 resize 渲染，并加固 Ghostline handoff 与工作区创建。面向 arm64 macOS 13+，Public Access 使用 Relay 路由。",
         sections: [
           {
             title: "新增",
@@ -1003,7 +1003,7 @@ const messages = {
         date: "2026 年 8 月 28 日",
         title: "Warren 升级 Ghostline 语义。",
         summary:
-          "超级重大版本：升级到不兼容的 Ghostline 运行时语义，自动迁移已有会话；不支持不重建会话的回退。面向 arm64 macOS 13+，内置 gnar 仍为 v1.7.2。",
+          "超级重大版本：升级到不兼容的 Ghostline 运行时语义，自动迁移已有会话；不支持不重建会话的回退。面向 arm64 macOS 13+，Public Access 使用 Relay 路由。",
         sections: [
           {
             title: "新增",
@@ -1074,14 +1074,14 @@ const messages = {
         version: "0.8.2",
         dateISO: "2026-08-23",
         date: "2026 年 8 月 23 日",
-        title: "Warren 内置最新 gnar Worker。",
+        title: "Warren 完成 Relay 路由支持。",
         summary:
-          "维护版本：内置 gnar v1.7.2，并保持 onboarding 首屏停留在顶部，只有明确请求时才进入终端演示。",
+          "维护版本：Public Access 对齐 Relay 路由，并保持 onboarding 首屏停留在顶部，只有明确请求时才进入终端演示。",
         sections: [
           {
             title: "调整",
             items: [
-              "内置 gnar Worker 升级到 v1.7.2，让 Public Access 使用匹配的 Worker 版本。",
+              "让 Public Access 路由生命周期与 Relay 协议保持一致。",
             ],
           },
           {
@@ -1135,7 +1135,7 @@ const messages = {
           {
             title: "新增",
             items: [
-              "通过自托管 gnar Edge 新增 Public Access，支持在设置中 Save & Test、使用 Invite Key 或 Approval Key 完成注册、控制生命周期、重启恢复，并报告不含凭据的公共 Endpoint。",
+              "通过自托管 Relay 新增 Public Access，支持在设置中 Save & Test、使用 pairing 完成注册、控制生命周期、重启恢复，并报告不含凭据的公共 Endpoint。",
               "新增面向 Agent 的 CLI 命令，支持 Codex 和 Claude Agent 的创建、列表、读取、发送、等待、附加和明确定位；支持规范化 Transcript 读取与有界 turn 等待。",
               "新增跨 Host、Web、Desktop 和 CLI 的统一 Agent 活动与人工关注状态，并汇总到 Workspace 和 Terminal Group。",
               "新增范围明确的 warren://terminal 与 Web 链接，可定位 Project、Workspace 和 Session；新增可预填 Public Access 的 warren://settings 链接。",
@@ -1145,7 +1145,7 @@ const messages = {
           {
             title: "调整",
             items: [
-              "发布版可内置 gnar，并使用隔离的凭据目录；构建时注入公开的默认 Edge，同时保留显式或系统 gnar 路径。",
+              "使用 Relay 路由元数据和范围明确的 capability，不再打包本地访问 worker。",
               "让 Agent、roster、Terminal 和 Transcript 投影保持明确且有界，并在响应式 Chrome 与通知出现时保持终端尺寸稳定。",
               "按发布 tag 滚动升级 Ghostline，并要求可分发的 macOS 构建使用稳定代码签名。",
             ],
@@ -1153,7 +1153,7 @@ const messages = {
           {
             title: "修复",
             items: [
-              "强化 Public Access 注册、gnar v1.7 密钥路由、生命周期恢复、密钥处理、设置默认值和显式浏览器认证链接。",
+              "强化 Public Access Relay 注册、路由生命周期恢复、密钥处理、设置默认值和显式浏览器认证链接。",
               "修复 Warren 终端在外观变化时的颜色保持问题，并恢复 Codex composer 背景。",
               "强化紧凑 Chrome、Web 输入回退、Session 标签和通知控制在重连、移动端与窄桌面状态下的表现。",
             ],

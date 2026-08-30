@@ -87,7 +87,7 @@ Sessions, and the Web interface through which those resources are accessed.
 
 **Public Access**:
 A reachability mode that lets the owner of a Warren Host access its existing
-Web interface from outside the local network through a configured gnar Edge.
+Web interface from outside the local network through a configured Relay route.
 It exposes the Host to its owner; it does not grant another person access to a
 Workspace.
 _Avoid_: Sharing, public sharing, share link
@@ -98,22 +98,16 @@ resource is made accessible to another person. Sharing is distinct from Public
 Access, which is the owner's remote reachability to a Host.
 _Avoid_: Public Access
 
-**gnar Edge**:
-A relay service that accepts gnar tunnel connections and forwards public
-requests to a connected local Web service. It is shared infrastructure and is
-not a Warren Host, Workspace, or Terminal Session.
+**Warren Relay**:
+An independently deployed control plane that authenticates Host connections,
+issues scoped access capabilities, and forwards owner or Public Access routes.
+It is shared infrastructure and is not a Warren Host, Workspace, or Terminal
+Session.
 
-**Enrollment Key**:
-A human-configured secret used to bootstrap a client account on a gnar Edge.
-It authorizes enrollment only; it is not the long-lived tunnel credential or a
-public endpoint URL.
-_Avoid_: Account token, Edge URL
-
-**gnar Account Token**:
-A credential issued by a gnar Edge to an enrolled client account and used to
-authenticate tunnel connections. It is distinct from the Enrollment Key and
-from a Warren Host's Web authentication token.
+**Relay access capability**:
+A short-lived signed credential issued after pairing. It authorizes a specific
+Host and scope and is distinct from the Host Secret used by the daemon.
 
 **Public Endpoint**:
-The network address assigned by a gnar Edge to one connected tunnel. It
-identifies a reachable route and carries no enrollment secret by itself.
+The network address assigned by Relay to one enabled Host route. It identifies a
+reachable route and carries no enrollment secret by itself.

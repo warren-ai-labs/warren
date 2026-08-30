@@ -73,9 +73,9 @@ func TestLoadRejectsRemovedTmuxRuntime(t *testing.T) {
 	}
 }
 
-func TestLoadIgnoresRemovedReachabilitySettings(t *testing.T) {
+func TestLoadIgnoresRemovedLegacyReachabilitySettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte(`{"gnarEdge":"https://old.example","gnarAccount":"old","tunnelEnabled":{"cloudflared":true}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"legacyEdge":"https://old.example","legacyAccount":"old","legacyTunnel":{"enabled":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := Load(path)
