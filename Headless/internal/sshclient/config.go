@@ -20,9 +20,22 @@ type HostConfig struct {
 	Port           int
 	IdentityFile   []string
 	IdentitiesOnly bool
+	IdentityAgent  string
+	AgentDisabled  bool
+	HostKeyAlias   string
 	KnownHosts     string
-	// KnownHostsFiles preserves all UserKnownHostsFile entries while
-	// KnownHosts remains the first path for callers that only need one value.
+	// KnownHostsDisabled records an explicit UserKnownHostsFile none. The
+	// system-wide defaults may still be active unless
+	// GlobalKnownHostsDisabled is also true.
+	KnownHostsDisabled bool
+	// GlobalKnownHostsDisabled records an explicit
+	// GlobalKnownHostsFile none. UserKnownHostsFile defaults still apply in
+	// that case, but the system-wide files must not be reintroduced by the
+	// fallback below.
+	GlobalKnownHostsDisabled bool
+	// KnownHostsFiles preserves the configured/default user and system files
+	// while KnownHosts remains the first path for callers that only need one
+	// value.
 	KnownHostsFiles []string
 }
 
@@ -55,8 +68,15 @@ func resolveHost(target, configPath string) (HostConfig, error) {
 		return HostConfig{}, err
 	}
 	host := HostConfig{Host: alias}
+	hostNameConfigured := false
+	var hostNameValue string
 	identityConfigured := false
 	identitiesOnlyConfigured := false
+	identityAgentConfigured := false
+	userKnownHostsConfigured := false
+	globalKnownHostsConfigured := false
+	var userKnownHostsFiles []string
+	var globalKnownHostsFiles []string
 	var proxyMode string
 	var proxyKind string
 	for _, block := range blocks {
@@ -69,8 +89,9 @@ func resolveHost(target, configPath string) (HostConfig, error) {
 			}
 			switch option {
 			case "hostname":
-				if host.Host == alias {
-					host.Host = values[0]
+				if !hostNameConfigured {
+					hostNameConfigured = true
+					hostNameValue = values[0]
 				}
 			case "user":
 				if host.User == "" {
@@ -96,15 +117,52 @@ func resolveHost(target, configPath string) (HostConfig, error) {
 					host.IdentitiesOnly = strings.EqualFold(values[0], "yes") || values[0] == "1" || strings.EqualFold(values[0], "true")
 					identitiesOnlyConfigured = true
 				}
+			case "identityagent":
+				if !identityAgentConfigured {
+					identityAgentConfigured = true
+					value := strings.TrimSpace(values[0])
+					if strings.EqualFold(value, "none") {
+						host.AgentDisabled = true
+					} else if value == "SSH_AUTH_SOCK" || value == "$SSH_AUTH_SOCK" || value == "${SSH_AUTH_SOCK}" {
+						// OpenSSH treats this spelling as the environment-provided
+						// agent socket rather than a literal path.
+						host.IdentityAgent = strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK"))
+					} else {
+						// Defer token expansion until User/Port have been resolved;
+						// %r and %p are valid in IdentityAgent paths.
+						host.IdentityAgent = value
+					}
+				}
+			case "hostkeyalias":
+				if host.HostKeyAlias == "" {
+					host.HostKeyAlias = values[0]
+				}
 			case "userknownhostsfile":
-				if len(host.KnownHostsFiles) == 0 {
+				if !userKnownHostsConfigured {
+					userKnownHostsConfigured = true
+					configuredPath := false
 					for _, value := range values {
 						if !strings.EqualFold(value, "none") {
-							host.KnownHostsFiles = append(host.KnownHostsFiles, value)
+							userKnownHostsFiles = append(userKnownHostsFiles, value)
+							configuredPath = true
 						}
 					}
-					if len(host.KnownHostsFiles) > 0 {
-						host.KnownHosts = host.KnownHostsFiles[0]
+					if !configuredPath {
+						host.KnownHostsDisabled = true
+					}
+				}
+			case "globalknownhostsfile":
+				if !globalKnownHostsConfigured {
+					globalKnownHostsConfigured = true
+					configuredPath := false
+					for _, value := range values {
+						if !strings.EqualFold(value, "none") {
+							globalKnownHostsFiles = append(globalKnownHostsFiles, value)
+							configuredPath = true
+						}
+					}
+					if !configuredPath {
+						host.GlobalKnownHostsDisabled = true
 					}
 				}
 			}
@@ -118,7 +176,11 @@ func resolveHost(target, configPath string) (HostConfig, error) {
 		}
 	}
 	if proxyMode != "" && !strings.EqualFold(proxyMode, "none") {
-		return HostConfig{}, fmt.Errorf("SSH target %q uses unsupported %s; use a direct host, or keep an external tunnel (ssh -J/-W or 'ssh -L 8789:127.0.0.1:8789 %s') and add it with 'warren endpoint add NAME --url http://127.0.0.1:8789 --token TOKEN'", target, proxyKind, target)
+		// Do not echo ProxyCommand/ProxyJump values: they can contain inline
+		// passwords or other credentials. OpenSSH will apply the configured route
+		// automatically when the user runs this external local forward.
+		fallback := fmt.Sprintf("ssh -L 8789:127.0.0.1:8789 %s", shellQuote(target))
+		return HostConfig{}, fmt.Errorf("SSH target %q uses unsupported %s; run %s externally, then add it with 'warren endpoint add NAME --url http://127.0.0.1:8789 --token TOKEN'", target, proxyKind, fallback)
 	}
 	if userOverride != "" {
 		host.User = userOverride
@@ -137,24 +199,68 @@ func resolveHost(target, configPath string) (HostConfig, error) {
 	if host.Port == 0 {
 		host.Port = 22
 	}
+	if hostNameConfigured {
+		// HostName is allowed to use OpenSSH %-tokens. Expand against the
+		// command-line alias for %h, then retain the resolved hostname for the
+		// actual TCP dial and all later path expansions.
+		templateHost := host
+		templateHost.Host = alias
+		host.Host = expandSSHPath(strings.ReplaceAll(hostNameValue, "%h", alias), templateHost)
+	}
+	host.Host = unbracketSSHHost(host.Host)
 	if strings.TrimSpace(host.Host) == "" {
 		return HostConfig{}, fmt.Errorf("SSH hostname is empty for %q", target)
+	}
+	if host.HostKeyAlias != "" {
+		host.HostKeyAlias = unbracketSSHHost(expandSSHPath(host.HostKeyAlias, host))
 	}
 	if !identityConfigured {
 		host.IdentityFile = defaultIdentityFiles()
 	}
-	if len(host.KnownHostsFiles) == 0 {
-		host.KnownHosts = filepath.Join(userHomeDirectory(), ".ssh", "known_hosts")
-		host.KnownHostsFiles = []string{host.KnownHosts}
+	// User and system known_hosts sources are independent OpenSSH options. An
+	// explicit value for one must not silently drop the default files from the
+	// other; only `none` disables its own source.
+	if !host.KnownHostsDisabled {
+		if userKnownHostsConfigured {
+			host.KnownHostsFiles = append(host.KnownHostsFiles, userKnownHostsFiles...)
+		} else {
+			host.KnownHostsFiles = append(host.KnownHostsFiles, defaultUserKnownHostsFiles()...)
+		}
+	}
+	if !host.GlobalKnownHostsDisabled {
+		if globalKnownHostsConfigured {
+			host.KnownHostsFiles = append(host.KnownHostsFiles, globalKnownHostsFiles...)
+		} else {
+			host.KnownHostsFiles = append(host.KnownHostsFiles, defaultGlobalKnownHostsFiles()...)
+		}
+	}
+	if len(host.KnownHostsFiles) > 0 {
+		host.KnownHosts = host.KnownHostsFiles[0]
 	}
 	for index, identity := range host.IdentityFile {
 		host.IdentityFile[index] = expandSSHPath(identity, host)
 	}
+	if host.IdentityAgent != "" {
+		host.IdentityAgent = expandSSHPath(host.IdentityAgent, host)
+	}
 	for index, knownHosts := range host.KnownHostsFiles {
 		host.KnownHostsFiles[index] = expandSSHPath(knownHosts, host)
 	}
-	host.KnownHosts = host.KnownHostsFiles[0]
+	if len(host.KnownHostsFiles) > 0 {
+		host.KnownHosts = host.KnownHostsFiles[0]
+	}
 	return host, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func unbracketSSHHost(value string) string {
+	if len(value) >= 2 && strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 // ListHosts returns concrete SSH aliases in config order. Wildcard-only and
@@ -324,6 +430,7 @@ func expandSSHPath(value string, host HostConfig) string {
 	replacements := map[string]string{
 		"%h": host.Host,
 		"%r": host.User,
+		"%p": strconv.Itoa(host.Port),
 		"%d": func() string { home, _ := os.UserHomeDir(); return home }(),
 		"%u": user,
 	}
@@ -344,6 +451,25 @@ func defaultIdentityFiles() []string {
 		filepath.Join(home, ".ssh", "id_ecdsa"),
 		filepath.Join(home, ".ssh", "id_rsa"),
 		filepath.Join(home, ".ssh", "id_dsa"),
+	}
+}
+
+func defaultKnownHostsFiles() []string {
+	return append(defaultUserKnownHostsFiles(), defaultGlobalKnownHostsFiles()...)
+}
+
+func defaultGlobalKnownHostsFiles() []string {
+	return []string{
+		"/etc/ssh/ssh_known_hosts",
+		"/etc/ssh/ssh_known_hosts2",
+	}
+}
+
+func defaultUserKnownHostsFiles() []string {
+	home := userHomeDirectory()
+	return []string{
+		filepath.Join(home, ".ssh", "known_hosts"),
+		filepath.Join(home, ".ssh", "known_hosts2"),
 	}
 }
 

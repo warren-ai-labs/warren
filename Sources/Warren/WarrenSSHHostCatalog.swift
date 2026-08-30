@@ -7,11 +7,18 @@ struct WarrenSSHHost: Identifiable, Hashable, Sendable {
     let port: Int
     let supported: Bool
     let message: String?
+    let proxyKind: String?
+    let proxyValue: String?
 
     var id: String { name }
 }
 
 enum WarrenSSHHostCatalog {
+    struct LoadResult: Sendable {
+        let hosts: [WarrenSSHHost]
+        let error: String?
+    }
+
     private struct Block {
         var patterns: [String]
         var values: [String: [String]]
@@ -24,8 +31,17 @@ enum WarrenSSHHostCatalog {
     }
 
     static func load(from url: URL) -> [WarrenSSHHost] {
+        loadResult(from: url).hosts
+    }
+
+    static func loadResult(from url: URL) -> LoadResult {
         var seenFiles = Set<String>()
-        let blocks = parseFile(url.standardizedFileURL, seenFiles: &seenFiles)
+        let blocks: [Block]
+        do {
+            blocks = try parseFile(url.standardizedFileURL, seenFiles: &seenFiles)
+        } catch {
+            return LoadResult(hosts: [], error: error.localizedDescription)
+        }
         var names: [String] = []
         var seenNames = Set<String>()
         for block in blocks {
@@ -33,15 +49,43 @@ enum WarrenSSHHostCatalog {
                 names.append(pattern)
             }
         }
-        return names.map { resolve(name: $0, blocks: blocks) }
+        return LoadResult(hosts: names.map { resolve(name: $0, blocks: blocks) }, error: nil)
     }
 
-    private static func parseFile(_ url: URL, seenFiles: inout Set<String>) -> [Block] {
+    private static func parseFile(_ url: URL, seenFiles: inout Set<String>) throws -> [Block] {
         let normalized = url.standardizedFileURL.path
-        guard seenFiles.insert(normalized).inserted,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: normalized)),
-              let text = String(data: data, encoding: .utf8) else {
-            return []
+        guard seenFiles.insert(normalized).inserted else {
+            throw NSError(
+                domain: "WarrenSSHHostCatalog",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Recursive SSH config include: \(normalized)"]
+            )
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: URL(fileURLWithPath: normalized))
+        } catch {
+            let nsError = error as NSError
+            if nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError {
+                seenFiles.remove(normalized)
+                return []
+            }
+            throw NSError(
+                domain: "WarrenSSHHostCatalog",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Unable to read SSH config \(normalized): \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ]
+            )
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            seenFiles.remove(normalized)
+            throw NSError(
+                domain: "WarrenSSHHostCatalog",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "SSH config is not valid UTF-8: \(normalized)"]
+            )
         }
         defer { seenFiles.remove(normalized) }
 
@@ -76,7 +120,7 @@ enum WarrenSSHHostCatalog {
                 }
                 for pattern in fields.dropFirst() {
                     for includedURL in includeURLs(pattern, relativeTo: url.deletingLastPathComponent()) {
-                        blocks.append(contentsOf: parseFile(includedURL, seenFiles: &seenFiles))
+                        blocks.append(contentsOf: try parseFile(includedURL, seenFiles: &seenFiles))
                     }
                 }
             default:
@@ -126,7 +170,9 @@ enum WarrenSSHHostCatalog {
                 user: user ?? NSUserName(),
                 port: port,
                 supported: false,
-                message: "Invalid SSH port \(invalidPort)."
+                message: "Invalid SSH port \(invalidPort).",
+                proxyKind: nil,
+                proxyValue: nil
             )
         }
         if let proxy, proxy.value.lowercased() != "none" {
@@ -136,7 +182,9 @@ enum WarrenSSHHostCatalog {
                 user: user ?? NSUserName(),
                 port: port,
                 supported: false,
-                message: "\(proxy.kind) is not supported by the embedded client. Use a direct host or an external tunnel (ssh -J/-W) and add it via warren endpoint add."
+                message: "\(proxy.kind) is not supported by the embedded client.",
+                proxyKind: proxy.kind,
+                proxyValue: proxy.value
             )
         }
         return WarrenSSHHost(
@@ -145,7 +193,9 @@ enum WarrenSSHHostCatalog {
             user: user ?? NSUserName(),
             port: port,
             supported: true,
-            message: nil
+            message: nil,
+            proxyKind: nil,
+            proxyValue: nil
         )
     }
 

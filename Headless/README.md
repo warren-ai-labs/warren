@@ -43,18 +43,20 @@ Default files:
 - ghostline socket: `~/.warren/ghostline.sock` (default runtime)
 - Worktrees: `~/.warren/worktrees/`
 
-From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the endpoint, and sets up port forwarding:
+From your Mac, `warren ssh` starts the remote daemon, fetches the token, saves the
+SSH endpoint metadata, and sets up port forwarding:
 
 ```sh
 warren ssh user@vps
 ```
 
-The CLI now owns the SSH client and forwarding connection, so no separate
-OpenSSH tunnel process is required. Keep the command running while the
-endpoint is in use. The Desktop reads the endpoint from
-`~/.warren/config.json` and shows `Local` plus server options in the top-right
-corner. Endpoint changes made with `warren endpoint add|use|remove` are picked
-up within about a second, so restarting Warren is not required.
+The CLI owns the SSH client and forwarding connection for that process, so no
+separate OpenSSH tunnel process is required. Keep the command running while
+using that CLI connection. The Desktop reads the durable SSH alias from
+`~/.warren/config.json` and starts its own helper when the endpoint is selected;
+runtime loopback ports and tokens are never written to the catalog. Endpoint
+changes made with `warren endpoint add|use|remove` are picked up within about a
+second, so restarting Warren is not required.
 The CLI chooses an ephemeral loopback port by default; pass `--local-port` only
 when a stable local port is required.
 
@@ -71,10 +73,11 @@ Host…**, and click an alias to save and activate the same SSH-backed endpoint.
 The list is refreshed each time the picker opens, so edits to `~/.ssh/config`
 take effect without restarting the app.
 
-The embedded client uses `SSH_AUTH_SOCK` when available, otherwise it loads
-`IdentityFile` entries from `~/.ssh/config`. Host keys are always verified
-against `~/.ssh/known_hosts`; connect once with OpenSSH if a host has not been
-trusted yet.
+The embedded client honors `IdentityAgent`/`SSH_AUTH_SOCK` when available,
+otherwise it loads `IdentityFile` entries from `~/.ssh/config`. Host keys are
+always verified against the configured `UserKnownHostsFile`/`GlobalKnownHostsFile`
+(or the OpenSSH user/system defaults); connect once with OpenSSH if a host has
+not been trusted yet.
 
 ## LAN HTTPS
 

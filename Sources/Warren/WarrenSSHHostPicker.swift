@@ -2,9 +2,34 @@ import SwiftUI
 import AppKit
 
 struct WarrenSSHHostPicker: View {
-    let hosts: [WarrenSSHHost]
+    @State private var hosts: [WarrenSSHHost]
+    @State private var errorMessage: String?
+    @State private var isLoading: Bool
     let onConfigure: (WarrenSSHHost) -> Void
     let onDismiss: () -> Void
+    let onRefresh: () async -> WarrenSSHHostCatalog.LoadResult
+    private let loadOnAppear: Bool
+
+    init(
+        hosts: [WarrenSSHHost],
+        errorMessage: String? = nil,
+        loadOnAppear: Bool = false,
+        onConfigure: @escaping (WarrenSSHHost) -> Void,
+        onDismiss: @escaping () -> Void,
+        onRefresh: @escaping () async -> WarrenSSHHostCatalog.LoadResult = {
+            await Task.detached(priority: .utility) {
+                WarrenSSHHostCatalog.loadResult(from: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config"))
+            }.value
+        }
+    ) {
+        _hosts = State(initialValue: hosts)
+        _errorMessage = State(initialValue: errorMessage)
+        _isLoading = State(initialValue: loadOnAppear)
+        self.onConfigure = onConfigure
+        self.onDismiss = onDismiss
+        self.onRefresh = onRefresh
+        self.loadOnAppear = loadOnAppear
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,7 +48,9 @@ struct WarrenSSHHostPicker: View {
 
             Divider()
 
-            if hosts.isEmpty {
+            if isLoading {
+                loadingState
+            } else if hosts.isEmpty {
                 emptyState
             } else {
                 List {
@@ -36,6 +63,25 @@ struct WarrenSSHHostPicker: View {
             }
         }
         .frame(minWidth: 520, minHeight: 380)
+        .task {
+            guard loadOnAppear else { return }
+            await refreshHosts()
+        }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Reading SSH config…")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text("Looking for hosts in ~/.ssh/config and its Include files.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     private var emptyState: some View {
@@ -43,12 +89,17 @@ struct WarrenSSHHostPicker: View {
             Image(systemName: "network.slash")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("No SSH Hosts")
+            Text(errorMessage == nil ? "No SSH Hosts" : "Unable to read SSH config")
                 .font(.headline)
-            Text("Add a Host entry to ~/.ssh/config and try again.")
+            Text(errorMessage ?? "Add a Host entry to ~/.ssh/config and try again.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if errorMessage != nil {
+                Text("Fix the file permissions or syntax, then retry.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Example ~/.ssh/config")
                     .font(.caption.weight(.semibold))
@@ -66,7 +117,7 @@ struct WarrenSSHHostPicker: View {
             .padding(.top, 4)
             HStack(spacing: 8) {
                 Button("Open ~/.ssh/config") { openSSHConfig() }
-                Button("Refresh") { refreshHosts() }
+                Button("Refresh") { refreshHostsInTask() }
             }
             .buttonStyle(.link)
             .font(.callout)
@@ -81,6 +132,14 @@ struct WarrenSSHHostPicker: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Refreshing SSH hosts")
+            } else {
+                Button("Refresh") { refreshHostsInTask() }
+                    .font(.caption)
+            }
             Button("Open ~/.ssh/config") { openSSHConfig() }
                 .font(.caption)
         }
@@ -88,7 +147,23 @@ struct WarrenSSHHostPicker: View {
         .padding(.vertical, 8)
     }
 
+    @ViewBuilder
     private func hostRow(_ host: WarrenSSHHost) -> some View {
+        if host.supported {
+            Button(action: { onConfigure(host) }) {
+                hostRowContent(host)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Configure SSH host \(host.name)")
+            .accessibilityValue("\(host.user) at \(host.host), port \(host.port)")
+            .accessibilityHint("Add this host as an execution server")
+        } else {
+            hostRowContent(host)
+                .accessibilityElement(children: .contain)
+        }
+    }
+
+    private func hostRowContent(_ host: WarrenSSHHost) -> some View {
         HStack(spacing: 10) {
             Image(systemName: host.supported ? "server.rack" : "exclamationmark.triangle")
                 .foregroundStyle(host.supported ? Color.accentColor : .orange)
@@ -106,7 +181,7 @@ struct WarrenSSHHostPicker: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !host.supported {
-                    Text("Fallback: ssh -J bastion \(host.name) or keep an external 'ssh -L 8789:127.0.0.1:8789 \(host.name)' and use 'warren endpoint add'.")
+                    Text(fallbackText(for: host))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -126,11 +201,6 @@ struct WarrenSSHHostPicker: View {
                 }
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard host.supported else { return }
-            onConfigure(host)
-        }
         .opacity(host.supported ? 1 : 0.92)
     }
 
@@ -146,15 +216,38 @@ struct WarrenSSHHostPicker: View {
         }
     }
 
-    private func refreshHosts() {
-        // Dismiss and let the caller reload – the CompositionRoot reloads on present.
-        onDismiss()
+    private func refreshHostsInTask() {
+        guard !isLoading else { return }
+        isLoading = true
+        Task { @MainActor in
+            await refreshHosts()
+        }
+    }
+
+    private func refreshHosts() async {
+        let result = await onRefresh()
+        guard !Task.isCancelled else { return }
+        hosts = result.hosts
+        errorMessage = result.error
+        isLoading = false
+    }
+
+    private func fallbackText(for host: WarrenSSHHost) -> String {
+        if let kind = host.proxyKind {
+            return "Fallback: run ssh -L 8789:127.0.0.1:8789 \(shellQuote(host.name)) externally (OpenSSH will apply its configured \(kind)), then add the local forward with 'warren endpoint add'."
+        }
+        return "Fallback: keep an external local forward and add it with 'warren endpoint add'."
     }
 
     private func copyFallback(for host: WarrenSSHHost) {
-        let cmd = "ssh -L 8789:127.0.0.1:8789 \(host.name)  # then: warren endpoint add \(host.name) --url http://127.0.0.1:8789 --token <token> --use"
+        let quotedName = shellQuote(host.name)
+        let cmd = "ssh -L 8789:127.0.0.1:8789 \(quotedName)  # then: warren endpoint add \(quotedName) --url http://127.0.0.1:8789 --token '<TOKEN>' --use"
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(cmd, forType: .string)
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

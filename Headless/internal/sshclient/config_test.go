@@ -3,7 +3,9 @@ package sshclient
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveHostReadsAliasAndUserOverride(t *testing.T) {
@@ -68,6 +70,21 @@ func TestResolveHostAcceptsEqualsSyntax(t *testing.T) {
 	}
 }
 
+func TestResolveHostUnbracketsIPv6Target(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host *\n    User deploy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("deploy@[::1]", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Host != "::1" || host.Port != 22 {
+		t.Fatalf("IPv6 target = %+v, want unbracketed ::1:22", host)
+	}
+}
+
 func TestReadSSHConfigPreservesHostContextAroundInclude(t *testing.T) {
 	directory := t.TempDir()
 	includePath := filepath.Join(directory, "included")
@@ -123,6 +140,24 @@ Host proxied
 	}
 }
 
+func TestResolveHostDoesNotEchoProxyCommandCredentials(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    ProxyCommand sshpass -p super-secret nc %h %p\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveHost("staging", configPath)
+	if err == nil {
+		t.Fatal("resolveHost unexpectedly accepted ProxyCommand")
+	}
+	if strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("proxy credential leaked in error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ssh -L 8789:127.0.0.1:8789") {
+		t.Fatalf("error lacks actionable external-forward fallback: %v", err)
+	}
+}
+
 func TestListHostsIncludesBareAliases(t *testing.T) {
 	directory := t.TempDir()
 	configPath := filepath.Join(directory, "config")
@@ -154,8 +189,12 @@ Host staging
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(host.KnownHostsFiles) != 2 {
-		t.Fatalf("known hosts files = %#v, want two paths", host.KnownHostsFiles)
+	if len(host.KnownHostsFiles) < 2 {
+		t.Fatalf("known hosts files = %#v, want the two configured user paths", host.KnownHostsFiles)
+	}
+	if host.KnownHostsFiles[0] != filepath.Join(userHomeDirectory(), ".ssh", "known_hosts") ||
+		host.KnownHostsFiles[1] != filepath.Join(userHomeDirectory(), ".ssh", "known_hosts2") {
+		t.Fatalf("configured known hosts paths were not retained: %#v", host.KnownHostsFiles)
 	}
 	if host.KnownHosts != host.KnownHostsFiles[0] {
 		t.Fatalf("legacy KnownHosts path = %q, want first path %q", host.KnownHosts, host.KnownHostsFiles[0])
@@ -177,5 +216,130 @@ func TestResolveHostUsesOpenSSHDefaultIdentityFiles(t *testing.T) {
 	}
 	if filepath.Base(host.IdentityFile[0]) != "id_ed25519" {
 		t.Fatalf("default identities = %#v, expected ed25519 first", host.IdentityFile)
+	}
+}
+
+func TestResolveHostRejectsKnownHostsNoneWithoutPanicking(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    UserKnownHostsFile none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.KnownHostsDisabled || len(host.KnownHostsFiles) != 2 || host.KnownHosts != host.KnownHostsFiles[0] {
+		t.Fatalf("UserKnownHostsFile none was not preserved while retaining system defaults: %+v", host)
+	}
+
+	allDisabledPath := filepath.Join(directory, "all-disabled")
+	if err := os.WriteFile(allDisabledPath, []byte("Host staging\n    UserKnownHostsFile none\n    GlobalKnownHostsFile none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allDisabled, err := resolveHost("staging", allDisabledPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allDisabled.KnownHostsFiles) != 0 {
+		t.Fatalf("all known_hosts sources were not disabled: %+v", allDisabled)
+	}
+	if _, _, err := clientConfig(allDisabled, time.Second); err == nil || !strings.Contains(err.Error(), "strict host-key verification") {
+		t.Fatalf("clientConfig error = %v, want strict verification error", err)
+	}
+}
+
+func TestResolveHostExpandsIdentityAgentEnvironmentReference(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    IdentityAgent SSH_AUTH_SOCK\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Getenv("SSH_AUTH_SOCK")
+	t.Cleanup(func() { _ = os.Setenv("SSH_AUTH_SOCK", previous) })
+	if err := os.Setenv("SSH_AUTH_SOCK", filepath.Join(directory, "agent.sock")); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.IdentityAgent != filepath.Join(directory, "agent.sock") {
+		t.Fatalf("identity agent = %q, want environment socket", host.IdentityAgent)
+	}
+}
+
+func TestResolveHostExpandsHostNameAndIdentityAgentTokensAfterDefaults(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    User deploy\n    Port 2201\n    HostName %h.internal\n    IdentityAgent "+filepath.Join(directory, "%r-%p.sock")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Host != "staging.internal" {
+		t.Fatalf("hostname = %q, want staging.internal", host.Host)
+	}
+	if host.IdentityAgent != filepath.Join(directory, "deploy-2201.sock") {
+		t.Fatalf("identity agent = %q, want expanded user/port path", host.IdentityAgent)
+	}
+}
+
+func TestResolveHostPreservesHostKeyAliasAndGlobalKnownHosts(t *testing.T) {
+	directory := t.TempDir()
+	knownHosts := filepath.Join(directory, "global-known-hosts")
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    HostKeyAlias bastion-key\n    GlobalKnownHostsFile "+knownHosts+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.HostKeyAlias != "bastion-key" {
+		t.Fatalf("host key alias = %q, want bastion-key", host.HostKeyAlias)
+	}
+	if len(host.KnownHostsFiles) != 3 || host.KnownHostsFiles[2] != knownHosts {
+		t.Fatalf("known hosts files = %#v, want user defaults plus %q", host.KnownHostsFiles, knownHosts)
+	}
+}
+
+func TestResolveHostHonorsGlobalKnownHostsNoneWithoutDisablingUserDefaults(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    GlobalKnownHostsFile none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.GlobalKnownHostsDisabled {
+		t.Fatalf("GlobalKnownHostsFile none was not preserved: %+v", host)
+	}
+	if len(host.KnownHostsFiles) != 2 {
+		t.Fatalf("known hosts files = %#v, want only user defaults", host.KnownHostsFiles)
+	}
+	for _, path := range host.KnownHostsFiles {
+		if strings.HasPrefix(path, "/etc/ssh/") {
+			t.Fatalf("system known_hosts was reintroduced after GlobalKnownHostsFile none: %#v", host.KnownHostsFiles)
+		}
+	}
+}
+
+func TestResolveHostDisablesConfiguredIdentityAgent(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    IdentityAgent none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resolveHost("staging", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.AgentDisabled || host.IdentityAgent != "" {
+		t.Fatalf("identity agent none was not preserved: %+v", host)
 	}
 }

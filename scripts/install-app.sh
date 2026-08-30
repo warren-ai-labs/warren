@@ -11,6 +11,8 @@ menubar_executable_path="$app_path/Contents/MacOS/WarrenDaemonMenuBar"
 installed_menubar_executable_path="$install_path/Contents/MacOS/WarrenDaemonMenuBar"
 daemon_executable_path="$app_path/Contents/MacOS/warren-headless"
 installed_daemon_executable_path="$install_path/Contents/MacOS/warren-headless"
+ssh_tunnel_executable_path="$app_path/Contents/MacOS/warren-ssh-tunnel"
+installed_ssh_tunnel_executable_path="$install_path/Contents/MacOS/warren-ssh-tunnel"
 
 # macOS pgrep/pkill cannot always see processes whose executable file has
 # been replaced while running, so resolve PIDs from `ps` and kill by PID.
@@ -35,6 +37,18 @@ is_menubar_running() {
 
 is_daemon_running() {
     [[ -n "$(pids_for_path "$daemon_executable_path")$(pids_for_path "$installed_daemon_executable_path")" ]]
+}
+
+ssh_tunnel_pids_for_path() {
+    local executable="$1"
+    # The helper receives --target/--remote arguments, so it is intentionally
+    # matched by its exact executable path without the argument-less filter
+    # used for the long-lived control-plane binaries above.
+    ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe { print $1 }'
+}
+
+is_ssh_tunnel_running() {
+    [[ -n "$(ssh_tunnel_pids_for_path "$ssh_tunnel_executable_path")$(ssh_tunnel_pids_for_path "$installed_ssh_tunnel_executable_path")" ]]
 }
 
 notify_maintenance() {
@@ -65,7 +79,15 @@ initialize_local_endpoint() {
 
     mkdir -p "$(dirname "$config_path")"
     if [[ ! -s "$token_path" ]]; then
-        (umask 077; openssl rand -base64 32 | tr -d '\n' > "$token_path")
+        # Use the platform primitives available on a fresh macOS install;
+        # OpenSSL is not a Warren prerequisite. The daemon accepts an opaque
+        # visible-ASCII token, and the private umask keeps it process-local.
+        token_seed="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '[:space:]')"
+        if [[ -z "$token_seed" ]]; then
+            echo "Could not initialize local endpoint: secure random source unavailable" >&2
+            exit 1
+        fi
+        (umask 077; printf '%s\n' "$token_seed" > "$token_path")
     fi
 
     local token
@@ -162,6 +184,13 @@ if is_daemon_running; then
     force_terminate_pids "$(pids_for_path "$daemon_executable_path") $(pids_for_path "$installed_daemon_executable_path")" || true
 fi
 
+# SSH helpers own a live forwarding socket and must not survive an app update.
+# Unlike the control-plane binaries they are launched with arguments, so use
+# the exact helper path filter above.
+if is_ssh_tunnel_running; then
+    force_terminate_pids "$(ssh_tunnel_pids_for_path "$ssh_tunnel_executable_path") $(ssh_tunnel_pids_for_path "$installed_ssh_tunnel_executable_path")" || true
+fi
+
 if is_running; then
     echo "Warren did not terminate before installation." >&2
     exit 1
@@ -174,6 +203,11 @@ fi
 
 if is_daemon_running; then
     echo "Warren headless daemon did not terminate before installation." >&2
+    exit 1
+fi
+
+if is_ssh_tunnel_running; then
+    echo "Warren SSH tunnel helper did not terminate before installation." >&2
     exit 1
 fi
 

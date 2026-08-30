@@ -35,6 +35,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
     private let onAddSSHHost: () -> Void
+    private let onRetryConnection: () -> Void
+    private let onStopConnection: () -> Void
 
     private let actions: WarrenDesktopActions
     private let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
@@ -129,6 +131,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onAddSSHHost: @escaping () -> Void = {},
+        onRetryConnection: @escaping () -> Void = {},
+        onStopConnection: @escaping () -> Void = {},
         onWebStart: @escaping () -> Void = {},
         onWebTest: ((String, String, String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
@@ -179,6 +183,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
         self.onAddSSHHost = onAddSSHHost
+        self.onRetryConnection = onRetryConnection
+        self.onStopConnection = onStopConnection
         self.actions = actions
         self.onCreateTask = onCreateTask
         self.terminalSurface = terminalSurface
@@ -497,6 +503,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         selectedID: selectedEndpointID,
                         onSelect: onSelectEndpoint,
                         onAddSSHHost: onAddSSHHost,
+                        onRetry: onRetryConnection,
+                        onStop: onStopConnection,
                         onDismiss: { setChromePopover(nil) }
                     )
                 case .externalIDE:
@@ -613,6 +621,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 closeEmbeddedEditor(for: presentation.workspace)
             },
             onSelectEndpoint: onSelectEndpoint,
+            onRetryConnection: onRetryConnection,
+            onStopConnection: onStopConnection,
             onSelectTab: { selectTab($0, in: presentation) },
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
@@ -1010,6 +1020,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     },
                     onAddSSHHost: {
                         onAddSSHHost()
+                        onBack()
+                    },
+                    onRetry: {
+                        onRetryConnection()
+                        onBack()
+                    },
+                    onStop: {
+                        onStopConnection()
                         onBack()
                     },
                     onDismiss: onBack

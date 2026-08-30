@@ -65,6 +65,64 @@ func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	}
 }
 
+func TestResolveConfiguredEndpointDefaultsToLocalDaemon(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+	previousEndpoint := endpointName
+	endpointName = ""
+	t.Cleanup(func() { endpointName = previousEndpoint })
+
+	value, err := resolveConfiguredEndpoint(config.Config{Endpoints: map[string]config.Endpoint{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestResolveConfiguredEndpointFallsBackWhenLocalTokenIsEmpty(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+
+	value, err := resolveConfiguredEndpoint(config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"local": {Name: "local", URL: "http://127.0.0.1:8789"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestEndpointUseAllowsSyntheticLocalEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	previousPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = previousPath })
+
+	if err := run([]string{"--config", path, "endpoint", "use", "local"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Current != "local" {
+		t.Fatalf("current endpoint = %q, want local", settings.Current)
+	}
+}
+
 func TestSendAgentTextSubmitsComposerWithKittyEnter(t *testing.T) {
 	var frames [][]byte
 	input := func(_ context.Context, data []byte) error {

@@ -394,6 +394,12 @@ private enum WarrenUpdateArchive {
               version == expectedVersion,
               FileManager.default.isExecutableFile(
                   atPath: applicationURL.appendingPathComponent("Contents/MacOS/Warren").path
+              ),
+              // Embedded SSH endpoints depend on the helper shipped beside
+              // the main executable. Reject an otherwise valid-looking
+              // archive that would install a permanently unusable feature.
+              FileManager.default.isExecutableFile(
+                  atPath: applicationURL.appendingPathComponent("Contents/MacOS/warren-ssh-tunnel").path
               ) else {
             return false
         }
@@ -459,21 +465,38 @@ private enum WarrenUpdateInstaller {
     # Keep ghostline session owners alive while replacing the GUI and control plane.
     for executable in \\
         "$destination_app/Contents/MacOS/WarrenDaemonMenuBar" \\
-        "$destination_app/Contents/MacOS/warren-headless"; do
+        "$destination_app/Contents/MacOS/warren-headless" \\
+        "$destination_app/Contents/MacOS/warren-ssh-tunnel"; do
         ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe && NF == 2 { print $1 }' |
             while read -r pid; do
                 [ -n "$pid" ] || continue
                 [ "$pid" = "$current_pid" ] && continue
                 kill -TERM "$pid" 2>/dev/null || true
             done
+        # The SSH helper receives --target/--remote arguments, so it cannot
+        # use the argument-less process filter above. Its executable path is
+        # still exact and scoped to this application bundle.
+        if [ "${executable##*/}" = "warren-ssh-tunnel" ]; then
+            ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe { print $1 }' |
+                while read -r pid; do
+                    [ -n "$pid" ] || continue
+                    [ "$pid" = "$current_pid" ] && continue
+                    kill -TERM "$pid" 2>/dev/null || true
+                done
+        fi
     done
 
     for _ in $(seq 1 30); do
         still_running=0
         for executable in \\
             "$destination_app/Contents/MacOS/WarrenDaemonMenuBar" \\
-            "$destination_app/Contents/MacOS/warren-headless"; do
-            if ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe && NF == 2 { found=1 } END { exit !found }'; then
+            "$destination_app/Contents/MacOS/warren-headless" \\
+            "$destination_app/Contents/MacOS/warren-ssh-tunnel"; do
+            process_filter='$2 == exe && NF == 2'
+            if [ "${executable##*/}" = "warren-ssh-tunnel" ]; then
+                process_filter='$2 == exe'
+            fi
+            if ps -axo pid=,command= | awk -v exe="$executable" "$process_filter { found=1 } END { exit !found }"; then
                 still_running=1
             fi
         done
