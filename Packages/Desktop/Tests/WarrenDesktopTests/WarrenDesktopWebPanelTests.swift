@@ -1,7 +1,10 @@
 import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 @testable import WarrenDesktop
 import WarrenDesignSystem
+import WarrenObservation
 
 final class WarrenDesktopWebPanelTests: XCTestCase {
     func testAddressPresentationKeepsLinksUniqueAndActionable() throws {
@@ -119,6 +122,55 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
                 "section alias \(value) should select AI titles"
             )
         }
+    }
+
+    @MainActor
+    func testAITitleSettingsTestConnectionButtonSendsCurrentDrafts() throws {
+        let callback = expectation(description: "test connection callback")
+        var received: (baseURL: String, model: String, key: String?)?
+        let recorder = WarrenSemanticRecorder()
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "https://api.example.test/v1",
+            openAIModel: "title-model",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { baseURL, model, key in
+                received = (baseURL, model, key)
+                callback.fulfill()
+            },
+            initialSettingsSection: .aiTitles
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        let hostingView = NSHostingView(rootView: settings)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let node = recorder.snapshot().node(id: "settings.ai-titles.test")
+        XCTAssertEqual(node?.label, "Test AI title connection")
+        XCTAssertTrue(node?.isEnabled == true)
+        try recorder.perform(.press, on: "settings.ai-titles.test")
+        wait(for: [callback], timeout: 1)
+
+        XCTAssertEqual(received?.baseURL, "https://api.example.test/v1")
+        XCTAssertEqual(received?.model, "title-model")
+        XCTAssertNil(received?.key)
     }
 
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
