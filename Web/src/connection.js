@@ -12,17 +12,16 @@ export function rejectPendingRequests(pending, detail = "Connection lost") {
   for (const handler of handlers) handler?.onError?.(detail);
 }
 
-// Headless WebSocket errors use the response envelope's `error` field. Keep
-// the older `message` spelling as a compatibility fallback for daemon builds
-// that emitted human-readable errors before the envelope was standardized.
+// Headless WebSocket errors use the response envelope's `error` field.
 export function connectionErrorDetail(message, fallback = "Error") {
-  return message?.error || message?.message || fallback;
+  return message?.error || fallback;
 }
 
 export class WarrenConnection {
   constructor({
     url,
     token,
+    getToken,
     WebSocketClass = WebSocket,
     onMessage = () => {},
     onState = () => {},
@@ -32,6 +31,7 @@ export class WarrenConnection {
   }) {
     this.url = url;
     this.token = token;
+    this.getToken = typeof getToken === "function" ? getToken : null;
     this.WebSocketClass = WebSocketClass;
     this.onMessage = onMessage;
     this.onState = onState;
@@ -118,13 +118,20 @@ export class WarrenConnection {
     socket.onopen = () => {
       if (socket !== this.socket) return;
       this.onState("open");
-      this.sendJSON({
+      const auth = {
         t: "auth",
-        token: this.token,
         version: "2.0",
         capabilities: ["roster-delta"],
         terminalStateFormats: ["ghostline-vt-replay-v1"],
-      });
+      };
+      const currentToken = this.getToken ? this.getToken() : this.token;
+      if (this.url.includes("/v1/client/connect")) {
+        auth.access_token = currentToken;
+        auth.client_id = globalThis.crypto?.randomUUID?.() || `web-${Date.now()}`;
+      } else {
+        auth.token = currentToken;
+      }
+      this.sendJSON(auth);
     };
     socket.onmessage = event => {
       if (socket === this.socket) this.onMessage(event);

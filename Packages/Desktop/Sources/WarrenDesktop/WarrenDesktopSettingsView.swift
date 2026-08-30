@@ -16,6 +16,7 @@ private extension WarrenDesktopSettingsSection {
         case .workspaces: "arrow.triangle.branch"
         case .notifications: "bell"
         case .externalIDEs: "macwindow"
+        case .relay: "point.3.connected.trianglepath.dotted"
         case .publicAccess: "globe"
         }
     }
@@ -30,6 +31,7 @@ private extension WarrenDesktopSettingsSection {
         case .workspaces: "How projects import worktrees and enter sessions."
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
+        case .relay: "Connect this Host to an independently deployed Warren Relay."
         case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
         }
     }
@@ -44,12 +46,13 @@ private extension WarrenDesktopSettingsSection {
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
-        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
+        case .relay: [rawValue, detail, "owned", "relay", "enrollment", "ticket", "host", "signing key", "remote"]
+        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "tunnel", "internet"]
         }
     }
 
     var isTerminalSection: Bool {
-        self != .notifications && self != .publicAccess
+        self != .notifications && self != .relay && self != .publicAccess
     }
 }
 
@@ -63,6 +66,7 @@ struct WarrenDesktopSettingsView: View {
     let onWebTest: ((String, String, String, String) -> Void)?
     let onWebStop: (() -> Void)?
     let onWebReset: (() -> Void)?
+    let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -111,6 +115,9 @@ struct WarrenDesktopSettingsView: View {
     @State private var publicAccessUseDefaultTunnel = true
     @State private var publicAccessMaskedKeyKind: PublicAccessKeyKind?
     @State private var publicAccessSubmittedKeyKind: PublicAccessKeyKind?
+    @State private var relayEnrollmentTicket = ""
+    @State private var relayEnrollmentBusy = false
+    @State private var relayEnrollmentError: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -119,6 +126,7 @@ struct WarrenDesktopSettingsView: View {
     /// view, but a link containing it must still be treated as a credential.
     var initialSettingsSection: WarrenDesktopSettingsSection?
     var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
+    var relayPrefill: WarrenDesktopRelayPrefill?
 
     private enum PublicAccessKeyKind: String, CaseIterable, Identifiable {
         case approval
@@ -191,6 +199,9 @@ struct WarrenDesktopSettingsView: View {
         .onChange(of: publicAccessPrefill) { _ in
             applyDeepLinkPrefill()
         }
+        .onChange(of: relayPrefill) { _ in
+            applyDeepLinkPrefill()
+        }
         .onChange(of: searchQuery) { _ in
             if !visibleSections.contains(selectedSection), let first = visibleSections.first {
                 selectedSection = first
@@ -214,7 +225,7 @@ struct WarrenDesktopSettingsView: View {
     private func navigationPanel(tokens: WarrenColorTokens) -> some View {
         let terminalSections = visibleSections.filter(\.isTerminalSection)
         let notificationSections = visibleSections.filter { $0 == .notifications }
-        let webSections = visibleSections.filter { $0 == .publicAccess }
+        let webSections = visibleSections.filter { $0 == .relay || $0 == .publicAccess }
         return VStack(alignment: .leading, spacing: 0) {
             Button(action: onBack) {
                 HStack(spacing: WarrenSpacing.small) {
@@ -380,6 +391,8 @@ struct WarrenDesktopSettingsView: View {
                     notificationsSection(tokens: tokens)
                 case .externalIDEs:
                     externalIDEsSection(tokens: tokens)
+                case .relay:
+                    relaySection(tokens: tokens)
                 case .publicAccess:
                     publicAccessSection(tokens: tokens)
                 }
@@ -861,6 +874,100 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    private func relaySection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Relay", section: .relay, tokens: tokens) {
+            Text("Relay is Warren's owner-controlled transport. It is separate from Public Access (gnar), which only exposes an application route.")
+                .font(WarrenTypography.settingsBody)
+                .foregroundStyle(tokens.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let relayPrefill {
+                if let relayURL = relayPrefill.relayURL {
+                    settingsValueRow("Relay URL", value: relayURL, tokens: tokens)
+                }
+                if let hostID = relayPrefill.hostID {
+                    settingsValueRow("Host ID", value: hostID, tokens: tokens)
+                }
+                if let relayKeyID = relayPrefill.relayKeyID {
+                    settingsValueRow("Signing key", value: relayKeyID, tokens: tokens)
+                }
+                if let enrollmentTicket = relayPrefill.enrollmentTicket {
+                    SecureField("Enrollment ticket (one time)", text: $relayEnrollmentTicket)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WarrenTypography.settingsControl)
+                        .accessibilityLabel("Relay enrollment ticket")
+                        .accessibilityIdentifier("settings.relay.enrollment-ticket")
+                        .onAppear { relayEnrollmentTicket = enrollmentTicket }
+
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Button(relayEnrollmentBusy ? "Enrolling…" : "Enroll Relay") {
+                            guard let relayURL = relayPrefill.relayURL,
+                                  let hostID = relayPrefill.hostID,
+                                  !relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                  let onRelayEnroll else { return }
+                            relayEnrollmentBusy = true
+                            relayEnrollmentError = nil
+                            onRelayEnroll(relayURL, hostID, relayEnrollmentTicket) { result in
+                                Task { @MainActor in
+                                    relayEnrollmentBusy = false
+                                    switch result {
+                                    case .success:
+                                        // The ticket is one-time; do not leave
+                                        // it visible or reusable after the
+                                        // daemon has consumed it.
+                                        relayEnrollmentTicket = ""
+                                        relayEnrollmentError = nil
+                                    case let .failure(error):
+                                        relayEnrollmentError = error.localizedDescription
+                                    }
+                                }
+                            }
+                        }
+                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                        .disabled(relayEnrollmentBusy || onRelayEnroll == nil)
+                        .accessibilityIdentifier("settings.relay.enroll")
+
+                        if relayEnrollmentBusy {
+                            WarrenStatusIndicator(
+                                color: tokens.info,
+                                isActive: true,
+                                accessibilityLabel: "Enrolling Relay"
+                            )
+                        }
+                    }
+                }
+                if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
+                    Text(relayEnrollmentError)
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Relay enrollment error: \(relayEnrollmentError)")
+                }
+                Text("This link carries a short-lived enrollment ticket. Consume it with `warren relay enroll` or the Headless Relay setup flow, then discard the link.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Create a Host on your Relay, then open its Warren setup link or run `warren relay enroll` with the one-time enrollment ticket. The daemon token remains the only Host Secret.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func settingsValueRow(_ label: String, value: String, tokens: WarrenColorTokens) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.small) {
+            Text(label)
+                .font(WarrenTypography.settingsBody)
+                .foregroundStyle(tokens.mutedForeground)
+            Text(value)
+                .font(WarrenTypography.settingsControl)
+                .foregroundStyle(tokens.foreground)
+                .textSelection(.enabled)
+        }
+    }
+
     private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
             Text(
@@ -1035,7 +1142,7 @@ struct WarrenDesktopSettingsView: View {
                     }
                 }
             } else {
-                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and enrollment key.")
+                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and approval key.")
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1234,6 +1341,7 @@ struct WarrenDesktopSettingsView: View {
 
     private func copySettingsDeepLink(for section: SettingsSection) {
         let publicAccess: WarrenDesktopPublicAccessPrefill?
+        let relay: WarrenDesktopRelayPrefill?
         if section == .publicAccess {
             let edgeURL = publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines)
             let accountName = publicAccessAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1258,9 +1366,12 @@ struct WarrenDesktopSettingsView: View {
             publicAccess = nil
         }
 
+        relay = section == .relay ? relayPrefill : nil
+
         guard let url = WarrenDesktopSettingsDeepLink(
             section: section,
-            publicAccess: publicAccess
+            publicAccess: publicAccess,
+            relay: relay
         ).url else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url.absoluteString, forType: .string)
@@ -1276,27 +1387,31 @@ struct WarrenDesktopSettingsView: View {
         if let initialSettingsSection {
             selectedSection = initialSettingsSection
         }
-        guard let publicAccessPrefill else { return }
+        if let publicAccessPrefill {
+            publicAccessUseDefaultTunnel = true
+            if let edgeURL = publicAccessPrefill.edgeURL {
+                publicAccessEdgeURL = edgeURL
+            }
+            if let accountName = publicAccessPrefill.accountName {
+                publicAccessAccountName = accountName
+            }
+            if let keyKind = publicAccessPrefill.keyKind {
+                publicAccessKeyKind = keyKind == .invite ? .invite : .approval
+            }
+            if let inviteKey = publicAccessPrefill.inviteKey {
+                publicAccessInviteKey = inviteKey
+                publicAccessMaskedKeyKind = nil
+                publicAccessSubmittedKeyKind = nil
+            }
+            if let approvalKey = publicAccessPrefill.approvalKey {
+                publicAccessApprovalKey = approvalKey
+                publicAccessMaskedKeyKind = nil
+                publicAccessSubmittedKeyKind = nil
+            }
+        }
 
-        publicAccessUseDefaultTunnel = true
-        if let edgeURL = publicAccessPrefill.edgeURL {
-            publicAccessEdgeURL = edgeURL
-        }
-        if let accountName = publicAccessPrefill.accountName {
-            publicAccessAccountName = accountName
-        }
-        if let keyKind = publicAccessPrefill.keyKind {
-            publicAccessKeyKind = keyKind == .invite ? .invite : .approval
-        }
-        if let inviteKey = publicAccessPrefill.inviteKey {
-            publicAccessInviteKey = inviteKey
-            publicAccessMaskedKeyKind = nil
-            publicAccessSubmittedKeyKind = nil
-        }
-        if let approvalKey = publicAccessPrefill.approvalKey {
-            publicAccessApprovalKey = approvalKey
-            publicAccessMaskedKeyKind = nil
-            publicAccessSubmittedKeyKind = nil
+        if let relayPrefill {
+            relayEnrollmentTicket = relayPrefill.enrollmentTicket ?? ""
         }
     }
 

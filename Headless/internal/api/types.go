@@ -388,8 +388,8 @@ type State struct {
 	Operations []OperationAudit `json:"operations,omitempty"`
 	// WorktreeOwnershipMigrated records that legacy workspace ownership has
 	// been reconciled against the configured Warren worktree root.
-	WorktreeOwnershipMigrated bool `json:"worktreeOwnershipMigrated,omitempty"`
-	WarrenVersion string `json:"warrenVersion,omitempty"`
+	WorktreeOwnershipMigrated bool   `json:"worktreeOwnershipMigrated,omitempty"`
+	WarrenVersion             string `json:"warrenVersion,omitempty"`
 }
 
 const (
@@ -582,25 +582,22 @@ type PublicAccessStatus struct {
 // PublicAccessEnableRequest contains the one-time bootstrap input for a
 // self-hosted gnar Edge. InviteKey and ApprovalKey are consumed in memory and
 // are never persisted or included in a URL or command-line argument.
-// ApprovalKey takes precedence when both are supplied. EnrollmentKey remains
-// as a deprecated approval-key alias for older clients.
+// ApprovalKey takes precedence when both are supplied.
 type PublicAccessEnableRequest struct {
 	// A nil EdgeURL keeps the existing configured override. An explicit empty
 	// string clears that override and selects the release/launcher default.
-	EdgeURL       *string `json:"edgeUrl,omitempty"`
-	AccountName   *string `json:"accountName,omitempty"`
-	InviteKey     string  `json:"inviteKey,omitempty"`
-	ApprovalKey   string  `json:"approvalKey,omitempty"`
-	EnrollmentKey string  `json:"enrollmentKey,omitempty"`
+	EdgeURL     *string `json:"edgeUrl,omitempty"`
+	AccountName *string `json:"accountName,omitempty"`
+	InviteKey   string  `json:"inviteKey,omitempty"`
+	ApprovalKey string  `json:"approvalKey,omitempty"`
 }
 
 // PublicAccessTestRequest saves the non-secret Public Access configuration
 // and verifies the gnar Edge connection. Keys are bootstrap-only and are
 // consumed from memory; they are never persisted or returned.
 type PublicAccessTestRequest struct {
-	EdgeURL       *string `json:"edgeUrl,omitempty"`
-	AccountName   *string `json:"accountName,omitempty"`
-	InviteKey     string  `json:"inviteKey,omitempty"`
-	ApprovalKey   string  `json:"approvalKey,omitempty"`
-	EnrollmentKey string  `json:"enrollmentKey,omitempty"`
+	EdgeURL     *string `json:"edgeUrl,omitempty"`
+	AccountName *string `json:"accountName,omitempty"`
+	InviteKey   string  `json:"inviteKey,omitempty"`
+	ApprovalKey string  `json:"approvalKey,omitempty"`
 }
