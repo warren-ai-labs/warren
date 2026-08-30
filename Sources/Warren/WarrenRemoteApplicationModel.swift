@@ -1299,6 +1299,10 @@ private actor WarrenRemoteWire {
         return true
     }
 
+    private nonisolated static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
+        lhs.split(separator: ".", maxSplits: 1).first == rhs.split(separator: ".", maxSplits: 1).first
+    }
+
     private nonisolated static func json(_ value: [String: Any]) -> String {
         let data = try! JSONSerialization.data(withJSONObject: value)
         return String(decoding: data, as: UTF8.self)
@@ -2569,12 +2573,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         controlPublicAccess(.disable)
     }
 
-    func enablePublicAccess(
-        edgeURL: String,
-        accountName: String,
-        inviteKey: String,
-        approvalKey: String
-    ) {
+    func enablePublicAccess(publicHostname: String = "", pathPrefix: String = "") {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
         Task {
@@ -2582,10 +2581,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             do {
                 try await publicAccessRequest(
                     .enable,
-                    edgeURL: edgeURL,
-                    accountName: accountName,
-                    inviteKey: inviteKey,
-                    approvalKey: approvalKey
+                    publicHostname: publicHostname,
+                    pathPrefix: pathPrefix
                 )
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
@@ -2594,15 +2591,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    /// Persists the non-secret Public Access configuration and verifies the
-    /// gnar Edge. Bootstrap keys are forwarded only through the headless API;
-    /// Settings clears them after a successful response and keeps only a mask.
-    func testPublicAccess(
-        edgeURL: String,
-        accountName: String,
-        inviteKey: String,
-        approvalKey: String
-    ) {
+    /// Persists the non-secret Relay route configuration and verifies the
+    /// route without changing its enabled intent.
+    func testPublicAccess(publicHostname: String, pathPrefix: String) {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
         webStatus.publicAccessAuthenticated = false
@@ -2611,10 +2602,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             do {
                 try await publicAccessRequest(
                     .test,
-                    edgeURL: edgeURL,
-                    accountName: accountName,
-                    inviteKey: inviteKey,
-                    approvalKey: approvalKey
+                    publicHostname: publicHostname,
+                    pathPrefix: pathPrefix
                 )
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
@@ -2623,8 +2612,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    /// Clears only Warren's local Public Access setup. The remote Edge is not
-    /// released; its operator can clean up any reservation independently.
+    /// Disables the Relay route and clears Warren's local route metadata.
     func resetPublicAccess() {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
@@ -2681,24 +2669,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
     }
-    func startCloudflareWebAccess() {
-        controlTunnel(.start, kind: "cloudflared")
-    }
-    func stopCloudflareWebAccess() {
-        controlTunnel(.stop, kind: "cloudflared")
-    }
-    func startTailscaleWebAccess() {
-        controlTunnel(.start, kind: "tailscale")
-    }
-    func stopTailscaleWebAccess() {
-        controlTunnel(.stop, kind: "tailscale")
-    }
     func copySecureWebURL() {
         Task {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and one Invite Key or Approval Key in Settings → Public Access, then use Save & Test.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Relay route in Settings → Public Access, then use Save & Test.",
                 ]))
                 return
             }
@@ -2786,84 +2762,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return components.url ?? url
     }
 
-    private enum TunnelAction: String {
-        case start
-        case stop
-    }
-
-    private func controlTunnel(_ action: TunnelAction, kind: String) {
-        Task {
-            do {
-                try await tunnelRequest(action, kind: kind)
-            } catch {
-                present(error)
-            }
-        }
-    }
-
-    private func tunnelRequest(_ action: TunnelAction, kind: String) async throws {
-        guard let configuration = liveEndpointConfiguration else {
-            throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "The selected SSH endpoint is still connecting.",
-            ])
-        }
-        let base = configuration.url.hasSuffix("/")
-            ? String(configuration.url.dropLast())
-            : configuration.url
-        guard let url = URL(string: base + "/v1/tunnels/" + action.rawValue) else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10
-        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["kind": kind])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let message = String(data: data, encoding: .utf8) ?? "Tunnel request failed."
-            throw NSError(domain: "WarrenRemote", code: 13, userInfo: [
-                NSLocalizedDescriptionKey: message,
-            ])
-        }
-        applyTunnelStatus(from: data)
-    }
-
     private func refreshTunnelStatus() async {
         guard let configuration = liveEndpointConfiguration else { return }
-        // Relay routes are controlled by RelayService, not by the daemon's
-        // local adapter API. Never probe `/v1/tunnels` on a Relay endpoint.
-        guard configuration.type.lowercased() != "relay" else { return }
-        let publicAccessAvailable = await refreshPublicAccessStatus(configuration: configuration)
-        if publicAccessAvailable && webStatus.tunnelRunning {
-            return
-        }
-        await refreshAdapterTunnelStatus(configuration: configuration)
-    }
-
-    private func refreshAdapterTunnelStatus(configuration: WarrenRemoteEndpointConfiguration) async {
-        let base = configuration.url.hasSuffix("/")
-            ? String(configuration.url.dropLast())
-            : configuration.url
-        guard let url = URL(string: base + "/v1/tunnels") else { return }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 5
-        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-            applyTunnelStatus(from: data)
-        } catch {
-            return
-        }
+        _ = await refreshPublicAccessStatus(configuration: configuration)
     }
 
     private func publicAccessRequest(
         _ action: PublicAccessAction,
-        edgeURL: String = "",
-        accountName: String = "",
-        inviteKey: String = "",
-        approvalKey: String = ""
+        publicHostname: String = "",
+        pathPrefix: String = ""
     ) async throws {
         guard let configuration = liveEndpointConfiguration else {
             throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
@@ -2881,20 +2788,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         request.timeoutInterval = 30
         request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if action == .enable {
-            request.httpBody = try JSONEncoder().encode(PublicAccessEnableRequest(
-                edgeURL: edgeURL.isEmpty ? nil : edgeURL,
-                accountName: accountName.isEmpty ? nil : accountName,
-                inviteKey: inviteKey,
-                approvalKey: approvalKey
-            ))
-        } else if action == .test {
-            request.httpBody = try JSONEncoder().encode(PublicAccessTestRequest(
-                edgeURL: edgeURL,
-                accountName: accountName,
-                inviteKey: inviteKey,
-                approvalKey: approvalKey
-            ))
+        if action == .enable || action == .test {
+            let body = PublicAccessRouteRequest(
+                publicHostname: publicHostname.isEmpty ? nil : publicHostname,
+                pathPrefix: pathPrefix.isEmpty ? nil : pathPrefix
+            )
+            request.httpBody = try JSONEncoder().encode(body)
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -2930,45 +2829,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private struct PublicAccessEnableRequest: Encodable {
-        /// The top chrome sends nil so an enable action keeps the configured
-        /// Edge/account. Settings uses the test route when it needs to save
-        /// an explicit empty value and return to the release default.
-        let edgeURL: String?
-        let accountName: String?
-        let inviteKey: String
-        let approvalKey: String
+    private struct PublicAccessRouteRequest: Encodable {
+        let publicHostname: String?
+        let pathPrefix: String?
 
         enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case accountName
-            case inviteKey
-            case approvalKey
-        }
-    }
-
-    private struct PublicAccessTestRequest: Encodable {
-        let edgeURL: String?
-        let accountName: String
-        let inviteKey: String
-        let approvalKey: String
-
-        enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case accountName
-            case inviteKey
-            case approvalKey
+            case publicHostname
+            case pathPrefix
         }
     }
 
     private struct PublicAccessStatus: Decodable {
-        let edgeURL: String?
-        let configuredEdgeURL: String?
-        let defaultEdgeURL: String?
-        let usingDefaultEdge: Bool?
-        let accountName: String?
-        let configuredAccountName: String?
-        let usingDefaultAccount: Bool?
+        let relayURL: String?
+        let hostID: String?
+        let routeID: String?
+        let publicHostname: String?
+        let pathPrefix: String?
+        let authMode: String?
         let enabled: Bool
         let authenticated: Bool?
         let running: Bool
@@ -2976,13 +2853,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let error: String?
 
         enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case configuredEdgeURL = "configuredEdgeUrl"
-            case defaultEdgeURL = "defaultEdgeUrl"
-            case usingDefaultEdge = "usingDefaultEdge"
-            case accountName
-            case configuredAccountName = "configuredAccountName"
-            case usingDefaultAccount = "usingDefaultAccount"
+            case relayURL = "relayUrl"
+            case hostID = "hostId"
+            case routeID = "routeId"
+            case publicHostname
+            case pathPrefix
+            case authMode
             case enabled
             case authenticated
             case running
@@ -2995,22 +2871,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard let response = try? JSONDecoder().decode(PublicAccessStatus.self, from: data) else {
             webStatus.secureURL = nil
             webStatus.tunnelRunning = false
-            webStatus.configuredEdgeURL = nil
-            webStatus.defaultEdgeURL = nil
-            webStatus.usingDefaultEdge = false
-            webStatus.configuredAccountName = nil
-            webStatus.effectiveAccountName = nil
-            webStatus.usingDefaultAccount = false
+            webStatus.relayURL = nil
+            webStatus.relayHostID = nil
+            webStatus.routeID = nil
+            webStatus.publicHostname = nil
+            webStatus.pathPrefix = nil
+            webStatus.authMode = nil
             webStatus.publicAccessEnabled = false
             webStatus.publicAccessAuthenticated = false
             return
         }
-        webStatus.configuredEdgeURL = response.configuredEdgeURL.flatMap(URL.init(string:))
-        webStatus.defaultEdgeURL = response.defaultEdgeURL.flatMap(URL.init(string:))
-        webStatus.usingDefaultEdge = response.usingDefaultEdge ?? (response.configuredEdgeURL == nil)
-        webStatus.configuredAccountName = response.configuredAccountName
-        webStatus.effectiveAccountName = response.accountName
-        webStatus.usingDefaultAccount = response.usingDefaultAccount ?? (response.configuredAccountName == nil)
+        webStatus.relayURL = response.relayURL.flatMap(URL.init(string:))
+        webStatus.relayHostID = response.hostID
+        webStatus.routeID = response.routeID
+        webStatus.publicHostname = response.publicHostname
+        webStatus.pathPrefix = response.pathPrefix
+        webStatus.authMode = response.authMode
         webStatus.publicAccessEnabled = response.enabled
         webStatus.publicAccessAuthenticated = response.authenticated ?? false
         webStatus.publicAccessError = response.error.flatMap { error in
@@ -3026,37 +2902,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         webStatus.secureURL = url
         webStatus.tunnelRunning = true
         webStatus.publicAccessAuthenticated = true
-    }
-
-    private func applyTunnelStatus(from data: Data) {
-        struct Response: Decodable {
-            let tunnels: [String: Tunnel]
-        }
-        struct Tunnel: Decodable {
-            let running: Bool
-            let url: String?
-        }
-        guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
-            webStatus.secureURL = nil
-            webStatus.tunnelRunning = false
-            return
-        }
-        let active = response.tunnels.first(where: { kind, tunnel in
-            kind == "gnar" && tunnel.running && tunnel.url != nil
-        }) ?? response.tunnels.first(where: { $0.value.running && $0.value.url != nil })
-        guard let active,
-              let rawURL = active.value.url,
-              let url = URL(string: rawURL) else {
-            webStatus.secureURL = nil
-            webStatus.tunnelRunning = false
-            return
-        }
-        webStatus.secureURL = Self.normalizeAuthenticatedWebURL(url)
-        webStatus.tunnelRunning = true
-        if active.key == "gnar" {
-            webStatus.publicAccessAuthenticated = true
-            webStatus.publicAccessError = nil
-        }
     }
 
     func previewSupersetImport() async throws -> SupersetImportPreview {

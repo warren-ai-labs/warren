@@ -126,12 +126,10 @@ struct WarrenCompositionRoot: View {
             onRetryConnection: retrySelectedEndpointConnection,
             onStopConnection: stopSelectedEndpointConnection,
             onWebStart: { remoteModel.startWebFromUI() },
-            onWebTest: { edgeURL, accountName, inviteKey, approvalKey in
+            onWebTest: { publicHostname, pathPrefix in
                 remoteModel.testPublicAccess(
-                    edgeURL: edgeURL,
-                    accountName: accountName,
-                    inviteKey: inviteKey,
-                    approvalKey: approvalKey
+                    publicHostname: publicHostname,
+                    pathPrefix: pathPrefix
                 )
             },
             onWebStop: { remoteModel.stopWeb() },
@@ -259,18 +257,6 @@ struct WarrenCompositionRoot: View {
         }
         .onChange(of: terminalFontFamily) { _ in updateTerminalFont() }
         .onChange(of: terminalFontSize) { _ in updateTerminalFont() }
-        .onReceive(NotificationCenter.default.publisher(for: WebCommand.startCloudflare)) { _ in
-            remoteModel.startCloudflareWebAccess()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: WebCommand.stopCloudflare)) { _ in
-            remoteModel.stopCloudflareWebAccess()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: WebCommand.startTailscale)) { _ in
-            remoteModel.startTailscaleWebAccess()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: WebCommand.stopTailscale)) { _ in
-            remoteModel.stopTailscaleWebAccess()
-        }
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copySecureURL)) { _ in
             remoteModel.copySecureWebURL()
         }
@@ -318,8 +304,8 @@ struct WarrenCompositionRoot: View {
             // Warm the shared local editor server as soon as a workspace is
             // selected so opening the editor pane skips both the server and
             // workbench cold starts.
-            guard let selectedWorkspacePath else { return }
-            embeddedEditorModel.prewarm(workspacePath: selectedWorkspacePath)
+            guard let workspacePath = selectedWorkspacePath else { return }
+            embeddedEditorModel.prewarm(workspacePath: workspacePath)
         }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()
