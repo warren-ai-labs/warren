@@ -26,7 +26,6 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	sessiontitle "github.com/abcdlsj/warren/Headless/internal/title"
-	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 )
 
 const (
@@ -72,9 +71,8 @@ const (
 
 type Service struct {
 	Store *store.Store
-	// HostName is the Warren Host/system name used for the default gnar
-	// account. It is injected by the daemon from --name/WARREN_HOST_NAME;
-	// embedded callers may leave it empty and use os.Hostname as a fallback.
+	// HostName is the Warren Host/system name advertised to the owned Relay.
+	// It is injected by the daemon from --name/WARREN_HOST_NAME.
 	HostName string
 	// Runtime is the adapter for DefaultRuntime, kept for compatibility with
 	// existing construction sites and tests.
@@ -2457,7 +2455,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 // preserving the configured runtime environment overrides.
 func (s *Service) SetDefaultRuntime(kind string) error {
 	value := s.SettingsSnapshot()
-	return s.UpdateSettings(kind, value.RuntimeEnv, value.GnarEdge)
+	return s.UpdateSettings(kind, value.RuntimeEnv)
 }
 
 // SettingsSnapshot returns a detached copy suitable for concurrent readers.
@@ -2470,7 +2468,6 @@ func (s *Service) SettingsSnapshot() settings.Settings {
 		value.DefaultRuntime = s.DefaultRuntime
 	}
 	value.RuntimeEnv = cloneStringMap(value.RuntimeEnv)
-	value.TunnelEnabled = cloneBoolMap(value.TunnelEnabled)
 	return value
 }
 
@@ -2479,17 +2476,6 @@ func cloneStringMap(value map[string]string) map[string]string {
 		return nil
 	}
 	copy := make(map[string]string, len(value))
-	for key, item := range value {
-		copy[key] = item
-	}
-	return copy
-}
-
-func cloneBoolMap(value map[string]bool) map[string]bool {
-	if value == nil {
-		return nil
-	}
-	copy := make(map[string]bool, len(value))
 	for key, item := range value {
 		copy[key] = item
 	}
@@ -2530,26 +2516,10 @@ func (s *Service) UpdatePublicTunnelSettings(value settings.PublicTunnelSettings
 	return nil
 }
 
-func (s *Service) SetGnarAccount(value string) error {
-	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
-	s.Settings.GnarAccount = value
-	if s.SettingsPath != "" {
-		return settings.Save(s.SettingsPath, s.Settings)
-	}
-	return nil
-}
-
 // UpdateSettings changes the engine used for newly created sessions and the
-// runtime environment overrides and the gnar edge, persisting them when a
-// settings file is configured. Existing sessions keep their own runtimeKind.
-func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnarEdge string) error {
-	gnarEdge = strings.TrimSpace(gnarEdge)
-	if gnarEdge != "" {
-		if err := tunnel.ValidateEdgeURL(gnarEdge); err != nil {
-			return err
-		}
-	}
+// runtime environment overrides, persisting them when a settings file is
+// configured. Existing sessions keep their own runtimeKind.
+func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string) error {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	if kind == "" {
@@ -2567,63 +2537,19 @@ func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string, gnar
 	s.DefaultRuntime = kind
 	s.Settings.DefaultRuntime = kind
 	s.Settings.RuntimeEnv = cloneStringMap(runtimeEnv)
-	s.Settings.GnarEdge = gnarEdge
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
 	}
 	return nil
 }
 
-// UpdatePublicAccessConfig persists the non-secret gnar Edge configuration.
-// Invite and approval keys are intentionally not accepted here; they belong
-// only to the in-memory enable request and are forwarded to gnar over stdin.
-func (s *Service) UpdatePublicAccessConfig(edge, account string) error {
-	edge = strings.TrimSpace(edge)
-	if edge != "" {
-		if err := tunnel.ValidateEdgeURL(edge); err != nil {
-			return err
-		}
-	}
-	normalizedAccount, err := settings.NormalizeConfiguredGnarAccount(account)
-	if err != nil {
-		return err
-	}
-	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
-	s.Settings.GnarEdge = edge
-	// An omitted account is intentional: keep the system-name default dynamic
-	// instead of persisting a machine-specific value as a user override.
-	s.Settings.GnarAccount = normalizedAccount
-	if s.SettingsPath != "" {
-		return settings.Save(s.SettingsPath, s.Settings)
-	}
-	return nil
-}
-
-// EffectiveGnarAccount returns the account label Warren will pass to gnar for
-// a bootstrap login. The value is never a credential.
-func (s *Service) EffectiveGnarAccount() string {
-	s.settingsMu.RLock()
-	configured := s.Settings.GnarAccount
-	s.settingsMu.RUnlock()
-	return settings.EffectiveGnarAccount(configured, s.HostName)
-}
-
-// ConfiguredGnarAccount returns only a user-provided account override.
-func (s *Service) ConfiguredGnarAccount() string {
-	s.settingsMu.RLock()
-	configured := s.Settings.GnarAccount
-	s.settingsMu.RUnlock()
-	return settings.ConfiguredGnarAccount(configured)
-}
-
-// PublicAccessEnabled reports the persisted user intent independently of the
-// current gnar process. This distinction lets recovery retry after a daemon
-// restart without claiming that an endpoint is already live.
+// PublicAccessEnabled reports the persisted public Relay route intent. This
+// distinction lets recovery retry after a daemon restart without claiming
+// that the route is already live.
 func (s *Service) PublicAccessEnabled() bool {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
-	return s.Settings.TunnelEnabled != nil && s.Settings.TunnelEnabled[tunnel.KindGnar]
+	return s.Settings.PublicTunnel.Enabled
 }
 
 // SetAutoOpenShell records whether opening an empty workspace creates a Shell
@@ -2644,32 +2570,6 @@ func (s *Service) SetAutoStartAI(enabled bool) error {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	s.Settings.AutoStartAI = enabled
-	if s.SettingsPath != "" {
-		return settings.Save(s.SettingsPath, s.Settings)
-	}
-	return nil
-}
-
-// UpdateTunnelEnabled records whether a reachability adapter should be
-// restored after a daemon restart, persisting the intent when a settings file
-// is configured. A tunnel that fails to start still keeps its intent so the
-// next daemon retries; only an explicit stop clears it.
-func (s *Service) UpdateTunnelEnabled(kind string, enabled bool) error {
-	switch kind {
-	case tunnel.KindCloudflared, tunnel.KindTailscale, tunnel.KindGnar:
-	default:
-		return fmt.Errorf("unknown tunnel kind %q", kind)
-	}
-	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
-	if s.Settings.TunnelEnabled == nil {
-		s.Settings.TunnelEnabled = map[string]bool{}
-	}
-	if enabled {
-		s.Settings.TunnelEnabled[kind] = true
-	} else {
-		delete(s.Settings.TunnelEnabled, kind)
-	}
 	if s.SettingsPath != "" {
 		return settings.Save(s.SettingsPath, s.Settings)
 	}
