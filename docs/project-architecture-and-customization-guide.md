@@ -429,7 +429,7 @@ menu):
 1. checks that `warren-headless` exists remotely;
 2. starts it on remote loopback when necessary;
 3. reads its token;
-4. stores a local endpoint in `~/.warren/config.json`;
+4. stores only the durable SSH endpoint metadata in `~/.warren/config.json`;
 5. keeps an embedded SSH local port forward running.
 
 The Desktop picker reads concrete aliases from `~/.ssh/config`, including

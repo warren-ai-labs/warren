@@ -100,6 +100,8 @@ struct WarrenDesktopEndpointPopover: View {
     let selectedID: String
     let onSelect: (String) -> Void
     let onAddSSHHost: () -> Void
+    let onRetry: () -> Void
+    let onStop: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -114,6 +116,8 @@ struct WarrenDesktopEndpointPopover: View {
                 selectedID: selectedID,
                 onSelect: onSelect,
                 onAddSSHHost: onAddSSHHost,
+                onRetry: onRetry,
+                onStop: onStop,
                 onDismiss: onDismiss
             )
         }
@@ -129,6 +133,8 @@ struct WarrenDesktopEndpointPopoverContent: View {
     let selectedID: String
     let onSelect: (String) -> Void
     let onAddSSHHost: () -> Void
+    let onRetry: () -> Void
+    let onStop: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -151,6 +157,34 @@ struct WarrenDesktopEndpointPopoverContent: View {
             }
             .padding(.horizontal, WarrenSpacing.standard)
             .padding(.vertical, WarrenSpacing.compact)
+
+            if connectionState == .failed || connectionState == .disconnected {
+                Button {
+                    onRetry()
+                } label: {
+                    Label("Retry connection", systemImage: "arrow.clockwise")
+                        .font(WarrenTypography.popoverItem)
+                        .foregroundStyle(tokens.foreground)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .padding(.vertical, WarrenSpacing.compact)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Try the selected execution server again")
+            } else if connectionState == .connecting || connectionState == .reconnecting {
+                Button {
+                    onStop()
+                } label: {
+                    Label("Stop connection", systemImage: "stop.circle")
+                        .font(WarrenTypography.popoverItem)
+                        .foregroundStyle(tokens.foreground)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .padding(.vertical, WarrenSpacing.compact)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Stop connecting to the selected execution server")
+            }
 
             ForEach(endpoints) { endpoint in
                 Button {

@@ -13,6 +13,9 @@ func TestLastNonEmptyLine(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
+	if !validateToken("short") {
+		t.Fatal("expected opaque non-empty token")
+	}
 	if !validateToken("0123456789abcdef0123456789abcdef") {
 		t.Fatal("expected valid token")
 	}
@@ -22,7 +25,7 @@ func TestValidateToken(t *testing.T) {
 	if !validateToken("0123456789abcdef0123456789abcdef0123456789a") {
 		t.Fatal("expected valid URL-safe base64 token")
 	}
-	for _, value := range []string{"short", "not-hex-0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcde"} {
+	for _, value := range []string{"", "token with spaces", "token\nwith-newline", string([]byte{'t', 0, 'k'})} {
 		if validateToken(value) {
 			t.Fatalf("expected invalid token: %q", value)
 		}
@@ -41,12 +44,12 @@ func TestSplitAddressRejectsInvalidPorts(t *testing.T) {
 }
 
 func TestValidateLoopbackAddress(t *testing.T) {
-	for _, address := range []string{"127.0.0.1:0", "[::1]:8790", "localhost:8791"} {
+	for _, address := range []string{"127.0.0.1:0", "127.42.0.9:8791", "[::1]:8790"} {
 		if err := validateLoopbackAddress(address); err != nil {
 			t.Errorf("validateLoopbackAddress(%q) = %v", address, err)
 		}
 	}
-	for _, address := range []string{"0.0.0.0:8790", "192.0.2.1:8790", "warren.local:8790"} {
+	for _, address := range []string{"0.0.0.0:8790", "192.0.2.1:8790", "warren.local:8790", "localhost:8791"} {
 		if err := validateLoopbackAddress(address); err == nil {
 			t.Errorf("validateLoopbackAddress(%q) unexpectedly succeeded", address)
 		}

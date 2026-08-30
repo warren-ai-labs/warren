@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -304,22 +305,100 @@ func connect() (context.Context, *client.Client, error) {
 	dialContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	url, token := endpointURL, endpointToken
+	var tunnel *sshclient.Tunnel
 	if url == "" {
 		settings, err := config.Load(configPath)
 		if err != nil {
 			return nil, nil, err
 		}
-		value, err := resolveEndpoint(settings, endpointName)
+		value, err := resolveConfiguredEndpoint(settings)
 		if err != nil {
 			return nil, nil, err
 		}
 		url, token = value.URL, value.Token
+		if strings.TrimSpace(value.SSH) != "" {
+			var ready sshclient.Ready
+			remoteAddress := value.SSHRemote
+			if strings.TrimSpace(remoteAddress) == "" {
+				remoteAddress = "127.0.0.1:8789"
+			}
+			tunnel, ready, err = sshclient.Start(dialContext, sshclient.Options{
+				Target:        value.SSH,
+				RemoteAddress: remoteAddress,
+				LocalAddress:  "127.0.0.1:0",
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("start SSH endpoint %q: %w", value.SSH, err)
+			}
+			url, token = ready.URL, ready.Token
+		}
 	}
 	if token == "" {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
 		return nil, nil, errors.New("endpoint token is required")
 	}
 	value, err := client.Dial(dialContext, url, token)
-	return context.Background(), value, err
+	if err != nil {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, nil, err
+	}
+	if tunnel != nil {
+		value.SetCloseHook(func() { _ = tunnel.Close() })
+	}
+	return context.Background(), value, nil
+}
+
+// resolveConfiguredEndpoint keeps the Desktop's synthetic "local" catalog
+// selection usable by the CLI even when an older/fresh config has no explicit
+// local row. Installed builds normally persist this row; the fallback reads
+// the daemon-owned token without copying it into endpoint metadata.
+func resolveConfiguredEndpoint(settings config.Config) (config.Endpoint, error) {
+	name := endpointName
+	if name == "" {
+		name = settings.Current
+		if name == "" {
+			if len(settings.Endpoints) > 1 {
+				return config.Endpoint{}, errors.New("multiple endpoints configured; run 'warren endpoint list', then retry with --endpoint NAME")
+			}
+			if _, ok := settings.Endpoints[defaultEndpointName]; ok {
+				name = defaultEndpointName
+			} else {
+				// A fresh checkout has no catalog row yet, but the local daemon
+				// still owns a token file. Treat that daemon as the implicit
+				// endpoint instead of requiring a one-time endpoint setup command.
+				name = defaultEndpointName
+			}
+		}
+	}
+	if name == defaultEndpointName {
+		if value, ok := settings.Endpoints[defaultEndpointName]; ok &&
+			(strings.TrimSpace(value.SSH) != "" || strings.TrimSpace(value.Token) != "") {
+			return value, nil
+		}
+		tokenPath := strings.TrimSpace(os.Getenv("WARREN_TOKEN_FILE"))
+		if tokenPath == "" {
+			home, _ := os.UserHomeDir()
+			tokenPath = filepath.Join(home, ".warren", "token")
+		}
+		data, err := os.ReadFile(tokenPath)
+		if err != nil {
+			return config.Endpoint{}, fmt.Errorf("read local endpoint token %s: %w", tokenPath, err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return config.Endpoint{}, fmt.Errorf("local endpoint token is empty: %s", tokenPath)
+		}
+		return config.Endpoint{Name: "local", URL: "http://127.0.0.1:8789", Token: token}, nil
+	}
+	value, err := settings.Resolve(name)
+	if err != nil {
+		return config.Endpoint{}, fmt.Errorf("%w; add one with 'warren endpoint add' or pass --server and --token", err)
+	}
+	return value, nil
 }
 
 func resolveEndpoint(settings config.Config, name string) (config.Endpoint, error) {
@@ -2169,14 +2248,28 @@ func endpointCommand(args []string) error {
 		name := positional(flags, 0, "endpoint name")
 		url := stringValue(flags, "url")
 		token := stringValue(flags, "token")
-		if url == "" || token == "" {
+		sshTarget := strings.TrimSpace(stringValue(flags, "ssh"))
+		if sshTarget != "" && name == "local" {
+			return newUsageError("local is reserved for the local daemon; choose another SSH endpoint name", endpointUsageText())
+		}
+		if sshTarget != "" && (url != "" || token != "") {
+			return newUsageError("--ssh cannot be combined with --url or --token", endpointUsageText())
+		}
+		if sshTarget == "" && (url == "" || token == "") {
 			return newUsageError("--url and --token are required", endpointUsageText())
 		}
-		settings.Endpoints[name] = config.Endpoint{Name: name, URL: url, Token: token, SSH: stringValue(flags, "ssh")}
-		if settings.Current == "" || boolValue(flags, "use") {
-			settings.Current = name
-		}
-		if err := config.Save(configPath, settings); err != nil {
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			// SSH endpoints keep only durable connection metadata. The helper
+			// obtains a fresh loopback URL/token for each command invocation.
+			if sshTarget != "" {
+				url, token = "", ""
+			}
+			settings.Endpoints[name] = config.Endpoint{Name: name, URL: url, Token: token, SSH: sshTarget, SSHRemote: stringValue(flags, "ssh-remote")}
+			if settings.Current == "" || boolValue(flags, "use") {
+				settings.Current = name
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"added": true, "name": name})
@@ -2184,11 +2277,15 @@ func endpointCommand(args []string) error {
 		if len(args) < 2 {
 			return newUsageError("missing ENDPOINT_NAME", endpointUsageText())
 		}
-		if _, ok := settings.Endpoints[args[1]]; !ok {
-			return fmt.Errorf("endpoint not found: %s", args[1])
-		}
-		settings.Current = args[1]
-		if err := config.Save(configPath, settings); err != nil {
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			if args[1] != "local" {
+				if _, ok := settings.Endpoints[args[1]]; !ok {
+					return fmt.Errorf("endpoint not found: %s", args[1])
+				}
+			}
+			settings.Current = args[1]
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"current": args[1]})
@@ -2196,16 +2293,18 @@ func endpointCommand(args []string) error {
 		if len(args) < 2 {
 			return newUsageError("missing ENDPOINT_NAME", endpointUsageText())
 		}
-		delete(settings.Endpoints, args[1])
-		if settings.Current == args[1] {
-			settings.Current = ""
-		}
-		if err := config.Save(configPath, settings); err != nil {
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			delete(settings.Endpoints, args[1])
+			if settings.Current == args[1] {
+				settings.Current = ""
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"removed": true, "name": args[1]})
 	case "current":
-		value, err := settings.Resolve("")
+		value, err := resolveConfiguredEndpoint(settings)
 		if err != nil {
 			return err
 		}
@@ -2263,6 +2362,9 @@ func sshCommand(args []string) error {
 	localPort := stringValueDefault(flags, "local-port", "0")
 	remotePort := stringValueDefault(flags, "remote-port", "8789")
 	name := stringValueDefault(flags, "name", strings.NewReplacer("@", "-", ":", "-").Replace(target))
+	if name == "local" {
+		return newUsageError("local is reserved for the local daemon; choose another --name", sshUsageText())
+	}
 	localAddress := localPort
 	if !strings.Contains(localAddress, ":") {
 		localAddress = "127.0.0.1:" + localAddress
@@ -2280,13 +2382,14 @@ func sshCommand(args []string) error {
 		return err
 	}
 	defer tunnel.Close()
-	settings, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
-	settings.Endpoints[name] = config.Endpoint{Name: name, URL: ready.URL, Token: ready.Token, SSH: target}
-	settings.Current = name
-	if err := config.Save(configPath, settings); err != nil {
+	if err := config.Update(configPath, func(settings *config.Config) error {
+		// Do not persist the helper's ephemeral listener or token. Persisting
+		// either value makes a later process reuse a dead tunnel and can leak
+		// credentials to unrelated Desktop/CLI instances.
+		settings.Endpoints[name] = config.Endpoint{Name: name, SSH: target, SSHRemote: "127.0.0.1:" + remotePort}
+		settings.Current = name
+		return nil
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "Warren endpoint %q active at %s; keep this process running.\n", name, ready.URL)
@@ -2294,7 +2397,7 @@ func sshCommand(args []string) error {
 	case <-ctx.Done():
 		return nil
 	case <-tunnel.Done():
-		return nil
+		return errors.New("SSH tunnel stopped unexpectedly")
 	}
 }
 
@@ -3487,7 +3590,8 @@ func actionUsageText(commandName, action string) string {
 func endpointUsageText() string {
 	return `Usage:
   warren endpoint list
-  warren endpoint add NAME --url URL --token TOKEN [--ssh SSH] [--use]
+  warren endpoint add NAME --url URL --token TOKEN [--use]
+  warren endpoint add NAME --ssh SSH [--ssh-remote 127.0.0.1:8789] [--use]
   warren endpoint use NAME
   warren endpoint remove NAME
   warren endpoint current
@@ -3501,8 +3605,9 @@ func sshUsageText() string {
 
 TARGET is an SSH alias from ~/.ssh/config or user@host. The embedded client
 resolves OpenSSH config (Host, Include, HostName, User, Port, IdentityFile,
-UserKnownHostsFile), verifies host keys against known_hosts, and authenticates
-via ssh-agent or IdentityFile. It bootstraps warren-headless on the remote host
+UserKnownHostsFile, GlobalKnownHostsFile, IdentityAgent, HostKeyAlias), verifies
+host keys against known_hosts, and authenticates via ssh-agent or IdentityFile.
+It bootstraps warren-headless on the remote host
 and forwards a loopback port to 127.0.0.1:8789.
 
 Unsupported ProxyJump/ProxyCommand aliases are reported by 'warren ssh list';
@@ -3513,7 +3618,7 @@ Options:
   --remote-port PORT    remote daemon port (default 8789)
   --name NAME           endpoint name (default TARGET with @/: replaced by -)
   --ssh-config PATH     SSH config path (default ~/.ssh/config)
-  --known-hosts PATH    known_hosts path (default ~/.ssh/known_hosts)
+  --known-hosts PATH    known_hosts path (default OpenSSH user/system files)
 
 Examples:
   warren ssh list

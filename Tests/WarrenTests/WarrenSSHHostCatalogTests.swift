@@ -105,6 +105,30 @@ final class WarrenSSHHostCatalogTests: XCTestCase {
         XCTAssertEqual(excluded.user, NSUserName())
     }
 
+    func testMissingConfigIsAnEmptyCatalogNotAReadError() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let result = WarrenSSHHostCatalog.loadResult(
+            from: directory.appendingPathComponent("missing-config")
+        )
+
+        XCTAssertTrue(result.hosts.isEmpty)
+        XCTAssertNil(result.error)
+    }
+
+    func testProxyFallbackRetainsConfiguredRoute() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config")
+        try Data("Host proxied\n    ProxyJump bastion,backup\n".utf8).write(to: config)
+
+        let proxied = try XCTUnwrap(WarrenSSHHostCatalog.load(from: config).first)
+
+        XCTAssertEqual(proxied.proxyKind, "ProxyJump")
+        XCTAssertEqual(proxied.proxyValue, "bastion,backup")
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-ssh-catalog-\(UUID().uuidString)", isDirectory: true)

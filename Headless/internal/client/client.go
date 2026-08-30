@@ -23,6 +23,9 @@ type Client struct {
 	mu         sync.Mutex
 	pendingMu  sync.Mutex
 	pending    []inboundMessage
+	closeOnce  sync.Once
+	closeErr   error
+	closeHook  func()
 }
 
 type inboundMessage struct {
@@ -73,7 +76,33 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 
 const terminalStateFormatANSI = "ghostline-vt-replay-v1"
 
-func (c *Client) Close() error { return c.connection.Close() }
+// SetCloseHook registers a cleanup callback owned by the caller.  It is used
+// by the CLI to tie an SSH tunnel's lifetime to the authenticated WebSocket;
+// callers must set it before handing the client to command code.
+func (c *Client) SetCloseHook(hook func()) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeHook = hook
+}
+
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.closeErr = c.connection.Close()
+		c.mu.Lock()
+		hook := c.closeHook
+		c.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+	})
+	return c.closeErr
+}
 
 func (c *Client) Request(ctx context.Context, method string, params map[string]any, result any) error {
 	c.mu.Lock()

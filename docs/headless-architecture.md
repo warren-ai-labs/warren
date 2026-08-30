@@ -87,7 +87,9 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - Headless Go's `/v1/ws` exposes one request/response control protocol. `session.attach` creates an output subscription only (and carries the `epoch/sequence` recovery anchor); a client sends `session.focus` with an optional `cols/rows` viewport after it gains UI focus. The Host only lets the focused peer resize the shared PTY; background `session.resize` requests are safe no-ops, and detach releases focus. Control messages and DENB output frames match the daemon protocol used by Desktop and Web clients.
 - Desktop discovers servers from the CLI config file and refreshes the endpoint catalog in the background, so CLI changes appear without restarting.
 - Remote Project paths must be added through the CLI; the Desktop file picker only applies to Local.
-- SSH auto-start requires `warren-headless` and `openssl` to be installed on the remote host.
+- SSH auto-start requires `warren-headless` to be installed on the remote host;
+  the existing remote token file is reused and no private key or token is
+  copied into the endpoint catalog.
 
 ## Agent Projection Boundary
 

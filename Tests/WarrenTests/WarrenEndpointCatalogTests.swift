@@ -34,9 +34,11 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertEqual(catalog.current, "vps")
         XCTAssertEqual(catalog.endpoints.map(\.name), ["local", "vps"])
         let vps = try XCTUnwrap(catalog.endpoints.first { $0.name == "vps" })
-        XCTAssertEqual(vps.url, "http://vps.example:8789")
-        XCTAssertEqual(vps.token, "remote-token")
+        XCTAssertEqual(vps.url, "")
+        XCTAssertEqual(vps.token, "")
         XCTAssertEqual(vps.ssh, "root@vps.example")
+        let rewritten = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(rewritten.contains("remote-token"))
     }
 
     func testMissingConfigurationReturnsEmptyCatalog() throws {
@@ -53,6 +55,20 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.endpoints.isEmpty)
     }
 
+    func testIncompleteConfigurationDefaultsToEmptyEndpointMap() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        try Data("{\"current\":\"local\"}".utf8).write(to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+
+        XCTAssertEqual(catalog.current, "local")
+        XCTAssertTrue(catalog.endpoints.isEmpty)
+    }
+
     func testSavesSSHEndpointWithPrivateFilePermissions() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
@@ -61,7 +77,7 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         let url = directory.appendingPathComponent("config.json")
         let endpoint = WarrenRemoteEndpointConfiguration(
             name: "tenc_sh",
-            url: "http://127.0.0.1:0",
+            url: "",
             token: "",
             ssh: "tenc_sh"
         )
@@ -97,5 +113,55 @@ final class WarrenEndpointCatalogTests: XCTestCase {
             ),
             "ssh-tenc_sh-2"
         )
+    }
+
+    func testSSHEndpointNameReservesSyntheticLocalEndpoint() {
+        let endpointName = WarrenCompositionRoot.endpointName(
+            for: "local",
+            endpoints: []
+        )
+
+        XCTAssertEqual(endpointName, "ssh-local")
+    }
+
+    func testSSHEndpointRemotePortRoundTripsAndRuntimeCredentialsAreScrubbed() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "vps",
+            url: "",
+            token: "",
+            ssh: "root@vps.example",
+            sshRemote: "127.0.0.1:9000"
+        )
+
+        try WarrenEndpointCatalog.upsert(endpoint, current: endpoint.name, to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, endpoint.name)
+        XCTAssertEqual(catalog.endpoints, [endpoint])
+    }
+
+    func testSetCurrentKeepsTheNewestEndpointSet() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "vps",
+            url: "https://vps.example",
+            token: "token",
+            ssh: nil
+        )
+        try WarrenEndpointCatalog.upsert(endpoint, to: url)
+        try WarrenEndpointCatalog.setCurrent(endpoint.name, to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, endpoint.name)
+        XCTAssertEqual(catalog.endpoints, [endpoint])
     }
 }

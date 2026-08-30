@@ -109,6 +109,7 @@ final class TerminalSurfaceCoordinator {
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
     private var displayLoopTask: Task<Void, Never>?
+    private var displayLoopGeneration: UInt64 = 0
     private var lastCreateFailureAt: TimeInterval?
 
     /// Cooldown before `fitToSize` may retry a surface create after
@@ -139,7 +140,14 @@ final class TerminalSurfaceCoordinator {
 
     func startDisplayLink() {
         guard displayLoopTask == nil else { return }
+        displayLoopGeneration &+= 1
+        let generation = displayLoopGeneration
         displayLoopTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.displayLoopGeneration == generation {
+                    self.displayLoopTask = nil
+                }
+            }
             while !Task.isCancelled {
                 guard let self, self.canRenderFrame else { return }
                 self.tick(context: .init(
@@ -154,6 +162,7 @@ final class TerminalSurfaceCoordinator {
     }
 
     func stopDisplayLink() {
+        displayLoopGeneration &+= 1
         displayLoopTask?.cancel()
         displayLoopTask = nil
         tickScheduled = false
@@ -321,6 +330,7 @@ final class TerminalSurfaceCoordinator {
         surface?.setOcclusion(effectiveSurfaceVisible)
 
         if canRenderFrame {
+            startDisplayLink()
             requestImmediateTick()
         } else {
             stopDisplayLink()
@@ -330,6 +340,7 @@ final class TerminalSurfaceCoordinator {
     func setApplicationActive(_ active: Bool) {
         guard isApplicationActive != active else {
             if active {
+                startDisplayLink()
                 renderImmediately()
             } else {
                 stopDisplayLink()
@@ -342,6 +353,7 @@ final class TerminalSurfaceCoordinator {
 
         if active {
             synchronizeMetrics()
+            startDisplayLink()
             renderImmediately()
         } else {
             stopDisplayLink()
