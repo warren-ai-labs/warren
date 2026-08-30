@@ -108,11 +108,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         launchDaemonMenuBar()
         presentMainWindowIfNeeded()
         NSApp.mainMenu = buildMainMenu(target: self)
-        applyEndpointCapabilities(
-            (UserDefaults.standard.string(forKey: "executionEndpoint") ?? "local") == "local"
-                ? .local
-                : .remote
-        )
+        // The catalog is shared with the CLI and is now the authoritative
+        // endpoint selection. Keep the old UserDefaults value only for
+        // catalogs created before the shared file existed.
+        let catalog = WarrenEndpointCatalog.load()
+        let selectedEndpoint = catalog.current
+            ?? UserDefaults.standard.string(forKey: "executionEndpoint")
+            ?? "local"
+        applyEndpointCapabilities(selectedEndpoint == "local" ? .local : .remote)
         endpointCapabilitiesObserver = NotificationCenter.default.addObserver(
             forName: WarrenDesktopEndpointCapabilitiesNotification.didChange,
             object: nil,
