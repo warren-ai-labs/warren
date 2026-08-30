@@ -138,6 +138,33 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertEqual(link.publicAccess?.approvalKey, "approval-secret")
     }
 
+    func testRelaySetupLinkRoundTripsWithoutBecomingPublicAccess() throws {
+        let prefill = WarrenDesktopRelayPrefill(
+            relayURL: "http://192.0.2.10:8080/relay",
+            hostID: "00000000-0000-4000-8000-000000000001",
+            enrollmentTicket: "one-time ticket/+value",
+            relayKeyID: "relay-key-1",
+            relayPublicKey: "base64-public-key"
+        )
+        let link = WarrenDesktopSettingsDeepLink(section: .relay, relay: prefill)
+        let url = try XCTUnwrap(link.url)
+        XCTAssertNil(url.fragment)
+        XCTAssertTrue(url.absoluteString.contains("enrollmentTicket="))
+        XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: url), link)
+        XCTAssertNil(link.publicAccess)
+        XCTAssertNotNil(link.relay)
+    }
+
+    func testRelaySetupPathAndAliasesAreSupported() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=00000000-0000-4000-8000-000000000001&ticket=short-lived&keyId=relay-key&publicKey=key"))
+        let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
+        XCTAssertEqual(link.section, .relay)
+        XCTAssertEqual(link.relay?.relayURL, "http://192.0.2.10:8080")
+        XCTAssertEqual(link.relay?.hostID, "00000000-0000-4000-8000-000000000001")
+        XCTAssertEqual(link.relay?.enrollmentTicket, "short-lived")
+        XCTAssertNil(link.publicAccess)
+    }
+
     func testSettingsDeepLinkRejectsForeignOrUnknownLinks() throws {
         let foreignScheme = try XCTUnwrap(URL(string: "https://settings?section=public-access"))
         let foreignHost = try XCTUnwrap(URL(string: "warren://other?section=public-access"))

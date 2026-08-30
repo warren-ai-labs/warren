@@ -104,6 +104,12 @@ child process.
 
 Warren only makes outbound WSS connections; with no control plane configured, it still listens on `127.0.0.1` only.
 
+Desktop and other local clients can use the equivalent Headless endpoint
+`POST /v1/relay/enroll` with `relayUrl`, `hostId`, and `enrollmentTicket`.
+Headless supplies the daemon token itself, validates the returned signing key,
+and persists the Relay metadata. This endpoint is intentionally unrelated to
+Public Access/gnar settings.
+
 ## Pairing, Discovery, and Revocation
 
 An admin or the Host's own credential can generate a 10-minute, one-time pairing code:

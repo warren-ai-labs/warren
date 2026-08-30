@@ -563,7 +563,9 @@ private actor WarrenRemoteWire {
 		let isRelay = configuration.type.lowercased() == "relay"
 		if isRelay {
 			guard let hostID = configuration.hostID, !hostID.isEmpty else { throw URLError(.badURL) }
-			components.path = "/h/\(hostID)/v1/client/connect"
+			let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+			let path = "/h/\(hostID)/v1/client/connect"
+			components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
 		} else {
 			components.path = "/v1/ws"
 		}
@@ -1424,6 +1426,94 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             } catch {
                 self?.present(error)
             }
+        }
+    }
+
+    /// Enrolls the selected local Headless daemon into an owned Relay using a
+    /// one-time setup ticket. The daemon supplies its canonical token to the
+    /// Relay; Desktop never receives or forwards that Host Secret.
+    func enrollRelay(
+        relayURL: String,
+        hostID: String,
+        enrollmentTicket: String,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        guard let configuration = endpointConfiguration else {
+            let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard configuration.type.lowercased() != "relay" else {
+            let error = NSError(domain: "WarrenRemote", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Relay enrollment must be started from the Host daemon, not a Relay endpoint.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.relayEnrollmentRequest(
+                    configuration: configuration,
+                    relayURL: relayURL,
+                    hostID: hostID,
+                    enrollmentTicket: enrollmentTicket
+                )
+                self.settingsLoaded = false
+                self.loadSettings()
+                completion(.success(()))
+            } catch {
+                self.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private func relayEnrollmentRequest(
+        configuration: WarrenRemoteEndpointConfiguration,
+        relayURL: String,
+        hostID: String,
+        enrollmentTicket: String
+    ) async throws {
+        let base = configuration.url.hasSuffix("/")
+            ? String(configuration.url.dropLast())
+            : configuration.url
+        guard let url = URL(string: base + "/v1/relay/enroll") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(RelayEnrollmentRequest(
+            relayURL: relayURL,
+            hostID: hostID,
+            enrollmentTicket: enrollmentTicket
+        ))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "Relay enrollment failed."
+            throw NSError(domain: "WarrenRemote", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+    }
+
+    private struct RelayEnrollmentRequest: Encodable {
+        let relayURL: String
+        let hostID: String
+        let enrollmentTicket: String
+
+        enum CodingKeys: String, CodingKey {
+            case relayURL = "relayUrl"
+            case hostID = "hostId"
+            case enrollmentTicket
         }
     }
 

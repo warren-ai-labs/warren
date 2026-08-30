@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,6 +193,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
+	mux.HandleFunc("POST /v1/relay/enroll", s.handleRelayEnroll)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /v1/runtime/refresh", s.handleRuntimeRefresh)
 	mux.HandleFunc("GET /v1/tunnels", s.handleTunnels)
@@ -211,6 +214,146 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /apple-touch-icon.png", s.handleWebAsset)
 	mux.HandleFunc("GET /tls/ca.pem", s.handleCACert)
 	return mux
+}
+
+var relayHostIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// handleRelayEnroll consumes a one-time Relay ticket with the daemon's
+// canonical token. The token never comes from the request body and is not
+// written to settings; only the Relay URL, Host identity, and signing key are
+// persisted after the remote enrollment succeeds.
+func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		RelayURL         string `json:"relayUrl"`
+		URL              string `json:"url"`
+		HostID           string `json:"hostId"`
+		EnrollmentTicket string `json:"enrollmentTicket"`
+		Ticket           string `json:"ticket"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+		http.Error(writer, "invalid request", http.StatusBadRequest)
+		return
+	}
+	relayURL := strings.TrimSpace(body.RelayURL)
+	if relayURL == "" {
+		relayURL = strings.TrimSpace(body.URL)
+	}
+	hostID := strings.ToLower(strings.TrimSpace(body.HostID))
+	ticket := strings.TrimSpace(body.EnrollmentTicket)
+	if ticket == "" {
+		ticket = strings.TrimSpace(body.Ticket)
+	}
+	if !relayHostIDPattern.MatchString(hostID) || ticket == "" {
+		http.Error(writer, "invalid request", http.StatusBadRequest)
+		return
+	}
+	base, err := normalizeRelayEnrollmentURL(relayURL)
+	if err != nil {
+		http.Error(writer, "invalid relay URL", http.StatusBadRequest)
+		return
+	}
+	endpoint := base + "/v1/hosts/" + url.PathEscape(hostID) + "/enroll"
+	payload, _ := json.Marshal(map[string]string{
+		"enrollment_ticket": ticket,
+		"host_secret":       s.Token,
+	})
+	upstream, err := http.NewRequestWithContext(request.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	upstream.Header.Set("Content-Type", "application/json")
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		// The enrollment payload contains the canonical daemon token. Never
+		// follow a redirect supplied by a Relay endpoint, otherwise an
+		// operator typo or a compromised endpoint could receive that secret.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	result, err := client.Do(upstream)
+	if err != nil {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	defer result.Body.Close()
+	data, readErr := io.ReadAll(io.LimitReader(result.Body, 64*1024))
+	if readErr != nil || result.StatusCode < 200 || result.StatusCode >= 300 {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	var response struct {
+		RelayKeyID     string `json:"relay_key_id"`
+		RelayPublicKey string `json:"relay_public_key"`
+	}
+	if json.Unmarshal(data, &response) != nil || strings.TrimSpace(response.RelayKeyID) == "" || strings.TrimSpace(response.RelayPublicKey) == "" {
+		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
+		return
+	}
+	key, err := decodeRelayPublicKey(response.RelayPublicKey)
+	if err != nil {
+		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
+		return
+	}
+	value := s.Service.RelaySettingsSnapshot()
+	value.Enabled = true
+	value.URL = base
+	value.HostID = hostID
+	value.RelayKeyID = strings.TrimSpace(response.RelayKeyID)
+	value.RelayKey = base64.RawStdEncoding.EncodeToString(key)
+	value.LastError = ""
+	if err := s.Service.UpdateRelaySettings(value); err != nil {
+		http.Error(writer, "Relay settings could not be saved", http.StatusInternalServerError)
+		return
+	}
+	if err := s.syncRelayLifecycle(); err != nil {
+		http.Error(writer, "Relay connector could not start", http.StatusBadGateway)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"enrolled":     true,
+		"relay":        value,
+		"relay_key_id": value.RelayKeyID,
+	})
+}
+
+func normalizeRelayEnrollmentURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid Relay URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("Relay URL must use http or https")
+	}
+	if strings.ContainsAny(parsed.Host, "\r\n\x00") || strings.HasPrefix(parsed.Path, "//") || strings.ContainsAny(parsed.Path, "\r\n\x00") {
+		return "", errors.New("invalid Relay URL")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return "", errors.New("Relay URL path traversal is not allowed")
+		}
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func decodeRelayPublicKey(value string) ([]byte, error) {
+	data, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		data, err = base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	}
+	if err != nil || len(data) != 32 {
+		return nil, errors.New("invalid Relay public key")
+	}
+	return data, nil
 }
 
 func (s *HTTPServer) handleCACert(writer http.ResponseWriter, request *http.Request) {
