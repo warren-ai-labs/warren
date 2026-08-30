@@ -108,6 +108,13 @@ final class TerminalSurfaceCoordinator {
     private var pendingImmediateTick = true
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
+    /// Keeps Ghostty's clock and framebuffer moving while the view is visible.
+    /// Output and input echoes can update the in-memory terminal from a
+    /// background task without producing a callback that is guaranteed to
+    /// schedule another main-thread draw. A generation guards against an old
+    /// cancelled task clearing a newly-started loop during a tab transition.
+    private var displayLoopTask: Task<Void, Never>?
+    private var displayLoopGeneration: UInt64 = 0
     private var lastCreateFailureAt: TimeInterval?
 
     /// Cooldown before `fitToSize` may retry a surface create after
@@ -137,10 +144,38 @@ final class TerminalSurfaceCoordinator {
     }
 
     func startDisplayLink() {
+        guard displayLoopTask == nil else { return }
+        displayLoopGeneration &+= 1
+        let generation = displayLoopGeneration
+        displayLoopTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.displayLoopGeneration == generation {
+                    self.displayLoopTask = nil
+                }
+            }
+
+            while !Task.isCancelled {
+                guard let self, self.canRenderFrame else { return }
+                let timestamp = Self.monotonicTimestamp()
+                self.tick(context: .init(
+                    duration: 1.0 / 60.0,
+                    timestamp: timestamp,
+                    targetTimestamp: timestamp
+                ))
+                do {
+                    try await Task.sleep(for: .milliseconds(16))
+                } catch {
+                    return
+                }
+            }
+        }
         scheduleTickIfNeeded()
     }
 
     func stopDisplayLink() {
+        displayLoopGeneration &+= 1
+        displayLoopTask?.cancel()
+        displayLoopTask = nil
         tickScheduled = false
     }
 
@@ -306,6 +341,7 @@ final class TerminalSurfaceCoordinator {
         surface?.setOcclusion(effectiveSurfaceVisible)
 
         if canRenderFrame {
+            startDisplayLink()
             requestImmediateTick()
         } else {
             stopDisplayLink()
@@ -315,6 +351,7 @@ final class TerminalSurfaceCoordinator {
     func setApplicationActive(_ active: Bool) {
         guard isApplicationActive != active else {
             if active {
+                startDisplayLink()
                 renderImmediately()
             } else {
                 stopDisplayLink()
@@ -327,6 +364,7 @@ final class TerminalSurfaceCoordinator {
 
         if active {
             synchronizeMetrics()
+            startDisplayLink()
             renderImmediately()
         } else {
             stopDisplayLink()
@@ -521,7 +559,11 @@ final class TerminalSurfaceCoordinator {
         guard canRenderFrame else {
             return false
         }
-        return pendingImmediateTick || lastTickTimestamp == 0
+        // Ghostty advances cursor blink, TUI shimmer, and pending output during
+        // refresh. Once visible, every display-loop tick must be allowed to
+        // reach the renderer; a one-shot pending flag leaves the framebuffer
+        // stale until an unrelated tab switch or layout event forces a draw.
+        return true
     }
 
     private func scheduleTickIfNeeded() {
