@@ -56,9 +56,11 @@ struct WarrenCompositionRoot: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
-    @AppStorage("executionEndpoint")
-    private var selectedEndpointID = "local"
+    @State private var selectedEndpointID: String
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
+    @State private var endpointCatalogError: String?
+    @State private var isSSHHostPickerPresented = false
+    @State private var localEndpointWaitGeneration: UInt64 = 0
 
     @MainActor
     init() {
@@ -70,8 +72,15 @@ struct WarrenCompositionRoot: View {
         _embeddedEditorModel = StateObject(wrappedValue: WarrenEmbeddedEditorModel())
         // Endpoint configuration is user input, not frame state. Seed the
         // catalog once and refresh it from disk in the background so CLI
-        // changes appear without restarting Warren.
-        _endpointCatalog = State(initialValue: WarrenEndpointCatalog.load().endpoints)
+        // changes appear without restarting Warren. The catalog's `current`
+        // value is authoritative; the legacy UserDefaults value is only a
+        // migration fallback for catalogs created before endpoint storage.
+        let catalog = WarrenEndpointCatalog.load()
+        _endpointCatalog = State(initialValue: catalog.endpoints)
+        _selectedEndpointID = State(initialValue: catalog.current
+            ?? UserDefaults.standard.string(forKey: "executionEndpoint")
+            ?? "local")
+        _endpointCatalogError = State(initialValue: nil)
     }
 
     var body: some View {
@@ -109,6 +118,13 @@ struct WarrenCompositionRoot: View {
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: selectEndpoint,
+            onAddSSHHost: {
+                // Present immediately with a loading state; parsing a large
+                // Include tree happens inside the picker on a utility task.
+                isSSHHostPickerPresented = true
+            },
+            onRetryConnection: retrySelectedEndpointConnection,
+            onStopConnection: stopSelectedEndpointConnection,
             onWebStart: { remoteModel.startWebFromUI() },
             onWebTest: { edgeURL, accountName, inviteKey, approvalKey in
                 remoteModel.testPublicAccess(
@@ -120,6 +136,14 @@ struct WarrenCompositionRoot: View {
             },
             onWebStop: { remoteModel.stopWeb() },
             onWebReset: { remoteModel.resetPublicAccess() },
+            onRelayEnroll: { relayURL, hostID, enrollmentTicket, completion in
+                remoteModel.enrollRelay(
+                    relayURL: relayURL,
+                    hostID: hostID,
+                    enrollmentTicket: enrollmentTicket,
+                    completion: completion
+                )
+            },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,
@@ -199,6 +223,14 @@ struct WarrenCompositionRoot: View {
             allowsMultipleSelection: false,
             onCompletion: importProject
         )
+        .sheet(isPresented: $isSSHHostPickerPresented) {
+            WarrenSSHHostPicker(
+                hosts: [],
+                loadOnAppear: true,
+                onConfigure: configureSSHHost,
+                onDismiss: { isSSHHostPickerPresented = false }
+            )
+        }
         .modifier(WarrenProjectFileDialogLabels())
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
             guard selectedEndpointCapabilities.canCopyLocalWebURL else { return }
@@ -301,7 +333,15 @@ struct WarrenCompositionRoot: View {
             connectSelectedEndpoint()
         }
         .onDisappear {
+            localEndpointWaitGeneration &+= 1
             embeddedEditorModel.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            // A bundled SSH helper is a child process of the Desktop. Stop it
+            // before AppKit tears down the process so a tunnel cannot outlive
+            // the app that owns the endpoint.
+            localEndpointWaitGeneration &+= 1
+            remoteModel.disconnect()
         }
     }
 
@@ -468,7 +508,7 @@ struct WarrenCompositionRoot: View {
                 WarrenDesktopEndpointOption(
                     id: endpoint.id,
                     label: endpoint.name,
-                    detail: Self.endpointDetail(endpoint.url)
+                    detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url)
                 )
             }
         return [local] + configured
@@ -523,12 +563,64 @@ struct WarrenCompositionRoot: View {
         guard endpointOptions.contains(where: { $0.id == id }) else { return }
         WarrenHangDiagnostics.logEndpointSwitch(from: selectedEndpointID, to: id)
         selectedEndpointID = id
+        do {
+            try WarrenEndpointCatalog.setCurrent(id)
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    private func configureSSHHost(_ host: WarrenSSHHost) {
+        guard host.supported else { return }
+        let name = Self.endpointName(for: host.name, endpoints: endpointCatalog)
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: name,
+            url: "http://127.0.0.1:0",
+            token: "",
+            ssh: host.name
+        )
+        do {
+            try WarrenEndpointCatalog.upsert(endpoint, current: name)
+            endpointCatalog = WarrenEndpointCatalog.load().endpoints
+            selectedEndpointID = name
+            isSSHHostPickerPresented = false
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    nonisolated static func endpointName(
+        for hostName: String,
+        endpoints: [WarrenRemoteEndpointConfiguration]
+    ) -> String {
+        // `local` is a synthetic endpoint owned by the Desktop and is not
+        // stored in the shared catalog. Reserve that identifier so an SSH
+        // alias named "local" cannot be persisted into an unreachable,
+        // indistinguishable row.
+        let occupied = Set(["local"]).union(endpoints.map(\.name))
+        if !occupied.contains(hostName) {
+            return hostName
+        }
+        var candidate = "ssh-\(hostName)"
+        var suffix = 2
+        while occupied.contains(candidate) {
+            candidate = "ssh-\(hostName)-\(suffix)"
+            suffix += 1
+        }
+        // Re-selecting an existing SSH endpoint should update it in place.
+        if endpoints.contains(where: { $0.name == hostName && $0.ssh == hostName }) {
+            return hostName
+        }
+        return candidate
     }
 
     private func restoreEndpointSelection() {
-        guard endpointOptions.contains(where: { $0.id == selectedEndpointID }) else {
+        let catalog = WarrenEndpointCatalog.load()
+        if let current = catalog.current,
+           endpointOptions.contains(where: { $0.id == current }) {
+            selectedEndpointID = current
+        } else if !endpointOptions.contains(where: { $0.id == selectedEndpointID }) {
             selectedEndpointID = "local"
-            return
         }
         connectSelectedEndpoint()
     }
@@ -536,12 +628,47 @@ struct WarrenCompositionRoot: View {
     private func monitorEndpointConfiguration() async {
         while !Task.isCancelled {
             let previous = endpointCatalog
-            let loaded = WarrenEndpointCatalog.load().endpoints
-            guard loaded != previous else {
+            let loadedCatalog: (current: String?, endpoints: [WarrenRemoteEndpointConfiguration])
+            do {
+                loadedCatalog = try await Task.detached(priority: .utility) {
+                    try WarrenEndpointCatalog.loadThrowing(from: WarrenEndpointCatalog.configurationURL())
+                }.value
+            } catch {
+                let message = error.localizedDescription
+                if endpointCatalogError != message {
+                    endpointCatalogError = message
+                    remoteModel.addNotice(
+                        title: "Endpoint catalog unavailable",
+                        message: "Warren could not read ~/.warren/config.json.",
+                        detail: message,
+                        kind: .error
+                    )
+                }
+                try? await Task.sleep(for: .seconds(1))
+                continue
+            }
+            endpointCatalogError = nil
+            let loaded = loadedCatalog.endpoints
+            // A missing `current` is the normal fresh-checkout state. Treat
+            // it as stable while the selected legacy endpoint still exists;
+            // otherwise the poller would wake and reassign state every
+            // second even though no catalog change occurred.
+            let currentChanged: Bool
+            if let current = loadedCatalog.current {
+                currentChanged = current != selectedEndpointID
+            } else {
+                currentChanged = selectedEndpointID != "local"
+                    && !loaded.contains(where: { $0.id == selectedEndpointID })
+            }
+            guard loaded != previous || currentChanged else {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
             endpointCatalog = loaded
+            if let current = loadedCatalog.current,
+               current == "local" || loaded.contains(where: { $0.id == current }) {
+                selectedEndpointID = current
+            }
             guard selectedEndpointID != "local" else {
                 try? await Task.sleep(for: .seconds(1))
                 continue
@@ -558,6 +685,8 @@ struct WarrenCompositionRoot: View {
     }
 
     private func connectSelectedEndpoint() {
+        localEndpointWaitGeneration &+= 1
+        let waitGeneration = localEndpointWaitGeneration
         let start = Date()
         TerminalDiagnostics.log("connect_selected_begin", ["endpoint": selectedEndpointID, "isLocal": isLocalEndpoint ? "true" : "false"])
         defer {
@@ -578,23 +707,40 @@ struct WarrenCompositionRoot: View {
         // once is empty and the connection can never succeed (code 7).
         guard !remoteModel.isConnected(to: WarrenRemoteEndpointConfiguration.localDaemon()) else { return }
         remoteModel.disconnect()
+        remoteModel.markConnectionConnecting()
         Task { @MainActor in
             for _ in 0..<30 {
+                guard self.localEndpointWaitGeneration == waitGeneration,
+                      self.selectedEndpointID == "local" else { return }
                 let endpoint = WarrenRemoteEndpointConfiguration.localDaemon()
                 // The remote model already owns the WebSocket retry loop. Once
                 // the daemon has published its token, connect immediately
-                // instead of issuing a second authenticated /v1/state probe
-                // that races the menu-bar supervisor.
+                // instead of issuing a second authenticated probe that races
+                // the menu-bar supervisor.
                 if !endpoint.token.isEmpty {
                     remoteModel.connect(endpoint, isLocal: true)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            remoteModel.report(NSError(domain: "WarrenRemote", code: 7, userInfo: [
+            guard self.localEndpointWaitGeneration == waitGeneration,
+                  self.selectedEndpointID == "local" else { return }
+            remoteModel.markConnectionFailed(NSError(domain: "WarrenRemote", code: 7, userInfo: [
                 NSLocalizedDescriptionKey: "The local daemon is not running; check the Warren status in the menu bar.",
             ]))
         }
+    }
+
+    private func stopSelectedEndpointConnection() {
+        localEndpointWaitGeneration &+= 1
+        remoteModel.stopConnection()
+    }
+
+    private func retrySelectedEndpointConnection() {
+        // Re-resolve the selected catalog entry instead of relying on the
+        // model's retained transport state. Stop clears that state by design;
+        // the same action must still restart a direct or SSH endpoint.
+        connectSelectedEndpoint()
     }
 
     private func beginSupersetImport() {

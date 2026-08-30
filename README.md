@@ -34,7 +34,7 @@ you want a structured conversation around the same session.
 
 - **Durable sessions** — Sessions belong to the Host, not the client. Detaching, switching workspaces, or quitting the app never ends a running session; closing a Tab is the explicit command to end one.
 - **One resource model** — Tasks aggregate related Workspaces across Projects, while Project → Workspace → Terminal Session → Runtime remains the ownership path shared by every client surface.
-- **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to `warren-headless` on a VPS. SSH only bootstraps the remote daemon and forwards a port; the same versioned WebSocket API is used everywhere.
+- **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to a VPS through an embedded SSH client. Choose an alias from `~/.ssh/config` in the execution-server menu; Warren bootstraps the remote daemon and forwards a loopback port while using the same versioned WebSocket API everywhere.
 - **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
 - **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
