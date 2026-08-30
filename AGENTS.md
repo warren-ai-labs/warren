@@ -1,6 +1,7 @@
 - Use English for comments, user-facing copy, documentation, and commit messages.
 - Before editing, read the relevant implementation, tests, and documentation to confirm existing invariants. Keep changes focused and do not expand the scope.
 - When diagnosing an issue, trace the full chain to find its root cause and prefer the smallest causal fix. Do not hide problems by changing protocols, bypassing the original path, or sacrificing user experience.
+- When troubleshooting, do not edit code directly; discuss and confirm the fix direction with the user first.
 - For UI, installers/packages, or TUI, verify the real running artifact; test-data changes cannot replace real behavior validation.
 - Run checks relevant to the change scope. If a check cannot run, explain why and note the unverified risks.
 - Do not commit credentials, personal paths, private hostnames, or sensitive terminal output.
