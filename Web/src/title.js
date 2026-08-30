@@ -1,4 +1,4 @@
-export const defaultTitleTemplate = "{workspace} · {branch} · {directory}";
+export const defaultTitleTemplate = "{session} · {directory} · {command}";
 
 export const titlePlaceholders = {
   session: "Session name",
@@ -13,6 +13,7 @@ export const titlePlaceholders = {
 };
 
 export const compactDirectoryMaxLength = 32;
+export const compactPlaceholderMaxLength = 32;
 
 const placeholderPattern = new RegExp(`\\{(${Object.keys(titlePlaceholders).join("|")})\\}`, "g");
 const separators = "—|·:-";
@@ -38,7 +39,7 @@ export function renderCompactTerminalTitle(template, session = {}, workspace = {
   const directory = session.directory || workspace.path || "";
   return renderTitleTemplate(
     template,
-    titleValues(session, workspace, host, abbreviateDirectory(directory)),
+    compactTitleValues(session, workspace, host, directory),
   );
 }
 
@@ -54,6 +55,27 @@ function titleValues(session, workspace, host, directory) {
     user: host.user || "",
     os: host.os || "",
   };
+}
+
+function compactTitleValues(session, workspace, host, directory) {
+  const values = titleValues(session, workspace, host, directory);
+  return {
+    ...values,
+    session: abbreviate(values.session),
+    command: abbreviate(values.command),
+    directory: abbreviateDirectory(values.directory, compactDirectoryMaxLength),
+    directoryName: abbreviate(values.directoryName),
+    workspace: abbreviate(values.workspace),
+    branch: abbreviate(values.branch),
+    host: abbreviate(values.host),
+    user: abbreviate(values.user),
+    os: abbreviate(values.os),
+  };
+}
+
+function abbreviate(value, maxLength = compactPlaceholderMaxLength) {
+  const text = String(value || "");
+  return Array.from(text).length > maxLength ? fitMiddle(text, maxLength) : text;
 }
 
 function renderTitleTemplate(template, values) {

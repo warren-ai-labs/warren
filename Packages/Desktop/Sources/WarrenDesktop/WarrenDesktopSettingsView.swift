@@ -447,7 +447,7 @@ struct WarrenDesktopSettingsView: View {
 
     private func terminalTitleSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Pane auxiliary title", section: .terminalTitle, tokens: tokens) {
-            Text("Tab owns the primary title. This template drives the auxiliary bar below the preset row (workspace · branch · directory by default).")
+            Text("Tab owns the primary title. This template drives the auxiliary bar below the preset row (session name · directory · command by default). Custom session names fill the {session} placeholder; each value is shortened to fit the pane.")
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)

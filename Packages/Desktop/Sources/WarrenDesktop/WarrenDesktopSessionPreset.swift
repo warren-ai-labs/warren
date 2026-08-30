@@ -204,7 +204,9 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Returns the launch request with the user's Settings overrides applied.
+    /// Returns the launch request with the user's Settings command override
+    /// applied. The preset title remains the stable session name; it is not
+    /// replaced by the command text.
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
     public func resolvedRequest(commandOverride: String) -> TerminalSessionLaunchRequest {
