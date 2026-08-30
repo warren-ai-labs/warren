@@ -1283,6 +1283,7 @@ final class WarrenDesktopTests: XCTestCase {
             selection: nil,
             deletingProjectIDs: [],
             deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
             isInteractionDisabled: false,
             onAddProject: {},
             onRequestTaskCreate: {},

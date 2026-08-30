@@ -107,6 +107,20 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         }
     }
 
+    func testAITitleSettingsSectionIsRegisteredAndDeepLinkable() throws {
+        XCTAssertTrue(WarrenDesktopSettingsSection.allCases.contains(.aiTitles))
+        XCTAssertEqual(WarrenDesktopSettingsSection.aiTitles.deepLinkValue, "ai-titles")
+
+        for value in ["ai-titles", "ai-title", "openai", "openai-titles"] {
+            let url = try XCTUnwrap(URL(string: "warren://settings?section=\(value)"))
+            XCTAssertEqual(
+                WarrenDesktopSettingsDeepLink(url: url)?.section,
+                .aiTitles,
+                "section alias \(value) should select AI titles"
+            )
+        }
+    }
+
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
         let prefill = WarrenDesktopPublicAccessPrefill(
             edgeURL: "https://tunnel.example.com:8443/path?mode=secure",
