@@ -1372,6 +1372,13 @@ func filterHeaders(header http.Header, includeUpgrade bool) [][2]string {
 	hop := map[string]bool{"connection": true, "keep-alive": true, "proxy-authenticate": true, "proxy-authorization": true, "te": true, "trailer": true, "transfer-encoding": true}
 	if !includeUpgrade {
 		hop["upgrade"] = true
+	} else {
+		// A WebSocket handshake is the one case where Connection and Upgrade
+		// are end-to-end material: the in-process Host handler must see both
+		// headers for net/http's upgrader to accept the request. The public
+		// route validates the tokens before this function is called, so this
+		// preserves only a bounded, syntactically valid handshake header.
+		delete(hop, "connection")
 	}
 	result := make([][2]string, 0, len(header))
 	for key, values := range header {
