@@ -42,7 +42,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
     private let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     private let onWebStart: () -> Void
-    private let onWebTest: ((String, String, String, String) -> Void)?
+    private let onWebTest: ((String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebReset: (() -> Void)?
     private let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -136,7 +136,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onRetryConnection: @escaping () -> Void = {},
         onStopConnection: @escaping () -> Void = {},
         onWebStart: @escaping () -> Void = {},
-        onWebTest: ((String, String, String, String) -> Void)? = nil,
+        onWebTest: ((String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebReset: (() -> Void)? = nil,
         onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,

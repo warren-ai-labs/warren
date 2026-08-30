@@ -94,9 +94,11 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNil(status.secureURL)
     }
 
-    func testGnarProjectLinkUsesTheSelfHostedWorkerRepository() {
-        XCTAssertEqual(WarrenPublicAccessCopy.gnarProjectURL, "https://github.com/abcdlsj/gnar")
-        XCTAssertEqual(WarrenPublicAccessCopy.resetLocalSetup, "Reset local setup")
+    func testPublicAccessCopyUsesRelayRouteTerminology() {
+        XCTAssertEqual(WarrenPublicAccessCopy.relayURL, "Relay URL")
+        XCTAssertEqual(WarrenPublicAccessCopy.publicHostname, "Public hostname")
+        XCTAssertEqual(WarrenPublicAccessCopy.pathPrefix, "Path prefix")
+        XCTAssertEqual(WarrenPublicAccessCopy.resetLocalSetup, "Reset local route")
     }
 
     func testSettingsDeepLinksRoundTripEverySection() throws {
@@ -136,6 +138,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onWebTest: nil,
             onWebStop: nil,
             onWebReset: nil,
+            onRelayEnroll: nil,
             defaultRuntime: nil,
             onSetRuntime: { _ in },
             autoOpenShell: false,
@@ -175,11 +178,8 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
         let prefill = WarrenDesktopPublicAccessPrefill(
-            edgeURL: "https://tunnel.example.com:8443/path?mode=secure",
-            accountName: "MacBook Pro / Li",
-            keyKind: .invite,
-            inviteKey: "invite + secret/with&reserved#characters",
-            approvalKey: nil
+            publicHostname: "public.example.com",
+            pathPrefix: "/private path?mode=secure&scope=owner"
         )
         let link = WarrenDesktopSettingsDeepLink(
             section: .publicAccess,
@@ -188,20 +188,18 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         let url = try XCTUnwrap(link.url)
         let absolute = url.absoluteString
         XCTAssertNil(url.fragment)
-        XCTAssertTrue(absolute.contains("inviteKey="))
-        XCTAssertTrue(absolute.contains("%23"))
+        XCTAssertTrue(absolute.contains("publicHostname="))
+        XCTAssertTrue(absolute.contains("%20"))
         XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: url), link)
     }
 
-    func testPublicAccessPathFormAndKeyKindInferenceAreSupported() throws {
-        let url = try XCTUnwrap(URL(string: "warren://settings/public-access?edgeUrl=https%3A%2F%2Ftunnel.example.com&accountName=host&approvalKey=approval-secret"))
+    func testPublicAccessRouteFieldsRoundTripFromPathForm() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings/public-access?publicHostname=public.example.com&pathPrefix=%2Fhost"))
 
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
         XCTAssertEqual(link.section, .publicAccess)
-        XCTAssertEqual(link.publicAccess?.edgeURL, "https://tunnel.example.com")
-        XCTAssertEqual(link.publicAccess?.accountName, "host")
-        XCTAssertEqual(link.publicAccess?.keyKind, .approval)
-        XCTAssertEqual(link.publicAccess?.approvalKey, "approval-secret")
+        XCTAssertEqual(link.publicAccess?.publicHostname, "public.example.com")
+        XCTAssertEqual(link.publicAccess?.pathPrefix, "/host")
     }
 
     func testRelaySetupLinkRoundTripsWithoutBecomingPublicAccess() throws {
@@ -251,9 +249,9 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     func testSettingsDeepLinkUsesTheFirstDuplicateQueryValue() throws {
-        let url = try XCTUnwrap(URL(string: "warren://settings?section=public-access&edgeUrl=https%3A%2F%2Ffirst.example&edgeUrl=https%3A%2F%2Fsecond.example"))
+        let url = try XCTUnwrap(URL(string: "warren://settings?section=public-access&publicHostname=first.example&publicHostname=second.example"))
 
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
-        XCTAssertEqual(link.publicAccess?.edgeURL, "https://first.example")
+        XCTAssertEqual(link.publicAccess?.publicHostname, "first.example")
     }
 }

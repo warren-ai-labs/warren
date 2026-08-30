@@ -32,7 +32,7 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
         case .relay: "Connect this Host to an independently deployed Warren Relay."
-        case .publicAccess: "Reach this host's Web UI through a self-hosted gnar Edge."
+        case .publicAccess: "Reach this host's Web UI through the Warren Relay."
         }
     }
 
@@ -47,7 +47,7 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .relay: [rawValue, detail, "owned", "relay", "enrollment", "ticket", "host", "signing key", "remote"]
-        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "tunnel", "internet"]
+        case .publicAccess: [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet"]
         }
     }
 
@@ -63,7 +63,7 @@ struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
     let hostName: String
     let webStatus: WarrenDesktopWebStatus
-    let onWebTest: ((String, String, String, String) -> Void)?
+    let onWebTest: ((String, String) -> Void)?
     let onWebStop: (() -> Void)?
     let onWebReset: (() -> Void)?
     let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -107,14 +107,8 @@ struct WarrenDesktopSettingsView: View {
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
     @State private var openAITestStatus: OpenAITestStatus = .idle
-    @State private var publicAccessEdgeURL = ""
-    @State private var publicAccessAccountName = ""
-    @State private var publicAccessInviteKey = ""
-    @State private var publicAccessApprovalKey = ""
-    @State private var publicAccessKeyKind: PublicAccessKeyKind = .invite
-    @State private var publicAccessUseDefaultTunnel = true
-    @State private var publicAccessMaskedKeyKind: PublicAccessKeyKind?
-    @State private var publicAccessSubmittedKeyKind: PublicAccessKeyKind?
+    @State private var publicAccessHostname = ""
+    @State private var publicAccessPathPrefix = ""
     @State private var relayEnrollmentTicket = ""
     @State private var relayEnrollmentBusy = false
     @State private var relayEnrollmentError: String?
@@ -127,22 +121,6 @@ struct WarrenDesktopSettingsView: View {
     var initialSettingsSection: WarrenDesktopSettingsSection?
     var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
     var relayPrefill: WarrenDesktopRelayPrefill?
-
-    private enum PublicAccessKeyKind: String, CaseIterable, Identifiable {
-        case approval
-        case invite
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .approval: "Approval Key"
-            case .invite: "Invite Key"
-            }
-        }
-
-        var accessibilityTitle: String { title }
-    }
 
     private enum OpenAITestStatus {
         case idle
@@ -876,7 +854,7 @@ struct WarrenDesktopSettingsView: View {
 
     private func relaySection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Relay", section: .relay, tokens: tokens) {
-            Text("Relay is Warren's owner-controlled transport. It is separate from Public Access (gnar), which only exposes an application route.")
+            Text("Relay is Warren's owner-controlled transport. Public Access uses the same enrolled Host and route service.")
                 .font(WarrenTypography.settingsBody)
                 .foregroundStyle(tokens.foreground)
                 .fixedSize(horizontal: false, vertical: true)
@@ -970,194 +948,88 @@ struct WarrenDesktopSettingsView: View {
 
     private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
-            Text(
-                "Reach this Mac's Web UI through a self-hosted gnar Edge. Save the non-secret "
-                    + "configuration here, then use Save & Test to finish the first gnar "
-                    + "authentication. Choose one Invite Key or Approval Key. Keys stay in memory, go "
-                    + "directly to gnar, and are never saved by Warren."
-            )
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
+            Text("Expose this host's Web UI through its enrolled Warren Relay. Leave the hostname and path blank to let Relay allocate safe defaults.")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Toggle(
-                isOn: $publicAccessUseDefaultTunnel
-            ) {
-                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                    Text(WarrenPublicAccessCopy.defaultTunnel)
-                        .font(WarrenTypography.settingsBody)
-                    Text("Turn this on to configure Warren's built-in gnar tunnel.")
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .toggleStyle(.switch)
-            .disabled(webStatus.publicAccessBusy)
-            .accessibilityIdentifier("settings.public-access.use-default-tunnel")
-            .onChange(of: publicAccessUseDefaultTunnel) { enabled in
-                guard !enabled else { return }
-                publicAccessInviteKey = ""
-                publicAccessApprovalKey = ""
-                publicAccessMaskedKeyKind = nil
-                publicAccessSubmittedKeyKind = nil
-                if webStatus.tunnelRunning {
-                    onWebStop?()
-                }
-            }
-
-            if publicAccessUseDefaultTunnel {
-                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                    Text(WarrenPublicAccessCopy.edgeURL)
-                        .font(WarrenTypography.settingsBody)
-                    HStack(spacing: WarrenSpacing.small) {
-                        TextField(edgeURLPlaceholder, text: $publicAccessEdgeURL)
-                            .textFieldStyle(.roundedBorder)
-                            .font(WarrenTypography.settingsControl)
-                            .accessibilityLabel(WarrenPublicAccessCopy.edgeURL)
-                            .accessibilityIdentifier("settings.public-access.edge-url")
-                        pasteButton(
-                            accessibilityLabel: "Paste Edge URL",
-                            accessibilityIdentifier: "settings.public-access.edge-url.paste"
-                        ) {
-                            publicAccessEdgeURL = pastedText() ?? publicAccessEdgeURL
-                        }
-                    }
-
-                    if let defaultEdgeURL = webStatus.defaultEdgeURL {
-                        Text(
-                            publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? "Built-in default: \(defaultEdgeURL.absoluteString)"
-                                : "Clear the custom URL to use the built-in default: \(defaultEdgeURL.absoluteString)"
-                        )
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Text("Account name")
-                        .font(WarrenTypography.settingsBody)
-                    HStack(spacing: WarrenSpacing.small) {
-                        TextField(accountNamePlaceholder, text: $publicAccessAccountName)
-                            .textFieldStyle(.roundedBorder)
-                            .font(WarrenTypography.settingsControl)
-                            .accessibilityLabel("gnar account name")
-                            .accessibilityIdentifier("settings.public-access.account-name")
-                        pasteButton(
-                            accessibilityLabel: "Paste account name",
-                            accessibilityIdentifier: "settings.public-access.account-name.paste"
-                        ) {
-                            publicAccessAccountName = pastedText() ?? publicAccessAccountName
-                        }
-                    }
-
-                    if let accountName = webStatus.effectiveAccountName,
-                       !accountName.isEmpty {
-                        Text(
-                            webStatus.usingDefaultAccount
-                                ? "Default account name: \(accountName)"
-                                : "Configured account name: \(accountName)"
-                        )
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Picker("Key type", selection: $publicAccessKeyKind) {
-                        ForEach(PublicAccessKeyKind.allCases) { kind in
-                            Text(kind.title).tag(kind)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                Text(WarrenPublicAccessCopy.publicHostname)
+                    .font(WarrenTypography.settingsBody)
+                TextField("Relay-assigned hostname", text: $publicAccessHostname)
+                    .textFieldStyle(.roundedBorder)
                     .font(WarrenTypography.settingsControl)
-                    .accessibilityIdentifier("settings.public-access.key-kind")
+                    .accessibilityLabel(WarrenPublicAccessCopy.publicHostname)
+                    .accessibilityIdentifier("settings.public-access.public-hostname")
 
-                    Text("Enter one key only. Approval Key and Invite Key are two ways to enroll this host.")
+                Text(WarrenPublicAccessCopy.pathPrefix)
+                    .font(WarrenTypography.settingsBody)
+                TextField("/", text: $publicAccessPathPrefix)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel(WarrenPublicAccessCopy.pathPrefix)
+                    .accessibilityIdentifier("settings.public-access.path-prefix")
+            }
+            .disabled(webStatus.publicAccessBusy)
+
+            if let relayURL = webStatus.relayURL {
+                settingsValueRow(WarrenPublicAccessCopy.relayURL, value: relayURL.absoluteString, tokens: tokens)
+            }
+            if let hostID = webStatus.relayHostID, !hostID.isEmpty {
+                settingsValueRow("Host ID", value: hostID, tokens: tokens)
+            }
+            if let routeID = webStatus.routeID, !routeID.isEmpty {
+                settingsValueRow("Route ID", value: routeID, tokens: tokens)
+            }
+            if let authMode = webStatus.authMode, !authMode.isEmpty {
+                settingsValueRow("Auth mode", value: authMode, tokens: tokens)
+            }
+
+            HStack(spacing: WarrenSpacing.compact) {
+                WarrenStatusIndicator(
+                    color: publicAccessStatusColor(tokens: tokens),
+                    isActive: webStatus.publicAccessBusy,
+                    accessibilityLabel: publicAccessStatusLabel
+                )
+                Text(publicAccessStatusLabel)
+                    .font(WarrenTypography.settingsBody)
+                    .foregroundStyle(tokens.foreground)
+                Spacer(minLength: 0)
+                Button(publicAccessActionTitle) {
+                    onWebTest?(
+                        publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines),
+                        publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                .disabled(webStatus.publicAccessBusy || onWebTest == nil)
+                .accessibilityIdentifier("settings.public-access.save-test")
+            }
+
+            if let publicEndpoint = webStatus.secureURL {
+                settingsValueRow(WarrenPublicAccessCopy.publicEndpoint, value: publicEndpoint.absoluteString, tokens: tokens)
+            }
+
+            if hasPublicAccessSetup {
+                HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
+                    Button(WarrenPublicAccessCopy.resetLocalSetup) {
+                        onWebReset?()
+                    }
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                    .disabled(webStatus.publicAccessBusy || onWebReset == nil)
+                    .accessibilityIdentifier("settings.public-access.reset")
+
+                    Text("Disables the Relay route and clears its local metadata. The Relay Host enrollment remains available.")
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    publicAccessKeyField(tokens: tokens)
-
-                    Text(
-                        "After a successful test, leave both keys empty; gnar's persisted "
-                            + "account token will be reused."
-                    )
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                    Text(
-                        "Setup links include the selected key so recipients can authenticate. "
-                            + "Treat a copied link like the key itself."
-                    )
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                .disabled(webStatus.publicAccessBusy)
-
-                HStack(spacing: WarrenSpacing.compact) {
-                    WarrenStatusIndicator(
-                        color: publicAccessStatusColor(tokens: tokens),
-                        isActive: webStatus.publicAccessBusy,
-                        accessibilityLabel: publicAccessStatusLabel
-                    )
-                    Text(publicAccessStatusLabel)
-                        .font(WarrenTypography.settingsBody)
-                        .foregroundStyle(tokens.foreground)
-                    Spacer(minLength: 0)
-                    Button(publicAccessActionTitle) {
-                        let edgeURL = publicAccessEdgeURL
-                        let accountName = publicAccessAccountName
-                        let inviteKey = publicAccessKeyKind == .invite ? publicAccessInviteKey : ""
-                        let approvalKey = publicAccessKeyKind == .approval ? publicAccessApprovalKey : ""
-                        publicAccessSubmittedKeyKind =
-                            inviteKey.isEmpty && approvalKey.isEmpty ? nil : publicAccessKeyKind
-                        onWebTest?(edgeURL, accountName, inviteKey, approvalKey)
-                    }
-                    .buttonStyle(
-                        WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction)
-                    )
-                    .disabled(
-                        webStatus.publicAccessBusy
-                            || onWebTest == nil
-                    )
-                    .accessibilityIdentifier("settings.public-access.save-test")
-                }
-
-                if hasPublicAccessSetup {
-                    HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
-                        Button(WarrenPublicAccessCopy.resetLocalSetup) {
-                            onWebReset?()
-                        }
-                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .disabled(webStatus.publicAccessBusy || onWebReset == nil)
-                        .accessibilityIdentifier("settings.public-access.reset")
-
-                        Text("Clears Warren's local Edge/account setup and bundled gnar credentials. It does not release the remote tunnel.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            } else {
-                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and approval key.")
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
-                Text("Public Access uses the open-source gnar worker and self-hosted Edge.")
-                if let gnarURL = URL(string: WarrenPublicAccessCopy.gnarProjectURL) {
-                    Link("View gnar on GitHub", destination: gnarURL)
-                        .foregroundStyle(tokens.info)
                 }
             }
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
+
+            Text("Public Access and owner Relay traffic use the same Relay Host enrollment and Host Secret.")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
 
             if let error = webStatus.publicAccessError, !error.isEmpty {
                 Text(error)
@@ -1168,148 +1040,10 @@ struct WarrenDesktopSettingsView: View {
             }
         }
         .onAppear(perform: seedPublicAccessFields)
-        .onChange(of: webStatus.configuredEdgeURL) { _ in
-            seedPublicAccessFields()
-            clearPublicAccessFieldsIfReset()
-        }
-        .onChange(of: webStatus.configuredAccountName) { _ in
-            seedPublicAccessFields()
-            clearPublicAccessFieldsIfReset()
-        }
-        .onChange(of: webStatus.publicAccessAuthenticated) { authenticated in
-            if !authenticated {
-                publicAccessMaskedKeyKind = nil
-                publicAccessSubmittedKeyKind = nil
-                clearPublicAccessFieldsIfReset()
-                return
-            }
-            guard let submittedKeyKind = publicAccessSubmittedKeyKind else { return }
-            publicAccessInviteKey = ""
-            publicAccessApprovalKey = ""
-            publicAccessMaskedKeyKind = submittedKeyKind
-            publicAccessSubmittedKeyKind = nil
-        }
-        .onChange(of: webStatus.tunnelRunning) { running in
-            if running {
-                publicAccessUseDefaultTunnel = true
-            }
-        }
-        .onChange(of: webStatus.publicAccessEnabled) { _ in
-            clearPublicAccessFieldsIfReset()
-        }
-    }
-
-    @ViewBuilder
-    private func publicAccessKeyField(tokens: WarrenColorTokens) -> some View {
-        switch publicAccessKeyKind {
-        case .approval:
-            Text(WarrenPublicAccessCopy.approvalKey)
-                .font(WarrenTypography.settingsBody)
-            HStack(spacing: WarrenSpacing.small) {
-                publicAccessKeyInput(.approval)
-                pasteButton(
-                    accessibilityLabel: "Paste Approval Key",
-                    accessibilityIdentifier: "settings.public-access.approval-key.paste"
-                ) {
-                    pastePublicAccessKey(.approval)
-                }
-            }
-        case .invite:
-            Text(WarrenPublicAccessCopy.inviteKey)
-                .font(WarrenTypography.settingsBody)
-            HStack(spacing: WarrenSpacing.small) {
-                publicAccessKeyInput(.invite)
-                pasteButton(
-                    accessibilityLabel: "Paste Invite Key",
-                    accessibilityIdentifier: "settings.public-access.invite-key.paste"
-                ) {
-                    pastePublicAccessKey(.invite)
-                }
-            }
-
-            Text("Use the invite secret from gnar, not its key name. Invite secrets must be at least 12 characters.")
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if publicAccessMaskedKeyKind == publicAccessKeyKind {
-            Text("A key was accepted. gnar keeps the account token; Warren does not retain the key.")
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
-    private func publicAccessKeyInput(_ kind: PublicAccessKeyKind) -> some View {
-        if publicAccessMaskedKeyKind == kind {
-            // Keep an accepted key visibly present without retaining the
-            // secret. The paste action remains available to replace it.
-            TextField("", text: .constant("••••••••"))
-                .textFieldStyle(.roundedBorder)
-                .font(WarrenTypography.settingsControl)
-                .disabled(true)
-                .accessibilityLabel("\(kind.accessibilityTitle), configured")
-                .accessibilityIdentifier("settings.public-access.\(kind.rawValue)-key")
-        } else {
-            SecureField(
-                kind == .approval ? "Enter Approval Key" : "Enter Invite Key",
-                text: publicAccessKeyBinding(kind)
-            )
-            .textFieldStyle(.roundedBorder)
-            .font(WarrenTypography.settingsControl)
-            .accessibilityLabel(kind.accessibilityTitle)
-            .accessibilityIdentifier("settings.public-access.\(kind.rawValue)-key")
-        }
-    }
-
-    private func pasteButton(
-        accessibilityLabel: String,
-        accessibilityIdentifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(.bordered)
-        .help(accessibilityLabel)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityIdentifier(accessibilityIdentifier)
-    }
-
-    private func pastedText() -> String? {
-        guard let value = NSPasteboard.general.string(forType: .string) else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func pastePublicAccessKey(_ kind: PublicAccessKeyKind) {
-        guard let value = pastedText() else { return }
-        publicAccessKeyBinding(kind).wrappedValue = value
-    }
-
-    private func publicAccessKeyBinding(_ kind: PublicAccessKeyKind) -> Binding<String> {
-        Binding(
-            get: {
-                switch kind {
-                case .approval: publicAccessApprovalKey
-                case .invite: publicAccessInviteKey
-                }
-            },
-            set: { value in
-                publicAccessMaskedKeyKind = nil
-                publicAccessSubmittedKeyKind = nil
-                switch kind {
-                case .approval: publicAccessApprovalKey = value
-                case .invite: publicAccessInviteKey = value
-                }
-            }
-        )
+        .onChange(of: webStatus.publicHostname) { _ in seedPublicAccessFields() }
+        .onChange(of: webStatus.pathPrefix) { _ in seedPublicAccessFields() }
+        .onChange(of: webStatus.publicAccessEnabled) { _ in clearPublicAccessFieldsIfReset() }
+        .onChange(of: webStatus.publicAccessAuthenticated) { _ in clearPublicAccessFieldsIfReset() }
     }
 
     private var publicAccessActionTitle: String {
@@ -1320,8 +1054,9 @@ struct WarrenDesktopSettingsView: View {
     private var hasPublicAccessSetup: Bool {
         webStatus.publicAccessAuthenticated
             || webStatus.publicAccessEnabled
-            || webStatus.configuredEdgeURL != nil
-            || webStatus.configuredAccountName != nil
+            || webStatus.relayURL != nil
+            || webStatus.relayHostID != nil
+            || webStatus.routeID != nil
     }
 
     private var publicAccessStatusLabel: String {
@@ -1343,24 +1078,11 @@ struct WarrenDesktopSettingsView: View {
         let publicAccess: WarrenDesktopPublicAccessPrefill?
         let relay: WarrenDesktopRelayPrefill?
         if section == .publicAccess {
-            let edgeURL = publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            let accountName = publicAccessAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let inviteKey = publicAccessKeyKind == .invite
-                ? publicAccessInviteKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                : ""
-            let approvalKey = publicAccessKeyKind == .approval
-                ? publicAccessApprovalKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                : ""
+            let publicHostname = publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pathPrefix = publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
             publicAccess = WarrenDesktopPublicAccessPrefill(
-                edgeURL: edgeURL.isEmpty
-                    ? (webStatus.defaultEdgeURL?.absoluteString ?? edgeURLPlaceholder)
-                    : edgeURL,
-                accountName: accountName.isEmpty
-                    ? (webStatus.effectiveAccountName ?? accountNamePlaceholder)
-                    : accountName,
-                keyKind: publicAccessKeyKind == .invite ? .invite : .approval,
-                inviteKey: inviteKey.isEmpty ? nil : inviteKey,
-                approvalKey: approvalKey.isEmpty ? nil : approvalKey
+                publicHostname: publicHostname.isEmpty ? webStatus.publicHostname : publicHostname,
+                pathPrefix: pathPrefix.isEmpty ? webStatus.pathPrefix : pathPrefix
             )
         } else {
             publicAccess = nil
@@ -1388,25 +1110,11 @@ struct WarrenDesktopSettingsView: View {
             selectedSection = initialSettingsSection
         }
         if let publicAccessPrefill {
-            publicAccessUseDefaultTunnel = true
-            if let edgeURL = publicAccessPrefill.edgeURL {
-                publicAccessEdgeURL = edgeURL
+            if let publicHostname = publicAccessPrefill.publicHostname {
+                publicAccessHostname = publicHostname
             }
-            if let accountName = publicAccessPrefill.accountName {
-                publicAccessAccountName = accountName
-            }
-            if let keyKind = publicAccessPrefill.keyKind {
-                publicAccessKeyKind = keyKind == .invite ? .invite : .approval
-            }
-            if let inviteKey = publicAccessPrefill.inviteKey {
-                publicAccessInviteKey = inviteKey
-                publicAccessMaskedKeyKind = nil
-                publicAccessSubmittedKeyKind = nil
-            }
-            if let approvalKey = publicAccessPrefill.approvalKey {
-                publicAccessApprovalKey = approvalKey
-                publicAccessMaskedKeyKind = nil
-                publicAccessSubmittedKeyKind = nil
+            if let pathPrefix = publicAccessPrefill.pathPrefix {
+                publicAccessPathPrefix = pathPrefix
             }
         }
 
@@ -1415,49 +1123,29 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private var edgeURLPlaceholder: String {
-        webStatus.defaultEdgeURL?.absoluteString ?? "https://tunnel.example.com"
-    }
-
-    private var accountNamePlaceholder: String {
-        webStatus.effectiveAccountName ?? (hostName.isEmpty ? "this-host" : hostName)
-    }
-
     private func seedPublicAccessFields() {
-        if publicAccessEdgeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let edgeURL = webStatus.configuredEdgeURL?.absoluteString,
-           !edgeURL.isEmpty {
-            publicAccessEdgeURL = edgeURL
+        if publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let publicHostname = webStatus.publicHostname,
+           !publicHostname.isEmpty {
+            publicAccessHostname = publicHostname
         }
-        if publicAccessAccountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let accountName = webStatus.configuredAccountName,
-           !accountName.isEmpty {
-            publicAccessAccountName = accountName
-        }
-        if webStatus.publicAccessAuthenticated,
-           publicAccessMaskedKeyKind == nil,
-           publicAccessInviteKey.isEmpty,
-           publicAccessApprovalKey.isEmpty {
-            // The bootstrap key is intentionally not persisted. A generic
-            // masked placeholder still communicates that gnar is enrolled
-            // when Settings is reopened without echoing which secret was used.
-            publicAccessMaskedKeyKind = .invite
+        if publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let pathPrefix = webStatus.pathPrefix,
+           !pathPrefix.isEmpty {
+            publicAccessPathPrefix = pathPrefix
         }
     }
 
     private func clearPublicAccessFieldsIfReset() {
         guard !webStatus.publicAccessEnabled,
               !webStatus.publicAccessAuthenticated,
-              webStatus.configuredEdgeURL == nil,
-              webStatus.configuredAccountName == nil else {
+              webStatus.relayURL == nil,
+              webStatus.relayHostID == nil,
+              webStatus.routeID == nil else {
             return
         }
-        publicAccessEdgeURL = ""
-        publicAccessAccountName = ""
-        publicAccessInviteKey = ""
-        publicAccessApprovalKey = ""
-        publicAccessMaskedKeyKind = nil
-        publicAccessSubmittedKeyKind = nil
+        publicAccessHostname = ""
+        publicAccessPathPrefix = ""
     }
 
     private var runtimeSelection: Binding<String> {
