@@ -13,6 +13,30 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testConnectionFailureBeforeTransportEntersFailedState() {
+        let model = WarrenRemoteApplicationModel()
+        model.markConnectionFailed(NSError(
+            domain: "WarrenRemote",
+            code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "The local daemon is not running"]
+        ))
+
+        XCTAssertEqual(model.projection.connectionState, .failed)
+        XCTAssertFalse(model.notices.isEmpty)
+    }
+
+    @MainActor
+    func testPendingConnectionCanBeStoppedBeforeTransportExists() {
+        let model = WarrenRemoteApplicationModel()
+
+        model.markConnectionConnecting()
+        XCTAssertEqual(model.projection.connectionState, .connecting)
+
+        model.stopConnection()
+        XCTAssertEqual(model.projection.connectionState, .disconnected)
+    }
+
+    @MainActor
     func testPublicAccessBrowserOpenAddsAuthFragmentOnlyForCurrentEndpoint() throws {
         let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
         let opened = WarrenRemoteApplicationModel.publicAccessBrowserURL(
@@ -651,6 +675,55 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 2), 2_000)
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 6), 30_000)
         XCTAssertEqual(WarrenRemoteApplicationModel.reconnectDelay(attempt: 99), 30_000)
+    }
+
+    func testPermanentSSHFailuresDoNotEnterTheRetryLoop() {
+        let permanent = NSError(
+            domain: "WarrenEmbeddedSSHTunnel",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "SSH config disables known_hosts; strict host-key verification is required"]
+        )
+        let transient = NSError(
+            domain: "WarrenEmbeddedSSHTunnel",
+            code: 5,
+            userInfo: [NSLocalizedDescriptionKey: "The embedded SSH helper timed out while establishing the tunnel."]
+        )
+
+        XCTAssertTrue(WarrenRemoteApplicationModel.isPermanentConnectionError(permanent))
+        XCTAssertFalse(WarrenRemoteApplicationModel.isPermanentConnectionError(transient))
+    }
+
+    func testSSHAuthenticationFailuresAreClassifiedAsPermanent() {
+        for message in [
+            "authenticate SSH host 203.0.113.10: ssh: unable to authenticate",
+            "remote Warren rejected the bootstrap token",
+        ] {
+            let error = NSError(
+                domain: "WarrenEmbeddedSSHTunnel",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+            XCTAssertTrue(
+                WarrenRemoteApplicationModel.isPermanentConnectionError(error),
+                "expected permanent failure for: \(message)"
+            )
+        }
+    }
+
+    func testDiagnosticsDoNotExposeEndpointCredentials() {
+        let error = NSError(
+            domain: "WarrenRemote",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "request failed"]
+        )
+        let text = WarrenRemoteApplicationModel.diagnosticText(
+            error: error,
+            endpoint: "https://user:password@example.test/warren?token=secret#t=secret"
+        )
+
+        XCTAssertTrue(text.contains("endpoint: https://example.test/warren"))
+        XCTAssertFalse(text.contains("password"))
+        XCTAssertFalse(text.contains("secret"))
     }
 
     func testRemoteTabOrderingMovesBeforeDestinationAndToEnd() {

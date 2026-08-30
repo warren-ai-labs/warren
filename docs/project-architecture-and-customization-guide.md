@@ -423,16 +423,20 @@ can lose visual continuity, scrollback, or produce black frames.
 
 ### 10.1 SSH endpoint
 
-`warren ssh user@host`:
+`warren ssh user@host` (or an alias selected from the Desktop execution-server
+menu):
 
 1. checks that `warren-headless` exists remotely;
 2. starts it on remote loopback when necessary;
 3. reads its token;
-4. stores a local endpoint in `~/.warren/config.json`;
-5. keeps an SSH local port forward running.
+4. stores only the durable SSH endpoint metadata in `~/.warren/config.json`;
+5. keeps an embedded SSH local port forward running.
 
-After bootstrap, Desktop and CLI still speak the normal `/v1/ws` protocol.
-SSH provides reachability only and does not enter Warren's domain model.
+The Desktop picker reads concrete aliases from `~/.ssh/config`, including
+relative `Include` files, and saves the selected alias as an SSH-backed
+endpoint before connecting. After bootstrap, Desktop and CLI still speak the
+normal `/v1/ws` protocol. SSH provides reachability only and does not enter
+Warren's domain model.
 
 ### 10.2 direct Web/PWA
 

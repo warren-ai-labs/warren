@@ -11,6 +11,64 @@ import GhosttyTerminal
 /// pending buffer and drains it on a utility-priority detached task, matching
 /// Ghostty's real-world input-to-render pipeline.
 public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
+    public var onOutputReceived: (@Sendable () -> Void)?
+    private static let codexBlackForeground = Data([0x1B, 0x5B, 0x33, 0x38, 0x3B, 0x32, 0x3B, 0x30, 0x3B, 0x30, 0x3B, 0x30, 0x6D])
+    private static let visibleCodexForeground = Data([0x1B, 0x5B, 0x33, 0x38, 0x3B, 0x32, 0x3B, 0x39, 0x32, 0x3B, 0x38, 0x38, 0x3B, 0x38, 0x36, 0x6D])
+    private var codexForegroundRemainder = Data()
+
+    /// Recolors only Codex's exact pure-black truecolor foreground SGR.
+    /// Backgrounds, indexed colors, and compound SGR sequences are untouched.
+    static func remapCodexBlackForeground(_ payload: Data) -> Data {
+        guard !payload.isEmpty else { return payload }
+        let bytes = [UInt8](payload)
+        let needle = [UInt8](codexBlackForeground)
+        guard bytes.count >= needle.count else { return payload }
+        var output = Data()
+        output.reserveCapacity(payload.count)
+        var index = 0
+        while index < bytes.count {
+            if index + needle.count <= bytes.count,
+               bytes[index..<(index + needle.count)].elementsEqual(needle) {
+                output.append(visibleCodexForeground)
+                index += needle.count
+            } else {
+                output.append(bytes[index])
+                index += 1
+            }
+        }
+        return output
+    }
+
+    /// Rewrites the foreground sequence while retaining a partial ANSI
+    /// sequence at a Data boundary.
+    private func remapCodexBlackForegroundStreaming(_ payload: Data) -> Data {
+        guard !payload.isEmpty || !codexForegroundRemainder.isEmpty else { return payload }
+        let needle = [UInt8](Self.codexBlackForeground)
+        var bytes = [UInt8](codexForegroundRemainder)
+        bytes.append(contentsOf: payload)
+        codexForegroundRemainder.removeAll(keepingCapacity: true)
+
+        var output = Data()
+        output.reserveCapacity(bytes.count)
+        var index = 0
+        while index < bytes.count {
+            if index + needle.count <= bytes.count,
+               bytes[index..<(index + needle.count)].elementsEqual(needle) {
+                output.append(Self.visibleCodexForeground)
+                index += needle.count
+                continue
+            }
+            let remaining = bytes.count - index
+            if remaining < needle.count,
+               needle.starts(with: bytes[index..<bytes.count]) {
+                codexForegroundRemainder.append(contentsOf: bytes[index..<bytes.count])
+                break
+            }
+            output.append(bytes[index])
+            index += 1
+        }
+        return output
+    }
     private struct Chunk: Sendable {
         let epoch: UInt64
         let sequence: UInt64
@@ -112,6 +170,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     // Synchronized-output depth: >0 means Ghostty is inside ESC[?2026h ... ESC[?2026l.
     // Foreground should draw at frame boundary (depth==0), not at queue-empty.
     private var syncDepth: Int = 0
+    private var syncRemainder = Data()
     private var syncEnteredAt: ContinuousClock.Instant?
     private var syncTail: [UInt8] = []
 
@@ -178,6 +237,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// while a feed is in flight; the next enqueue starts a fresh drain.
     public func reset(epoch: UInt64, sequence: UInt64) {
         terminalFeedLock.withLock {
+            codexForegroundRemainder.removeAll(keepingCapacity: true)
+            syncRemainder.removeAll(keepingCapacity: true)
             lock.withLock {
                 buffer.reset(epoch: epoch, sequence: sequence)
                 syncDepth = 0
@@ -198,6 +259,8 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     ) -> Bool {
         terminalFeedLock.lock()
         defer { terminalFeedLock.unlock() }
+        codexForegroundRemainder.removeAll(keepingCapacity: true)
+        syncRemainder.removeAll(keepingCapacity: true)
         guard inMemory.restoreSnapshot(data) else { return false }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
         return true
@@ -269,16 +332,21 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         terminalFeedLock.withLock {
             ansiObserver.receive(payload)
             updateSyncDepth(with: payload)
-            inMemory.receive(payload)
+            if inMemory.receive(remapCodexBlackForegroundStreaming(payload)) {
+                onOutputReceived?()
+            }
         }
     }
 
     // MARK: - Synchronized output tracking
 
     private func updateSyncDepth(with payload: Data) {
-        // Scan for ESC[?2026h / ESC[?2026l. Split sequences across Data
-        // boundaries are rare (8-byte pattern) and ignored for simplicity.
-        let bytes = [UInt8](payload)
+        // Scan for ESC[?2026h / ESC[?2026l while retaining a partial
+        // sequence across Data boundaries. PTY reads may split any byte.
+        let markerPrefix: [UInt8] = [0x1B, 0x5B, 0x3F, 0x32, 0x30, 0x32, 0x36]
+        var bytes = [UInt8](syncRemainder)
+        bytes.append(contentsOf: payload)
+        syncRemainder.removeAll(keepingCapacity: true)
         var delta = 0
         var i = 0
         while i + 7 < bytes.count {
@@ -296,6 +364,13 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }
             }
             i += 1
+        }
+        let suffixLimit = min(markerPrefix.count - 1, bytes.count)
+        for count in stride(from: suffixLimit, through: 1, by: -1) {
+            if markerPrefix.starts(with: bytes.suffix(count)) {
+                syncRemainder.append(contentsOf: bytes.suffix(count))
+                break
+            }
         }
         guard delta != 0 else { return }
         lock.withLock {
@@ -379,7 +454,9 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }
                 ansiObserver.receive(slice.payload)
                 updateSyncDepth(with: slice.payload)
-                return (true, inMemory.receive(slice.payload))
+                let received = inMemory.receive(remapCodexBlackForegroundStreaming(slice.payload))
+                if received { onOutputReceived?() }
+                return (true, received)
             }
             guard writeResult.isCurrent else {
                 // A reanchor reset the stream while this slice was in flight;

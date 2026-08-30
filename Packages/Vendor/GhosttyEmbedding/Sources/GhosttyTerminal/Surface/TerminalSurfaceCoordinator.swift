@@ -153,7 +153,6 @@ final class TerminalSurfaceCoordinator {
                     self.displayLoopTask = nil
                 }
             }
-
             while !Task.isCancelled {
                 guard let self, self.canRenderFrame else { return }
                 let timestamp = Self.monotonicTimestamp()

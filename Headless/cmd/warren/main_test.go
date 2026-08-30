@@ -65,6 +65,64 @@ func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	}
 }
 
+func TestResolveConfiguredEndpointDefaultsToLocalDaemon(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+	previousEndpoint := endpointName
+	endpointName = ""
+	t.Cleanup(func() { endpointName = previousEndpoint })
+
+	value, err := resolveConfiguredEndpoint(config.Config{Endpoints: map[string]config.Endpoint{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestResolveConfiguredEndpointFallsBackWhenLocalTokenIsEmpty(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+
+	value, err := resolveConfiguredEndpoint(config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"local": {Name: "local", URL: "http://127.0.0.1:8789"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestEndpointUseAllowsSyntheticLocalEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	previousPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = previousPath })
+
+	if err := run([]string{"--config", path, "endpoint", "use", "local"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Current != "local" {
+		t.Fatalf("current endpoint = %q, want local", settings.Current)
+	}
+}
+
 func TestSendAgentTextSubmitsComposerWithKittyEnter(t *testing.T) {
 	var frames [][]byte
 	input := func(_ context.Context, data []byte) error {
@@ -1323,7 +1381,7 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		{[]string{"task", "workspace", "create", "task-1", "project-1"}, "missing --branch BRANCH", "warren task workspace create TASK_ID PROJECT_ID"},
 		{[]string{"session", "send"}, "missing SESSION_ID", "warren session send SESSION_ID"},
 		{[]string{"endpoint", "add"}, "missing ENDPOINT_NAME", "warren endpoint add NAME"},
-		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh USER@HOST"},
+		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh TARGET"},
 	}
 	for _, test := range tests {
 		err := run(test.arguments)
@@ -1338,6 +1396,20 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		if !contains(usageErr.text, test.usage) {
 			t.Errorf("run(%v) usage = %q, want it to contain %q", test.arguments, usageErr.text, test.usage)
 		}
+	}
+}
+
+func TestSSHListReadsAnExplicitOpenSSHConfig(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    HostName 192.0.2.10\n    User deploy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousJSON := outputJSON
+	outputJSON = true
+	defer func() { outputJSON = previousJSON }()
+	if err := run([]string{"ssh", "list", "--ssh-config", configPath}); err != nil {
+		t.Fatalf("ssh list returned an error: %v", err)
 	}
 }
 

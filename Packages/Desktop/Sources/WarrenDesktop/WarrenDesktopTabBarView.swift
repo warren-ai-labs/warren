@@ -37,6 +37,8 @@ struct WarrenDesktopTabBar: View {
     let onOpenEmbeddedEditor: () -> Void
     let onCloseEmbeddedEditor: () -> Void
     let onSelectEndpoint: (String) -> Void
+    let onRetryConnection: () -> Void
+    let onStopConnection: () -> Void
     let onSelectTab: (String) -> Void
     let onMoveTab: (String, String?) -> Void
     let sessionMoveTargets: [WarrenDesktopSessionMoveTarget]
@@ -83,6 +85,8 @@ struct WarrenDesktopTabBar: View {
         onOpenEmbeddedEditor: @escaping () -> Void,
         onCloseEmbeddedEditor: @escaping () -> Void,
         onSelectEndpoint: @escaping (String) -> Void,
+        onRetryConnection: @escaping () -> Void = {},
+        onStopConnection: @escaping () -> Void = {},
         onSelectTab: @escaping (String) -> Void,
         onMoveTab: @escaping (String, String?) -> Void,
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
@@ -129,6 +133,8 @@ struct WarrenDesktopTabBar: View {
         self.onOpenEmbeddedEditor = onOpenEmbeddedEditor
         self.onCloseEmbeddedEditor = onCloseEmbeddedEditor
         self.onSelectEndpoint = onSelectEndpoint
+        self.onRetryConnection = onRetryConnection
+        self.onStopConnection = onStopConnection
         self.onSelectTab = onSelectTab
         self.onMoveTab = onMoveTab
         self.sessionMoveTargets = sessionMoveTargets
@@ -274,7 +280,9 @@ struct WarrenDesktopTabBar: View {
                         onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
                         onOpenEmbeddedEditor: onOpenEmbeddedEditor,
-                        onSelectEndpoint: onSelectEndpoint
+                        onSelectEndpoint: onSelectEndpoint,
+                        onRetryConnection: onRetryConnection,
+                        onStopConnection: onStopConnection
                     )
                 }
             }
@@ -541,6 +549,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onOpenEmbeddedEditor: () -> Void
     let onSelectEndpoint: (String) -> Void
+    let onRetryConnection: () -> Void
+    let onStopConnection: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
