@@ -439,14 +439,21 @@ func TestAgentStateFileReflectsShellReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := api.Session{
-		ID: "session-agent", Title: "Codex", Kind: "codex",
+		ID: "session-agent", Title: "Shell", Kind: "shell",
 		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
 	}
 	service := &Service{Store: state, Runtime: newMemoryOutputRuntime(t)}
 	service.lazyInit()
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "codex",
+		SessionID:      "thread-agent",
+		TranscriptPath: filepath.Join(directory, "rollout.jsonl"),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	statePath := agent.StatePath(session.ID)
-	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
+	if err := agent.WriteAgentState(statePath, "thread-agent", api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
 		t.Fatal(err)
 	}
 	service.applyAgentState(session)
@@ -460,12 +467,51 @@ func TestAgentStateFileReflectsShellReturn(t *testing.T) {
 		}
 	}
 
-	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
+	if err := agent.WriteAgentState(statePath, "thread-agent", api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
 		t.Fatal(err)
 	}
 	service.applyAgentState(session)
 	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityReady {
 		t.Fatalf("after new SessionStart state = %q, want ready", got)
+	}
+}
+
+func TestDedicatedCodexThreadEndDoesNotGraySession(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(directory, "rollout.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := api.Session{
+		ID: "session-codex", Title: "Codex", Kind: "codex",
+		Runtime: "runtime-codex", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	service := &Service{Store: state, Runtime: newMemoryOutputRuntime(t)}
+	service.lazyInit()
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "codex",
+		SessionID:      "thread-current",
+		TranscriptPath: transcriptPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteAgentState(agent.StatePath(session.ID), "thread-current", api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
+		t.Fatal(err)
+	}
+
+	service.applyAgentState(session)
+	entry := service.startAgentWatcher(session.ID, "codex", transcriptPath, false, nil)
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("dedicated Codex thread end must not prevent the watcher from starting")
+	}
+	defer entry.watcher.Close()
+	if got := service.agentStatus(session.ID).Activity; got == api.AgentActivityExited {
+		t.Fatalf("dedicated Codex thread end changed activity to %q", got)
 	}
 }
 

@@ -125,6 +125,49 @@ func TestEnsureAgentClearsShellBindingOnExit(t *testing.T) {
 	}
 }
 
+func TestEnsureAgentIgnoresStaleCodexSessionEnd(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	transcriptPath := filepath.Join(directory, "rollout-shell.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := newStateWithSession(t, "session-shell", "runtime-shell")
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-shell", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "codex",
+		SessionID:      "thread-current",
+		TranscriptPath: transcriptPath,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteAgentState(agent.StatePath(session.ID), "thread-old", api.AgentStatus{Activity: api.AgentActivityExited}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("stale Codex SessionEnd must not tear down the shell overlay")
+	}
+	if got := service.agentStatus(session.ID).Activity; got == api.AgentActivityExited {
+		t.Fatalf("stale Codex SessionEnd changed activity to %q", got)
+	}
+	entry.watcher.Close()
+}
+
 func TestPlainShellSessionHasNoAgentActivity(t *testing.T) {
 	state := newStateWithSession(t, "session-shell", "runtime-shell")
 	runtime := newMemoryOutputRuntime(t)
