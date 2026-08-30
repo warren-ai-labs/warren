@@ -324,7 +324,7 @@ sleep 30
 	}
 }
 
-func TestStartPublicAccessFeedsEnrollmentKeyOnlyToLoginStdin(t *testing.T) {
+func TestStartPublicAccessFeedsApprovalKeyOnlyToLoginStdin(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "enrollment-key")
 	argsFile := filepath.Join(t.TempDir(), "gnar-args")
 	t.Setenv("GNAR_KEY_FILE", keyFile)
@@ -616,7 +616,7 @@ sleep 30
 	}
 }
 
-func TestStartPublicAccessRedactsEnrollmentKeyOnLoginFailure(t *testing.T) {
+func TestStartPublicAccessRedactsApprovalKeyOnLoginFailure(t *testing.T) {
 	binary := writeScript(t, `#!/bin/sh
 if [ "$1" = "login" ]; then
   cat >/dev/null

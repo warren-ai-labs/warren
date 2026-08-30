@@ -90,7 +90,7 @@ curl -sS -X POST https://relay.example.com/v1/hosts \
 ```
 
 The response contains `enrollment_ticket`, the Relay signing public key, and a
-`settings_url` (also returned as the additive `setup_url` alias). Open that
+canonical `settings_url`. Open that
 `warren://settings` link in the Warren desktop app to prefill the Relay URL,
 Host ID, pinned key, and one-time ticket, or enroll from the CLI. The link
 contains no daemon token and should be discarded after enrollment; the ticket

@@ -43,7 +43,7 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .relay: [rawValue, detail, "owned", "relay", "enrollment", "ticket", "host", "signing key", "remote"]
-        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
+        case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "tunnel", "internet"]
         }
     }
 
@@ -1115,7 +1115,7 @@ struct WarrenDesktopSettingsView: View {
                     }
                 }
             } else {
-                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and enrollment key.")
+                Text("Turn on Use default tunnel (gnar) to enter the Edge URL and approval key.")
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)

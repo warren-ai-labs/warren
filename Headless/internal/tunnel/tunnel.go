@@ -29,8 +29,8 @@ const (
 	gnarLoginTimeout = 30 * time.Second
 )
 
-// LoginKeyKind selects the gnar v1.7 bootstrap contract. Approval keys are
-// the historical enrollment keys; invite keys use gnar's invite-key flow.
+// LoginKeyKind selects the gnar v1.7 bootstrap contract. Approval keys use
+// gnar's enrollment-key flow; invite keys use gnar's invite-key flow.
 type LoginKeyKind string
 
 const (
@@ -66,7 +66,7 @@ type Manager struct {
 
 	mu sync.Mutex
 	// operationMu serializes lifecycle operations across Public Access and the
-	// lower-level compatibility routes. The process state lock alone cannot
+	// lower-level adapter routes. The process state lock alone cannot
 	// prevent an enable and a stop from interleaving between child creation and
 	// readiness observation.
 	operationMu sync.Mutex
@@ -185,7 +185,7 @@ func (m *Manager) SetGnarEdge(edge string) {
 // SetGnarConfigDir selects the credential directory for gnar child processes.
 // Warren never reads the credential store; gnar remains the owner of its
 // long-lived account token. An empty value deliberately leaves the child
-// environment untouched for system gnar compatibility.
+// environment untouched for a system-managed gnar installation.
 func (m *Manager) SetGnarConfigDir(directory string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,7 +199,7 @@ func (m *Manager) SetGnarConfigDir(directory string) {
 
 // SetGnarConfigDirOwned records whether the directory belongs to Warren's
 // bundled worker. A reset may remove only an owned store; system gnar
-// credentials remain untouched for compatibility and user control.
+// credentials remain untouched for user control.
 func (m *Manager) SetGnarConfigDirOwned(owned bool) {
 	m.mu.Lock()
 	m.gnarConfigDirOwned = owned
@@ -423,11 +423,11 @@ func gnarEnvironmentFor(directory string) []string {
 	return append(filtered, "GNAR_CONFIG_DIR="+directory)
 }
 
-// StartPublicAccess preserves the legacy API, treating its key as an approval
-// (enrollment) key. New callers should use StartPublicAccessWithKey so invite
-// keys select gnar's --key-stdin contract.
-func (m *Manager) StartPublicAccess(edge, account string, enrollmentKey []byte) (Status, error) {
-	return m.StartPublicAccessWithKey(edge, account, LoginKeyApproval, enrollmentKey)
+// StartPublicAccess starts the configured gnar public endpoint using an
+// already-persisted account token. An optional approval key is consumed only
+// for the initial login and is never retained by Warren.
+func (m *Manager) StartPublicAccess(edge, account string, approvalKey []byte) (Status, error) {
+	return m.StartPublicAccessWithKey(edge, account, LoginKeyApproval, approvalKey)
 }
 
 // StartPublicAccessWithKey enrolls gnar when a one-time key is supplied, then

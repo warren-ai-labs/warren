@@ -5,7 +5,7 @@
 - Created: 2026-08-29
 - Scope: self-hosted Relay, one Host connection, public HTTP/Upgrade tunnel,
   unified credentials, and a P2P follow-up
-- Supersedes: `gnar` as the default public-access path
+- Supersedes: Relay BRLY/1 transport and Relay-to-gnar fallback paths
 
 ## Decision summary
 
@@ -38,15 +38,15 @@ The current repository provides useful pieces but not the complete design:
 
 - Relay exposes `/v1/host/connect` and `/v1/client/connect`; its registry keeps
   one live tunnel per Host and fences stale connections with a generation.
-- BRLY v1 has `open`, `close`, `text`, and `binary` kinds only. WebSocket
-  message boundaries provide the current payload length; there is no HTTP
-  stream, flow-control, or Upgrade contract.
+- Relay now speaks BRLY/2 with explicit stream classes, flow control, and
+  HTTP/Upgrade framing; BRLY/1 is not a supported transport.
 - Headless authenticates `/v1/ws` with the daemon token in `~/.warren/token`.
   It has no Relay connector or Relay-capability verifier yet.
 - The Headless listen address and port are configurable through
   `WARREN_LISTEN`; `8789` is only the default.
 - The existing `Headless/internal/tunnel` package and `gnar` lifecycle remain
-  valid compatibility paths during migration.
+  independent local reachability options; Relay does not invoke them as a
+  fallback.
 
 The RFC describes the target protocol and integration. It does not claim that
 the current implementation already supports these endpoints or frames.
@@ -64,7 +64,7 @@ the current implementation already supports these endpoints or frames.
 - Make local daemon authentication and Relay enrollment one credential model,
   with scoped delegation rather than duplicated long-lived secrets.
 - Support Web, Desktop, CLI, and Headless with platform-appropriate secret
-  storage and a recoverable migration from `gnar`.
+  storage while keeping local `gnar` Public Access independent from Relay.
 - Make revocation, reconnect, deployment limits, and operational recovery
   explicit before enabling the feature by default.
 
@@ -218,9 +218,9 @@ Pairing remains explicit and one-time:
    in Keychain, Secret Service, Credential Manager, or a protected file
    fallback. They keep `A` in memory and refresh it before reconnecting.
 
-The compatibility endpoint may accept an old `#t=<token>` URL during one
-deprecation window, but it must exchange and scrub it immediately. New Web
-code must not persist Relay capabilities in `localStorage`.
+Relay accepts only one-time pairing tickets in browser fragments. The Web app
+exchanges the ticket immediately, scrubs the fragment, and never persists a
+Relay capability in `localStorage`.
 
 The native endpoint is `GET /v1/client/connect`. The Web app uses the
 host-scoped alias `GET /h/{hostID}/v1/client/connect` so its refresh cookie can
@@ -258,7 +258,7 @@ schemas may gain additive fields:
 | `POST /v1/hosts/{id}/route` | Admin or `H` | Enable/disable route and set policy; never accepts an arbitrary upstream. |
 | `DELETE /v1/hosts/{id}` | Relay admin | Revoke Host, route, and all generations. |
 | `GET /v1/host/connect` | `H` plus Host handshake | The single outbound Host WSS. |
-| `GET /v1/client/connect` | `A` or refresh cookie | Native and legacy client WSS. |
+| `GET /v1/client/connect` | `A` or refresh cookie | Native and Web client WSS. |
 
 ## One Host connection and handshake
 
@@ -342,9 +342,8 @@ queue closes the slow stream with a retryable backpressure error instead of
 unbounded memory growth. `CLOSE` and `END` propagate independently so an HTTP
 response can finish while the opposite direction is being torn down.
 
-The existing BRLY v1 private-control path may remain for a compatibility
-window, but a Host must advertise BRLY/2 before Relay enables public HTTP or
-Upgrade. New clients must not infer HTTP semantics from v1 `TEXT` or `BINARY`.
+BRLY/2 is the only Relay stream protocol. A Host must complete the BRLY/2
+handshake before Relay enables private control, public HTTP, or Upgrade.
 
 ## Private Relay control
 
@@ -368,11 +367,11 @@ The first client message is a text envelope within ten seconds:
 }
 ```
 
-Relay derives the Host ID from the signed capability; an optional legacy
-`host_id` query value must match and must not be trusted for routing. Relay
-checks origin, token signature, expiry, scope, generation, and Host presence,
-then opens one `control` stream on the Host WSS. The capability envelope is
-forwarded to Headless for the second signature check; `H` is never forwarded.
+Relay derives the Host ID from the signed capability and, for the host-scoped
+alias, checks that the path Host ID matches. Relay checks origin, token
+signature, expiry, scope, generation, and Host presence, then opens one
+`control` stream on the Host WSS. The capability envelope is forwarded to
+Headless for the second signature check; `H` is never forwarded.
 
 The Headless side receives the same control messages as a local `/v1/ws`
 client, including protocol-version and terminal-state-format negotiation. The
@@ -559,10 +558,9 @@ The lifecycle is:
    `503 Service Unavailable` with `Retry-After` while the route is enabled but
    offline; it never queues public requests across a restart.
 
-The existing `gnar` adapter remains selectable during migration. A Host must
-not publish the same public route through both adapters at once; the owner of
-the route is recorded so rollback cannot leave two processes competing for one
-endpoint.
+The local `gnar` adapter remains an independent Public Access feature. Relay
+routes never fall back to `gnar`, and the two lifecycles do not share an owner
+or a public endpoint.
 
 ## P2P follow-up
 
@@ -747,30 +745,23 @@ timestamps only.
   an overlapping, auditable key set. P2P uses ephemeral keys and transcript
   signatures; a generation is only a revocation/version value.
 
-## Migration and rollback
+## Deployment and recovery
 
-Migration is additive and reversible:
+There is no Relay compatibility window or Relay-to-gnar migration. Existing
+local, SSH, and `gnar` reachability remains available as separate features.
 
-1. Existing Headless, local Desktop, SSH endpoints, and `gnar` public access
-   continue to work unchanged when Relay is not enabled.
-2. `warren relay enroll` binds the existing daemon token as `H`; it does not
+1. `warren relay enroll` binds the existing daemon token as `H`; it does not
    replace the local token or create a second long-lived Host credential.
-3. Relay control is enabled first. The operator pairs a client and verifies a
+2. Relay control is enabled first. The operator pairs a client and verifies a
    control roster, terminal input/output, reconnect, and revocation before
    enabling a public route.
-4. The operator enables the Relay route and verifies HTTP and WebSocket
-   Upgrade health. Only then may the `gnar` route be disabled. The selected
-   route owner is persisted so a restart cannot start both adapters.
-5. Existing old `#t=` links are accepted only during the compatibility window
-   and are exchanged/scrubbed. New pairings use one-time tickets and scoped
-   capabilities. No terminal or Session data migration is needed.
+3. The operator enables the Relay route and verifies HTTP and WebSocket
+   Upgrade health. Disabling that route never changes local Public Access.
 
-If the Relay connector or public route fails, rollback disables only
-`relay.enabled`/`publicTunnel.enabled`, restores the previous `gnar` setting,
-and leaves the daemon token, Sessions, PTYs, and local endpoint untouched. A
-failed credential rotation restores the old hash and secret atomically; a
-failed route migration never deletes the old route until the new route has
-passed its health checks.
+If the Relay connector or route fails, disable only `relay.enabled` or
+`publicTunnel.enabled`; the daemon token, local `gnar` configuration, Sessions,
+PTYs, and local endpoint remain untouched. Credential rotation and route
+updates are atomic and generation-fenced.
 
 ## Implementation phases
 
@@ -815,7 +806,7 @@ covered:
 | Upgrade | Valid and invalid WebSocket Upgrade, subprotocol negotiation, close propagation, idle timeout, and no-compression behavior are tested through the real reverse proxy. |
 | Authentication boundary | Public application requests cannot call `/v1/ws` or mutations; owner routes require `tunnel`; control routes require `control`; Origin and CSRF checks reject wrong sites. |
 | Clients | Desktop, Web, CLI, macOS Keychain, Linux/Windows stores, fragment scrubbing, token expiry, endpoint switching, and daemon restart are tested. |
-| Migration | Existing `gnar`, local, and old-link compatibility; relay-to-gnar rollback; credential rotation; and no duplicate tunnel owner are tested. |
+| Separation | Relay route isolation from local `gnar`, credential rotation, generation fencing, and no cross-feature fallback are tested. |
 | Operations | Docker read-only deployment, persistent registry restart, required AllowedOrigin, TLS/WSS, rate limits, metrics, redacted logs, and single-replica behavior are verified. |
 | Real behavior | Start the built Relay and a real Headless with a non-default listen address, pair a real Web/Desktop client, execute control operations, `curl` an HTTP route, perform a WebSocket Upgrade, revoke access, and confirm existing Sessions survive. |
 
@@ -838,8 +829,8 @@ revocation behavior.
   Headless cannot independently verify the delegation and Relay becomes a
   hidden authentication oracle. A pinned public signing key gives the Host a
   second, offline-verifiable check.
-- **Keep `gnar` as the only public path:** rejected as the default because it
-  requires an external binary, account/enrollment state, and a separate
-  credential lifecycle. It remains a compatibility adapter during rollout.
+- **Use `gnar` as a Relay fallback:** rejected. Local Public Access has its own
+  lifecycle and credentials; Relay failures must not silently change its
+  endpoint or ownership.
 - **Drop terminal frames on a weak network now:** rejected and deferred to P2;
   silent byte loss is not a valid terminal recovery strategy.

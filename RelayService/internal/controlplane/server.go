@@ -275,7 +275,7 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 	if err != nil {
 		return
 	}
-	tunnel := newHostTunnel(connection, true)
+	tunnel := newHostTunnel(connection)
 	if err := server.hostHandshake(connection, hostID, credential); err != nil {
 		tunnel.close()
 		return
@@ -430,12 +430,13 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil || !validHostID(strings.TrimSpace(body.ID)) {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || !validHostID(strings.TrimSpace(body.ID)) {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
-	credential, err := server.registry.provisionHost(strings.TrimSpace(body.ID), strings.TrimSpace(body.Name))
-	if err != nil {
+	if err := server.registry.provisionHost(strings.TrimSpace(body.ID), strings.TrimSpace(body.Name)); err != nil {
 		http.Error(response, "provision failed", http.StatusInternalServerError)
 		return
 	}
@@ -443,21 +444,14 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 	keyID, publicKey := server.signer.currentPublicKey()
 	settingsURL := server.relaySettingsURL(strings.TrimSpace(body.ID), ticket, keyID, publicKey)
 	writeJSON(response, http.StatusCreated, map[string]any{
-		"host_id": body.ID,
-		// host_credential is retained for one compatibility window. New clients
-		// should send their existing daemon token to /enroll instead.
-		"host_credential":   credential,
+		"host_id":           body.ID,
 		"enrollment_ticket": ticket,
 		"expires_at":        expires.UTC().Format(time.RFC3339),
 		"relay_key_id":      keyID,
 		"relay_public_key":  base64.RawStdEncoding.EncodeToString(publicKey),
 		// The setup link contains only the one-time enrollment ticket and
-		// public Relay metadata. It never carries the Host Secret or the
-		// compatibility bootstrap credential.
+		// public Relay metadata. It never carries the Host Secret.
 		"settings_url": settingsURL,
-		// Keep the shorter name as an additive alias for API clients that call
-		// this a setup link rather than a settings link.
-		"setup_url": settingsURL,
 	})
 }
 
@@ -479,23 +473,21 @@ func (server *Server) relaySettingsURL(hostID, enrollmentTicket, keyID string, p
 
 func (server *Server) enrollHost(response http.ResponseWriter, request *http.Request) {
 	hostID := request.PathValue("hostID")
-	if !server.pairingLimiter.allow("ip:"+requestClientIP(request), "host:"+hostID) {
+	if !server.pairingLimiter.allow("enroll-ip:"+requestClientIP(request), "enroll-host:"+hostID) {
 		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
 	var body struct {
 		EnrollmentTicket string `json:"enrollment_ticket"`
 		HostSecret       string `json:"host_secret"`
-		Token            string `json:"token"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
 	secret := strings.TrimSpace(body.HostSecret)
-	if secret == "" {
-		secret = strings.TrimSpace(body.Token)
-	}
 	generation, err := server.registry.enrollment(hostID, body.EnrollmentTicket, secret)
 	if err != nil {
 		http.Error(response, "invalid enrollment", http.StatusUnauthorized)
@@ -565,7 +557,9 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		HostID string `json:"host_id"`
 		Code   string `json:"pairing_code"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -617,17 +611,15 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 	}
 	var body struct {
 		PairingTicket string `json:"pairing_ticket"`
-		Ticket        string `json:"ticket"`
 		ClientID      string `json:"client_id"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body) != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
 	ticket := strings.TrimSpace(body.PairingTicket)
-	if ticket == "" {
-		ticket = strings.TrimSpace(body.Ticket)
-	}
 	server.sessionMu.Lock()
 	entry, ok := server.pairingTickets[ticket]
 	if ok && strings.TrimSpace(request.PathValue("hostID")) != "" && strings.TrimSpace(request.PathValue("hostID")) != entry.HostID {
@@ -676,7 +668,12 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		RefreshToken string `json:"refresh_token"`
 	}
 	if request.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024)).Decode(&body)
+		decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil && err != io.EOF {
+			http.Error(response, "invalid request", http.StatusBadRequest)
+			return
+		}
 	}
 	refresh := strings.TrimSpace(body.RefreshToken)
 	if refresh == "" {
@@ -814,17 +811,13 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
-	requestedHostID := strings.TrimSpace(request.URL.Query().Get("host_id"))
+	requestedHostID := ""
 	if scopedHostID := strings.TrimSpace(request.PathValue("hostID")); scopedHostID != "" {
-		if !validHostID(scopedHostID) || (requestedHostID != "" && requestedHostID != scopedHostID) {
+		if !validHostID(scopedHostID) {
 			http.Error(response, "invalid host_id", http.StatusBadRequest)
 			return
 		}
 		requestedHostID = scopedHostID
-	}
-	if requestedHostID != "" && !validHostID(requestedHostID) {
-		http.Error(response, "invalid host_id", http.StatusBadRequest)
-		return
 	}
 	client, err := server.upgrader.Upgrade(response, request, nil)
 	if err != nil {
@@ -836,23 +829,15 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	messageType, authPayload, err := client.ReadMessage()
 	var auth struct {
 		Type        string `json:"t"`
-		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 		ClientID    string `json:"client_id"`
 		Version     string `json:"version"`
 	}
-	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" {
+	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" || auth.Version != "2.0" || strings.TrimSpace(auth.AccessToken) == "" {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
 		return
 	}
-	if auth.Version != "" && auth.Version != "2.0" {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unsupported relay version"})
-		return
-	}
-	if auth.AccessToken != "" {
-		auth.Token = auth.AccessToken
-	}
-	claims, err := server.signer.verify(auth.Token, requestedHostID, "control")
+	claims, err := server.signer.verify(auth.AccessToken, requestedHostID, "control")
 	if err != nil {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
 		return
@@ -879,7 +864,7 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	client.SetPongHandler(func(string) error {
 		return client.SetReadDeadline(time.Now().Add(75 * time.Second))
 	})
-	connectionID, route, err := tunnel.openStream(&streamOpen{Class: "control", Version: "2.0", HostID: hostID, ClientID: claims.ClientID, Token: auth.Token})
+	connectionID, route, err := tunnel.openStream(&streamOpen{Class: "control", Version: "2.0", HostID: hostID, ClientID: claims.ClientID, Token: auth.AccessToken})
 	if err != nil {
 		return
 	}
@@ -1400,9 +1385,6 @@ func (server *Server) openHTTPStream(request *http.Request, route routeRecord, u
 	tunnel := server.registry.authorizedTunnel(route.HostID, route.Generation)
 	if tunnel == nil {
 		return connectionID{}, nil, nil, errors.New("host offline")
-	}
-	if !tunnel.v2 {
-		return connectionID{}, nil, nil, errors.New("host does not support BRLY/2")
 	}
 	requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
 	if requestID == "" || len(requestID) > 256 {

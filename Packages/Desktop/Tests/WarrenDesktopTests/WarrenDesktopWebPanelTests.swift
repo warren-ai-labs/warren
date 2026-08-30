@@ -155,14 +155,23 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNotNil(link.relay)
     }
 
-    func testRelaySetupPathAndAliasesAreSupported() throws {
-        let url = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=00000000-0000-4000-8000-000000000001&ticket=short-lived&keyId=relay-key&publicKey=key"))
+    func testRelaySetupLinkRequiresCanonicalParameters() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings/relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&hostId=00000000-0000-4000-8000-000000000001&enrollmentTicket=short-lived&relayKeyId=relay-key&relayPublicKey=key"))
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
         XCTAssertEqual(link.section, .relay)
         XCTAssertEqual(link.relay?.relayURL, "http://192.0.2.10:8080")
         XCTAssertEqual(link.relay?.hostID, "00000000-0000-4000-8000-000000000001")
         XCTAssertEqual(link.relay?.enrollmentTicket, "short-lived")
         XCTAssertNil(link.publicAccess)
+    }
+
+    func testRelaySetupLinkRejectsLegacyAliases() throws {
+        let aliasParameters = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=00000000-0000-4000-8000-000000000001&ticket=short-lived&keyId=relay-key&publicKey=key"))
+        let aliasSection = try XCTUnwrap(URL(string: "warren://settings/owned-relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&hostId=00000000-0000-4000-8000-000000000001&enrollmentTicket=short-lived&relayKeyId=relay-key&relayPublicKey=key"))
+
+        XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.section, .relay)
+        XCTAssertNil(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.relay)
+        XCTAssertNil(WarrenDesktopSettingsDeepLink(url: aliasSection))
     }
 
     func testSettingsDeepLinkRejectsForeignOrUnknownLinks() throws {

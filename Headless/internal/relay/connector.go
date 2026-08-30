@@ -502,7 +502,7 @@ func (connector *Connector) dispatch(value frame) error {
 		if json.Unmarshal(value.Payload, &metadata) != nil || metadata.Class == "" {
 			return errors.New("invalid stream metadata")
 		}
-		if metadata.Version != "" && metadata.Version != version {
+		if metadata.Version != version {
 			return errors.New("unsupported stream version")
 		}
 		if metadata.DeadlineMS < 0 || metadata.DeadlineMS > int64((10*time.Minute)/time.Millisecond) {

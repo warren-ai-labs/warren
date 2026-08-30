@@ -89,6 +89,8 @@ func TestRelayEnrollmentRejectsUnauthorizedAndUnsafeInput(t *testing.T) {
 		{name: "unauthorized", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusUnauthorized},
 		{name: "invalid host", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"not-a-host","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
 		{name: "unsafe URL", body: `{"relayUrl":"https://relay.example/../private","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
+		{name: "legacy URL field", body: `{"url":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
+		{name: "legacy ticket field", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","ticket":"ticket"}`, want: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/enroll", strings.NewReader(test.body))
