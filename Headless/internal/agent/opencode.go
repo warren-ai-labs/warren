@@ -35,8 +35,9 @@ const (
 	// a bounded line/byte count keeps long replies from turning the cache into
 	// an O(n²) append-only history while retaining the latest state for restart
 	// recovery.
-	openCodeCacheCompactionLines = 256
-	openCodeCacheCompactionBytes = 8 * 1024 * 1024
+	openCodeCacheCompactionLines = 64
+	openCodeCacheCompactionBytes = 2 * 1024 * 1024
+	openCodeInitialPollLimit   = 64
 )
 
 var openCodeSessionReuseFlags = map[string]bool{
@@ -467,6 +468,7 @@ func findSQLiteOpenCodeSessions(ctx context.Context, databasePath, workspacePath
 		return nil, nil
 	}
 	projectWorktree := sqliteProjectWorktree(ctx, db)
+	ensureOpenCodeSessionDirectoryIndex(databasePath)
 	// OpenCode's current schema is intentionally explicit here. Supporting a
 	// second schema silently would make a corrupt or old database look valid and
 	// could bind a Warren session to the wrong conversation.
@@ -475,6 +477,14 @@ func findSQLiteOpenCodeSessions(ctx context.Context, databasePath, workspacePath
 	if wantedID != "" {
 		query += " WHERE id = ?"
 		args = append(args, wantedID)
+	} else if strings.TrimSpace(workspacePath) != "" {
+		if sqliteTableExists(ctx, db, "project") {
+			query += " WHERE (directory = ? OR project_id IN (SELECT id FROM project WHERE worktree = ?))"
+			args = append(args, workspacePath, workspacePath)
+		} else {
+			query += " WHERE directory = ?"
+			args = append(args, workspacePath)
+		}
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -625,6 +635,20 @@ func sqliteTableExists(ctx context.Context, db *sql.DB, table string) bool {
 	return db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name) == nil
 }
 
+func ensureOpenCodeSessionDirectoryIndex(databasePath string) {
+	if strings.TrimSpace(databasePath) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_session_directory ON session(directory)")
+}
+
 type sqliteOpenCodeReader struct {
 	databasePath string
 	state        *sqliteReaderState
@@ -733,6 +757,7 @@ func (r sqliteOpenCodeReader) ReadMessages(ctx context.Context, sessionID string
 		FROM message AS m
 		WHERE m.session_id = ?`
 	args := []any{sessionID}
+	isInitial := updatedSince == 0
 	if updatedSince > 0 {
 		query += ` AND (
 			EXISTS (SELECT 1 FROM part AS changed WHERE changed.message_id = m.id AND changed.time_updated >= ?)
@@ -740,7 +765,11 @@ func (r sqliteOpenCodeReader) ReadMessages(ctx context.Context, sessionID string
 		)`
 		args = append(args, updatedSince, updatedSince, updatedSince)
 	}
-	query += " ORDER BY m.time_created ASC, m.id ASC"
+	if isInitial {
+		query = `SELECT * FROM (` + query + " ORDER BY m.time_created DESC, m.id DESC LIMIT " + fmt.Sprintf("%d", openCodeInitialPollLimit) + `) ORDER BY time_created ASC, id ASC`
+	} else {
+		query += " ORDER BY m.time_created ASC, m.id ASC"
+	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		r.invalidateVersion()
@@ -885,6 +914,7 @@ type OpenCodeTailer struct {
 	mu           sync.Mutex
 	stop         chan struct{}
 	done         chan struct{}
+	loadDone     chan struct{}
 	started      bool
 	once         sync.Once
 }
@@ -906,10 +936,15 @@ func NewOpenCodeTailer(binding OpenCodeBinding) (*OpenCodeTailer, error) {
 	}
 	tailer := &OpenCodeTailer{
 		binding: binding, cachePath: cachePath, interval: watchInterval,
-		reader: reader, seen: map[string]string{}, snapshots: map[string]openCodeEnvelope{}, stop: make(chan struct{}), done: make(chan struct{}),
+		reader: reader, seen: map[string]string{}, snapshots: map[string]openCodeEnvelope{}, stop: make(chan struct{}), done: make(chan struct{}), loadDone: make(chan struct{}),
 	}
-	tailer.loadCacheState()
+	go tailer.loadCacheStateAsync()
 	return tailer, nil
+}
+
+func (t *OpenCodeTailer) loadCacheStateAsync() {
+	defer close(t.loadDone)
+	t.loadCacheState()
 }
 
 // StartOpenCodeSessionTailer starts the stable, bound tailer used by Service.
@@ -928,14 +963,18 @@ func StartOpenCodeSessionTailer(binding OpenCodeBinding) (*OpenCodeTailer, error
 func StartOpenCodeTailer(cachePath, workspace string, after time.Time) *OpenCodeTailer {
 	binding, _ := (DefaultFinder{}).FindBinding(context.Background(), "compat", openCodeProvider, workspace, after)
 	if binding == nil {
-		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{})}
+		done := make(chan struct{})
+		close(done)
+		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{}), loadDone: done}
 	}
 	if cachePath != "" {
 		binding.CachePath = cachePath
 	}
 	tailer, err := NewOpenCodeTailer(*binding)
 	if err != nil {
-		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{})}
+		done := make(chan struct{})
+		close(done)
+		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{}), loadDone: done}
 	}
 	tailer.started = true
 	go tailer.loop()
@@ -949,6 +988,12 @@ func (t *OpenCodeTailer) Path() string { return t.cachePath }
 func (t *OpenCodeTailer) Close() {
 	t.once.Do(func() {
 		close(t.stop)
+		if t.loadDone != nil {
+			select {
+			case <-t.loadDone:
+			case <-time.After(2 * time.Second):
+			}
+		}
 		if t.started && t.done != nil {
 			<-t.done
 		}
@@ -975,6 +1020,13 @@ func (t *OpenCodeTailer) loop() {
 
 // Poll performs one bounded read and is exported for deterministic fixtures.
 func (t *OpenCodeTailer) Poll(parent context.Context) (err error) {
+	if t.loadDone != nil {
+		select {
+		case <-t.loadDone:
+		case <-parent.Done():
+			return parent.Err()
+		}
+	}
 	t.pollMu.Lock()
 	defer t.pollMu.Unlock()
 	// Provider databases are external state. The SQLite driver can panic on an
@@ -1050,23 +1102,30 @@ func (t *OpenCodeTailer) loadCacheState() {
 	if t.cachePath == "" {
 		return
 	}
+	t.mu.Lock()
 	if t.seen == nil {
 		t.seen = map[string]string{}
 	}
 	if t.snapshots == nil {
 		t.snapshots = map[string]openCodeEnvelope{}
 	}
+	t.mu.Unlock()
 	file, err := os.Open(t.cachePath)
 	if err != nil {
 		return
 	}
 	if info, statErr := file.Stat(); statErr == nil {
+		t.mu.Lock()
 		t.cacheBytes = info.Size()
+		t.mu.Unlock()
 	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxTranscriptLine)
+	seen := map[string]string{}
+	snapshots := map[string]openCodeEnvelope{}
+	lines := 0
 	for scanner.Scan() {
-		t.cacheLines++
+		lines++
 		var envelope openCodeEnvelope
 		if json.Unmarshal(scanner.Bytes(), &envelope) != nil || envelope.MessageID == "" {
 			continue
@@ -1075,11 +1134,20 @@ func (t *OpenCodeTailer) loadCacheState() {
 		if fingerprint == "" {
 			fingerprint = openCodeEnvelopeFingerprint(envelope)
 		}
-		t.seen[envelope.MessageID] = fingerprint
-		t.snapshots[envelope.MessageID] = envelope
+		seen[envelope.MessageID] = fingerprint
+		snapshots[envelope.MessageID] = envelope
 	}
 	scanErr := scanner.Err()
 	_ = file.Close()
+	t.mu.Lock()
+	for k, v := range seen {
+		t.seen[k] = v
+	}
+	for k, v := range snapshots {
+		t.snapshots[k] = v
+	}
+	t.cacheLines += lines
+	t.mu.Unlock()
 	// A cache may have grown before the daemon was restarted. Compact it before
 	// the first poll so the new watcher starts from a bounded file as well.
 	if scanErr == nil {
