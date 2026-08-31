@@ -53,7 +53,7 @@ public struct WarrenRemoteRecoveryAnchor: Hashable, Sendable {
 }
 
 private enum WarrenRemoteSocketEvent: Sendable {
-    case welcome(version: String)
+    case welcome(version: String, capabilities: [String])
     case roster(WarrenRemoteRoster)
     case rosterDelta(WarrenRemoteRoster.Delta)
     case output(WarrenRemoteOutputFrame)
@@ -107,7 +107,18 @@ private actor WarrenRemoteSocket {
         return URLSessionWebSocketTaskAdapter(task: task)
     }
 
-    func connect(token: String, isRelay: Bool = false, clientID: String? = nil) async throws -> String {
+    func connect(
+        token: String,
+        isRelay: Bool = false,
+        clientID: String? = nil,
+        capabilities: [String] = [
+            "roster-delta",
+            WarrenRemoteAgentCapability.timeline,
+            WarrenRemoteAgentCapability.interactions,
+            WarrenRemoteAgentCapability.interrupt,
+            WarrenRemoteAgentCapability.attachments,
+        ]
+    ) async throws -> String {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
         await adapter.resume()
         receiveTask = Task { [weak self] in await self?.receiveLoop() }
@@ -115,7 +126,7 @@ private actor WarrenRemoteSocket {
         var auth: [String: Any] = [
             "t": "auth",
             "version": "2.0",
-            "capabilities": ["roster-delta"],
+            "capabilities": capabilities,
             "terminalStateFormats": [Self.terminalStateFormat],
         ]
         if isRelay {
@@ -198,13 +209,20 @@ private actor WarrenRemoteSocket {
     }
 
     func request(_ method: String, params: [String: String]) async throws -> Data {
+		var jsonParams: [String: String] = [:]
+		for (key, value) in params { jsonParams[key] = value }
+		let data = (try? JSONSerialization.data(withJSONObject: jsonParams)) ?? Data("{}".utf8)
+		return try await request(method, paramsData: data)
+	}
+
+	func request(_ method: String, paramsData: Data) async throws -> Data {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
         let id = UUID().uuidString.lowercased()
         let text = Self.json([
             "t": "request",
             "id": id,
             "method": method,
-            "params": params,
+            "params": (try? JSONSerialization.jsonObject(with: paramsData)) ?? [:],
         ])
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
@@ -362,7 +380,8 @@ private actor WarrenRemoteSocket {
             } else {
                 welcomeResult = .success(version)
             }
-            _ = continuation?.yield(.welcome(version: version))
+            let capabilities = (object["capabilities"] as? [String]) ?? []
+            _ = continuation?.yield(.welcome(version: version, capabilities: capabilities))
         case "response":
             guard let id = object["id"] as? String else { return }
             if object["ok"] as? Bool == true {
@@ -407,8 +426,24 @@ private actor WarrenRemoteSocket {
         case "agent":
             guard let sessionID = object["session"] as? String,
                   let rawEvents = object["events"] else { return }
-            let encoded = try JSONSerialization.data(withJSONObject: rawEvents)
-            let events = try JSONDecoder().decode([WarrenRemoteAgentEvent].self, from: encoded)
+            // Decode each event independently. A newer Host may include an
+            // unknown or partially malformed event in an otherwise valid
+            // batch; dropping that row must not tear down the connection or
+            // prevent later sequence-bearing events from being applied.
+            let values: [Any]
+            if let array = rawEvents as? [Any] {
+                values = array
+            } else {
+                return
+            }
+            let events = values.compactMap { value -> WarrenRemoteAgentEvent? in
+                guard JSONSerialization.isValidJSONObject(value),
+                      let encoded = try? JSONSerialization.data(withJSONObject: value),
+                      let event = try? JSONDecoder().decode(WarrenRemoteAgentEvent.self, from: encoded) else {
+                    return nil
+                }
+                return event
+            }
             _ = continuation?.yield(.agent(
                 sessionID: sessionID,
                 epoch: Self.uint64(object["epoch"]) ?? 0,
@@ -417,8 +452,12 @@ private actor WarrenRemoteSocket {
         case "agent.status":
             guard let sessionID = object["session"] as? String,
                   let rawStatus = object["status"] else { return }
-            let encoded = try JSONSerialization.data(withJSONObject: rawStatus)
-            let status = try JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: encoded)
+            // Status is an optional projection. A newer Host may send a
+            // malformed value while still carrying useful events; ignore
+            // that one update instead of tearing down the whole socket.
+            guard JSONSerialization.isValidJSONObject(rawStatus),
+                  let encoded = try? JSONSerialization.data(withJSONObject: rawStatus),
+                  let status = try? JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: encoded) else { return }
             _ = continuation?.yield(.agentStatus(
                 sessionID: sessionID,
                 epoch: Self.uint64(object["epoch"]) ?? 0,
@@ -468,6 +507,7 @@ public actor WarrenRemoteClient {
     private let configuration: WarrenRemoteEndpointConfiguration
     private let urlSession: URLSession
     private var accessToken: String
+    private let advertisedCapabilities: [String]
     /// A native pairing intentionally leaves the Relay capability's client_id
     /// empty. Keeping this optional also lets a future enrollment flow pin a
     /// stable client identity without changing the WebSocket protocol.
@@ -481,6 +521,7 @@ public actor WarrenRemoteClient {
     private var running = false
     private var connectionState: WarrenRemoteConnectionState = .stopped
     private var rosterStorage: WarrenRemoteRoster?
+    private var negotiatedCapabilities: Set<String> = []
     private var anchors: [String: WarrenRemoteRecoveryAnchor] = [:]
     /// Subscriptions survive a socket replacement. They are deliberately
     /// separate from recovery anchors: the latter advance with every frame,
@@ -495,6 +536,13 @@ public actor WarrenRemoteClient {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
+        self.advertisedCapabilities = [
+            "roster-delta",
+            WarrenRemoteAgentCapability.timeline,
+            WarrenRemoteAgentCapability.interactions,
+            WarrenRemoteAgentCapability.interrupt,
+            WarrenRemoteAgentCapability.attachments,
+        ]
         self.clientID = nil
         self.codec = codec
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
@@ -506,11 +554,13 @@ public actor WarrenRemoteClient {
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
         task: any WarrenWebSocketTaskAdapter,
-        codec: WarrenWireCodec = WarrenWireCodec()
+        codec: WarrenWireCodec = WarrenWireCodec(),
+        capabilities: [String] = ["roster-delta"]
     ) {
         self.configuration = configuration
         self.urlSession = .shared
         self.accessToken = configuration.token
+        self.advertisedCapabilities = capabilities
         self.clientID = nil
         self.injectedTask = task
         self.codec = codec
@@ -550,9 +600,28 @@ public actor WarrenRemoteClient {
     public func roster() -> WarrenRemoteRoster? { rosterStorage }
     public func recoveryAnchor(for sessionID: String) -> WarrenRemoteRecoveryAnchor? { anchors[sessionID] }
 
+    /// Capabilities returned by the latest authenticated Host welcome. A
+    /// reconnect replaces this set; callers should hide controls while the
+    /// connection is negotiating rather than assuming a previous Host's
+    /// capabilities still apply.
+    public func capabilities() -> Set<String> { negotiatedCapabilities }
+
+    public func supportsCapability(_ capability: String) -> Bool {
+        negotiatedCapabilities.contains(capability)
+    }
+
     public func request(_ method: String, params: [String: String] = [:]) async throws -> Data {
         guard let socket else { throw WarrenRemoteClientError.notConnected }
         return try await request(on: socket, method: method, params: params)
+    }
+
+    /// JSON-shaped request parameters for structured Agent View operations.
+    /// The string overload above remains source-compatible with existing
+    /// terminal calls.
+    public func request(_ method: String, jsonParams: [String: Any] = [:]) async throws -> Data {
+        guard let socket else { throw WarrenRemoteClientError.notConnected }
+        let data = (try? JSONSerialization.data(withJSONObject: jsonParams)) ?? Data("{}".utf8)
+        return try await request(on: socket, method: method, paramsData: data)
     }
 
     public func request<Value: Decodable>(
@@ -561,6 +630,15 @@ public actor WarrenRemoteClient {
         decoding type: Value.Type = Value.self
     ) async throws -> Value {
         let data = try await request(method, params: params)
+        return try decode(data, as: type)
+    }
+
+    public func request<Value: Decodable>(
+        _ method: String,
+        jsonParams: [String: Any] = [:],
+        decoding type: Value.Type = Value.self
+    ) async throws -> Value {
+        let data = try await request(method, jsonParams: jsonParams)
         return try decode(data, as: type)
     }
 
@@ -644,12 +722,38 @@ public actor WarrenRemoteClient {
         try await socket.request(method, params: params)
     }
 
+    private func request(
+        on socket: WarrenRemoteSocket,
+        method: String,
+        paramsData: Data
+    ) async throws -> Data {
+        try await socket.request(method, paramsData: paramsData)
+    }
+
+    private func request<Value: Decodable>(
+        _ method: String,
+        jsonData: Data,
+        decoding type: Value.Type
+    ) async throws -> Value {
+        guard let socket else { throw WarrenRemoteClientError.notConnected }
+        let data = try await request(on: socket, method: method, paramsData: jsonData)
+        return try decode(data, as: type)
+    }
+
     private func decode<Value: Decodable>(_ data: Data, as type: Value.Type) throws -> Value {
         do {
             return try JSONDecoder().decode(Value.self, from: data)
         } catch {
             throw WarrenRemoteClientError.invalidResponse
         }
+    }
+
+    private func jsonObject<Value: Encodable>(_ value: Value) -> Data {
+        guard let data = try? JSONEncoder().encode(value),
+              (try? JSONSerialization.jsonObject(with: data)) != nil else {
+            return Data("{}".utf8)
+        }
+        return data
     }
 
     @discardableResult
@@ -758,6 +862,83 @@ public actor WarrenRemoteClient {
         try await sendInput(Data([0x1B, 0x5B, 0x31, 0x33, 0x75]))
     }
 
+    @discardableResult
+    public func respondAgentInteraction(
+        _ response: WarrenRemoteAgentInteractionResponse
+    ) async throws -> WarrenRemoteAgentInteractionResult {
+        try await request(
+            "agent.interaction.respond",
+            jsonData: jsonObject(response),
+            decoding: WarrenRemoteAgentInteractionResult.self
+        )
+    }
+
+    @discardableResult
+    public func interruptAgentTurn(
+        _ requestValue: WarrenRemoteAgentTurnInterruptRequest
+    ) async throws -> WarrenRemoteAgentTurnInterruptResult {
+        try await request(
+            "agent.turn.interrupt",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentTurnInterruptResult.self
+        )
+    }
+
+    @discardableResult
+    public func sendAgentMessage(
+        _ requestValue: WarrenRemoteAgentMessageSendRequest
+    ) async throws -> WarrenRemoteAgentMessageSendResult {
+        try await request(
+            "agent.message.send",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentMessageSendResult.self
+        )
+    }
+
+    @discardableResult
+    public func prepareAgentAttachment(
+        _ requestValue: WarrenRemoteAgentAttachmentPrepareRequest
+    ) async throws -> WarrenRemoteAgentAttachmentPrepareResult {
+        try await request(
+            "agent.attachment.prepare",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentAttachmentPrepareResult.self
+        )
+    }
+
+    @discardableResult
+    public func uploadAgentAttachmentChunk(
+        _ requestValue: WarrenRemoteAgentAttachmentChunkRequest
+    ) async throws -> WarrenRemoteAgentAttachmentResult {
+        try await request(
+            "agent.attachment.chunk",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentAttachmentResult.self
+        )
+    }
+
+    @discardableResult
+    public func completeAgentAttachment(
+        _ requestValue: WarrenRemoteAgentAttachmentCompleteRequest
+    ) async throws -> WarrenRemoteAgentAttachmentResult {
+        try await request(
+            "agent.attachment.complete",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentAttachmentResult.self
+        )
+    }
+
+    @discardableResult
+    public func abortAgentAttachment(
+        _ requestValue: WarrenRemoteAgentAttachmentAbortRequest
+    ) async throws -> WarrenRemoteAgentAttachmentResult {
+        try await request(
+            "agent.attachment.abort",
+            jsonData: jsonObject(requestValue),
+            decoding: WarrenRemoteAgentAttachmentResult.self
+        )
+    }
+
     public func agentHistory(
         sessionID: String,
         before: UInt64? = nil,
@@ -802,13 +983,15 @@ public actor WarrenRemoteClient {
             }
             let socket = WarrenRemoteSocket(adapter: adapter, codec: codec)
             self.socket = socket
+            negotiatedCapabilities = []
             let connectionStartedAt = ContinuousClock.now
             var refreshedAfterAuthenticationFailure = false
             do {
                 let version = try await socket.connect(
                     token: accessToken,
                     isRelay: configuration.isRelay,
-                    clientID: clientID
+                    clientID: clientID,
+                    capabilities: advertisedCapabilities
                 )
                 setConnectionState(.connected)
                 await socket.startHeartbeat()
@@ -887,7 +1070,9 @@ public actor WarrenRemoteClient {
 
     private func consume(_ event: WarrenRemoteSocketEvent, from socket: WarrenRemoteSocket) async {
         switch event {
-        case .welcome(let version): emit(.welcome(version: version))
+        case .welcome(let version, let capabilities):
+            negotiatedCapabilities = Set(capabilities)
+            emit(.welcome(version: version))
         case .roster(let roster):
             if let currentRevision = rosterStorage?.revision,
                let nextRevision = roster.revision,

@@ -1020,6 +1020,286 @@ public enum WarrenRemoteAgentTurnStatus: String, Codable, Sendable {
     }
 }
 
+/// Capabilities understood by the Agent View transport. These values mirror
+/// Headless's wire constants and intentionally remain plain strings so a
+/// newer Host can add capabilities without making decoding fail.
+public enum WarrenRemoteAgentCapability {
+    public static let timeline = "agent-timeline-v1"
+    public static let interactions = "agent-interactions-v1"
+    public static let interrupt = "agent-interrupt-v1"
+    public static let attachments = "agent-attachments-v1"
+}
+
+public struct WarrenRemoteAgentAttachmentRef: Codable, Equatable, Hashable, Sendable {
+    public let attachmentID: String
+    public let name: String?
+    public let mime: String?
+    public let size: Int64?
+
+    public init(attachmentID: String, name: String? = nil, mime: String? = nil, size: Int64? = nil) {
+        self.attachmentID = attachmentID
+        self.name = name
+        self.mime = mime
+        self.size = size
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attachmentID = "attachmentId"
+        case name, mime, size
+    }
+}
+
+public struct WarrenRemoteAgentMessageSendRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let clientMessageID: String
+    public let text: String
+    public let attachments: [WarrenRemoteAgentAttachmentRef]
+
+    public init(session: String, clientMessageID: String, text: String, attachments: [WarrenRemoteAgentAttachmentRef] = []) {
+        self.session = session
+        self.clientMessageID = clientMessageID
+        self.text = text
+        self.attachments = attachments
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case clientMessageID = "clientMessageId"
+        case text, attachments
+    }
+}
+
+public struct WarrenRemoteAgentInteractionResponse: Codable, Equatable, Sendable {
+    public let session: String
+    public let requestID: String
+    public let kind: String
+    public let response: [String: WarrenRemoteJSONValue]
+
+    public init(session: String, requestID: String, kind: String, response: [String: WarrenRemoteJSONValue] = [:]) {
+        self.session = session
+        self.requestID = requestID
+        self.kind = kind
+        self.response = response
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case requestID = "requestId"
+        case kind, response
+    }
+}
+
+public struct WarrenRemoteAgentTurnInterruptRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let turn: UInt64
+    public let reason: String
+    public let replacement: WarrenRemoteAgentMessageSendRequest?
+
+    public init(session: String, turn: UInt64, reason: String, replacement: WarrenRemoteAgentMessageSendRequest? = nil) {
+        self.session = session
+        self.turn = turn
+        self.reason = reason
+        self.replacement = replacement
+    }
+}
+
+public struct WarrenRemoteAgentTurnInterruptResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let session: String
+    public let turn: UInt64
+    public let clientMessageID: String?
+    public let status: String?
+
+    public init(
+        accepted: Bool,
+        session: String,
+        turn: UInt64,
+        clientMessageID: String? = nil,
+        status: String? = nil
+    ) {
+        self.accepted = accepted
+        self.session = session
+        self.turn = turn
+        self.clientMessageID = clientMessageID
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted, session, turn
+        case clientMessageID = "clientMessageId"
+        case status
+    }
+}
+
+public struct WarrenRemoteAgentMessageSendResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let session: String
+    public let clientMessageID: String
+
+    public init(accepted: Bool, session: String, clientMessageID: String) {
+        self.accepted = accepted
+        self.session = session
+        self.clientMessageID = clientMessageID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted, session
+        case clientMessageID = "clientMessageId"
+    }
+}
+
+public struct WarrenRemoteAgentInteractionResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let session: String
+    public let requestID: String
+    public let kind: String
+
+    public init(accepted: Bool, session: String, requestID: String, kind: String) {
+        self.accepted = accepted
+        self.session = session
+        self.requestID = requestID
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted, session
+        case requestID = "requestId"
+        case kind
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentPrepareRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let name: String
+    public let mime: String
+    public let size: Int64
+    public let sha256: String?
+
+    public init(session: String, name: String, mime: String, size: Int64, sha256: String? = nil) {
+        self.session = session
+        self.name = name
+        self.mime = mime
+        self.size = size
+        self.sha256 = sha256
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentPrepareResult: Codable, Equatable, Sendable {
+    public let attachmentID: String
+    public let uploadID: String
+    public let chunkSize: Int
+    public let expiresAt: String
+
+    public init(
+        attachmentID: String,
+        uploadID: String,
+        chunkSize: Int,
+        expiresAt: String
+    ) {
+        self.attachmentID = attachmentID
+        self.uploadID = uploadID
+        self.chunkSize = chunkSize
+        self.expiresAt = expiresAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attachmentID = "attachmentId"
+        case uploadID = "uploadId"
+        case chunkSize, expiresAt
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentChunkRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let uploadID: String
+    public let sequence: UInt64
+    public let length: Int
+    public let sha256: String?
+    public let data: String
+
+    public init(session: String, uploadID: String, sequence: UInt64, length: Int, sha256: String? = nil, data: String) {
+        self.session = session
+        self.uploadID = uploadID
+        self.sequence = sequence
+        self.length = length
+        self.sha256 = sha256
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case uploadID = "uploadId"
+        case sequence, length, sha256, data
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentCompleteRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let uploadID: String
+    public let length: Int64
+    public let sha256: String?
+
+    public init(session: String, uploadID: String, length: Int64, sha256: String? = nil) {
+        self.session = session
+        self.uploadID = uploadID
+        self.length = length
+        self.sha256 = sha256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case uploadID = "uploadId"
+        case length, sha256
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentAbortRequest: Codable, Equatable, Sendable {
+    public let session: String
+    public let uploadID: String
+
+    public init(session: String, uploadID: String) {
+        self.session = session
+        self.uploadID = uploadID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case uploadID = "uploadId"
+    }
+}
+
+public struct WarrenRemoteAgentAttachmentResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let attachmentID: String?
+    public let uploadID: String?
+    public let state: String?
+    public let received: Int64?
+    public let error: String?
+
+    public init(
+        accepted: Bool,
+        attachmentID: String? = nil,
+        uploadID: String? = nil,
+        state: String? = nil,
+        received: Int64? = nil,
+        error: String? = nil
+    ) {
+        self.accepted = accepted
+        self.attachmentID = attachmentID
+        self.uploadID = uploadID
+        self.state = state
+        self.received = received
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted
+        case attachmentID = "attachmentId"
+        case uploadID = "uploadId"
+        case state, received, error
+    }
+}
+
 public struct WarrenRemoteAgentTurn: Codable, Equatable, Hashable, Sendable {
     public let id: UInt64
     public let status: WarrenRemoteAgentTurnStatus
@@ -1085,6 +1365,10 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
     public let durationMs: Int64?
     public let sidechain: Bool
     public let timestamp: String?
+    /// Optional structured payload used by RFC 0010 timeline events. Keeping
+    /// this as a JSON value lets older clients decode and advance sequence
+    /// numbers without understanding newly introduced event types.
+    public let payload: [String: WarrenRemoteJSONValue]?
 
     public init(
         sequence: UInt64,
@@ -1107,7 +1391,8 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         usage: WarrenRemoteAgentUsage? = nil,
         durationMs: Int64? = nil,
         sidechain: Bool = false,
-        timestamp: String? = nil
+        timestamp: String? = nil,
+        payload: [String: WarrenRemoteJSONValue]? = nil
     ) {
         self.sequence = sequence
         self.turn = turn
@@ -1130,6 +1415,7 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         self.durationMs = durationMs
         self.sidechain = sidechain
         self.timestamp = timestamp
+        self.payload = payload
     }
 
     public var stableID: String {
@@ -1145,6 +1431,7 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         case contentDelta, model, stopReason, toolName, toolInput, toolStatus
         case callID = "callId"
         case output, files, error, usage, durationMs, sidechain, timestamp
+        case payload
     }
 
     public init(from decoder: Decoder) throws {
@@ -1170,6 +1457,14 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         durationMs = try values.decodeIfPresent(Int64.self, forKey: .durationMs)
         sidechain = try values.decodeIfPresent(Bool.self, forKey: .sidechain) ?? false
         timestamp = try values.decodeIfPresent(String.self, forKey: .timestamp)
+        // Payload is optional extension data. A newer Host can accidentally
+        // send a scalar or otherwise malformed object; retain the event so
+        // sequence recovery continues and let the View ignore the payload.
+        do {
+            payload = try values.decodeIfPresent([String: WarrenRemoteJSONValue].self, forKey: .payload)
+        } catch {
+            payload = nil
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { agentEventLimit, groupAgentEvents, mergeAgentEvents } from "./agent.js";
+import { agentDraftKey, agentEventLimit, agentQueueKey, groupAgentEvents, mergeAgentEvents } from "./agent.js";
 
 test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {
   const existing = [
@@ -15,6 +15,24 @@ test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {
   const merged = mergeAgentEvents(existing, incoming);
   assert.deepEqual(merged.map(event => event.seq), [1, 2, 3]);
   assert.deepEqual(merged.map(event => event.content), ["started", "hello", "hi"]);
+});
+
+test("mergeAgentEvents keeps the first event at an immutable sequence", () => {
+  const merged = mergeAgentEvents(
+    [{ seq: 7, type: "assistant", content: "first" }],
+    [{ seq: 7, type: "assistant", content: "rewritten" }],
+  );
+  assert.deepEqual(merged, [{ seq: 7, type: "assistant", content: "first" }]);
+});
+
+test("agentQueueKey isolates endpoint and session identities", () => {
+  assert.notEqual(agentQueueKey("wss://one.example", "session"), agentQueueKey("wss://two.example", "session"));
+  assert.notEqual(agentQueueKey("wss://one.example", "session"), agentQueueKey("wss://one.example", "other"));
+});
+
+test("agentDraftKey keeps separator punctuation collision-safe", () => {
+  assert.notEqual(agentDraftKey("host.a", "session"), agentDraftKey("host", "a.session"));
+  assert.notEqual(agentDraftKey("wss://host", "session"), agentDraftKey("wss:/host", "session"));
 });
 
 test("mergeAgentEvents caps history at the agent event limit", () => {

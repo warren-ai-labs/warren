@@ -2,7 +2,18 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { groupAgentEvents } from "./agent.js";
+import {
+  agentDraftMaximumBytes,
+  copyAgentText,
+  copyableAgentText,
+  groupAgentEvents,
+  loadAgentDraft,
+  normalizeAgentEventType,
+  projectAgentEvents,
+  removeAgentDraft,
+  saveAgentDraft,
+  validateAgentAttachment,
+} from "./agent.js";
 import { sessionDisplayTitle } from "./title.js";
 
 export function AgentView({
@@ -16,6 +27,20 @@ export function AgentView({
   hasMore = false,
   loadingMore = false,
   onLoadMore = () => {},
+  endpointIdentity = "default",
+  capabilities = [],
+  actionError = "",
+  onCancel = () => {},
+  onSendNow = () => {},
+  onInteraction = () => {},
+  onUploadAttachments = async () => { throw new Error("Attachments are unavailable"); },
+  onEditResend = null,
+  queueItems = [],
+  onQueueEdit = () => {},
+  onQueueDelete = () => {},
+  onQueueMoveToFront = () => {},
+  onQueueReorder = () => {},
+  onQueueRetry = () => {},
 }) {
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -25,8 +50,14 @@ export function AgentView({
   const anchorElementRef = useRef(null);
   const anchorOffsetRef = useRef(null);
   const skipFollowRef = useRef(false);
-  const [draft, setDraft] = useState("");
-  const blocks = groupAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
+  const [draft, setDraft] = useState(() => loadAgentDraft(localStorage, endpointIdentity, session?.id));
+  const [showQueue, setShowQueue] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [draftWarning, setDraftWarning] = useState("");
+  const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
@@ -37,6 +68,48 @@ export function AgentView({
   // that means the agent is actively producing output; "blocked"/"stalled"
   // are waiting on a human, not running, so they must not show the shim.
   const running = agentStatus?.activity === "working";
+  const canInterrupt = running && capabilities.includes("agent-interrupt-v1");
+  const canInteract = capabilities.includes("agent-interactions-v1");
+  const canUpload = capabilities.includes("agent-attachments-v1");
+  const lastUserEvent = [...events].reverse().find(event => normalizeAgentEventType(event?.type) === "user") || null;
+  const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
+
+  const copyMessage = async event => {
+    const value = copyableAgentText(event);
+    if (!value) return;
+    const copied = await copyAgentText(value);
+    setCopyStatus(copied ? "Copied" : "Copy failed");
+    setTimeout(() => setCopyStatus(""), 1600);
+  };
+  const editAndResend = value => {
+    if (onEditResend) onEditResend(value);
+    else setDraft(value);
+    inputRef.current?.focus();
+  };
+
+  useEffect(() => {
+    setDraft(loadAgentDraft(localStorage, endpointIdentity, session?.id));
+    setAttachments([]);
+    setUploadingAttachments(false);
+    setSubmitError("");
+    setDraftWarning("");
+  }, [endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    const value = String(draft || "");
+    const timer = setTimeout(() => {
+      if (new TextEncoder().encode(value).length <= agentDraftMaximumBytes) {
+        saveAgentDraft(localStorage, endpointIdentity, session?.id, value);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [draft, endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    const flush = () => saveAgentDraft(localStorage, endpointIdentity, session?.id, draft);
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [draft, endpointIdentity, session?.id]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -104,13 +177,82 @@ export function AgentView({
     if (followsBottom) list.scrollTop = list.scrollHeight;
   }, [events.length]);
 
-  const submit = () => {
+  const addAttachments = files => {
+    const values = Array.from(files || []).filter(file => file && typeof file.name === "string");
+    if (!values.length) return;
+    setAttachments(previous => [
+      ...previous,
+      ...values.map(file => {
+        const validation = validateAgentAttachment(file);
+        return {
+          file,
+          status: validation.ok ? "selected" : "failed",
+          progress: 0,
+          error: validation.ok ? "" : validation.error,
+        };
+      }),
+    ]);
+  };
+
+  const removeAttachment = index => {
+    if (uploadingAttachments) return;
+    setAttachments(previous => previous.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const retryAttachment = index => {
+    if (uploadingAttachments) return;
+    setAttachments(previous => previous.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, status: "selected", progress: 0, error: "" } : item
+    )));
+  };
+
+  const submit = async (sendNow = false) => {
     if (!ready) return;
     const value = draft.trim();
     if (!value) return;
-    onSend(value);
+    if (!canCompose || uploadingAttachments) return;
+    if (attachments.length > 0 && (!canUpload || attachments.some(item => item.status === "failed"))) return;
+    setSubmitError("");
+    setUploadingAttachments(attachments.length > 0);
+    let refs = [];
+    try {
+      refs = attachments.length > 0
+        ? await onUploadAttachments(
+          attachments.map(item => item.file),
+          (index, progress, error = "") => {
+            setAttachments(previous => previous.map((item, itemIndex) => (
+              itemIndex === index
+                ? { ...item, status: error ? "failed" : progress >= 1 ? "ready" : "uploading", progress, error }
+                : item
+            )));
+          },
+        )
+        : [];
+    } catch (error) {
+      const reason = String(error?.message || error || "Upload failed");
+      setAttachments(previous => previous.map(item => ({ ...item, status: "failed", error: reason })));
+      setSubmitError(reason);
+      setUploadingAttachments(false);
+      return;
+    }
+    try {
+      if (sendNow) await onSendNow(value, refs);
+      else onSend(value, refs);
+    } catch (error) {
+      // The atomic Send now request owns the replacement's local queue item.
+      // Keep the draft/attachments visible here so a failed request can be
+      // retried without silently discarding the user's input.
+      const reason = String(error?.message || error || "Send failed");
+      setSubmitError(reason);
+      setUploadingAttachments(false);
+      return;
+    }
     setDraft("");
+    setDraftWarning("");
+    removeAgentDraft(localStorage, endpointIdentity, session?.id);
+    setAttachments([]);
     inputRef.current?.focus();
+    setUploadingAttachments(false);
   };
 
   return (
@@ -118,6 +260,14 @@ export function AgentView({
       className="agent-view"
       onPointerDown={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
+      onDragOver={event => {
+        if (canUpload && event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      }}
+      onDrop={event => {
+        if (!canUpload) return;
+        event.preventDefault();
+        addAttachments(event.dataTransfer?.files);
+      }}
     >
       <div ref={listRef} className="agent-events" aria-label={`${displayTitle} conversation`}>
         {hasMore && (
@@ -143,7 +293,15 @@ export function AgentView({
             // intentionally not a conversation row on mobile or Web.
             block.kind === "usage"
               ? null
-              : <AgentBlock key={blockKindKey(block, index)} block={block} />
+              : <AgentBlock
+                key={blockKindKey(block, index)}
+                block={block}
+                onInteraction={onInteraction}
+                canInteract={canInteract}
+                onCopy={copyMessage}
+                onEditResend={editAndResend}
+                isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
+              />
           ))
         )}
         {running && (
@@ -154,6 +312,24 @@ export function AgentView({
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
+      {(actionError || submitError) && (
+        <div className="agent-action-error" role="alert">{actionError || submitError}</div>
+      )}
+      {draftWarning && (
+        <div className="agent-draft-warning" role="status">{draftWarning}</div>
+      )}
+      {copyStatus && <div className="agent-copy-status" role="status" aria-live="polite">{copyStatus}</div>}
+      {showQueue && (
+        <AgentQueuePanel
+          items={queueItems}
+          onClose={() => setShowQueue(false)}
+          onEdit={onQueueEdit}
+          onDelete={onQueueDelete}
+          onMoveToFront={onQueueMoveToFront}
+          onReorder={onQueueReorder}
+          onRetry={onQueueRetry}
+        />
+      )}
       {shouldShowWorking(agentStatus, events) && (
         <div className="agent-working" aria-live="polite">
           <span className="agent-working-shimmer">Working</span>
@@ -163,21 +339,46 @@ export function AgentView({
       {ready ? (
         <form
           className="agent-input"
-          onSubmit={event => {
-            event.preventDefault();
-            submit();
-          }}
+              onSubmit={event => {
+                event.preventDefault();
+            void submit();
+              }}
         >
           <div className="agent-input-surface">
+            <label className="agent-attachment-picker" title="Attach files">
+              <span aria-hidden="true">＋</span>
+              <input
+                type="file"
+                multiple
+                onChange={event => {
+                  addAttachments(event.target.files);
+                  event.target.value = "";
+                }}
+                aria-label="Attach files"
+                disabled={!canUpload || uploadingAttachments}
+              />
+            </label>
             <textarea
               ref={inputRef}
               value={draft}
-              onChange={event => setDraft(event.target.value)}
+              onChange={event => {
+                const value = event.target.value;
+                setDraft(value);
+                setDraftWarning(
+                  new TextEncoder().encode(value).length > agentDraftMaximumBytes
+                    ? "Draft is too large to save locally."
+                    : "",
+                );
+              }}
               onKeyDown={event => {
                 if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
                   event.preventDefault();
-                  submit();
+                  void submit();
                 }
+              }}
+              onPaste={event => {
+                if (!canUpload || !event.clipboardData?.files?.length) return;
+                addAttachments(event.clipboardData.files);
               }}
               placeholder={`Message ${displayTitle}…`}
               aria-label="Message"
@@ -187,9 +388,21 @@ export function AgentView({
               autoCorrect="off"
               autoComplete="off"
               spellCheck="false"
-              disabled={!canCompose}
+              disabled={!canCompose || uploadingAttachments}
             />
-            <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose} aria-label="Send">
+            {attachments.length > 0 && (
+              <div className="agent-attachment-list" aria-label="Selected attachments">
+                {attachments.map((item, index) => (
+                  <span key={`${item.file.name}-${item.file.lastModified}-${index}`} className={`agent-attachment-chip ${item.status}`}>
+                    <span>{item.file.name}</span>
+                    {item.status === "uploading" && <small>{Math.round(item.progress * 100)}%</small>}
+                    {item.status === "failed" && <><small title={item.error}>Failed</small><button type="button" onClick={() => retryAttachment(index)}>Retry</button></>}
+                    {!uploadingAttachments && <button type="button" onClick={() => removeAttachment(index)} aria-label={`Remove ${item.file.name}`}>×</button>}
+                  </span>
+                ))}
+              </div>
+            )}
+            <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments} aria-label="Send">
               <SendIcon />
             </button>
           </div>
@@ -198,6 +411,17 @@ export function AgentView({
             {mode && <span className="agent-mode-badge">{mode}</span>}
             {agentModel(session, events) && <code>{agentModel(session, events)}</code>}
             {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
+            {queueItems.length > 0 && (
+              <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
+                Queue {queueItems.length}
+              </button>
+            )}
+            {canInterrupt && (
+              <>
+                <button type="button" className="agent-cancel-button" onClick={onCancel}>Cancel</button>
+                {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments} onClick={() => { void submit(true); }}>Send now</button>}
+              </>
+            )}
           </div>
         </form>
       ) : (
@@ -343,8 +567,10 @@ function blockKindKey(block, index) {
   return `${block.kind}-${id || "event"}-${sequence || index}`;
 }
 
-function AgentBlock({ block }) {
+function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEditResend = () => {}, isLastUser = false, canInteract = false }) {
   switch (block.kind) {
+  case "structured":
+    return <StructuredAgentBlock event={block.event} onInteraction={onInteraction} canInteract={canInteract} />;
   case "user":
   case "assistant": {
     const event = block.event;
@@ -354,6 +580,10 @@ function AgentBlock({ block }) {
         <div className={`agent-message user${interrupted ? " interrupted" : ""}`}>
           <div className="agent-bubble">
             <MarkdownContent value={event.content || ""} />
+          </div>
+          <div className="agent-message-actions">
+            <button type="button" onClick={() => onCopy(event)}>Copy</button>
+            {isLastUser && <button type="button" onClick={() => onEditResend(event.content || "")}>Edit &amp; resend</button>}
           </div>
           <div className="agent-message-meta">
             {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
@@ -365,6 +595,9 @@ function AgentBlock({ block }) {
     return (
       <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
         <MarkdownContent value={event.content || ""} />
+        <div className="agent-message-actions">
+          <button type="button" onClick={() => onCopy(event)}>Copy</button>
+        </div>
         <div className="agent-message-meta">
           {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
           {event.durationMs ? formatDuration(event.durationMs) : ""}
@@ -420,6 +653,270 @@ function AgentBlock({ block }) {
       </details>
     );
   }
+}
+
+function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false }) {
+  const type = String(event?.type || "").trim().toLowerCase().replaceAll("-", "_");
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+  const state = String(payload.state || "").toLowerCase();
+  const title = payload.title || payload.label || payload.name || type.replaceAll("_", " ");
+  const [submitting, setSubmitting] = useState(false);
+  const [answers, setAnswers] = useState({});
+  const [customAnswers, setCustomAnswers] = useState({});
+  const requestID = String(payload.requestId || "").trim();
+  const pending = canInteract && (state === "pending" || state === "submitting") && requestID;
+  const questions = type === "question"
+    ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => ({
+      ...question,
+      id: String(question?.id || `question-${index}`),
+      prompt: String(question?.prompt || question?.title || "Question"),
+      selection: String(question?.selection || "single").toLowerCase() === "multiple" ? "multiple" : "single",
+      required: question?.required !== false,
+      allowCustom: Boolean(question?.allowCustom),
+      options: Array.isArray(question?.options) ? question.options : [],
+    }))
+    : [];
+  const permissionOptions = type === "permission" && Array.isArray(payload.options) ? payload.options : [];
+  const submitResponse = response => {
+    if (!pending || submitting || state !== "pending") return;
+    setSubmitting(true);
+    try {
+      const result = onInteraction({ requestId: requestID, kind: type, response });
+      // App-level request adapters return a Promise when the Host rejects the
+      // response. Restore the card so a transient failure is retryable.
+      Promise.resolve(result).catch(() => setSubmitting(false));
+    } catch {
+      setSubmitting(false);
+    }
+  };
+  const toggleQuestionOption = (question, optionID) => {
+    if (!pending || submitting || state !== "pending") return;
+    setAnswers(previous => {
+      const selected = new Set(previous[question.id] || []);
+      if (question.selection === "multiple") {
+        if (selected.has(optionID)) selected.delete(optionID);
+        else selected.add(optionID);
+      } else {
+        selected.clear();
+        selected.add(optionID);
+      }
+      return { ...previous, [question.id]: [...selected] };
+    });
+  };
+  const submitQuestionAnswers = () => {
+    const normalized = {};
+    const custom = {};
+    for (const question of questions) {
+      const selected = Array.isArray(answers[question.id]) ? answers[question.id] : [];
+      const customValue = String(customAnswers[question.id] || "").trim();
+      if (selected.length > 0 || customValue) normalized[question.id] = selected;
+      if (customValue) custom[question.id] = customValue;
+    }
+    submitResponse({ answers: normalized, ...(Object.keys(custom).length ? { customAnswers: custom } : {}) });
+  };
+  const questionsValid = questions.every(question => {
+    if (!question.required) return true;
+    return (answers[question.id] || []).length > 0 || String(customAnswers[question.id] || "").trim().length > 0;
+  });
+  const cancelInteraction = () => submitResponse({ cancelled: true });
+  const selectPermission = option => submitResponse({ decision: option.id || option.value });
+  const optionID = option => String(option?.id || option?.value || "");
+
+  useEffect(() => {
+    if (state !== "pending") setSubmitting(false);
+  }, [state]);
+
+  const interactionPending = pending && state === "pending";
+  const isSelected = (questionID, id) => (answers[questionID] || []).includes(id);
+
+  const questionContent = questions.map(question => (
+    <fieldset className="agent-question" key={question.id}>
+      <legend>{question.prompt}</legend>
+      <div className="agent-structured-options" role={question.selection === "multiple" ? "group" : "radiogroup"} aria-label={question.prompt}>
+        {question.options.map((option, index) => {
+          const id = optionID(option) || `option-${index}`;
+          const selected = isSelected(question.id, id);
+          return (
+            <button
+              key={`${question.id}-${id}`}
+              type="button"
+              className={selected ? "selected" : ""}
+              onClick={() => toggleQuestionOption(question, id)}
+              disabled={!interactionPending}
+              aria-pressed={selected}
+            >
+              <span>{option.label || option.id || option.value || id}</span>
+              {option.description && <small>{option.description}</small>}
+            </button>
+          );
+        })}
+      </div>
+      {question.allowCustom && (
+        <input
+          className="agent-question-custom"
+          value={customAnswers[question.id] || ""}
+          onChange={event => setCustomAnswers(previous => ({ ...previous, [question.id]: event.target.value }))}
+          placeholder="Custom answer"
+          aria-label={`${question.prompt} custom answer`}
+          disabled={!interactionPending}
+        />
+      )}
+    </fieldset>
+  ));
+
+  const permissionContent = permissionOptions.map((option, index) => {
+    const id = optionID(option) || `option-${index}`;
+    return (
+      <button key={id} type="button" onClick={() => selectPermission(option)} disabled={!interactionPending}>
+        <span>{option.label || option.id || option.value || id}</span>
+        {option.description && <small>{option.description}</small>}
+      </button>
+    );
+  });
+
+  const responseControls = interactionPending && canInteract && (
+    <div className="agent-structured-actions">
+      {type === "question" && <button type="button" onClick={submitQuestionAnswers} disabled={submitting || !questionsValid}>Submit</button>}
+      {(type === "question" || type === "permission") && <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>}
+    </div>
+  );
+
+  return (
+    <section className={`agent-structured agent-structured-${type}`} aria-label={title}>
+      <div className="agent-structured-head">
+        <span className="agent-structured-icon" aria-hidden="true">{structuredIcon(type)}</span>
+        <strong>{title}</strong>
+        <span className={`agent-structured-state ${state}`}>{structuredStateLabel(state)}</span>
+      </div>
+      {payload.description && <p className="agent-structured-description">{payload.description}</p>}
+      {pending && type === "question" && questionContent}
+      {pending && type === "permission" && permissionContent.length > 0 && (
+        <div className="agent-structured-options" role="group" aria-label={`${title} options`}>{permissionContent}</div>
+      )}
+      {responseControls}
+      {!canInteract && (type === "question" || type === "permission") && (state === "pending" || state === "submitting") && (
+        <p className="agent-structured-readonly" role="status">This Host does not support responding here.</p>
+      )}
+      {(type === "plan" || type === "todo") && Array.isArray(payload.items) && (
+        <ul className="agent-structured-items">
+          {payload.items.map((item, index) => (
+            <li key={item.id || index} className={item.state || "pending"}>
+              <span aria-hidden="true">{item.state === "completed" ? "✓" : "○"}</span>
+              {item.label || item.title || item.prompt || ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {type !== "question" && type !== "permission" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
+        <p className="agent-structured-summary">{payload.summary || payload.detail || payload.name}</p>
+      )}
+    </section>
+  );
+}
+
+function structuredIcon(type) {
+  return {
+    question: "?",
+    permission: "✓",
+    plan: "☷",
+    todo: "☑",
+    activity: "•",
+    plugin: "◆",
+    subagent: "◇",
+    attachment: "⌕",
+  }[type] || "•";
+}
+
+function structuredStateLabel(state) {
+  return {
+    pending: "Pending",
+    submitting: "Submitting…",
+    resolved: "Resolved",
+    completed: "Completed",
+    cancelled: "Cancelled",
+    canceled: "Cancelled",
+    failed: "Failed",
+    in_progress: "In progress",
+  }[state] || (state ? state.replaceAll("_", " ") : "Details");
+}
+
+function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onReorder, onRetry }) {
+  const [editingID, setEditingID] = useState(null);
+  const [editingText, setEditingText] = useState("");
+  const [deleteID, setDeleteID] = useState(null);
+  const [draggingID, setDraggingID] = useState(null);
+
+  const beginEdit = item => {
+    setEditingID(item.id);
+    setEditingText(item.text);
+    setDeleteID(null);
+  };
+
+  const saveEdit = item => {
+    const value = editingText.trim();
+    if (value) onEdit(item.id, value, item.attachments || []);
+    setEditingID(null);
+    setEditingText("");
+  };
+
+  return (
+    <div className="agent-queue-panel" role="dialog" aria-modal="true" aria-label="Queued messages">
+      <div className="agent-queue-panel-head"><strong>Queued messages</strong><button type="button" onClick={onClose} aria-label="Close queue">×</button></div>
+      {items.length === 0 ? <p>No queued messages.</p> : items.map(item => (
+        <div
+          className={`agent-queue-item ${item.status || "queued"}`}
+          key={item.id}
+          draggable={item.status !== "sending"}
+          onDragStart={() => setDraggingID(item.id)}
+          onDragEnd={() => setDraggingID(null)}
+          onDragOver={event => {
+            if (draggingID && draggingID !== item.id && item.status !== "sending") event.preventDefault();
+          }}
+          onDrop={event => {
+            event.preventDefault();
+            if (draggingID && draggingID !== item.id && item.status !== "sending") onReorder(draggingID, item.id);
+            setDraggingID(null);
+          }}
+        >
+          {editingID === item.id ? (
+            <textarea
+              className="agent-queue-edit"
+              value={editingText}
+              onChange={event => setEditingText(event.target.value)}
+              aria-label="Edit queued message"
+              autoFocus
+            />
+          ) : (
+            <div className="agent-queue-item-text">{item.text}</div>
+          )}
+          {item.attachments?.length > 0 && (
+            <div className="agent-queue-item-attachments" aria-label="Queued attachments">
+              {item.attachments.map(attachment => <span key={attachment.attachmentId}>{attachment.name || attachment.attachmentId}</span>)}
+            </div>
+          )}
+          {item.failureReason && <div className="agent-queue-error">{item.failureReason}</div>}
+          <div className="agent-queue-actions">
+            {editingID === item.id ? (
+              <>
+                <button type="button" onClick={() => saveEdit(item)} disabled={!editingText.trim()}>Save</button>
+                <button type="button" onClick={() => setEditingID(null)}>Cancel</button>
+              </>
+            ) : item.status === "failed" && <button type="button" onClick={() => onRetry(item.id)}>Retry</button>}
+            {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => beginEdit(item)}>Edit</button>}
+            {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => onMoveToFront(item.id)}>Move to front</button>}
+            {item.status !== "sending" && editingID !== item.id && (deleteID === item.id ? (
+              <>
+                <span className="agent-queue-delete-confirm">Delete?</span>
+                <button type="button" onClick={() => { onDelete(item.id); setDeleteID(null); }}>Confirm</button>
+                <button type="button" onClick={() => setDeleteID(null)}>Keep</button>
+              </>
+            ) : <button type="button" onClick={() => setDeleteID(item.id)}>Delete</button>)}
+            {item.status === "sending" && <span aria-live="polite">Sending…</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ActivityGroup({ block }) {
