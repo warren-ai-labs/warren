@@ -232,8 +232,12 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         let snapshot = recorder.snapshot()
         XCTAssertNotNil(snapshot.node(id: "settings.relay.save"))
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.reregister"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.registration"))
         XCTAssertNotNil(snapshot.node(id: "settings.relay.reset"))
+
+        try recorder.perform(.press, on: "settings.relay.registration")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reregister"))
 
         try recorder.perform(.press, on: "settings.relay.save")
         wait(for: [save], timeout: 1)
