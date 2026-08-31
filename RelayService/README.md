@@ -77,6 +77,11 @@ Hosts can share one IP and port because their route paths are independent. A
 DNS deployment continues to use the per-route hostname form; an explicit
 `path_prefix` can be used in either deployment.
 
+For an intentional trusted-network HTTP deployment, including the iOS App
+Transport Security exception required by a private development build, see
+[Using an HTTP Relay](../docs/relay-http.md). Public or untrusted deployments
+must terminate TLS instead.
+
 ## Host Registration and Connection
 
 The daemon token in `~/.warren/token` is the canonical Host Secret. Create a Host record to obtain a one-time enrollment ticket, then enroll that existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or revocation bumps the Host generation, disconnects the old socket, and invalidates capabilities from the previous generation.
