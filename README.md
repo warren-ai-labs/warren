@@ -247,6 +247,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
 - [docs/startup-performance-governance.md](docs/startup-performance-governance.md) — cold-start critical path, deferral rules, and review checklist
 - [docs/update-service.md](docs/update-service.md) — Cloudflare release proxy, caching, and updater endpoint contract
+- [docs/relay-http.md](docs/relay-http.md) — trusted-network HTTP Relay setup and iOS development notes
 - [docs/runtime.md](docs/runtime.md) — ghostline runtime and recovery
 - [Headless/README.md](Headless/README.md) — headless daemon and CLI
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
