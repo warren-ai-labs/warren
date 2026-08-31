@@ -218,6 +218,11 @@ type agentSession struct {
 	titleAssistantID       string
 	titleAssistantComplete bool
 	titleGenerationStarted bool
+	// hookStateModTime prevents a durable provider hook observation from being
+	// re-applied over newer transcript state on every reconcile tick. Hook
+	// writes use an atomic rename, so the state file's modification time is a
+	// stable change token for one observation.
+	hookStateModTime time.Time
 	// lastFind throttles transcript discovery while a CLI has not written a
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
@@ -3533,10 +3538,12 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.titleAssistantID = ""
 		existing.titleAssistantComplete = false
 		existing.titleGenerationStarted = false
+		existing.hookStateModTime = time.Time{}
 		existing.mu.Unlock()
 	} else if existing != nil {
 		existing.mu.Lock()
 		existing.status = api.AgentStatus{}
+		existing.hookStateModTime = time.Time{}
 		existing.mu.Unlock()
 	}
 	if existing == nil {
@@ -4079,6 +4086,21 @@ func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
 // first event's sequence and can be passed back as `before` to page further
 // into the past.
 func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) api.AgentHistoryResult {
+	return s.agentHistoryPageWithOptions(sessionID, before, limit, false)
+}
+
+// agentHistoryPageWithOptions serves the regular event page and the mobile
+// conversation-priority view. The latter intentionally returns only user and
+// assistant messages: a long run of tool calls can otherwise fill a bounded
+// page and hide the conversation the reader is trying to recover. The cursor
+// remains an event sequence, so clients can page backwards without changing
+// the wire contract or the ordering of the default view.
+func (s *Service) agentHistoryPageWithOptions(
+	sessionID string,
+	before uint64,
+	limit int,
+	conversationOnly bool,
+) api.AgentHistoryResult {
 	if limit <= 0 {
 		limit = agentHistoryDefaultLimit
 	}
@@ -4094,10 +4116,17 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 		return result
 	}
 	entry.mu.Lock()
-	events := entry.events
+	// Take a stable snapshot before applying a potentially more expensive
+	// conversation projection. The watcher can append deltas concurrently;
+	// iterating its backing slice after unlocking would race a reallocation and
+	// could make a history response internally inconsistent.
+	events := append([]api.AgentEvent(nil), entry.events...)
 	entry.mu.Unlock()
 	if len(events) == 0 {
 		return result
+	}
+	if conversationOnly {
+		return conversationHistoryPage(events, before, limit, result)
 	}
 	var page []api.AgentEvent
 	start := 0
@@ -4120,6 +4149,111 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 	result.Cursor = page[0].Sequence
 	result.HasMore = start > 0
 	return result
+}
+
+func conversationHistoryPage(
+	events []api.AgentEvent,
+	before uint64,
+	limit int,
+	result api.AgentHistoryResult,
+) api.AgentHistoryResult {
+	conversation := conversationHistoryEvents(events)
+	if before > 0 {
+		end := sort.Search(len(conversation), func(i int) bool {
+			return conversation[i].Sequence >= before
+		})
+		conversation = conversation[:end]
+	}
+
+	// Project the bounded Host history before applying the page limit. OpenCode
+	// emits one append-only event for every mutable content delta; counting
+	// those rows independently would let a single long answer consume the whole
+	// conversation page and return only its tail. The projection coalesces such
+	// deltas into one logical message while retaining its first event sequence
+	// as the pagination cursor.
+	if len(conversation) == 0 {
+		return result
+	}
+	start := max(0, len(conversation)-limit)
+	page := conversation[start:]
+	result.Events = page
+	result.Cursor = page[0].Sequence
+	result.HasMore = start > 0
+	return result
+}
+
+// conversationHistoryEvents keeps only readable conversation messages and
+// folds OpenCode's mutable-part deltas. The regular history endpoint remains
+// a lossless event view; this projection is opt-in for mobile conversation
+// surfaces that need message pagination without tool/reasoning noise.
+func conversationHistoryEvents(events []api.AgentEvent) []api.AgentEvent {
+	result := make([]api.AgentEvent, 0, len(events))
+	positions := make(map[string]int)
+	for _, source := range events {
+		if !isConversationAgentEvent(source) {
+			continue
+		}
+		event := source
+		typeName := normalizedAgentEventType(event)
+		provider := strings.ToLower(strings.TrimSpace(event.Provider))
+		id := strings.TrimSpace(event.ID)
+		if provider == "opencode" && id != "" && (typeName == "user" || typeName == "assistant") {
+			key := provider + ":" + typeName + ":" + id
+			if position, ok := positions[key]; ok {
+				result[position] = mergeConversationAgentEvent(result[position], event)
+				continue
+			}
+			// A projected message is no longer a delta. This also keeps the
+			// response stable if a client feeds it back through its own merge.
+			event.ContentDelta = false
+			positions[key] = len(result)
+		}
+		result = append(result, event)
+	}
+	return result
+}
+
+func mergeConversationAgentEvent(previous, next api.AgentEvent) api.AgentEvent {
+	if next.ContentDelta {
+		previous.Content += next.Content
+	} else if next.Content != "" {
+		// OpenCode may rewrite a part instead of appending a delta. Match the
+		// Web projection and keep the provider's latest complete value.
+		previous.Content = next.Content
+	}
+	if next.Turn != 0 {
+		previous.Turn = next.Turn
+	}
+	if next.Role != "" {
+		previous.Role = next.Role
+	}
+	if next.Model != "" {
+		previous.Model = next.Model
+	}
+	if next.StopReason != "" {
+		previous.StopReason = next.StopReason
+	}
+	if !next.Timestamp.IsZero() {
+		previous.Timestamp = next.Timestamp
+	}
+	if next.Error != "" {
+		previous.Error = next.Error
+	}
+	previous.ContentDelta = false
+	return previous
+}
+
+func normalizedAgentEventType(event api.AgentEvent) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(event.Type), "-", "_"))
+}
+
+func isConversationAgentEvent(event api.AgentEvent) bool {
+	typeName := normalizedAgentEventType(event)
+	role := strings.ToLower(strings.TrimSpace(event.Role))
+	if typeName != "user" && typeName != "assistant" && role != "user" && role != "assistant" {
+		return false
+	}
+	return strings.TrimSpace(event.Content) != ""
 }
 
 // agentTranscriptChunk returns raw JSONL only from the transcript already
@@ -4308,8 +4442,10 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 	return watcher.WaitReady(ctx)
 }
 
-// applyAgentState reflects the managed hook's SessionEnd state on the status
-// light: the agent CLI is gone, but the Warren session is still a shell.
+// applyAgentState reflects the managed provider hook's state file on the
+// status light. Hook observations are edge-triggered by file modification
+// time: once a transcript watcher has observed newer progress, the same
+// durable hook snapshot must not overwrite it on every one-second reconcile.
 func (s *Service) applyAgentState(session api.Session) {
 	kind := session.Kind
 	if kind == "shell" || kind == "custom" {
@@ -4333,7 +4469,26 @@ func (s *Service) applyAgentState(session api.Session) {
 			return
 		}
 	}
-	current := s.agentStatus(session.ID)
+	info, err := os.Stat(agent.StatePath(session.ID))
+	if err != nil {
+		return
+	}
+	s.agentsMu.Lock()
+	entry := s.agents[session.ID]
+	if entry == nil {
+		entry = &agentSession{}
+		s.agents[session.ID] = entry
+	}
+	entry.mu.Lock()
+	if !entry.hookStateModTime.IsZero() && entry.hookStateModTime.Equal(info.ModTime()) {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.hookStateModTime = info.ModTime()
+	current := entry.status
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
 	switch state.Status.Activity {
 	case api.AgentActivityExited:
 		if current.Activity != state.Status.Activity {
@@ -4342,6 +4497,19 @@ func (s *Service) applyAgentState(session api.Session) {
 	case api.AgentActivityReady:
 		if current.Activity == api.AgentActivityExited || current.Activity == api.AgentActivityFailed {
 			s.forceAgentStatus(session.ID, state.Status)
+		} else if current.Activity != state.Status.Activity && !current.Equal(state.Status) {
+			// Stop/session.idle hooks are the provider's explicit turn boundary.
+			// They must clear a transcript status that is still working when the
+			// final assistant event and the hook arrive in different poll ticks.
+			s.recordAgentStatus(session.ID, state.Status)
+		}
+	case api.AgentActivityWorking:
+		if current.Activity != api.AgentActivityExited && current.Activity != api.AgentActivityFailed && !current.Equal(state.Status) {
+			s.recordAgentStatus(session.ID, state.Status)
+		}
+	case api.AgentActivityBlocked, api.AgentActivityStalled:
+		if current.Activity != api.AgentActivityExited && current.Activity != api.AgentActivityFailed && !current.Equal(state.Status) {
+			s.recordAgentStatus(session.ID, state.Status)
 		}
 	case api.AgentActivityFailed:
 		if current.Activity != state.Status.Activity {

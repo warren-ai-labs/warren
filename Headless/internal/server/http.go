@@ -1794,7 +1794,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
-		return p.writeResult(command.ID, p.server.Service.agentHistoryPage(sessionID, before, limit))
+		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
+		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithOptions(
+			sessionID,
+			before,
+			limit,
+			priority == "conversation" || priority == "messages",
+		))
 	case "agent.transcript":
 		sessionID := stringParam(params, "session")
 		if sessionID == "" {

@@ -673,6 +673,12 @@ button:disabled {
   background: var(--color-status-connecting);
 }
 
+/* A Host attention payload outranks the lifecycle color. Keep stale
+   ready/working snapshots yellow until the Host explicitly clears it. */
+.activity.attention {
+  background: var(--color-status-waiting);
+}
+
 @keyframes ping {
   75%,
   100% {
@@ -1051,6 +1057,123 @@ button:disabled {
   overflow: hidden;
   background: var(--color-bg-page);
   touch-action: pan-y;
+}
+
+.agent-attention {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+  padding: 8px 22px;
+  border-top: 1px solid color-mix(in srgb, var(--color-status-warning) 34%, transparent);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+}
+
+.agent-attention.input {
+  border-top-color: color-mix(in srgb, var(--color-text-link) 34%, transparent);
+}
+
+.agent-attention.warning {
+  border-top-color: color-mix(in srgb, var(--color-status-warning) 34%, transparent);
+}
+
+.agent-attention-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-circle);
+  color: var(--color-status-warning);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+}
+
+.agent-attention.input .agent-attention-icon {
+  color: var(--color-text-link);
+}
+
+.agent-attention.approval .agent-attention-icon {
+  color: var(--color-status-working);
+}
+
+.agent-attention-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.agent-attention-copy strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.agent-attention-copy span {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-attention-action {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--color-status-warning) 42%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.agent-working {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+  padding: 7px 22px;
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+}
+
+.agent-working-shimmer {
+  color: var(--color-status-working);
+  background: linear-gradient(90deg, currentColor 0%, currentColor 38%, #fff 50%, currentColor 62%, currentColor 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: agent-shimmer 1.35s linear infinite;
+}
+
+.agent-working-provider {
+  color: var(--color-text-secondary);
+}
+
+@keyframes agent-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-working-shimmer {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 
 .agent-events {
@@ -1541,6 +1664,43 @@ button:disabled {
   box-shadow: 0 0 0 2px var(--color-accent-subtle);
 }
 
+.agent-input-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: 5px 4px 0;
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+}
+
+.agent-input-meta code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font: 10.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-input-reason {
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-mode-badge {
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-text);
+  font: 10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
 .agent-input textarea {
   flex: 1 1 auto;
   min-width: 0;
@@ -1557,6 +1717,11 @@ button:disabled {
 
 .agent-input textarea::placeholder {
   color: var(--color-text-secondary);
+}
+
+.agent-input textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .agent-starting {
@@ -3024,13 +3189,19 @@ button:disabled {
 
   .agent-view-toggle button {
     height: 26px;
-    padding-inline: 10px;
+    width: 30px;
+    padding-inline: 0;
     border: 0;
     border-radius: var(--radius-full);
     background: transparent;
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
     cursor: pointer;
+  }
+
+  .agent-view-toggle button svg {
+    width: 15px;
+    height: 15px;
   }
 
   .agent-view-toggle button.active {
@@ -3239,6 +3410,11 @@ button:disabled {
   .agent-events {
     gap: var(--space-lg);
     padding: 18px 14px 14px;
+  }
+
+  .agent-attention,
+  .agent-working {
+    padding-inline: 14px;
   }
 
   .agent-bubble {

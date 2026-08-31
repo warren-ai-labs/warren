@@ -331,3 +331,54 @@ final class WarrenWireCodecTests: XCTestCase {
         bytes[offset + 3] = UInt8(value & 0xFF)
     }
 }
+
+final class WarrenANSIVisibilityRewriterTests: XCTestCase {
+    func testRewritesOnlyPureBlackTruecolorForeground() {
+        var rewriter = WarrenANSIVisibilityRewriter()
+        let input = Data("\u{1B}[38;2;0;0;0mWorking \u{1B}[48;2;0;0;0mbackground".utf8)
+
+        let output = rewriter.rewrite(input)
+
+        XCTAssertEqual(
+            String(decoding: output, as: UTF8.self),
+            "\u{1B}[38;2;234;232;230mWorking \u{1B}[48;2;0;0;0mbackground"
+        )
+    }
+
+    func testCarriesSplitSGRAcrossChunks() {
+        var rewriter = WarrenANSIVisibilityRewriter()
+
+        let first = rewriter.rewrite(Data("prefix\u{1B}[38;2;0;".utf8))
+        let second = rewriter.rewrite(Data("0;0mWorking".utf8))
+
+        XCTAssertEqual(String(decoding: first, as: UTF8.self), "prefix")
+        XCTAssertEqual(
+            String(decoding: second, as: UTF8.self),
+            "\u{1B}[38;2;234;232;230mWorking"
+        )
+    }
+
+    func testLeavesNearMissAndIndexedColorsUntouched() {
+        var rewriter = WarrenANSIVisibilityRewriter()
+        let input = Data(
+            "\u{1B}[138;2;0;0;0mnear \u{1B}[30mindexed \u{1B}[38;2;1;0;0mred".utf8
+        )
+
+        XCTAssertEqual(rewriter.rewrite(input), input)
+    }
+
+    func testResetDiscardsAnIncompleteSequence() {
+        var rewriter = WarrenANSIVisibilityRewriter()
+        XCTAssertEqual(
+            rewriter.rewrite(Data("\u{1B}[38;2;0;".utf8)),
+            Data()
+        )
+
+        rewriter.reset()
+
+        XCTAssertEqual(
+            rewriter.rewrite(Data("0;0mtext".utf8)),
+            Data("0;0mtext".utf8)
+        )
+    }
+}

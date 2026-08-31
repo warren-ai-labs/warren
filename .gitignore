@@ -2,6 +2,7 @@
 .build/
 .swiftpm/
 *.xcodeproj/xcuserdata/
+Packages/WarrenIOS/WarrenIOS.xcodeproj/
 DerivedData/
 xcuserdata/
 .vscode/

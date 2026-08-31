@@ -10,7 +10,9 @@ export function AgentView({
   events = [],
   status = null,
   onSend,
+  onOpenTerminal,
   ready = true,
+  hasControl = true,
   hasMore = false,
   loadingMore = false,
   onLoadMore = () => {},
@@ -24,12 +26,17 @@ export function AgentView({
   const anchorOffsetRef = useRef(null);
   const skipFollowRef = useRef(false);
   const [draft, setDraft] = useState("");
-  const blocks = groupAgentEvents(events);
+  const blocks = groupAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const displayTitle = sessionDisplayTitle(session) || "Agent";
+  const agentStatus = status || session?.agentStatus || null;
+  const attention = agentStatus?.attention || null;
+  const mode = agentModeLabel(session);
+  const canCompose = ready && hasControl && canSendForStatus(agentStatus);
+  const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
   // The Host projects a session-level lifecycle. "working" is the only state
   // that means the agent is actively producing output; "blocked"/"stalled"
   // are waiting on a human, not running, so they must not show the shim.
-  const running = status?.activity === "working";
+  const running = agentStatus?.activity === "working";
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -131,15 +138,13 @@ export function AgentView({
             <div className="agent-empty-hint">Messages, tool calls and results will appear here.</div>
           </div>
         ) : (
-          blocks.map((block, index) => {
-            // Token usage is only useful right after an assistant reply;
-            // intermediate counts between tool calls are noise.
-            if (block.kind === "usage") {
-              const previous = blocks[index - 1];
-              if (!previous || previous.kind !== "assistant" || !block.event.usage) return null;
-            }
-            return <AgentBlock key={blockKindKey(block, index)} block={block} />;
-          })
+          blocks.map((block, index) => (
+            // Usage remains in the protocol for future analytics, but it is
+            // intentionally not a conversation row on mobile or Web.
+            block.kind === "usage"
+              ? null
+              : <AgentBlock key={blockKindKey(block, index)} block={block} />
+          ))
         )}
         {running && (
           <div className="agent-running-shim" aria-live="polite">
@@ -148,6 +153,13 @@ export function AgentView({
           </div>
         )}
       </div>
+      {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
+      {shouldShowWorking(agentStatus, events) && (
+        <div className="agent-working" aria-live="polite">
+          <span className="agent-working-shimmer">Working</span>
+          <span className="agent-working-provider">{displayTitle}</span>
+        </div>
+      )}
       {ready ? (
         <form
           className="agent-input"
@@ -175,10 +187,17 @@ export function AgentView({
               autoCorrect="off"
               autoComplete="off"
               spellCheck="false"
+              disabled={!canCompose}
             />
-            <button type="submit" className="agent-send" disabled={!draft.trim()} aria-label="Send">
+            <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose} aria-label="Send">
               <SendIcon />
             </button>
+          </div>
+          <div className="agent-input-meta" aria-label="Agent details">
+            <span>{agentKindLabel(session?.kind) || displayTitle}</span>
+            {mode && <span className="agent-mode-badge">{mode}</span>}
+            {agentModel(session, events) && <code>{agentModel(session, events)}</code>}
+            {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
           </div>
         </form>
       ) : (
@@ -190,6 +209,129 @@ export function AgentView({
       )}
     </div>
   );
+}
+
+function agentKindLabel(kind) {
+  switch (String(kind || "").trim().toLowerCase()) {
+  case "codex": return "Codex";
+  case "claude":
+  case "claude-code": return "Claude";
+  case "opencode":
+  case "open-code": return "OpenCode";
+  default: return "";
+  }
+}
+
+function agentModel(session, events = []) {
+  const model = String(session?.agentModel || [...events].reverse().find(event => event.model)?.model || "").trim();
+  return model || "";
+}
+
+function agentModeLabel(session) {
+  const kind = String(session?.kind || "").trim().toLowerCase();
+  const command = String(session?.command || "").trim().toLowerCase();
+  if (!kind && !command) return "";
+  if (kind === "codex") {
+    // Warren's --dangerously-bypass-hook-trust only trusts the managed hook;
+    // it does not disable Codex approvals or the sandbox.
+    if (command.includes("--dangerously-bypass-approvals-and-sandbox")
+      || command.includes("--full-auto")
+      || command.includes("--yolo")) return "YOLO";
+    if (command.includes("--ask-for-approval")) return "Ask";
+  }
+  if (kind === "claude" || kind === "claude-code") {
+    if (command.includes("--dangerously-skip-permissions") || command.includes("bypasspermissions")) return "YOLO";
+    if (command.includes("acceptedits")) return "Edit";
+    if (command.includes("permission-mode plan")) return "Plan";
+    if (command.includes("permission-mode default")) return "Ask";
+    if (command.includes("permission-mode dontask")) return "Auto";
+  }
+  if (kind === "opencode" || kind === "open-code") {
+    if (command.includes("--dangerously") || command.includes("--yolo") || command.includes("--auto-approve")) return "YOLO";
+    const match = command.match(/--(?:agent|mode)(?:=|\s+)([^\s]+)/);
+    if (match) return match[1].charAt(0).toUpperCase() + match[1].slice(1);
+  }
+  return "";
+}
+
+function AgentAttention({ attention, onOpenTerminal }) {
+  const kind = attention.kind || "warning";
+  const reason = String(attention.reason || "").trim().toLowerCase();
+  const labels = {
+    input: ["text-bubble", "Question · Reply in the composer to continue."],
+    approval: ["shield-check", "Permission · Review the request in Terminal."],
+    warning: ["triangle-exclamation", "Check the Agent in Terminal."],
+  };
+  const [icon, fallback] = labels[kind] || labels.warning;
+  const reasonLabel = {
+    question: "Question · Reply in the composer to continue.",
+    permission: "Permission · Review the request in Terminal.",
+    approval: "Permission · Review the request in Terminal.",
+    stalled: "No progress detected · Check the Agent in Terminal.",
+    no_progress: "No progress detected · Check the Agent in Terminal.",
+    no_progress_detected: "No progress detected · Check the Agent in Terminal.",
+    unexpectedabort: "Unexpected interruption · Check the Agent in Terminal.",
+    unexpected_abort: "Unexpected interruption · Check the Agent in Terminal.",
+  }[reason] || fallback;
+  return (
+    <div className={`agent-attention ${kind}`} role="status">
+      <span className="agent-attention-icon" aria-hidden="true">{icon === "shield-check" ? "✓" : icon === "text-bubble" ? "↵" : "!"}</span>
+      <span className="agent-attention-copy">
+        <strong>Needs attention</strong>
+        <span>{reasonLabel}</span>
+      </span>
+      {kind === "approval" && onOpenTerminal && (
+        <button type="button" className="agent-attention-action" onClick={onOpenTerminal}>
+          Terminal
+        </button>
+      )}
+    </div>
+  );
+}
+
+function shouldShowWorking(status, events) {
+  if (status?.activity !== "working") return false;
+  const visible = events.filter(event => !isHiddenAgentEvent(event));
+  const last = visible.at(-1);
+  // Providers may normalize an assistant message by role while preserving a
+  // provider-native type. Treat either representation as a completed reply;
+  // otherwise a late hook status can leave the shimmer below the final text.
+  const isAssistant = last?.type === "assistant" || last?.role === "assistant";
+  return !(isAssistant && String(last.content || "").trim());
+}
+
+function canSendForStatus(status) {
+  if (!status) return true;
+  const activity = String(status.activity || "").toLowerCase();
+  if (["failed", "stalled", "exited", "unknown"].includes(activity)) return false;
+  // An input/question attention is intentionally answerable in the composer;
+  // approval and warning attention must be reviewed in the Terminal.
+  return !status.attention || status.attention.kind === "input";
+}
+
+function agentInputDisabledReason({ ready, hasControl, status }) {
+  if (!ready) return "Agent is starting in Terminal.";
+  if (!hasControl) return "Terminal control is held by another client.";
+  const activity = String(status?.activity || "").toLowerCase();
+  if (status?.attention?.kind === "approval") return "Approval is required in Terminal.";
+  if (status?.attention && status.attention.kind !== "input") return "Check the Agent in Terminal.";
+  switch (activity) {
+  case "stalled": return "Agent is stalled.";
+  case "failed": return "Agent failed.";
+  case "exited": return "Agent has exited.";
+  case "unknown": return "Agent status is unavailable.";
+  default: return "";
+  }
+}
+
+function isHiddenAgentEvent(event) {
+  const type = String(event?.type || "").toLowerCase().replaceAll("-", "_");
+  return type === "usage"
+    || type === "token_usage"
+    || type === "token_count"
+    || type.endsWith("_usage")
+    || type === "system_instructions"
+    || (event?.usage && String(event?.content || "").trim().toLowerCase() === "token usage");
 }
 
 function blockKindKey(block, index) {
