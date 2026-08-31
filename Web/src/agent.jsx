@@ -14,7 +14,6 @@ import {
   saveAgentDraft,
   validateAgentAttachment,
 } from "./agent.js";
-import { sessionDisplayTitle } from "./title.js";
 
 export function AgentView({
   session,
@@ -58,21 +57,15 @@ export function AgentView({
   const [submitError, setSubmitError] = useState("");
   const [draftWarning, setDraftWarning] = useState("");
   const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
-  const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
-  const mode = agentModeLabel(session);
   const canCompose = ready && hasControl && canSendForStatus(agentStatus);
   const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
-  // The Host projects a session-level lifecycle. "working" is the only state
-  // that means the agent is actively producing output; "blocked"/"stalled"
-  // are waiting on a human, not running, so they must not show the shim.
-  const running = agentStatus?.activity === "working";
-  const canInterrupt = running && capabilities.includes("agent-interrupt-v1");
+  const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
-  const showInputMeta = Boolean(mode || disabledReason || queueItems.length > 0 || canInterrupt);
-  const lastUserEvent = [...events].reverse().find(event => normalizeAgentEventType(event?.type) === "user") || null;
+  const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
+  const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
 
   const copyMessage = async event => {
@@ -270,7 +263,7 @@ export function AgentView({
         addAttachments(event.dataTransfer?.files);
       }}
     >
-      <div ref={listRef} className="agent-events" aria-label={`${displayTitle} conversation`}>
+      <div ref={listRef} className="agent-events" aria-label="Agent conversation">
         {hasMore && (
           <button
             ref={loadMoreRef}
@@ -305,12 +298,6 @@ export function AgentView({
               />
           ))
         )}
-        {running && (
-          <div className="agent-running-shim" aria-live="polite">
-            <span className="codex-caret" aria-hidden="true" />
-            <span className="agent-running-label">{displayTitle} is working…</span>
-          </div>
-        )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
       {(actionError || submitError) && (
@@ -331,19 +318,13 @@ export function AgentView({
           onRetry={onQueueRetry}
         />
       )}
-      {shouldShowWorking(agentStatus, events) && (
-        <div className="agent-working" aria-live="polite">
-          <span className="agent-working-shimmer">Working</span>
-          <span className="agent-working-provider">{displayTitle}</span>
-        </div>
-      )}
       {ready ? (
         <form
           className="agent-input"
-              onSubmit={event => {
-                event.preventDefault();
+          onSubmit={event => {
+            event.preventDefault();
             void submit();
-              }}
+          }}
         >
           <div className="agent-input-surface">
             <label className="agent-attachment-picker" title="Attach files">
@@ -381,7 +362,7 @@ export function AgentView({
                 if (!canUpload || !event.clipboardData?.files?.length) return;
                 addAttachments(event.clipboardData.files);
               }}
-              placeholder={`Message ${displayTitle}…`}
+              placeholder="Message…"
               aria-label="Message"
               rows={1}
               enterKeyHint="send"
@@ -409,7 +390,6 @@ export function AgentView({
           </div>
           {showInputMeta && (
             <div className="agent-input-meta" aria-label="Agent controls">
-              {mode && <span className="agent-mode-badge">{mode}</span>}
               {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
               {queueItems.length > 0 && (
                 <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
@@ -434,33 +414,6 @@ export function AgentView({
       )}
     </div>
   );
-}
-
-function agentModeLabel(session) {
-  const kind = String(session?.kind || "").trim().toLowerCase();
-  const command = String(session?.command || "").trim().toLowerCase();
-  if (!kind && !command) return "";
-  if (kind === "codex") {
-    // Warren's --dangerously-bypass-hook-trust only trusts the managed hook;
-    // it does not disable Codex approvals or the sandbox.
-    if (command.includes("--dangerously-bypass-approvals-and-sandbox")
-      || command.includes("--full-auto")
-      || command.includes("--yolo")) return "YOLO";
-    if (command.includes("--ask-for-approval")) return "Ask";
-  }
-  if (kind === "claude" || kind === "claude-code") {
-    if (command.includes("--dangerously-skip-permissions") || command.includes("bypasspermissions")) return "YOLO";
-    if (command.includes("acceptedits")) return "Edit";
-    if (command.includes("permission-mode plan")) return "Plan";
-    if (command.includes("permission-mode default")) return "Ask";
-    if (command.includes("permission-mode dontask")) return "Auto";
-  }
-  if (kind === "opencode" || kind === "open-code") {
-    if (command.includes("--dangerously") || command.includes("--yolo") || command.includes("--auto-approve")) return "YOLO";
-    const match = command.match(/--(?:agent|mode)(?:=|\s+)([^\s]+)/);
-    if (match) return match[1].charAt(0).toUpperCase() + match[1].slice(1);
-  }
-  return "";
 }
 
 function AgentAttention({ attention, onOpenTerminal }) {
@@ -498,17 +451,6 @@ function AgentAttention({ attention, onOpenTerminal }) {
   );
 }
 
-function shouldShowWorking(status, events) {
-  if (status?.activity !== "working") return false;
-  const visible = events.filter(event => !isHiddenAgentEvent(event));
-  const last = visible.at(-1);
-  // Providers may normalize an assistant message by role while preserving a
-  // provider-native type. Treat either representation as a completed reply;
-  // otherwise a late hook status can leave the shimmer below the final text.
-  const isAssistant = last?.type === "assistant" || last?.role === "assistant";
-  return !(isAssistant && String(last.content || "").trim());
-}
-
 function canSendForStatus(status) {
   if (!status) return true;
   const activity = String(status.activity || "").toLowerCase();
@@ -543,6 +485,11 @@ function isHiddenAgentEvent(event) {
     || (event?.usage && String(event?.content || "").trim().toLowerCase() === "token usage");
 }
 
+function isUserAgentEvent(event) {
+  return normalizeAgentEventType(event?.type) === "user"
+    || normalizeAgentEventType(event?.role) === "user";
+}
+
 function blockKindKey(block, index) {
   const id = block.call?.id || block.event?.id || block.event?.seq || block.call?.seq;
   const sequence = block.call?.seq || block.event?.seq;
@@ -560,7 +507,7 @@ function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEdit
   case "assistant": {
     const event = block.event;
     const interrupted = isInterrupted(event);
-    if (event.type === "user") {
+    if (isUserAgentEvent(event)) {
       return (
         <div className={`agent-message user${interrupted ? " interrupted" : ""}`}>
           <div className="agent-bubble">

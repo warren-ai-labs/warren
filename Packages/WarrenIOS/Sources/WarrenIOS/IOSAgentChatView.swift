@@ -144,9 +144,6 @@ public struct AgentChatView: View {
     @State private var historyScrollAnchorID: String?
     @State private var isNearLatest = true
     @State private var showReturnToLatest = false
-    @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
-    @State private var lastObservedUserEventKey: String?
-    @State private var didInitializeUserTurnTracking = false
     @State private var localAttachments: [IOSAgentLocalAttachment] = []
     @State private var isUploadingAttachments = false
     @State private var isFileImporterPresented = false
@@ -379,10 +376,6 @@ public struct AgentChatView: View {
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if shouldShowWorking {
-                        AgentWorkingFooter(phrase: workingPhrase)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
                     if let actionError = model.agentActionError, !actionError.isEmpty {
                         Text(actionError)
                             .font(IOSTypography.status)
@@ -393,7 +386,6 @@ public struct AgentChatView: View {
                     }
                     composer
                 }
-                .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
                 .animation(.easeInOut(duration: 0.22), value: model.agentAttention(for: sessionID))
                 .animation(.easeInOut(duration: 0.22), value: composerFocused)
             }
@@ -401,8 +393,6 @@ public struct AgentChatView: View {
         .onAppear {
             draft = model.agentDraft(for: sessionID)
             refreshRenderedBlocks()
-            lastObservedUserEventKey = latestUserEventKey()
-            didInitializeUserTurnTracking = model.agentHistoryLoaded(for: sessionID)
             if !model.agentHistoryLoaded(for: sessionID) {
                 model.loadOlderAgentHistory()
             }
@@ -419,9 +409,6 @@ public struct AgentChatView: View {
             historyScrollAnchorID = nil
             showReturnToLatest = false
             isNearLatest = true
-            workingPhrase = AgentWorkingPhrases.defaultPhrase
-            lastObservedUserEventKey = latestUserEventKey()
-            didInitializeUserTurnTracking = model.agentHistoryLoaded(for: sessionID)
             guard !model.agentHistoryLoaded(for: sessionID) else { return }
             model.loadOlderAgentHistory()
         }
@@ -476,17 +463,6 @@ public struct AgentChatView: View {
     }
 
     private func observeAgentRevision(using proxy: ScrollViewProxy) {
-        let currentUserEventKey = latestUserEventKey()
-        if !didInitializeUserTurnTracking {
-            if model.agentHistoryLoaded(for: sessionID) {
-                lastObservedUserEventKey = currentUserEventKey
-                didInitializeUserTurnTracking = true
-            }
-        } else if currentUserEventKey != lastObservedUserEventKey {
-            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
-            lastObservedUserEventKey = currentUserEventKey
-        }
-
         refreshRenderedBlocks()
         guard historyScrollAnchorID == nil else { return }
         // The revision is published before the new LazyVStack rows have been
@@ -496,12 +472,6 @@ public struct AgentChatView: View {
             await Task.yield()
             handleNewContent(using: proxy)
         }
-    }
-
-    private func latestUserEventKey() -> String? {
-        agentState.agentEventsBySessionID[sessionID]?
-            .last(where: \.isUserEvent)
-            .map { "\($0.sequence):\($0.id)" }
     }
 
     private func scrollToLatest(using proxy: ScrollViewProxy, animated: Bool) {
@@ -563,7 +533,7 @@ public struct AgentChatView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .bottom, spacing: 7) {
                     ZStack(alignment: .topLeading) {
-                        Text("Message \(agentKind)…")
+                        Text("Message…")
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
                             .padding(.horizontal, 7)
@@ -638,11 +608,8 @@ public struct AgentChatView: View {
                     }
                 }
 
-                if agentMode != nil || (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
+                if (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
                     HStack(spacing: 8) {
-                        if let mode = agentMode {
-                            AgentModeBadge(title: mode)
-                        }
                         if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
                             Button {
                                 isQueueSheetPresented = true
@@ -777,7 +744,6 @@ public struct AgentChatView: View {
             guard accepted else { return }
             draft = ""
             model.clearAgentDraft(for: sessionID)
-            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
             return
         }
         isUploadingAttachments = true
@@ -818,7 +784,6 @@ public struct AgentChatView: View {
             guard accepted else { return }
             draft = ""
             model.clearAgentDraft(for: sessionID)
-            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
             localAttachments.removeAll()
         }
     }
@@ -862,49 +827,8 @@ public struct AgentChatView: View {
         return model.agentStatusBySessionID[sessionID] ?? session.agentStatus
     }
 
-    private var agentKind: String {
-        let sessionKind = model.roster?.sessions.first(where: { $0.id == sessionID })?.kind
-        if let label = agentKindLabel(sessionKind) { return label }
-
-        if let provider = agentState.agentEventsBySessionID[sessionID]?.reversed()
-            .compactMap({ event -> String? in
-                let value = event.provider.trimmingCharacters(in: .whitespacesAndNewlines)
-                return value.isEmpty ? nil : value
-            })
-            .first {
-            return agentKindLabel(provider) ?? provider.capitalized
-        }
-        return "Agent"
-    }
-
-    private func agentKindLabel(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "codex": return "Codex"
-        case "claude", "claude-code": return "Claude"
-        case "opencode", "open-code": return "OpenCode"
-        default: return nil
-        }
-    }
-
     private var canSend: Bool {
         model.canSendAgent && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var shouldShowWorking: Bool {
-        guard agentStatus?.activity == .working else { return false }
-        guard let last = (agentState.agentEventsBySessionID[sessionID] ?? [])
-            .last(where: { !$0.isHiddenFromMobile }) else { return true }
-        // A provider may briefly publish `working` after its final assistant
-        // event. The completed message is the stronger visual signal, so do
-        // not leave a shimmer below it during that race.
-        return !(last.isAssistantEvent && !(last.content?.isEmpty ?? true))
-    }
-
-    private var agentMode: String? {
-        let session = model.roster?.sessions.first(where: { $0.id == sessionID })
-        let provider = agentKind == "Agent" ? session?.kind : agentKind
-        return agentModeLabel(provider: provider, command: session?.command)
     }
 }
 
@@ -1136,27 +1060,6 @@ private struct AgentAttentionBanner: View {
     }
 }
 
-private struct AgentWorkingFooter: View {
-    let phrase: String
-
-    var body: some View {
-        HStack(spacing: 7) {
-            IOSShimmerText(phrase, color: IOSTheme.accent, font: IOSTypography.working)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 7)
-        .background(IOSTheme.background)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.45))
-                .frame(height: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(phrase)
-    }
-}
-
 private struct AgentHistoryLoadMoreRow: View {
     let isLoading: Bool
     let action: () -> Void
@@ -1185,102 +1088,6 @@ private struct AgentHistoryLoadMoreRow: View {
         .disabled(isLoading)
         .accessibilityLabel(isLoading ? "Loading earlier messages" : "Load earlier messages")
     }
-}
-
-private enum AgentWorkingPhrases {
-    static let defaultPhrase = "Fermenting…"
-    static let all: [String] = [
-        "Fermenting…",
-        "Fiddle-faddling…",
-        "Booping…",
-        "Pondering…",
-        "Whirring…",
-        "Tinkering…",
-        "Conjuring…",
-        "Mulling…",
-        "Warming up…",
-        "Plotting…",
-        "Wiggling…",
-        "Riffing…",
-        "Hatching…",
-        "Stirring…",
-        "Percolating…",
-        "Polishing…",
-    ]
-
-    static func random(excluding current: String) -> String {
-        let candidates = all.filter { $0 != current }
-        return (candidates.isEmpty ? all : candidates).randomElement() ?? defaultPhrase
-    }
-}
-
-private struct AgentModeBadge: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .font(IOSTypography.metadata)
-            .foregroundStyle(IOSTheme.accent)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(IOSTheme.accentSubtle, in: Capsule())
-            .accessibilityLabel("Agent mode \(title)")
-    }
-}
-
-private func agentModeLabel(provider: String?, command: String?) -> String? {
-    let kind = provider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    guard !kind.isEmpty || !command.isEmpty else { return nil }
-
-    switch kind {
-    case "codex":
-        // `--dangerously-bypass-hook-trust` is Warren's hook bootstrap flag;
-        // it does not disable Codex approvals or the sandbox and must not be
-        // presented as YOLO.
-        if command.contains("--dangerously-bypass-approvals-and-sandbox")
-            || command.contains("--full-auto")
-            || command.contains("--yolo") {
-            return "YOLO"
-        }
-        if command.contains("--ask-for-approval") { return "Ask" }
-    case "claude", "claude-code":
-        if command.contains("--dangerously-skip-permissions") || command.contains("bypasspermissions") {
-            return "YOLO"
-        }
-        if command.contains("acceptedits") { return "Edit" }
-        if command.contains("permission-mode plan") { return "Plan" }
-        if command.contains("permission-mode default") { return "Ask" }
-        if command.contains("permission-mode dontask") { return "Auto" }
-    case "opencode", "open-code":
-        if command.contains("--dangerously") || command.contains("--yolo") || command.contains("--auto-approve") {
-            return "YOLO"
-        }
-        if let value = commandOptionValue(command, options: ["--agent", "--mode"]) {
-            return value.capitalized
-        }
-    default:
-        break
-    }
-    return nil
-}
-
-private func commandOptionValue(_ command: String, options: [String]) -> String? {
-    let tokens = command.split(whereSeparator: { $0 == " " || $0 == "\t" })
-    for (index, token) in tokens.enumerated() {
-        let value = String(token)
-        for option in options {
-            if value == option, index + 1 < tokens.count {
-                let next = String(tokens[index + 1])
-                return next.isEmpty ? nil : next
-            }
-            if value.hasPrefix(option + "=") {
-                let next = String(value.dropFirst(option.count + 1))
-                return next.isEmpty ? nil : next
-            }
-        }
-    }
-    return nil
 }
 
 private enum AgentDisplayBlock: Identifiable {
@@ -2355,9 +2162,8 @@ private struct AgentActivityGroupBlock: View {
     private var activityStatusMark: some View {
         switch activity.status {
         case .running:
-            // Keep the activity rail non-verbal: the animated Working cue is
-            // already anchored immediately above the composer. A small pulse
-            // still makes a running group discoverable without duplicating it.
+            // Keep the activity rail non-verbal while a pulse makes a running
+            // group discoverable without adding another status label.
             IOSAgentActivityMark(activity: .working, slotSize: 18)
         case .failed:
             Image(systemName: "xmark.circle")

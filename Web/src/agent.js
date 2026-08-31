@@ -52,34 +52,63 @@ export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = 
  * Groups a flat transcript into renderable blocks. A tool_call and its
  * matching tool_output(s) become one tool block so the UI can show the call
  * and its result as a single compact step instead of two separate cards.
- * Every user message opens a turn. All reasoning steps and tool blocks
- * produced inside that turn fold into one activity strip placed where the
- * turn's last activity actually happened, so assistant commentary before the
- * final answer stays in front and the strip lands between the messages that
- * surround the work.
+ * Reasoning and tool blocks are folded only while they are contiguous in the
+ * transcript. Any visible message or protocol event closes that activity
+ * segment, matching the iOS projection instead of hiding work from later
+ * assistant messages in one turn-wide disclosure.
  */
 export function groupAgentEvents(events = []) {
   const blocks = [];
+  const activity = [];
   const pending = new Map();
+
+  const flushActivity = () => {
+    if (activity.length === 0) return;
+    const order = [...activity];
+    blocks.push({
+      kind: "activity_group",
+      reasoning: order
+        .filter(item => item.kind === "reasoning")
+        .map(item => item.event),
+      tools: order
+        .filter(item => item.kind === "tool")
+        .map(item => item.block),
+      order,
+    });
+    activity.length = 0;
+    pending.clear();
+  };
+
   for (const event of coalesceAgentContent(events)) {
     if (isStructuredAgentEvent(event)) {
+      flushActivity();
       blocks.push({ kind: "structured", event });
-    } else if (event.type === "tool_call") {
+    } else if (isToolCallAgentEvent(event)) {
       const block = { kind: "tool", call: event, outputs: [] };
-      blocks.push(block);
-      if (event.callId) pending.set(event.callId, block);
-    } else if (event.type === "tool_output") {
-      const block = event.callId ? pending.get(event.callId) : null;
+      activity.push({ kind: "tool", block });
+      const correlationID = agentCorrelationID(event);
+      if (correlationID) pending.set(correlationID, block);
+    } else if (isToolOutputAgentEvent(event)) {
+      const correlationID = agentCorrelationID(event);
+      const block = correlationID ? pending.get(correlationID) : null;
       if (block) {
         block.outputs.push(event);
       } else {
+        flushActivity();
         blocks.push({ kind: "tool_output", event });
       }
+    } else if (isReasoningAgentEvent(event)) {
+      if (!hasRenderableActivityContent(event)) continue;
+      activity.push({ kind: "reasoning", event });
     } else {
-      blocks.push({ kind: event.type, event });
+      const kind = conversationBlockKind(event);
+      if ((kind === "user" || kind === "assistant") && !hasRenderableConversationContent(event)) continue;
+      flushActivity();
+      blocks.push({ kind, event });
     }
   }
-  return foldTurns(blocks);
+  flushActivity();
+  return blocks;
 }
 
 /**
@@ -110,23 +139,22 @@ export function reduceAgentTimeline(
 /** Returns renderable blocks with one card per structured object ID. */
 export function projectAgentEvents(events = []) {
   const latestStructured = new Map();
-  const regular = [];
+  const projected = [];
   for (const event of events || []) {
     if (isStructuredAgentEvent(event)) {
       const type = normalizeAgentEventType(event.type);
       const stableID = String(event.id || `seq-${event.seq}`);
       latestStructured.set(`${type}:${stableID}`, event);
     } else {
-      regular.push(event);
+      projected.push(event);
     }
   }
-  const blocks = groupAgentEvents(regular);
-  for (const event of latestStructured.values()) blocks.push({ kind: "structured", event });
-  return blocks.sort((left, right) => {
-    const leftSeq = left.event?.seq ?? left.call?.seq ?? left.tools?.[0]?.call?.seq ?? 0;
-    const rightSeq = right.event?.seq ?? right.call?.seq ?? right.tools?.[0]?.call?.seq ?? 0;
-    return leftSeq - rightSeq;
-  });
+  // Keep the latest structured update in the timeline before grouping. The
+  // structured event is also a message boundary: removing it first would let
+  // activity from either side of a question/plan card collapse into one row.
+  projected.push(...latestStructured.values());
+  projected.sort((left, right) => (left?.seq ?? 0) - (right?.seq ?? 0));
+  return groupAgentEvents(projected);
 }
 
 export class AgentMessageQueue {
@@ -359,6 +387,44 @@ export async function copyAgentText(text, clipboard = globalThis.navigator?.clip
   return copied;
 }
 
+function hasRenderableActivityContent(event) {
+  return [event?.content, event?.output, event?.error]
+    .some(value => String(value || "").trim() !== "");
+}
+
+function hasRenderableConversationContent(event) {
+  return String(event?.content || "").trim() !== "";
+}
+
+function conversationBlockKind(event) {
+  const type = normalizeAgentEventType(event?.type);
+  const role = normalizeAgentEventType(event?.role);
+  if (type === "user" || role === "user") return "user";
+  if (type === "assistant" || role === "assistant") return "assistant";
+  return event?.type;
+}
+
+function isReasoningAgentEvent(event) {
+  const type = normalizeAgentEventType(event?.type);
+  return type === "reasoning" || type.includes("thinking") || type.includes("reason");
+}
+
+function isToolCallAgentEvent(event) {
+  const type = normalizeAgentEventType(event?.type);
+  return type === "tool_call" || type === "toolcall";
+}
+
+function isToolOutputAgentEvent(event) {
+  const type = normalizeAgentEventType(event?.type);
+  return type === "tool_output" || type === "tooloutput";
+}
+
+function agentCorrelationID(event) {
+  const callID = String(event?.callId || "").trim();
+  if (callID) return callID;
+  return String(event?.id || "").trim();
+}
+
 // OpenCode stores a mutable part and the Host exposes each observed update as
 // an append-only event. Fold those deltas back into one renderable message so
 // streaming replies do not produce a bubble (or React key) per database poll.
@@ -400,55 +466,7 @@ function coalesceAgentContent(events) {
 
 function isOpenCodeContentEvent(event) {
   return event.provider === "opencode"
-    && (event.type === "user" || event.type === "assistant" || event.type === "reasoning");
-}
-
-function foldTurns(blocks) {
-  const result = [];
-  let turn = [];
-
-  const flush = () => {
-    if (!turn.length) return;
-    const order = [];
-    let lastActivityIndex = -1;
-    for (let index = 0; index < turn.length; index += 1) {
-      const block = turn[index];
-      if (block.kind === "reasoning") {
-        order.push({ kind: "reasoning", event: block.event });
-        lastActivityIndex = index;
-      } else if (block.kind === "tool") {
-        order.push({ kind: "tool", block });
-        lastActivityIndex = index;
-      }
-    }
-    if (order.length === 0) {
-      result.push(...turn);
-    } else {
-      const group = {
-        kind: "activity_group",
-        reasoning: order.filter(item => item.kind === "reasoning").map(item => item.event),
-        tools: order.filter(item => item.kind === "tool").map(item => item.block),
-        order,
-      };
-      for (let index = 0; index < turn.length; index += 1) {
-        if (index === lastActivityIndex) {
-          result.push(group);
-        } else if (turn[index].kind !== "reasoning" && turn[index].kind !== "tool") {
-          result.push(turn[index]);
-        }
-      }
-    }
-    turn = [];
-  };
-
-  for (const block of blocks) {
-    if (block.kind === "user") {
-      flush();
-      result.push(block);
-    } else {
-      turn.push(block);
-    }
-  }
-  flush();
-  return result;
+    && (normalizeAgentEventType(event.type) === "user"
+      || normalizeAgentEventType(event.type) === "assistant"
+      || isReasoningAgentEvent(event));
 }
