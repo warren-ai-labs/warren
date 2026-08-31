@@ -344,10 +344,10 @@ func startGhostline(config ghostlineMigrationConfig, socketPath string, spawn []
 		Socket: socketPath,
 		Spawn:  spawn,
 		// Ghostline v1 merges this list with its own os.Environ(). The daemon
-		// has already installed a clean process environment, and passing the
-		// same explicit baseline documents the lifecycle boundary for callers
-		// that start a migration from a test or an embedded daemon.
-		Env:          runtime.CleanEnvironment(os.Environ()),
+		// may retain Warren/provider configuration for control-plane work, so
+		// pass only the terminal baseline here; the --ghostline-serve entry
+		// point applies the same boundary before creating its server.
+		Env:          runtime.TerminalEnvironment(os.Environ()),
 		Log:          logFile,
 		ReadyTimeout: ghostlineMigrationTimeout,
 	})

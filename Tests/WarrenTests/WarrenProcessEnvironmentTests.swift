@@ -22,6 +22,7 @@ final class WarrenProcessEnvironmentTests: XCTestCase {
             "NO_COLOR": "1",
             "HTTP_PROXY": "http://proxy.invalid",
             "CODEX_HOME": "/tmp/warren-home/.codex",
+            "CLAUDE_CONFIG_DIR": "/tmp/warren-home/.claude",
             "WARREN_DATA_DIR": "/tmp/warren-home/.warren",
             "WARREN_CONFIG": "/tmp/warren-home/config.json",
             "WARREN_CODE_SERVER_PATH": "/tmp/warren-home/code-server",
@@ -51,13 +52,35 @@ final class WarrenProcessEnvironmentTests: XCTestCase {
         for key in [
             "TERM_PROGRAM", "MISE_TASK", "DIRENV_DIFF", "CODEX_SESSION_ID",
             "WARREN_SESSION_ID", "NO_COLOR", "HTTP_PROXY",
+            "CODEX_HOME", "CLAUDE_CONFIG_DIR", "WARREN_DATA_DIR", "WARREN_CONFIG",
+            "WARREN_CODE_SERVER_PATH",
         ] {
             XCTAssertNil(environment[key], "\(key) leaked into clean environment")
         }
+    }
+
+    func testDaemonEnvironmentKeepsControlPlaneConfiguration() {
+        let home = URL(fileURLWithPath: "/tmp/warren-home")
+        let environment = WarrenProcessEnvironment.daemonEnvironment(
+            from: [
+                "HOME": home.path,
+                "SHELL": "/bin/sh",
+                "CODEX_HOME": "/tmp/warren-home/.codex",
+                "CLAUDE_CONFIG_DIR": "/tmp/warren-home/.claude",
+                "WARREN_DATA_DIR": "/tmp/warren-home/.warren",
+                "WARREN_CONFIG": "/tmp/warren-home/config.json",
+                "WARREN_CODE_SERVER_PATH": "/tmp/warren-home/code-server",
+                "MISE_TASK": "install",
+            ],
+            homeDirectory: home
+        )
+
         XCTAssertEqual(environment["CODEX_HOME"], "/tmp/warren-home/.codex")
+        XCTAssertEqual(environment["CLAUDE_CONFIG_DIR"], "/tmp/warren-home/.claude")
         XCTAssertEqual(environment["WARREN_DATA_DIR"], "/tmp/warren-home/.warren")
         XCTAssertEqual(environment["WARREN_CONFIG"], "/tmp/warren-home/config.json")
         XCTAssertEqual(environment["WARREN_CODE_SERVER_PATH"], "/tmp/warren-home/code-server")
+        XCTAssertNil(environment["MISE_TASK"])
     }
 
     func testCleanEnvironmentUsesSafeShellFallback() {
