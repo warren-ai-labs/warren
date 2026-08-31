@@ -1,10 +1,14 @@
 import SwiftUI
 import AppKit
+import WarrenDesignSystem
 
 struct WarrenSSHHostPicker: View {
     @State private var hosts: [WarrenSSHHost]
     @State private var errorMessage: String?
     @State private var isLoading: Bool
+    @State private var hoveredHostName: String?
+    @FocusState private var closeButtonFocused: Bool
+
     let onConfigure: (WarrenSSHHost) -> Void
     let onDismiss: () -> Void
     let onRefresh: () async -> WarrenSSHHostCatalog.LoadResult
@@ -31,177 +35,319 @@ struct WarrenSSHHostPicker: View {
         self.loadOnAppear = loadOnAppear
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Add SSH Host")
-                        .font(.title3.weight(.semibold))
-                    Text("Choose an alias from ~/.ssh/config to add it as an execution server.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Cancel", action: onDismiss)
-            }
-            .padding()
+            header(tokens: tokens)
 
-            Divider()
+            Rectangle()
+                .fill(tokens.border)
+                .frame(height: WarrenSpacing.hairline)
 
-            if isLoading {
-                loadingState
-            } else if hosts.isEmpty {
-                emptyState
-            } else {
-                List {
-                    ForEach(hosts) { host in
-                        hostRow(host)
-                    }
-                }
-                .listStyle(.inset)
-                footer
-            }
+            content(tokens: tokens)
+
+            footer(tokens: tokens)
         }
-        .frame(minWidth: 520, minHeight: 380)
+        .frame(width: 560)
+        .frame(minHeight: 440, idealHeight: 500, maxHeight: 620)
+        .warrenPresentationSurface(role: .sheet, cornerRadius: WarrenRadius.large)
+        .onExitCommand(perform: onDismiss)
         .task {
             guard loadOnAppear else { return }
             await refreshHosts()
         }
     }
 
-    private var loadingState: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Reading SSH config…")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            Text("Looking for hosts in ~/.ssh/config and its Include files.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
+    private func header(tokens: WarrenColorTokens) -> some View {
+        HStack(alignment: .top, spacing: WarrenSpacing.medium) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(tokens.highlight)
+                .frame(width: 36, height: 36)
+                .background(tokens.highlight.opacity(0.12))
+                .clipShape(.rect(cornerRadius: WarrenRadius.medium))
+                .accessibilityHidden(true)
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "network.slash")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            Text(errorMessage == nil ? "No SSH Hosts" : "Unable to read SSH config")
-                .font(.headline)
-            Text(errorMessage ?? "Add a Host entry to ~/.ssh/config and try again.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            if errorMessage != nil {
-                Text("Fix the file permissions or syntax, then retry.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                Text("Add SSH Host")
+                    .font(WarrenTypography.dialogTitle)
+                    .foregroundStyle(tokens.foreground)
+                Text("Choose an alias from ~/.ssh/config to add it as an execution server.")
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Example ~/.ssh/config")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("Host my-vps\n  HostName 203.0.113.10\n  User root\n  Port 22")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-                    .clipShape(.rect(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
-            }
-            .frame(maxWidth: 420)
-            .padding(.top, 4)
-            HStack(spacing: 8) {
-                Button("Open ~/.ssh/config") { openSSHConfig() }
-                Button("Refresh") { refreshHostsInTask() }
-            }
-            .buttonStyle(.link)
-            .font(.callout)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Text("Edits to ~/.ssh/config appear without restarting Warren.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Refreshing SSH hosts")
-            } else {
-                Button("Refresh") { refreshHostsInTask() }
-                    .font(.caption)
+            Spacer(minLength: WarrenSpacing.standard)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .regular))
+                    .frame(width: 24, height: 24)
             }
-            Button("Open ~/.ssh/config") { openSSHConfig() }
-                .font(.caption)
+            .buttonStyle(WarrenChromeButtonStyle(isFocused: closeButtonFocused))
+            .focused($closeButtonFocused)
+            .foregroundStyle(tokens.mutedForeground)
+            .accessibilityLabel("Close Add SSH Host")
+            .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, WarrenSpacing.large)
+        .padding(.vertical, WarrenSpacing.medium)
     }
 
     @ViewBuilder
-    private func hostRow(_ host: WarrenSSHHost) -> some View {
+    private func content(tokens: WarrenColorTokens) -> some View {
+        if isLoading {
+            loadingState(tokens: tokens)
+        } else if hosts.isEmpty {
+            emptyState(tokens: tokens)
+        } else {
+            hostList(tokens: tokens)
+        }
+    }
+
+    private func loadingState(tokens: WarrenColorTokens) -> some View {
+        VStack(spacing: WarrenSpacing.medium) {
+            WarrenBrailleSpinner(size: 22, accessibilityLabel: "Reading SSH config")
+            Text("Reading SSH config…")
+                .font(WarrenTypography.dialogTitle)
+                .foregroundStyle(tokens.foreground)
+            Text("Looking for hosts in ~/.ssh/config and its Include files.")
+                .font(WarrenTypography.dialogBody)
+                .foregroundStyle(tokens.mutedForeground)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+        .padding(WarrenSpacing.large)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func emptyState(tokens: WarrenColorTokens) -> some View {
+        let hasError = errorMessage != nil
+        return VStack(spacing: WarrenSpacing.medium) {
+            Image(systemName: hasError ? "exclamationmark.triangle" : "network.slash")
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(hasError ? tokens.warning : tokens.mutedForeground)
+                .accessibilityHidden(true)
+
+            Text(hasError ? "Unable to read SSH config" : "No SSH hosts found")
+                .font(WarrenTypography.dialogTitle)
+                .foregroundStyle(tokens.foreground)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.destructive)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("SSH config error: \(errorMessage)")
+            } else {
+                Text("Add a Host entry to ~/.ssh/config and refresh this list.")
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("No SSH hosts found")
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                Text("Example ~/.ssh/config")
+                    .font(WarrenTypography.dialogMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                Text("Host my-vps\n  HostName 203.0.113.10\n  User root\n  Port 22")
+                    .font(WarrenTypography.code)
+                    .foregroundStyle(tokens.foreground)
+                    .lineSpacing(2)
+                    .padding(WarrenSpacing.medium)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(tokens.inputSurface)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: WarrenRadius.small)
+                            .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+                    }
+            }
+            .frame(maxWidth: 420)
+            .padding(.top, WarrenSpacing.xs)
+        }
+        .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+        .padding(.horizontal, WarrenSpacing.large)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func hostList(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("SSH HOSTS")
+                    .font(WarrenTypography.sectionLabel)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .tracking(0.8)
+                Spacer(minLength: WarrenSpacing.standard)
+                Text("\(hosts.count) \(hosts.count == 1 ? "host" : "hosts")")
+                    .font(WarrenTypography.dialogMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: WarrenSpacing.xs) {
+                    ForEach(hosts) { host in
+                        hostRow(host, tokens: tokens)
+                    }
+                }
+                .padding(WarrenSpacing.xs)
+            }
+            .frame(minHeight: 260, maxHeight: 380)
+            .background(tokens.inputSurface)
+            .clipShape(.rect(cornerRadius: WarrenRadius.medium))
+            .overlay {
+                RoundedRectangle(cornerRadius: WarrenRadius.medium)
+                    .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+            }
+        }
+        .padding(.horizontal, WarrenSpacing.large)
+        .padding(.vertical, WarrenSpacing.standard)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func hostRow(_ host: WarrenSSHHost, tokens: WarrenColorTokens) -> some View {
+        let isHovered = hoveredHostName == host.name
         if host.supported {
             Button(action: { onConfigure(host) }) {
-                hostRowContent(host)
+                hostRowContent(host, tokens: tokens, isHovered: isHovered)
             }
             .buttonStyle(.plain)
+            .onHover { isHovering in
+                hoveredHostName = isHovering ? host.name : nil
+            }
             .accessibilityLabel("Configure SSH host \(host.name)")
             .accessibilityValue("\(host.user) at \(host.host), port \(host.port)")
             .accessibilityHint("Add this host as an execution server")
         } else {
-            hostRowContent(host)
+            hostRowContent(host, tokens: tokens, isHovered: isHovered)
+                .onHover { isHovering in
+                    hoveredHostName = isHovering ? host.name : nil
+                }
                 .accessibilityElement(children: .contain)
         }
     }
 
-    private func hostRowContent(_ host: WarrenSSHHost) -> some View {
-        HStack(spacing: 10) {
+    private func hostRowContent(
+        _ host: WarrenSSHHost,
+        tokens: WarrenColorTokens,
+        isHovered: Bool
+    ) -> some View {
+        let accent = host.supported ? tokens.highlight : tokens.warning
+        return HStack(alignment: .top, spacing: WarrenSpacing.medium) {
             Image(systemName: host.supported ? "server.rack" : "exclamationmark.triangle")
-                .foregroundStyle(host.supported ? Color.accentColor : .orange)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(host.name)
-                    .font(.body.weight(.medium))
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(accent)
+                .frame(width: 28, height: 28)
+                .background(accent.opacity(0.12))
+                .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                HStack(spacing: WarrenSpacing.small) {
+                    Text(host.name)
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.foreground)
+                        .lineLimit(1)
+
+                    Text(host.supported ? "Ready" : "Unsupported")
+                        .font(WarrenTypography.badge)
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, WarrenSpacing.xs)
+                        .padding(.vertical, 2)
+                        .background(accent.opacity(0.12))
+                        .clipShape(.rect(cornerRadius: WarrenRadius.xs))
+                }
+
                 Text("\(host.user)@\(host.host):\(host.port)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WarrenTypography.code)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
                 if let message = host.message {
                     Text(message)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .font(WarrenTypography.dialogMeta)
+                        .foregroundStyle(tokens.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
                 if !host.supported {
                     Text(fallbackText(for: host))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(WarrenTypography.dialogMeta)
+                        .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                if host.supported {
+
+            Spacer(minLength: WarrenSpacing.medium)
+
+            if host.supported {
+                HStack(spacing: WarrenSpacing.xs) {
                     Text("Configure")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
-                } else {
-                    Button("Copy Fallback") {
-                        copyFallback(for: host)
-                    }
-                    .font(.caption)
+                        .font(WarrenTypography.dialogMeta)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .accessibilityHidden(true)
                 }
+                .foregroundStyle(accent)
+                .padding(.top, WarrenSpacing.xs)
+            } else {
+                Button {
+                    copyFallback(for: host)
+                } label: {
+                    Label("Copy Fallback", systemImage: "doc.on.doc")
+                        .font(WarrenTypography.dialogMeta)
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogMeta))
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityHint("Copy an external SSH forwarding command")
             }
         }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isHovered ? tokens.fillHover : Color.clear)
+        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .contentShape(.rect)
         .opacity(host.supported ? 1 : 0.92)
+    }
+
+    private func footer(tokens: WarrenColorTokens) -> some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(tokens.border)
+                .frame(height: WarrenSpacing.hairline)
+
+            HStack(spacing: WarrenSpacing.medium) {
+                HStack(spacing: WarrenSpacing.small) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(tokens.mutedForeground)
+                        .accessibilityHidden(true)
+                    Text("Changes to ~/.ssh/config appear without restarting Warren.")
+                        .font(WarrenTypography.dialogMeta)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button("Open SSH Config", action: openSSHConfig)
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+
+                Button("Refresh", action: refreshHostsInTask)
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
+                    .disabled(isLoading)
+            }
+            .padding(.horizontal, WarrenSpacing.large)
+            .padding(.vertical, WarrenSpacing.medium)
+        }
     }
 
     private func openSSHConfig() {
@@ -209,7 +355,7 @@ struct WarrenSSHHostPicker: View {
         if FileManager.default.fileExists(atPath: url.path) {
             NSWorkspace.shared.open(url)
         } else {
-            // Ensure ~/.ssh exists and reveal it in Finder
+            // Ensure ~/.ssh exists and reveal it in Finder.
             let sshDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
             try? FileManager.default.createDirectory(at: sshDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             NSWorkspace.shared.open(sshDir)
