@@ -62,36 +62,25 @@ struct WarrenSSHHostPicker: View {
 
     private func header(tokens: WarrenColorTokens) -> some View {
         HStack(alignment: .top, spacing: WarrenSpacing.medium) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 18, weight: .light))
-                .foregroundStyle(tokens.highlight)
-                .frame(width: 36, height: 36)
-                .background(tokens.highlight.opacity(0.12))
-                .clipShape(.rect(cornerRadius: WarrenRadius.medium))
-                .accessibilityHidden(true)
-
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text("Add SSH Host")
-                    .font(WarrenTypography.dialogTitle)
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(tokens.foreground)
                 Text("Choose an alias from ~/.ssh/config to add it as an execution server.")
-                    .font(WarrenTypography.dialogBody)
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: WarrenSpacing.standard)
 
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .regular))
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(WarrenChromeButtonStyle(isFocused: closeButtonFocused))
-            .focused($closeButtonFocused)
-            .foregroundStyle(tokens.mutedForeground)
-            .accessibilityLabel("Close Add SSH Host")
-            .keyboardShortcut(.cancelAction)
+            Button("Cancel", action: onDismiss)
+                .font(.system(size: 14, weight: .regular))
+                .buttonStyle(WarrenChromeButtonStyle(isFocused: closeButtonFocused))
+                .focused($closeButtonFocused)
+                .foregroundStyle(tokens.mutedForeground)
+                .accessibilityLabel("Close Add SSH Host")
+                .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, WarrenSpacing.large)
         .padding(.vertical, WarrenSpacing.medium)
@@ -112,10 +101,10 @@ struct WarrenSSHHostPicker: View {
         VStack(spacing: WarrenSpacing.medium) {
             WarrenBrailleSpinner(size: 22, accessibilityLabel: "Reading SSH config")
             Text("Reading SSH config…")
-                .font(WarrenTypography.dialogTitle)
+                .font(.system(size: 18, weight: .light))
                 .foregroundStyle(tokens.foreground)
             Text("Looking for hosts in ~/.ssh/config and its Include files.")
-                .font(WarrenTypography.dialogBody)
+                .font(.system(size: 14, weight: .light))
                 .foregroundStyle(tokens.mutedForeground)
                 .multilineTextAlignment(.center)
         }
@@ -127,25 +116,20 @@ struct WarrenSSHHostPicker: View {
     private func emptyState(tokens: WarrenColorTokens) -> some View {
         let hasError = errorMessage != nil
         return VStack(spacing: WarrenSpacing.medium) {
-            Image(systemName: hasError ? "exclamationmark.triangle" : "network.slash")
-                .font(.system(size: 24, weight: .light))
-                .foregroundStyle(hasError ? tokens.warning : tokens.mutedForeground)
-                .accessibilityHidden(true)
-
             Text(hasError ? "Unable to read SSH config" : "No SSH hosts found")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(hasError ? tokens.destructive : tokens.foreground)
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(WarrenTypography.dialogBody)
+                    .font(.system(size: 14, weight: .light))
                     .foregroundStyle(tokens.destructive)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("SSH config error: \(errorMessage)")
             } else {
                 Text("Add a Host entry to ~/.ssh/config and refresh this list.")
-                    .font(WarrenTypography.dialogBody)
+                    .font(.system(size: 14, weight: .light))
                     .foregroundStyle(tokens.mutedForeground)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -154,10 +138,10 @@ struct WarrenSSHHostPicker: View {
 
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text("Example ~/.ssh/config")
-                    .font(WarrenTypography.dialogMeta)
+                    .font(.system(size: 12, weight: .light))
                     .foregroundStyle(tokens.mutedForeground)
                 Text("Host my-vps\n  HostName 203.0.113.10\n  User root\n  Port 22")
-                    .font(WarrenTypography.code)
+                    .font(.system(size: 12, weight: .light, design: .monospaced))
                     .foregroundStyle(tokens.foreground)
                     .lineSpacing(2)
                     .padding(WarrenSpacing.medium)
@@ -181,12 +165,12 @@ struct WarrenSSHHostPicker: View {
         VStack(alignment: .leading, spacing: WarrenSpacing.small) {
             HStack(alignment: .firstTextBaseline) {
                 Text("SSH HOSTS")
-                    .font(WarrenTypography.sectionLabel)
+                    .font(.system(size: 10, weight: .light))
                     .foregroundStyle(tokens.mutedForeground)
                     .tracking(0.8)
                 Spacer(minLength: WarrenSpacing.standard)
                 Text("\(hosts.count) \(hosts.count == 1 ? "host" : "hosts")")
-                    .font(WarrenTypography.dialogMeta)
+                    .font(.system(size: 12, weight: .light))
                     .foregroundStyle(tokens.mutedForeground)
             }
 
@@ -239,48 +223,35 @@ struct WarrenSSHHostPicker: View {
         tokens: WarrenColorTokens,
         isHovered: Bool
     ) -> some View {
-        let accent = host.supported ? tokens.highlight : tokens.warning
         return HStack(alignment: .top, spacing: WarrenSpacing.medium) {
-            Image(systemName: host.supported ? "server.rack" : "exclamationmark.triangle")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(accent)
-                .frame(width: 28, height: 28)
-                .background(accent.opacity(0.12))
-                .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                .accessibilityHidden(true)
-
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 HStack(spacing: WarrenSpacing.small) {
                     Text(host.name)
-                        .font(WarrenTypography.dialogBody)
+                        .font(.system(size: 14, weight: .light))
                         .foregroundStyle(tokens.foreground)
                         .lineLimit(1)
 
                     Text(host.supported ? "Ready" : "Unsupported")
-                        .font(WarrenTypography.badge)
-                        .foregroundStyle(accent)
-                        .padding(.horizontal, WarrenSpacing.xs)
-                        .padding(.vertical, 2)
-                        .background(accent.opacity(0.12))
-                        .clipShape(.rect(cornerRadius: WarrenRadius.xs))
+                        .font(.system(size: 12, weight: .light))
+                        .foregroundStyle(host.supported ? tokens.mutedForeground : tokens.warning)
                 }
 
                 Text("\(host.user)@\(host.host):\(host.port)")
-                    .font(WarrenTypography.code)
+                    .font(.system(size: 12, weight: .light, design: .monospaced))
                     .foregroundStyle(tokens.mutedForeground)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 if let message = host.message {
                     Text(message)
-                        .font(WarrenTypography.dialogMeta)
+                        .font(.system(size: 12, weight: .light))
                         .foregroundStyle(tokens.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if !host.supported {
                     Text(fallbackText(for: host))
-                        .font(WarrenTypography.dialogMeta)
+                        .font(.system(size: 12, weight: .light))
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -289,23 +260,18 @@ struct WarrenSSHHostPicker: View {
             Spacer(minLength: WarrenSpacing.medium)
 
             if host.supported {
-                HStack(spacing: WarrenSpacing.xs) {
-                    Text("Configure")
-                        .font(WarrenTypography.dialogMeta)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .medium))
-                        .accessibilityHidden(true)
-                }
-                .foregroundStyle(accent)
-                .padding(.top, WarrenSpacing.xs)
+                Text("Configure")
+                    .font(.system(size: 12, weight: .light))
+                    .foregroundStyle(tokens.foreground)
+                    .padding(.top, WarrenSpacing.xs)
             } else {
                 Button {
                     copyFallback(for: host)
                 } label: {
-                    Label("Copy Fallback", systemImage: "doc.on.doc")
-                        .font(WarrenTypography.dialogMeta)
+                    Text("Copy Fallback")
+                        .font(.system(size: 12, weight: .light))
                 }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogMeta))
+                .buttonStyle(WarrenSecondaryButtonStyle(font: .system(size: 12, weight: .light)))
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityHint("Copy an external SSH forwarding command")
             }
@@ -326,23 +292,17 @@ struct WarrenSSHHostPicker: View {
                 .frame(height: WarrenSpacing.hairline)
 
             HStack(spacing: WarrenSpacing.medium) {
-                HStack(spacing: WarrenSpacing.small) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .accessibilityHidden(true)
-                    Text("Changes to ~/.ssh/config appear without restarting Warren.")
-                        .font(WarrenTypography.dialogMeta)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .lineLimit(2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Changes to ~/.ssh/config appear without restarting Warren.")
+                    .font(.system(size: 12, weight: .light))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button("Open SSH Config", action: openSSHConfig)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: .system(size: 14, weight: .light)))
 
                 Button("Refresh", action: refreshHostsInTask)
-                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: .system(size: 14, weight: .light)))
                     .disabled(isLoading)
             }
             .padding(.horizontal, WarrenSpacing.large)
