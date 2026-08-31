@@ -1,5 +1,5 @@
 {
-  "originHash" : "68644f5b389de58cf0ff18f179cd70f992276d7a11d26c6641959d12418c386e",
+  "originHash" : "4a4218b953a6a471ed090e084d1b3d5b512bf0a37a43c8c6824a54311fbc633e",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
         "version" : "7.10.0"
-      }
-    },
-    {
-      "identity" : "msdisplaylink",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MSDisplayLink.git",
-      "state" : {
-        "revision" : "87eb0af130744c8cbe2e31b6e1a5bcd659f1c220",
-        "version" : "2.2.0"
       }
     }
   ],
