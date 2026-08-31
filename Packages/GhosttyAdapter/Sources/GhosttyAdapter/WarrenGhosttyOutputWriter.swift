@@ -146,10 +146,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         // Large live TUI bursts and legacy recovery frames must drain without
         // delaying input echoes. Native cold recovery bypasses this VT parser
         // entirely through restoreSnapshot(_:epoch:sequence:).
-        // Warm promotion must drain a hidden backlog within 50ms, so keep the
-        // budget large and the yield minimal; visible fast-forward is avoided
-        // by the presentation gate, not by throttling the writer.
-        budgetBytes: Int = 8 * 1024 * 1024,
+        // Keep one host-managed write close to Ghostty's 64 KiB reader batch.
+        // A large call holds Ghostty's terminal-state mutex for the entire VT
+        // parse and can delay the renderer behind a sustained output burst.
+        budgetBytes: Int = 64 * 1024,
         yield: Duration = .microseconds(200)
     ) {
         precondition(budgetBytes > 0)

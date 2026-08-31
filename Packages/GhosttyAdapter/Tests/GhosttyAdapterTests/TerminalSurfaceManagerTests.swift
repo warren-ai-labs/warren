@@ -602,7 +602,7 @@ final class TerminalSurfaceManagerTests: XCTestCase {
     }
 
     private func makeSurface(
-        outputRenderBudgetBytes: Int = 8 * 1024 * 1024,
+        outputRenderBudgetBytes: Int = 64 * 1024,
         outputRenderYield: Duration = .milliseconds(1)
     ) -> GhosttySurface {
         GhosttySurface(

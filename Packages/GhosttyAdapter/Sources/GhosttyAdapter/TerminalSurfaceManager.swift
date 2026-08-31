@@ -140,6 +140,12 @@ public final class TerminalSurfaceManager {
         var presentationTask: Task<Void, Never>?
         var recoveryPhase: RecoveryPresentationPhase = .ready
         var displayVisible = false
+        /// The presentation token that last completed successfully. Native
+        /// surface identity matters because a coordinator can rebuild the
+        /// underlying Ghostty surface without replacing this entry.
+        var lastPresentedSurface: ObjectIdentifier?
+        var lastPresentedEpoch: UInt64?
+        var lastPresentedSequence: UInt64 = 0
 
         init(surface: GhosttySurface, view: AppTerminalView) {
             self.surface = surface
@@ -730,7 +736,31 @@ public final class TerminalSurfaceManager {
     private func schedulePresent(_ entry: Entry, generation: UInt64) {
         guard entry.recoveryPhase == .ready else { return }
         let sessionID = entry.surface.id
-        cancelPresentation(for: entry)
+        // A pending presentation already observes the same lifecycle state;
+        // restarting it for every window notification only multiplies sync
+        // draws. Reconciliation cancels the task explicitly when its
+        // generation changes.
+        guard entry.presentationTask == nil else { return }
+
+        let currentSurface = entry.surface.state.surface
+        let currentSurfaceID = currentSurface.map(ObjectIdentifier.init)
+        let currentEpoch = entry.surface.outputWriter.bufferEpoch
+        let currentSequence = entry.surface.outputWriter.enqueuedSequence
+        if entry.displayVisible,
+           entry.surface.terminalViewIsPresentable,
+           entry.surface.terminalSurfaceIsReady,
+           entry.lastPresentedSurface == currentSurfaceID,
+           entry.lastPresentedEpoch == currentEpoch,
+           entry.lastPresentedSequence >= currentSequence
+        {
+            // The same surface and output boundary are already on screen.
+            TerminalDiagnostics.logVerbose("present_skip_duplicate", [
+                "session": sessionID.description,
+                "sequence": String(currentSequence),
+            ])
+            return
+        }
+
         let presentationGeneration = entry.presentationGeneration
         // Jump to latest: warm surfaces are kept current while hidden
         // (output subscription + retained grid), so promotion reveals the
@@ -769,17 +799,18 @@ public final class TerminalSurfaceManager {
 
                 let viewReady = entry.surface.terminalViewIsPresentable
                 if viewReady, entry.surface.terminalSurfaceIsReady {
-                    entry.surface.requestDisplayRefresh()
                     if entry.surface.presentNow() {
                         entry.view.isHidden = false
                         entry.view.alphaValue = 1
                         setDisplayVisible(true, for: entry)
-                        entry.surface.requestDisplayRefresh()
-                        _ = entry.surface.presentNow()
+                        let presentedSurface = entry.surface.state.surface
+                        entry.lastPresentedSurface = presentedSurface.map(ObjectIdentifier.init)
+                        entry.lastPresentedEpoch = entry.surface.outputWriter.bufferEpoch
+                        entry.lastPresentedSequence = entry.surface.outputWriter.enqueuedSequence
                         TerminalDiagnostics.log("present_complete", [
                             "session": sessionID.description,
-                            "targetEpoch": "jump",
-                            "targetSequence": "jump",
+                            "targetEpoch": entry.lastPresentedEpoch.map(String.init) ?? "nil",
+                            "targetSequence": String(entry.lastPresentedSequence),
                             "enqueuedNow": String(entry.surface.outputWriter.enqueuedSequence),
                             "renderedEpoch": String(entry.surface.renderedEpoch),
                             "renderedSequence": String(entry.surface.renderedSequence),
