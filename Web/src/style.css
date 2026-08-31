@@ -1110,46 +1110,6 @@ button:disabled {
   cursor: pointer;
 }
 
-.agent-working {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-sm);
-  width: 100%;
-  max-width: 820px;
-  margin-inline: auto;
-  padding: 7px 22px;
-  border-top: 1px solid var(--color-border-subtle);
-  color: var(--color-text-secondary);
-  font-size: 10.5px;
-}
-
-.agent-working-shimmer {
-  color: var(--color-status-working);
-  background: linear-gradient(90deg, currentColor 0%, currentColor 38%, #fff 50%, currentColor 62%, currentColor 100%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: agent-shimmer 1.35s linear infinite;
-}
-
-.agent-working-provider {
-  color: var(--color-text-secondary);
-}
-
-@keyframes agent-shimmer {
-  from { background-position: 120% 0; }
-  to { background-position: -120% 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-working-shimmer {
-    animation: none;
-    background: none;
-    -webkit-text-fill-color: currentColor;
-  }
-}
-
 .agent-events {
   flex: 1 1 0;
   min-height: 0;
@@ -1611,7 +1571,9 @@ button:disabled {
 
 .agent-input {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
   flex: 0 0 auto;
   width: 100%;
   max-width: 820px;
@@ -1751,8 +1713,10 @@ button:disabled {
 .agent-input-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-sm);
   min-width: 0;
+  width: 100%;
   padding: 5px 4px 0;
   color: var(--color-text-secondary);
   font-size: 10.5px;
@@ -1766,14 +1730,6 @@ button:disabled {
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-mode-badge {
-  padding: 2px 6px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-subtle);
-  color: var(--color-accent-text);
-  font: 10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 .agent-input textarea {
@@ -3016,49 +2972,6 @@ button:disabled {
 .braille-spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.54s; }
 .braille-spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: -0.63s; }
 
-.agent-running-shim {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 2px 4px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-md);
-}
-
-.agent-running-label {
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  background: linear-gradient(
-    90deg,
-    var(--color-text-secondary, #9aa0a6) 0%,
-    var(--color-text-primary, #e6e6e6) 50%,
-    var(--color-text-secondary, #9aa0a6) 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: codex-flow 1.6s linear infinite;
-}
-
-.codex-caret {
-  width: 6px;
-  height: 14px;
-  border-radius: 1px;
-  background: var(--color-text-primary, #e6e6e6);
-  animation: codex-blink 1s steps(1, end) infinite;
-  flex: none;
-}
-
-@keyframes codex-blink {
-  50% { opacity: 0; }
-}
-
-@keyframes codex-flow {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
 .agent-interrupted-tag {
   display: inline-block;
   margin-inline-end: 6px;
@@ -3487,8 +3400,7 @@ button:disabled {
     padding: 18px 14px 14px;
   }
 
-  .agent-attention,
-  .agent-working {
+  .agent-attention {
     padding-inline: 14px;
   }
 
