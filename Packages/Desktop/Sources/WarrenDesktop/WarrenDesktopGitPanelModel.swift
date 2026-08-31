@@ -355,12 +355,7 @@ public final class WarrenDesktopGitPanelModel: ObservableObject {
 
     public func openFile(change: WarrenDesktopGitChange, commit: String = "") {
         let key = Self.changeKey(change, commit: commit)
-        if selectedKey == key {
-            selectedKey = nil
-            clearFileView()
-            return
-        }
-        selectedKey = key
+        selectedKey = selectedKey == key ? nil : key
         setFileView(path: change.path, staged: change.staged, commit: commit.isEmpty ? nil : commit)
     }
 
@@ -502,7 +497,7 @@ public final class WarrenDesktopGitPanelModel: ObservableObject {
     private func restoreUI(workspaceID: WorkspaceID) {
         guard let saved = persistence.load(workspaceID: workspaceID.description) else { return }
         let restoredPanes = Set(saved.openPanes.compactMap(Pane.init(rawValue:)))
-        openPanes = restoredPanes.isEmpty ? Set(Pane.allCases) : restoredPanes
+        openPanes = restoredPanes
         selectedKey = saved.selectedKey
         expandedCommits = Set(saved.expanded)
         if let branch = saved.branch {

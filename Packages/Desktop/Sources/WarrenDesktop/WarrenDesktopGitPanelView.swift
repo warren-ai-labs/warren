@@ -5,6 +5,7 @@ import WarrenObservation
 
 private enum WarrenGitPanelStyle {
     static let headerHeight: CGFloat = 36
+    static let checkoutHeightRatio: CGFloat = 0.25
     static let pullRequestHeightRatio: CGFloat = 0.40
     static let changesHeightRatio: CGFloat = 0.38
     static let changesMaximumHeight: CGFloat = 320
@@ -123,75 +124,71 @@ public struct WarrenDesktopGitPanelView: View {
     }
 
     private func content(tokens: WarrenColorTokens) -> some View {
-        Group {
-            if model.showsLoading {
-                loadingState(tokens: tokens)
-            } else {
-                GeometryReader { proxy in
-                    VStack(alignment: .leading, spacing: 0) {
-                        WarrenGitBranchSection(model: model)
+        ZStack {
+            GeometryReader { proxy in
+                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                    WarrenGitBranchSection(model: model)
+                    WarrenGitPaneHeader(
+                        title: "Checkout",
+                        systemImage: "arrow.triangle.branch",
+                        isOpen: model.openPanes.contains(.checkout),
+                        onToggle: { model.togglePane(.checkout) }
+                    )
+                    if model.openPanes.contains(.checkout) {
+                        WarrenGitCheckoutPane(model: model)
+                            .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.checkoutHeightRatio)
+                    }
+                    if model.panel?.remote != nil {
                         WarrenGitPaneHeader(
-                            title: "Checkout",
-                            systemImage: "arrow.triangle.branch",
-                            isOpen: model.openPanes.contains(.checkout),
-                            onToggle: { model.togglePane(.checkout) }
+                            title: "Pull Request",
+                            systemImage: "arrow.triangle.merge",
+                            isOpen: model.openPanes.contains(.pr),
+                            onToggle: { model.togglePane(.pr) }
                         )
-                        if model.openPanes.contains(.checkout) {
-                            WarrenGitCheckoutPane(model: model)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if model.panel?.remote != nil {
-                            WarrenGitPaneHeader(
-                                title: "Pull Request",
-                                systemImage: "arrow.triangle.merge",
-                                isOpen: model.openPanes.contains(.pr),
-                                onToggle: { model.togglePane(.pr) }
-                            )
-                            if model.openPanes.contains(.pr) {
-                                ScrollView {
-                                    WarrenGitPullRequestPane(model: model)
-                                }
-                                .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.pullRequestHeightRatio)
-                            }
-                        }
-                        WarrenGitPaneHeader(
-                            title: model.changeCount > 0 ? "Changes (\(model.changeCount))" : "Changes",
-                            isOpen: model.openPanes.contains(.changes),
-                            onToggle: { model.togglePane(.changes) }
-                        )
-                        if model.openPanes.contains(.changes) {
+                        if model.openPanes.contains(.pr) {
                             ScrollView {
-                                WarrenGitChangesPane(model: model)
+                                WarrenGitPullRequestPane(model: model)
                             }
-                            .frame(
-                                maxHeight: min(
-                                    WarrenGitPanelStyle.changesMaximumHeight,
-                                    proxy.size.height * WarrenGitPanelStyle.changesHeightRatio
-                                )
-                            )
-                        }
-                        WarrenGitPaneHeader(
-                            title: "History",
-                            detail: historyScope,
-                            isOpen: model.openPanes.contains(.history),
-                            onToggle: { model.togglePane(.history) }
-                        )
-                        if model.openPanes.contains(.history) {
-                            ScrollView {
-                                WarrenGitHistoryPane(model: model)
-                            }
-                            .frame(maxHeight: .infinity)
-                        } else {
-                            Spacer(minLength: 0)
+                            .frame(maxHeight: proxy.size.height * WarrenGitPanelStyle.pullRequestHeightRatio)
                         }
                     }
-                    .padding(.vertical, WarrenSpacing.small)
-                    .frame(
-                        width: proxy.size.width,
-                        height: proxy.size.height,
-                        alignment: .topLeading
+                    WarrenGitPaneHeader(
+                        title: model.changeCount > 0 ? "Changes (\(model.changeCount))" : "Changes",
+                        isOpen: model.openPanes.contains(.changes),
+                        onToggle: { model.togglePane(.changes) }
                     )
+                    if model.openPanes.contains(.changes) {
+                        ScrollView {
+                            WarrenGitChangesPane(model: model)
+                        }
+                        .frame(
+                            maxHeight: min(
+                                WarrenGitPanelStyle.changesMaximumHeight,
+                                proxy.size.height * WarrenGitPanelStyle.changesHeightRatio
+                            )
+                        )
+                    }
+                    WarrenGitPaneHeader(
+                        title: "History",
+                        detail: historyScope,
+                        isOpen: model.openPanes.contains(.history),
+                        onToggle: { model.togglePane(.history) }
+                    )
+                    if model.openPanes.contains(.history) {
+                        ScrollView {
+                            WarrenGitHistoryPane(model: model)
+                        }
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
                 }
+                .padding(.vertical, WarrenSpacing.small)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            }
+            if model.showsLoading {
+                loadingState(tokens: tokens)
+                    .background(tokens.chromeSurface.opacity(0.72))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -417,7 +414,13 @@ private struct WarrenGitCheckoutPane: View {
                     .onSubmit(submitCheckout)
                     .onExitCommand { model.toggleCreateMode() }
             } else {
-                Picker("Branch", selection: $model.branchSelection) {
+                Picker(
+                    "Branch",
+                    selection: Binding(
+                        get: { model.branchSelection },
+                        set: { model.setBranchSelection($0) }
+                    )
+                ) {
                     Text("Switch to a branch…").tag("")
                     ForEach(model.localBranches(), id: \.self) { branch in
                         Text(branch).tag(branch)
@@ -598,7 +601,6 @@ private struct WarrenGitPullRequestCard: View {
             }
             Text(pr.title)
                 .font(WarrenTypography.bodyEmphasis)
-                .lineLimit(2)
             if let author = pr.author {
                 let base = pr.base ?? ""
                 let head = pr.head ?? ""
@@ -613,7 +615,6 @@ private struct WarrenGitPullRequestCard: View {
                     .font(WarrenTypography.supporting)
                     .foregroundStyle(tokens.foreground)
                     .fixedSize(horizontal: false, vertical: true)
-                    .lineLimit(8)
             }
             if let urlString = pr.url, let url = URL(string: urlString) {
                 Button {
@@ -679,13 +680,6 @@ private struct WarrenGitChangesPane: View {
                     selectedKey: model.selectedKey,
                     onOpen: { change in model.openFile(change: change) }
                 )
-            }
-            if staged.isEmpty, unstaged.isEmpty {
-                Text("No changes")
-                    .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .padding(.horizontal, WarrenSpacing.compact)
-                    .padding(.vertical, WarrenSpacing.small)
             }
         }
         .padding(.bottom, WarrenSpacing.compact)
