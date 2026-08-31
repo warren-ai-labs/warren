@@ -114,6 +114,15 @@ run = "bash scripts/acceptance-smoke.sh"
 description = "Build release app and package a zip"
 run = "bash scripts/package.sh"
 
+
+[tasks."ios:install"]
+description = "Build and install Warren iOS app to a connected iPhone (auto-detects LAN IP; pass HOST or set WARREN_IOS_HOST)"
+run = "bash scripts/install-ios.sh"
+
+[tasks."ios:build"]
+description = "Build Warren iOS app for device without installing (auto-detects LAN IP; pass HOST)"
+run = "bash scripts/install-ios.sh --no-launch"
+
 [tasks.clean]
 description = "Clean build artifacts"
 run = "swift package clean && rm -rf .build Warren.app"

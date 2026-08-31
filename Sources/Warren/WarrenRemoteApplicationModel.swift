@@ -9,6 +9,10 @@ import WarrenDomain
 import WarrenStateStore
 import WarrenTransport
 
+// Keep the desktop module's historical internal name while sharing the
+// cross-platform endpoint value with native clients.
+typealias WarrenRemoteEndpointConfiguration = WarrenTransport.WarrenRemoteEndpointConfiguration
+
 extension WarrenRemoteEndpointConfiguration {
     static func localDaemon() -> Self {
         let environment = ProcessInfo.processInfo.environment
@@ -22,59 +26,6 @@ extension WarrenRemoteEndpointConfiguration {
         let token = (try? String(contentsOf: tokenURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return Self(name: "Local", url: "http://127.0.0.1:8789", token: token, ssh: nil)
-    }
-}
-
-struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable, Sendable {
-    let name: String
-    let url: String
-    let token: String
-    let ssh: String?
-    let sshRemote: String?
-    let type: String
-    let hostID: String?
-    let routeID: String?
-
-    var id: String { name }
-
-    init(
-        name: String,
-        url: String,
-        token: String,
-        ssh: String?,
-        sshRemote: String? = nil,
-        type: String = "daemon",
-        hostID: String? = nil,
-        routeID: String? = nil
-    ) {
-        self.name = name
-        self.url = url
-        self.token = token
-        self.ssh = ssh
-        self.sshRemote = sshRemote
-        self.type = type
-        self.hostID = hostID
-        self.routeID = routeID
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name, url, token, ssh, sshRemote, type
-        case hostID = "host_id"
-        case routeID = "route_id"
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            name: try values.decode(String.self, forKey: .name),
-            url: try values.decode(String.self, forKey: .url),
-            token: try values.decode(String.self, forKey: .token),
-            ssh: try values.decodeIfPresent(String.self, forKey: .ssh),
-            sshRemote: try values.decodeIfPresent(String.self, forKey: .sshRemote),
-            type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
-            hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
-            routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
-        )
     }
 }
 

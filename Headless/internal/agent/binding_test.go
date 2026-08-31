@@ -396,11 +396,84 @@ func TestEnsureClaudeBindHookMergesIdempotently(t *testing.T) {
 	if len(end) != 1 {
 		t.Fatalf("SessionEnd entries = %d, want 1", len(end))
 	}
+	for _, event := range []string{
+		"PermissionRequest", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+		"UserPromptSubmit", "Stop",
+	} {
+		entries, ok := hooks[event].([]any)
+		if !ok || len(entries) != 1 {
+			t.Fatalf("%s entries = %#v, want one Warren hook", event, hooks[event])
+		}
+	}
 	changed, err = EnsureClaudeBindHook(claudeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if changed {
 		t.Fatal("second install must be a no-op")
+	}
+}
+
+func TestClaudeAttentionHookScript(t *testing.T) {
+	t.Setenv("WARREN_DATA_DIR", t.TempDir())
+	claudeDir := t.TempDir()
+	if _, err := EnsureClaudeBindHook(claudeDir); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(configDir(), "hooks", "agent-bind.sh")
+	statePath := filepath.Join(t.TempDir(), "bind.state")
+	cases := []struct {
+		name, input, activity, kind, reason, requestID string
+	}{
+		{
+			name:     "permission request",
+			input:    `{"hook_event_name":"PermissionRequest","request_id":"req-42"}`,
+			activity: "blocked", kind: "approval", reason: "permission", requestID: "req-42",
+		},
+		{
+			name:     "question tool",
+			input:    `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"ask-7"}`,
+			activity: "blocked", kind: "input", reason: "question", requestID: "ask-7",
+		},
+		{
+			name:     "resolved tool",
+			input:    `{"hook_event_name":"PostToolUse","tool_name":"Bash"}`,
+			activity: "working",
+		},
+		{
+			name:     "turn stop",
+			input:    `{"hook_event_name":"Stop"}`,
+			activity: "ready",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			command := exec.Command("bash", scriptPath, hookCommandMarker, "claude")
+			command.Stdin = strings.NewReader(tc.input)
+			command.Env = append(os.Environ(),
+				"WARREN_STATE_FILE="+statePath,
+				"WARREN_BIND_FILE=",
+			)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("attention hook failed: %v: %s", err, output)
+			}
+			status, err := ReadAgentStatus(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(status.Activity) != tc.activity {
+				t.Fatalf("activity = %q, want %q", status.Activity, tc.activity)
+			}
+			if tc.kind == "" {
+				if status.Attention != nil {
+					t.Fatalf("attention = %#v, want nil", status.Attention)
+				}
+				return
+			}
+			if status.Attention == nil || string(status.Attention.Kind) != tc.kind ||
+				status.Attention.Reason != tc.reason || status.Attention.RequestID != tc.requestID {
+				t.Fatalf("attention = %#v, want %s/%s/%s/%s", status.Attention, tc.kind, tc.reason, tc.requestID, tc.activity)
+			}
+		})
 	}
 }

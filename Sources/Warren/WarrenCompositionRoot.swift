@@ -6,6 +6,7 @@ import WarrenDomain
 import GhosttyAdapter
 import WarrenStateStore
 import WarrenDesignSystem
+import WarrenTransport
 
 private struct WarrenProjectFileDialogLabels: ViewModifier {
     func body(content: Content) -> some View {
