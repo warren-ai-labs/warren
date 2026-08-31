@@ -103,9 +103,16 @@ func Start(ctx context.Context, options Options) (*Tunnel, Ready, error) {
 	if err != nil {
 		return nil, Ready{}, fmt.Errorf("connect SSH host %s: %w", address, err)
 	}
-	clientConn, channels, requests, err := ssh.NewClientConn(connection, address, config)
+	clientConn, channels, requests, err := handshakeWithHostKeyFallback(
+		ctx,
+		connection,
+		address,
+		config,
+		func(redialContext context.Context) (net.Conn, error) {
+			return dialer.DialContext(redialContext, "tcp", address)
+		},
+	)
 	if err != nil {
-		connection.Close()
 		if isHostKeyMismatch(err) {
 			return nil, Ready{}, fmt.Errorf("SSH host key verification failed for %s: %w; the remote host key does not match known_hosts (check 'ssh-keygen -F %s' or remove the stale entry)", address, err, host.Host)
 		}
@@ -269,6 +276,107 @@ func proxy(local, remote net.Conn) {
 	go func() { defer wg.Done(); _, _ = io.Copy(remote, local); closeBoth() }()
 	go func() { defer wg.Done(); _, _ = io.Copy(local, remote); closeBoth() }()
 	wg.Wait()
+}
+
+// handshakeWithHostKeyFallback retries only with key algorithms represented
+// by known_hosts after the initial negotiation selects an unrecorded key type.
+// The host-key callback remains unchanged, so every retry is still strictly
+// verified against the same trusted entries.
+func handshakeWithHostKeyFallback(
+	ctx context.Context,
+	connection net.Conn,
+	address string,
+	config *ssh.ClientConfig,
+	redial func(context.Context) (net.Conn, error),
+) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	clientConn, channels, requests, err := ssh.NewClientConn(connection, address, config)
+	if err == nil {
+		return clientConn, channels, requests, nil
+	}
+	initialErr := err
+	for _, algorithms := range knownHostKeyAlgorithmCandidates(err) {
+		if ctx.Err() != nil {
+			break
+		}
+		retryConnection, dialErr := redial(ctx)
+		if dialErr != nil {
+			break
+		}
+		retryConfig := *config
+		retryConfig.HostKeyAlgorithms = algorithms
+		clientConn, channels, requests, err = ssh.NewClientConn(retryConnection, address, &retryConfig)
+		if err == nil {
+			return clientConn, channels, requests, nil
+		}
+		if !isHostKeyMismatch(err) && !isHostKeyAlgorithmNegotiationFailure(err) {
+			return nil, nil, nil, err
+		}
+	}
+	return nil, nil, nil, initialErr
+}
+
+// knownHostKeyAlgorithmCandidates extracts one safe negotiation preference
+// per known key entry. RSA has separate SSH signature algorithm names even
+// though its known_hosts key type is always ssh-rsa.
+func knownHostKeyAlgorithmCandidates(err error) [][]string {
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+
+	candidates := make([][]string, 0, len(keyErr.Want))
+	seen := make(map[string]struct{}, len(keyErr.Want))
+	for _, known := range keyErr.Want {
+		algorithms := hostKeyAlgorithmsForKnownKey(known.Key)
+		if len(algorithms) == 0 {
+			continue
+		}
+		identity := strings.Join(algorithms, "\x00")
+		if _, ok := seen[identity]; ok {
+			continue
+		}
+		seen[identity] = struct{}{}
+		candidates = append(candidates, algorithms)
+	}
+	return candidates
+}
+
+func hostKeyAlgorithmsForKnownKey(key ssh.PublicKey) []string {
+	if key == nil || key.Type() == "" {
+		return nil
+	}
+	switch key.Type() {
+	case ssh.KeyAlgoRSA:
+		return []string{
+			ssh.KeyAlgoRSASHA512,
+			ssh.KeyAlgoRSASHA256,
+			ssh.KeyAlgoRSA,
+			ssh.CertAlgoRSASHA512v01,
+			ssh.CertAlgoRSASHA256v01,
+			ssh.CertAlgoRSAv01,
+		}
+	case ssh.KeyAlgoECDSA256:
+		return []string{ssh.KeyAlgoECDSA256, ssh.CertAlgoECDSA256v01}
+	case ssh.KeyAlgoECDSA384:
+		return []string{ssh.KeyAlgoECDSA384, ssh.CertAlgoECDSA384v01}
+	case ssh.KeyAlgoECDSA521:
+		return []string{ssh.KeyAlgoECDSA521, ssh.CertAlgoECDSA521v01}
+	case ssh.KeyAlgoED25519:
+		return []string{ssh.KeyAlgoED25519, ssh.CertAlgoED25519v01}
+	case ssh.KeyAlgoSKECDSA256:
+		return []string{ssh.KeyAlgoSKECDSA256, ssh.CertAlgoSKECDSA256v01}
+	case ssh.KeyAlgoSKED25519:
+		return []string{ssh.KeyAlgoSKED25519, ssh.CertAlgoSKED25519v01}
+	case ssh.InsecureKeyAlgoDSA:
+		return []string{ssh.InsecureKeyAlgoDSA, ssh.InsecureCertAlgoDSAv01}
+	default:
+		return []string{key.Type()}
+	}
+}
+
+func isHostKeyAlgorithmNegotiationFailure(err error) bool {
+	var negotiationErr *ssh.AlgorithmNegotiationError
+	return errors.As(err, &negotiationErr) && negotiationErr.What == "host key"
 }
 
 func clientConfig(host HostConfig, timeout time.Duration) (*ssh.ClientConfig, func(), error) {

@@ -1,10 +1,22 @@
 package sshclient
 
 import (
+	"errors"
+	"fmt"
 	"net"
+	"reflect"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+type testPublicKey struct{ typ string }
+
+func (key testPublicKey) Type() string                        { return key.typ }
+func (key testPublicKey) Marshal() []byte                     { return []byte(key.typ) }
+func (key testPublicKey) Verify([]byte, *ssh.Signature) error { return nil }
 
 func TestLastNonEmptyLine(t *testing.T) {
 	if got := lastNonEmptyLine("warning\n0123456789abcdef0123456789abcdef\n"); got != "0123456789abcdef0123456789abcdef" {
@@ -91,5 +103,24 @@ func TestProxyCopiesBothDirections(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("proxy did not stop after one side closed")
+	}
+}
+
+func TestKnownHostKeyAlgorithmCandidates(t *testing.T) {
+	err := fmt.Errorf("ssh: handshake failed: %w", &knownhosts.KeyError{Want: []knownhosts.KnownKey{
+		{Key: testPublicKey{typ: ssh.KeyAlgoED25519}},
+		{Key: testPublicKey{typ: ssh.KeyAlgoRSA}},
+		{Key: testPublicKey{typ: ssh.KeyAlgoED25519}},
+	}})
+	got := knownHostKeyAlgorithmCandidates(err)
+	want := [][]string{
+		{ssh.KeyAlgoED25519, ssh.CertAlgoED25519v01},
+		{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA, ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSAv01},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("known host algorithms = %#v, want %#v", got, want)
+	}
+	if got := knownHostKeyAlgorithmCandidates(errors.New("not a known host error")); got != nil {
+		t.Fatalf("unexpected candidates for unrelated error: %#v", got)
 	}
 }
