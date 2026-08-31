@@ -5,6 +5,7 @@ import Foundation
 /// the reusable UI package stays free of AppDelegate dependencies.
 public enum WarrenDesktopCommand {
     public static let commandPalette = Notification.Name("WarrenDesktopCommand.commandPalette")
+    public static let activeSessions = Notification.Name("WarrenDesktopCommand.activeSessions")
     public static let newSession = Notification.Name("WarrenDesktopCommand.newSession")
     public static let nextTab = Notification.Name("WarrenDesktopCommand.nextTab")
     public static let previousTab = Notification.Name("WarrenDesktopCommand.previousTab")

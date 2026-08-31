@@ -2581,6 +2581,315 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(projection.session(id: failed.id), failed)
     }
 
+    func testActiveAgentGroupsFilterRunningSessionsAndAggregateByWorkspace() {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let firstProject = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let secondProject = Project(hostID: host.id, name: "Web", rootPath: "/tmp/web")
+        let firstWorkspace = Workspace(
+            projectID: firstProject.id,
+            name: "feature",
+            path: "/tmp/api-feature",
+            branch: "feature"
+        )
+        let secondWorkspace = Workspace(
+            projectID: secondProject.id,
+            name: "main",
+            path: "/tmp/web-main",
+            branch: "main"
+        )
+        let runningCodex = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: firstWorkspace.id,
+            title: "Implement API",
+            kind: .codex,
+            state: .attached
+        )
+        let runningClaude = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: firstWorkspace.id,
+            title: "Review API",
+            kind: .claude,
+            state: .reconnecting,
+            activity: .ready
+        )
+        let runningShellOverlay = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: secondWorkspace.id,
+            title: "Web checks",
+            kind: .shell,
+            state: .connecting,
+            activity: .working
+        )
+        let plainShell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: secondWorkspace.id,
+            title: "Shell",
+            kind: .shell,
+            state: .attached
+        )
+        let endedAgent = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: secondWorkspace.id,
+            title: "Ended",
+            kind: .codex,
+            state: .exited,
+            activity: .working
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [firstProject, secondProject],
+            workspaces: [firstWorkspace, secondWorkspace],
+            sessions: [
+                runningClaude,
+                plainShell,
+                runningCodex,
+                endedAgent,
+                runningShellOverlay,
+            ]
+        )
+
+        let groups = projection.activeAgentGroups()
+        XCTAssertEqual(groups.map(\.workspace.id), [firstWorkspace.id, secondWorkspace.id])
+        XCTAssertEqual(groups.map(\.project.id), [firstProject.id, secondProject.id])
+        XCTAssertEqual(groups[0].sessions.map(\.id), [runningClaude.id, runningCodex.id])
+        XCTAssertEqual(groups[1].sessions.map(\.id), [runningShellOverlay.id])
+    }
+
+    @MainActor
+    func testActiveSessionRowsStayFlatAndRepeatProjectWorkspaceContext() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature",
+            branch: "feature"
+        )
+        let working = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Implement API",
+            kind: .codex,
+            activity: .working
+        )
+        let ready = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Review API",
+            kind: .claude,
+            activity: .ready
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [working, ready]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeAgentGroups: projection.activeAgentGroups(),
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let activeNodes = recorder.snapshot().nodes.filter {
+            $0.id.hasPrefix("active-agent.")
+        }
+        XCTAssertEqual(activeNodes.count, 2)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: activeNodes.map { ($0.label, $0.value) }),
+            [
+                "Agent Session Implement API": "Working · API · feature",
+                "Agent Session Review API": "Idle · API · feature",
+            ]
+        )
+    }
+
+    @MainActor
+    func testActiveSessionsPopoverShowsEveryRunningSessionAsFlatRows() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature",
+            branch: "feature"
+        )
+        let terminalGroup = TerminalGroup(hostID: host.id, name: "Operations", home: "/tmp/ops")
+        let workspaceSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Implement API",
+            kind: .codex,
+            activity: .working
+        )
+        let workspaceShell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Shell",
+            kind: .shell
+        )
+        let terminalSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            terminalGroupID: terminalGroup.id,
+            title: "Deploy",
+            kind: .shell,
+            state: .connecting
+        )
+        let endedSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Ended",
+            kind: .codex,
+            state: .exited
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [workspaceSession, workspaceShell, terminalSession, endedSession],
+            terminalGroups: [terminalGroup]
+        )
+        let recorder = WarrenSemanticRecorder()
+        var actions: [WarrenDesktopAction] = []
+        let popup = WarrenDesktopActiveSessionsPopover(
+            projection: projection,
+            onAction: { actions.append($0) },
+            onDismiss: {},
+            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
+            resultsMaxHeight: 400
+        )
+        .frame(width: WarrenLayoutMetrics.activeSessionsPopoverWidth, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: popup)
+        hostingView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
+            height: 500
+        )
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        let activeNodes = snapshot.nodes.filter { $0.id.hasPrefix("active-session.") }
+        XCTAssertEqual(activeNodes.count, 3)
+        XCTAssertEqual(
+            Set(activeNodes.map(\.label)),
+            Set(["Session Implement API", "Session Shell", "Session Deploy"])
+        )
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: activeNodes.map { ($0.label, $0.value) }),
+            [
+                "Session Implement API": "API · feature",
+                "Session Shell": "API · feature",
+                "Session Deploy": "Operations",
+            ]
+        )
+        XCTAssertNil(snapshot.nodes.first { $0.id.hasPrefix("active-agent.") })
+
+        try recorder.perform(.press, on: "active-session.\(workspaceSession.id.description)")
+        XCTAssertEqual(actions, [.openSession(workspaceSession.id)])
+    }
+
+    @MainActor
+    func testActiveSessionsPopoverPrioritizesRecentlyReadySessions() {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature",
+            branch: "feature"
+        )
+        let now = Date()
+        let olderReady = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Older ready",
+            activity: .ready,
+            activityUpdatedAt: now.addingTimeInterval(-601)
+        )
+        let working = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Working"
+        )
+        let recentReady = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Recent ready",
+            activity: .ready,
+            activityUpdatedAt: now.addingTimeInterval(-60)
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [olderReady, working, recentReady]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let popup = WarrenDesktopActiveSessionsPopover(
+            projection: projection,
+            onAction: { _ in },
+            onDismiss: {},
+            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
+            resultsMaxHeight: 400
+        )
+        .frame(width: WarrenLayoutMetrics.activeSessionsPopoverWidth, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: popup)
+        hostingView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
+            height: 500
+        )
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let orderedLabels = recorder.snapshot().nodes
+            .filter { $0.id.hasPrefix("active-session.") }
+            .sorted { $0.frame.y < $1.frame.y }
+            .map(\.label)
+        XCTAssertEqual(orderedLabels, [
+            "Session Recent ready",
+            "Session Older ready",
+            "Session Working",
+        ])
+    }
+
     func testWorkspaceActivityCountsOnlyVisibleWorkingTabs() {
         let fixture = WarrenDesktopFixture.preview
         let workspaceID = fixture.groups[0].workspaces[0].id
@@ -2815,7 +3124,8 @@ final class WarrenDesktopTests: XCTestCase {
             expandedTaskIDs: [TaskID(), TaskID()],
             expandedProjectIDs: [ProjectID(), ProjectID()],
             tasksCollapsed: true,
-            projectsCollapsed: true
+            projectsCollapsed: true,
+            activeSessionsCollapsed: true
         )
 
         WarrenDesktopSidebarTreePersistence.save(state, scope: "local", defaults: defaults)

@@ -7,9 +7,11 @@ struct WarrenDesktopSidebar: View {
     @Binding var sidebarState: WarrenDesktopSidebarState
     @Binding var sidebarTree: WarrenDesktopSidebarTreeState
     let selection: WarrenDesktopSidebarSelection?
+    let selectedTabID: String?
     let chromeMode: WarrenDesktopChromeMode
     let updateStatus: WarrenDesktopUpdateStatus
     let onUpdateAction: () -> Void
+    let showsTasks: Bool
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
     let onRequestTaskCreate: () -> Void
@@ -51,9 +53,14 @@ struct WarrenDesktopSidebar: View {
                             )
                         },
                         workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                        // Active Sessions lives in the dedicated shortcut
+                        // switcher; the sidebar stays focused on navigation.
+                        showsActiveSessions: false,
+                        showsTasks: showsTasks,
                         tree: $sidebarTree,
                         isCollapsed: sidebarState.isCollapsed,
                         selection: selection,
+                        selectedTabID: selectedTabID,
                         deletingProjectIDs: deletingProjectIDs,
                         deletingWorkspaceIDs: deletingWorkspaceIDs,
                         endpointCapabilities: endpointCapabilities,

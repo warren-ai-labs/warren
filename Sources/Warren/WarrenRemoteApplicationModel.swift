@@ -1541,6 +1541,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var connectionIssueTask: Task<Void, Never>?
     private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
     private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
+    /// Client-observed activity history used by the desktop switcher to
+    /// prioritize sessions that have just become ready. The daemon status
+    /// payload has no transition timestamp, so this is intentionally kept
+    /// local to the live application model.
+    private var lastObservedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
+    private var activityUpdatedAtBySessionID: [TerminalSessionID: Date] = [:]
     private var agentCompletionTracker = WarrenAgentCompletionTracker()
     private let agentCompletionSubject = PassthroughSubject<WarrenAgentCompletionEvent, Never>()
     private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
@@ -1732,6 +1738,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         currentRoster = nil
         appliedLiveTabSessionIDs.removeAll()
         agentStatusBySessionID.removeAll()
+        lastObservedActivityBySessionID.removeAll()
+        activityUpdatedAtBySessionID.removeAll()
         agentCompletionTracker = WarrenAgentCompletionTracker()
         tabOrderByWorkspaceID.removeAll()
         tabOrderByTerminalGroupID.removeAll()
@@ -4021,6 +4029,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             apply(roster)
             ensureDeletionReconciliation(using: wire)
         case .agent(let sessionID, let status):
+            let previousActivity = lastObservedActivityBySessionID[sessionID]
+            lastObservedActivityBySessionID[sessionID] = status.activity
+            if status.activity == .ready, previousActivity != .ready {
+                activityUpdatedAtBySessionID[sessionID] = Date()
+            }
             agentStatusBySessionID[sessionID] = status
             let activity = status.activity
             let presentation = WarrenActivityDismissal.presentedActivity(
@@ -4036,7 +4049,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // server snapshot later.
             let presentedStatus = presentation.activity == nil ? nil : status
             publishProjectionIfChanged(
-                projection.withSessionAgentStatus(presentedStatus, for: sessionID)
+                projection.withSessionAgentStatus(
+                    presentedStatus,
+                    activityUpdatedAt: activityUpdatedAtBySessionID[sessionID],
+                    for: sessionID
+                )
             )
         case .maintenance(let message):
             maintenanceMessage = message?.isEmpty == false ? message : "Warren is updating"
@@ -4295,12 +4312,32 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             value.agentTurn.map { (sessionID, $0) }
         })
         let completedAgentSessions = agentCompletionTracker.observe(agentTurns)
+        let previousProjectionSessions = Dictionary(
+            uniqueKeysWithValues: projection.sessions.map { ($0.id, $0) }
+        )
+        let rosterObservationDate = Date()
+        var nextLastObservedActivityBySessionID = lastObservedActivityBySessionID
+        var nextActivityUpdatedAtBySessionID = activityUpdatedAtBySessionID
         let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
             let candidateStatus = Self.resolvedAgentStatus(
                 rosterStatus: value.agentStatus,
                 liveStatus: agentStatusBySessionID[id]
             )
             let candidateActivity = candidateStatus?.activity
+            let previousActivity = nextLastObservedActivityBySessionID[id]
+                ?? previousProjectionSessions[id]?.activity
+            let hadPreviousObservation = nextLastObservedActivityBySessionID[id] != nil
+                || previousProjectionSessions[id] != nil
+            if candidateActivity == .ready,
+               previousActivity != .ready,
+               hadPreviousObservation {
+                nextActivityUpdatedAtBySessionID[id] = rosterObservationDate
+            }
+            if let candidateActivity {
+                nextLastObservedActivityBySessionID[id] = candidateActivity
+            } else {
+                nextLastObservedActivityBySessionID.removeValue(forKey: id)
+            }
             let presentation = WarrenActivityDismissal.presentedActivity(
                 candidate: candidateActivity,
                 dismissed: dismissedActivityBySessionID[id]
@@ -4319,6 +4356,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 kind: TerminalSessionKind(rawValue: value.kind) ?? .custom,
                 state: value.lifecycle == "running" ? .attached : .exited,
                 agentStatus: presentation.activity == nil ? nil : candidateStatus,
+                activityUpdatedAt: nextActivityUpdatedAtBySessionID[id],
                 runtimeProcess: value.process ?? value.command ?? "",
                 workingDirectory: value.directory
                     ?? workspaceID.flatMap { workspacePaths[$0] }
@@ -4327,6 +4365,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
         }
         let liveSessionIDs = Set(remoteSessions.map(\.1))
+        lastObservedActivityBySessionID = nextLastObservedActivityBySessionID.filter {
+            liveSessionIDs.contains($0.key)
+        }
+        activityUpdatedAtBySessionID = nextActivityUpdatedAtBySessionID.filter {
+            liveSessionIDs.contains($0.key)
+        }
         dismissedActivityBySessionID = dismissedActivityBySessionID.filter {
             liveSessionIDs.contains($0.key)
         }

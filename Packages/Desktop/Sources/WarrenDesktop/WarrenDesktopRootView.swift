@@ -69,6 +69,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var sidebarState: WarrenDesktopSidebarState
     @State private var sidebarTree: WarrenDesktopSidebarTreeState
     @State private var commandPalettePresented = false
+    @State private var activeSessionsPresented = false
     @State private var settingsPresented = false
     @State private var settingsDeepLinkSection: WarrenDesktopSettingsSection?
     @State private var settingsPublicAccessPrefill: WarrenDesktopPublicAccessPrefill?
@@ -96,6 +97,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var notificationsMuted = false
     @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
     private var embeddedEditorDefaultIDE = false
+    @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
+    private var showsTasks = true
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -281,9 +284,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             sidebarState: $sidebarState,
             sidebarTree: $sidebarTree,
             selection: navigation.selection,
+            selectedTabID: navigation.selectedTabID,
             chromeMode: chromeMode,
             updateStatus: updateStatus,
             onUpdateAction: onUpdateAction,
+            showsTasks: showsTasks,
             deletingProjectIDs: deletingProjectIDs,
             deletingWorkspaceIDs: deletingWorkspaceIDs,
             onRequestTaskCreate: presentTaskCreator,
@@ -358,6 +363,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
         }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.activeSessions)) { _ in
+            presentActiveSessions()
+        }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.newSession)) { _ in
             handleNewSession(in: presentation)
         }
@@ -425,6 +433,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 .transition(.opacity)
                 .zIndex(WarrenPresentationLayer.commandSurface)
             }
+        }
+        .overlay {
+            activeSessionsOverlay
         }
         .overlay {
             chromePopoverLayer
@@ -585,6 +596,43 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    @ViewBuilder
+    private var activeSessionsOverlay: some View {
+        if activeSessionsPresented && !settingsPresented && !commandPalettePresented {
+            GeometryReader { proxy in
+                let panelWidth = min(
+                    WarrenLayoutMetrics.activeSessionsPopoverWidth,
+                    max(0, proxy.size.width - WarrenSpacing.standard * 2)
+                )
+                let resultsMaxHeight = min(
+                    WarrenLayoutMetrics.activeSessionsPopoverResultsMaxHeight,
+                    max(0, proxy.size.height - WarrenSpacing.large * 2)
+                )
+                ZStack {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { setActiveSessionsPresented(false) }
+
+                    WarrenDesktopActiveSessionsPopover(
+                        projection: projection,
+                        onAction: { action in
+                            dispatch(action)
+                            setActiveSessionsPresented(false)
+                        },
+                        onDismiss: { setActiveSessionsPresented(false) },
+                        width: panelWidth,
+                        resultsMaxHeight: resultsMaxHeight
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .transition(.opacity)
+            .zIndex(WarrenPresentationLayer.commandSurface)
+        }
+    }
+
     /// Resolve all selection-dependent UI values once per body evaluation.
     /// SwiftUI asks for these values in several branches and closures; keeping
     /// one immutable presentation value avoids repeated graph lookups while
@@ -709,6 +757,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         ),
                         wantsTerminalFocus: contentMode == .terminal
                             && !commandPalettePresented
+                            && !activeSessionsPresented
                             && !settingsPresented,
                         onAddProject: { dispatch(.addProject) },
                         onImportSuperset: { dispatch(.importSuperset) },
@@ -941,6 +990,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func openSettings(_ request: WarrenDesktopSettingsDeepLink?) {
         setCommandPalettePresented(false)
+        setActiveSessionsPresented(false)
         settingsDeepLinkSection = request?.section
         settingsPublicAccessPrefill = request?.publicAccess
         settingsRelayPrefill = request?.relay
@@ -1154,6 +1204,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    private func setActiveSessionsPresented(_ presented: Bool) {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            activeSessionsPresented = presented
+        }
+    }
+
     private func tabIndex(from rawValue: Any?) -> Int? {
         if let index = rawValue as? Int {
             return index
@@ -1237,7 +1293,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         // Release the terminal's AppKit first responder before the overlay
         // mounts so the palette TextField receives the next keystroke.
         NSApp.keyWindow?.makeFirstResponder(nil)
+        setActiveSessionsPresented(false)
         setCommandPalettePresented(true)
+    }
+
+    private func presentActiveSessions() {
+        guard !settingsPresented else { return }
+        // The search field owns the next keystroke; do not leave the terminal
+        // AppKit responder attached while the switcher is being mounted.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        setCommandPalettePresented(false)
+        setChromePopover(nil)
+        setActiveSessionsPresented(true)
     }
 
     private func setSettingsPresented(_ presented: Bool) {

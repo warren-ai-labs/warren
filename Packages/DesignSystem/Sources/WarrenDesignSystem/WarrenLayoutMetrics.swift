@@ -80,6 +80,11 @@ public enum WarrenLayoutMetrics {
     /// Superset's command dialog uses `max-w-[720px]`.
     public static let commandPaletteWidth: CGFloat = 720
     public static let commandPaletteResultsMaxHeight: CGFloat = 560
+    /// The active-session switcher follows the command palette width so its
+    /// search field and result rows share the same visual rhythm.
+    public static let activeSessionsPopoverWidth: CGFloat = commandPaletteWidth
+    public static let activeSessionsPopoverResultsMaxHeight: CGFloat =
+        commandPaletteResultsMaxHeight
     public static let commandPaletteInputHorizontalPadding: CGFloat = 14
     public static let commandPaletteResultsPadding: CGFloat = 6
     public static let commandPaletteItemHorizontalPadding: CGFloat = 10
