@@ -67,6 +67,9 @@ struct WarrenDesktopSettingsView: View {
     let onWebStop: (() -> Void)?
     let onWebReset: (() -> Void)?
     let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    let relaySettings: WarrenDesktopRelaySettings
+    let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -109,7 +112,14 @@ struct WarrenDesktopSettingsView: View {
     @State private var openAITestStatus: OpenAITestStatus = .idle
     @State private var publicAccessHostname = ""
     @State private var publicAccessPathPrefix = ""
+    @State private var relayURLDraft = ""
+    @State private var relayEnabledDraft = false
+    @State private var relayRegistrationURL = ""
+    @State private var relayRegistrationHostID = ""
     @State private var relayEnrollmentTicket = ""
+    @State private var relaySettingsBusy = false
+    @State private var relayResetBusy = false
+    @State private var relaySettingsError: String?
     @State private var relayEnrollmentBusy = false
     @State private var relayEnrollmentError: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
@@ -141,6 +151,59 @@ struct WarrenDesktopSettingsView: View {
     @FocusState private var searchFocused: Bool
     @State private var installedIDEs: [InstalledIDE] = []
     @State private var customIDEs = WarrenDesktopCustomIDEStore.load()
+
+    @MainActor
+    init(
+        onBack: @escaping () -> Void,
+        hostName: String,
+        webStatus: WarrenDesktopWebStatus,
+        onWebTest: ((String, String) -> Void)?,
+        onWebStop: (() -> Void)?,
+        onWebReset: (() -> Void)?,
+        onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
+        relaySettings: WarrenDesktopRelaySettings = .init(),
+        onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        defaultRuntime: String?,
+        onSetRuntime: @escaping (String) -> Void,
+        autoOpenShell: Bool,
+        onSetAutoOpenShell: @escaping (Bool) -> Void,
+        autoStartAI: Bool,
+        onSetAutoStartAI: @escaping (Bool) -> Void,
+        openAIBaseURL: String,
+        openAIModel: String,
+        openAITitleEnabled: Bool,
+        onSetOpenAISetting: @escaping (String, String) -> Void,
+        onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void,
+        initialSettingsSection: WarrenDesktopSettingsSection? = nil,
+        publicAccessPrefill: WarrenDesktopPublicAccessPrefill? = nil,
+        relayPrefill: WarrenDesktopRelayPrefill? = nil
+    ) {
+        self.onBack = onBack
+        self.hostName = hostName
+        self.webStatus = webStatus
+        self.onWebTest = onWebTest
+        self.onWebStop = onWebStop
+        self.onWebReset = onWebReset
+        self.onRelayEnroll = onRelayEnroll
+        self.relaySettings = relaySettings
+        self.onSetRelaySettings = onSetRelaySettings
+        self.onResetRelay = onResetRelay
+        self.defaultRuntime = defaultRuntime
+        self.onSetRuntime = onSetRuntime
+        self.autoOpenShell = autoOpenShell
+        self.onSetAutoOpenShell = onSetAutoOpenShell
+        self.autoStartAI = autoStartAI
+        self.onSetAutoStartAI = onSetAutoStartAI
+        self.openAIBaseURL = openAIBaseURL
+        self.openAIModel = openAIModel
+        self.openAITitleEnabled = openAITitleEnabled
+        self.onSetOpenAISetting = onSetOpenAISetting
+        self.onTestOpenAI = onTestOpenAI
+        self.initialSettingsSection = initialSettingsSection
+        self.publicAccessPrefill = publicAccessPrefill
+        self.relayPrefill = relayPrefill
+    }
 
     private var visibleSections: [SettingsSection] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -859,61 +922,175 @@ struct WarrenDesktopSettingsView: View {
                 .foregroundStyle(tokens.foreground)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let relayPrefill {
-                if let relayURL = relayPrefill.relayURL {
-                    settingsValueRow("Relay URL", value: relayURL, tokens: tokens)
-                }
-                if let hostID = relayPrefill.hostID {
-                    settingsValueRow("Host ID", value: hostID, tokens: tokens)
-                }
-                if let relayKeyID = relayPrefill.relayKeyID {
-                    settingsValueRow("Signing key", value: relayKeyID, tokens: tokens)
-                }
-                if let enrollmentTicket = relayPrefill.enrollmentTicket {
-                    SecureField("Enrollment ticket (one time)", text: $relayEnrollmentTicket)
-                        .textFieldStyle(.roundedBorder)
-                        .font(WarrenTypography.settingsControl)
-                        .accessibilityLabel("Relay enrollment ticket")
-                        .accessibilityIdentifier("settings.relay.enrollment-ticket")
-                        .onAppear { relayEnrollmentTicket = enrollmentTicket }
+            VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+                Text("Current configuration")
+                    .font(WarrenTypography.settingsSectionTitle)
+                    .foregroundStyle(tokens.foreground)
 
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Button(relayEnrollmentBusy ? "Enrolling…" : "Enroll Relay") {
-                            guard let relayURL = relayPrefill.relayURL,
-                                  let hostID = relayPrefill.hostID,
-                                  !relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                                  let onRelayEnroll else { return }
-                            relayEnrollmentBusy = true
-                            relayEnrollmentError = nil
-                            onRelayEnroll(relayURL, hostID, relayEnrollmentTicket) { result in
-                                Task { @MainActor in
-                                    relayEnrollmentBusy = false
-                                    switch result {
-                                    case .success:
-                                        // The ticket is one-time; do not leave
-                                        // it visible or reusable after the
-                                        // daemon has consumed it.
-                                        relayEnrollmentTicket = ""
-                                        relayEnrollmentError = nil
-                                    case let .failure(error):
-                                        relayEnrollmentError = error.localizedDescription
-                                    }
-                                }
-                            }
-                        }
-                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .disabled(relayEnrollmentBusy || onRelayEnroll == nil)
-                        .accessibilityIdentifier("settings.relay.enroll")
+                Text("Relay URL")
+                    .font(WarrenTypography.settingsBody)
+                    .foregroundStyle(tokens.mutedForeground)
+                TextField("https://relay.example.com", text: $relayURLDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Relay URL")
+                    .accessibilityIdentifier("settings.relay.url")
 
-                        if relayEnrollmentBusy {
-                            WarrenStatusIndicator(
-                                color: tokens.info,
-                                isActive: true,
-                                accessibilityLabel: "Enrolling Relay"
-                            )
-                        }
+                if !relaySettings.isEnrolled {
+                    Text("No Relay enrollment is currently configured for this Host.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle("Enable Relay connection", isOn: $relayEnabledDraft)
+                    .toggleStyle(.switch)
+                    .disabled(relaySettingsBusy || relayResetBusy)
+                    .accessibilityIdentifier("settings.relay.enabled")
+
+                HStack(spacing: WarrenSpacing.compact) {
+                    Button(relaySettingsBusy ? "Saving…" : "Save Relay settings") {
+                        saveRelaySettings()
+                    }
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                    .disabled(relaySettingsBusy || relayResetBusy || onSetRelaySettings == nil)
+                    .accessibilityIdentifier("settings.relay.save")
+                    .warrenSemanticElement(
+                        id: "settings.relay.save",
+                        role: .button,
+                        label: "Save Relay settings",
+                        isEnabled: !relaySettingsBusy && !relayResetBusy && onSetRelaySettings != nil,
+                        action: saveRelaySettings
+                    )
+
+                    if relaySettingsBusy {
+                        WarrenStatusIndicator(
+                            color: tokens.info,
+                            isActive: true,
+                            accessibilityLabel: "Saving Relay settings"
+                        )
                     }
                 }
+
+                if !relaySettings.hostID.isEmpty {
+                    settingsValueRow("Host ID", value: relaySettings.hostID, tokens: tokens)
+                }
+                if !relaySettings.routeID.isEmpty {
+                    settingsValueRow("Route ID", value: relaySettings.routeID, tokens: tokens)
+                }
+                if !relaySettings.relayKeyID.isEmpty {
+                    settingsValueRow("Signing key", value: relaySettings.relayKeyID, tokens: tokens)
+                }
+                if !relaySettings.relayPublicKey.isEmpty {
+                    settingsValueRow(
+                        "Pinned public key",
+                        value: Self.relayKeySummary(relaySettings.relayPublicKey),
+                        tokens: tokens
+                    )
+                }
+                if !relaySettings.lastError.isEmpty {
+                    Text(relaySettings.lastError)
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Relay error: \(relaySettings.lastError)")
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
+                    Button("Reset local enrollment", role: .destructive) {
+                        resetRelay()
+                    }
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                    .disabled(relaySettingsBusy || relayResetBusy || onResetRelay == nil)
+                    .accessibilityIdentifier("settings.relay.reset")
+                    .warrenSemanticElement(
+                        id: "settings.relay.reset",
+                        role: .button,
+                        label: "Reset local Relay enrollment",
+                        isEnabled: !relaySettingsBusy && !relayResetBusy && onResetRelay != nil,
+                        action: resetRelay
+                    )
+
+                    Text("Stops the local connector and clears this Host's Relay enrollment metadata. The Relay Host record is not revoked.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if let relaySettingsError, !relaySettingsError.isEmpty {
+                Text(relaySettingsError)
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Relay settings error: \(relaySettingsError)")
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+                Text(relaySettings.isEnrolled ? "Re-register Relay" : "Register Relay")
+                    .font(WarrenTypography.settingsSectionTitle)
+                    .foregroundStyle(tokens.foreground)
+
+                TextField("Relay URL", text: $relayRegistrationURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Relay registration URL")
+                    .accessibilityIdentifier("settings.relay.registration-url")
+
+                TextField("Host ID", text: $relayRegistrationHostID)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Relay Host ID")
+                    .accessibilityIdentifier("settings.relay.registration-host-id")
+
+                SecureField("Enrollment ticket (one time)", text: $relayEnrollmentTicket)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityLabel("Relay enrollment ticket")
+                    .accessibilityIdentifier("settings.relay.enrollment-ticket")
+
+                if let relayKeyID = relayPrefill?.relayKeyID {
+                    settingsValueRow("Expected signing key", value: relayKeyID, tokens: tokens)
+                }
+
+                HStack(spacing: WarrenSpacing.compact) {
+                    Button(relayEnrollmentBusy
+                        ? "Registering…"
+                        : (relaySettings.isEnrolled ? "Re-register Relay" : "Register Relay")) {
+                        enrollRelay()
+                    }
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                    .disabled(
+                        relayEnrollmentBusy
+                            || relaySettingsBusy
+                            || onRelayEnroll == nil
+                            || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("settings.relay.reregister")
+                    .warrenSemanticElement(
+                        id: "settings.relay.reregister",
+                        role: .button,
+                        label: relaySettings.isEnrolled ? "Re-register Relay" : "Register Relay",
+                        isEnabled: !relayEnrollmentBusy
+                            && !relaySettingsBusy
+                            && onRelayEnroll != nil
+                            && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && !relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && !relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        action: enrollRelay
+                    )
+
+                    if relayEnrollmentBusy {
+                        WarrenStatusIndicator(
+                            color: tokens.info,
+                            isActive: true,
+                            accessibilityLabel: "Registering Relay"
+                        )
+                    }
+                }
+
                 if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
                     Text(relayEnrollmentError)
                         .font(WarrenTypography.settingsSupporting)
@@ -921,17 +1098,102 @@ struct WarrenDesktopSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Relay enrollment error: \(relayEnrollmentError)")
                 }
-                Text("This link carries a short-lived enrollment ticket. Consume it with `warren relay enroll` or the Headless Relay setup flow, then discard the link.")
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("Create a Host on your Relay, then open its Warren setup link or run `warren relay enroll` with the one-time enrollment ticket. The daemon token remains the only Host Secret.")
+
+                Text("Use the one-time ticket from the Relay setup link. The Host Secret stays in the daemon and is never entered here.")
                     .font(WarrenTypography.settingsSupporting)
                     .foregroundStyle(tokens.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .onAppear(perform: seedRelayFields)
+        .onChange(of: relaySettings) { _ in seedRelayFields() }
+    }
+
+    private func saveRelaySettings() {
+        guard !relaySettingsBusy, let onSetRelaySettings else { return }
+        var value = relaySettings
+        value.enabled = relayEnabledDraft
+        value.relayURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        relaySettingsBusy = true
+        relaySettingsError = nil
+        onSetRelaySettings(value) { result in
+            Task { @MainActor in
+                relaySettingsBusy = false
+                switch result {
+                case .success:
+                    relaySettingsError = nil
+                case let .failure(error):
+                    relaySettingsError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func enrollRelay() {
+        guard !relayEnrollmentBusy,
+              let onRelayEnroll else { return }
+        let relayURL = relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostID = relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ticket = relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relayURL.isEmpty, !hostID.isEmpty, !ticket.isEmpty else { return }
+        relayEnrollmentBusy = true
+        relayEnrollmentError = nil
+        onRelayEnroll(relayURL, hostID, ticket) { result in
+            Task { @MainActor in
+                relayEnrollmentBusy = false
+                switch result {
+                case .success:
+                    // Enrollment tickets are one-time credentials. Remove the
+                    // value as soon as the daemon confirms it was consumed.
+                    relayEnrollmentTicket = ""
+                    relayEnrollmentError = nil
+                case let .failure(error):
+                    relayEnrollmentError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func resetRelay() {
+        guard !relayResetBusy, let onResetRelay else { return }
+        relayResetBusy = true
+        relaySettingsError = nil
+        onResetRelay { result in
+            Task { @MainActor in
+                relayResetBusy = false
+                switch result {
+                case .success:
+                    relayURLDraft = ""
+                    relayEnabledDraft = false
+                    relayRegistrationURL = ""
+                    relayRegistrationHostID = ""
+                    relayEnrollmentTicket = ""
+                    relayEnrollmentError = nil
+                    relaySettingsError = nil
+                case let .failure(error):
+                    relaySettingsError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func seedRelayFields() {
+        relayURLDraft = relaySettings.relayURL
+        relayEnabledDraft = relaySettings.enabled
+        guard relayPrefill == nil else { return }
+        if relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            relayRegistrationURL = relaySettings.relayURL
+        }
+        if relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            relayRegistrationHostID = relaySettings.hostID
+        }
+    }
+
+    private static func relayKeySummary(_ value: String) -> String {
+        guard value.count > 28 else { return value }
+        let prefix = value.prefix(14)
+        let suffix = value.suffix(10)
+        return "\(prefix)…\(suffix)"
     }
 
     private func settingsValueRow(_ label: String, value: String, tokens: WarrenColorTokens) -> some View {
@@ -1088,7 +1350,16 @@ struct WarrenDesktopSettingsView: View {
             publicAccess = nil
         }
 
-        relay = section == .relay ? relayPrefill : nil
+        if section == .relay {
+            relay = relayPrefill ?? WarrenDesktopRelayPrefill(
+                relayURL: relaySettings.relayURL,
+                hostID: relaySettings.hostID,
+                relayKeyID: relaySettings.relayKeyID,
+                relayPublicKey: relaySettings.relayPublicKey
+            )
+        } else {
+            relay = nil
+        }
 
         guard let url = WarrenDesktopSettingsDeepLink(
             section: section,
@@ -1119,7 +1390,15 @@ struct WarrenDesktopSettingsView: View {
         }
 
         if let relayPrefill {
+            if let relayURL = relayPrefill.relayURL {
+                relayRegistrationURL = relayURL
+            }
+            if let hostID = relayPrefill.hostID {
+                relayRegistrationHostID = hostID
+            }
             relayEnrollmentTicket = relayPrefill.enrollmentTicket ?? ""
+        } else {
+            seedRelayFields()
         }
     }
 

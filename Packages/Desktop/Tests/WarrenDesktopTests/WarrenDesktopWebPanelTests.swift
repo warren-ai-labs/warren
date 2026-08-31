@@ -176,6 +176,74 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNil(received?.key)
     }
 
+    @MainActor
+    func testRelaySettingsShowCurrentConfigurationAndLifecycleActions() throws {
+        let save = expectation(description: "relay settings save")
+        let reset = expectation(description: "relay settings reset")
+        var saved: WarrenDesktopRelaySettings?
+        let recorder = WarrenSemanticRecorder()
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: { _, _, _, completion in completion(.success(())) },
+            relaySettings: WarrenDesktopRelaySettings(
+                enabled: true,
+                relayURL: "https://relay.example.test",
+                hostID: "00000000-0000-4000-8000-000000000001",
+                routeID: "route-1",
+                relayKeyID: "key-1",
+                relayPublicKey: "pinned-public-key"
+            ),
+            onSetRelaySettings: { value, completion in
+                saved = value
+                completion(.success(()))
+                save.fulfill()
+            },
+            onResetRelay: { completion in
+                completion(.success(()))
+                reset.fulfill()
+            },
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .relay
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        let hostingView = NSHostingView(rootView: settings)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.save"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.reregister"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.reset"))
+
+        try recorder.perform(.press, on: "settings.relay.save")
+        wait(for: [save], timeout: 1)
+        XCTAssertEqual(saved?.relayURL, "https://relay.example.test")
+        XCTAssertTrue(saved?.enabled == true)
+
+        try recorder.perform(.press, on: "settings.relay.reset")
+        wait(for: [reset], timeout: 1)
+    }
+
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
         let prefill = WarrenDesktopPublicAccessPrefill(
             publicHostname: "public.example.com",

@@ -138,6 +138,10 @@ warren relay enroll --url https://relay.example.com --host HOST_ID \
   --ticket ENROLLMENT_TICKET --secret "$(cat ~/.warren/token)"
 ```
 
+Warren Desktop exposes the same non-secret Relay settings under Settings →
+Relay, including the current enrollment, connection toggle, URL edits,
+re-registration with a new one-time ticket, and local enrollment reset.
+
 Set `relay.enabled` (and, for an application route, `publicTunnel.enabled`) to
 start the supervised connector. It opens one outbound WSS connection and
 multiplexes private control, HTTP, and WebSocket Upgrade streams using BRLY/2;

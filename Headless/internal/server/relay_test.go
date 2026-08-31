@@ -2,14 +2,17 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
 
@@ -156,6 +159,66 @@ func TestRelayEnrollmentDoesNotFollowRedirectsWithDaemonToken(t *testing.T) {
 	}
 	if leaked.Load() {
 		t.Fatal("enrollment leaked the daemon token to a redirect target")
+	}
+}
+
+func TestRelayResetDisablesRouteAndClearsLocalEnrollment(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000033"
+	var disabled atomic.Bool
+	relayServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodDelete {
+			t.Fatalf("Relay request method = %s, want DELETE", request.Method)
+		}
+		disabled.Store(true)
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer relayServer.Close()
+
+	service := &Service{
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
+		Settings: settings.Settings{
+			Relay: settings.RelaySettings{
+				Enabled:    true,
+				URL:        relayServer.URL,
+				HostID:     hostID,
+				RelayKeyID: "key-1",
+				RelayKey:   "pinned-key",
+			},
+			PublicTunnel: settings.PublicTunnelSettings{
+				Enabled:        true,
+				RouteID:        "route-1",
+				PublicHostname: "public.example.com",
+			},
+		},
+	}
+	handler := NewHTTPServer(service, "host-secret", nil)
+	var stops atomic.Int32
+	handler.RelayStop = func() { stops.Add(1) }
+	handler.RelayRouteClient = func() (*relay.RouteClient, error) {
+		return relay.NewRouteClient(relayServer.URL, hostID, "host-secret")
+	}
+
+	if err := handler.resetRelayEnrollment(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !disabled.Load() {
+		t.Fatal("Relay route was not disabled")
+	}
+	if stops.Load() != 1 {
+		t.Fatalf("Relay stop count = %d, want 1", stops.Load())
+	}
+	if got := service.RelaySettingsSnapshot(); got != (settings.RelaySettings{}) {
+		t.Fatalf("Relay settings = %#v, want zero value", got)
+	}
+	if got := service.PublicTunnelSettingsSnapshot(); got != (settings.PublicTunnelSettings{}) {
+		t.Fatalf("Public tunnel settings = %#v, want zero value", got)
+	}
+	loaded, err := settings.Load(service.SettingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Relay != (settings.RelaySettings{}) || loaded.PublicTunnel != (settings.PublicTunnelSettings{}) {
+		t.Fatalf("persisted settings = %#v, want cleared Relay and public tunnel", loaded)
 	}
 }
 
