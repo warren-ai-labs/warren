@@ -46,6 +46,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebStop: () -> Void
     private let onWebReset: (() -> Void)?
     private let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    private let relaySettings: WarrenDesktopRelaySettings
+    private let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    private let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
@@ -140,6 +143,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebStop: @escaping () -> Void = {},
         onWebReset: (() -> Void)? = nil,
         onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        relaySettings: WarrenDesktopRelaySettings = .init(),
+        onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
@@ -196,6 +202,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebStop = onWebStop
         self.onWebReset = onWebReset
         self.onRelayEnroll = onRelayEnroll
+        self.relaySettings = relaySettings
+        self.onSetRelaySettings = onSetRelaySettings
+        self.onResetRelay = onResetRelay
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
@@ -768,6 +777,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onWebStop: onWebStop,
                 onWebReset: onWebReset,
                 onRelayEnroll: onRelayEnroll,
+                relaySettings: relaySettings,
+                onSetRelaySettings: onSetRelaySettings,
+                onResetRelay: onResetRelay,
                 defaultRuntime: defaultRuntime,
                 onSetRuntime: onSetRuntime,
                 autoOpenShell: autoOpenShell,

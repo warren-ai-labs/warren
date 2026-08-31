@@ -1110,6 +1110,43 @@ private actor WarrenRemoteWire {
     }
 
     func request(_ method: String, params: [String: String] = [:]) async throws -> Data {
+        try await requestJSON(
+            method,
+            params: params,
+            contextParams: params
+        )
+    }
+
+    func requestRelaySettings(_ settings: WarrenDesktopRelaySettings) async throws -> Data {
+        let relay: [String: Any] = [
+            "enabled": settings.enabled,
+            "url": settings.relayURL,
+            "hostID": settings.hostID,
+            "routeID": settings.routeID,
+            "relayKeyID": settings.relayKeyID,
+            "relayKey": settings.relayPublicKey,
+            "lastError": settings.lastError,
+        ]
+        return try await requestJSON(
+            "settings.put",
+            params: ["relay": relay],
+            contextParams: ["relay": "settings"]
+        )
+    }
+
+    func requestRelayReset() async throws -> Data {
+        try await requestJSON(
+            "relay.reset",
+            params: [:],
+            contextParams: ["operation": "reset"]
+        )
+    }
+
+    private func requestJSON(
+        _ method: String,
+        params: [String: Any],
+        contextParams: [String: String]
+    ) async throws -> Data {
         guard let task else { throw URLError(.notConnectedToInternet) }
         let id = UUID().uuidString.lowercased()
         let text = Self.json(["t": "request", "id": id, "method": method, "params": params])
@@ -1118,7 +1155,7 @@ private actor WarrenRemoteWire {
                 continuations[id] = continuation
                 requestContexts[id] = WarrenRemoteRequestContext(
                     method: method,
-                    params: params,
+                    params: contextParams,
                     startedAt: Date()
                 )
                 Task {
@@ -1494,6 +1531,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// model without limit.
     @Published private(set) var notices: [WarrenDesktopNotice] = []
     @Published private(set) var webStatus = WarrenDesktopWebStatus()
+    /// Non-secret Relay enrollment metadata owned by the selected Host
+    /// daemon. The Host Secret remains in the daemon credential store.
+    @Published private(set) var relaySettings = WarrenDesktopRelaySettings()
     /// Default engine for new sessions, owned by the headless daemon.
     @Published private(set) var defaultRuntime: String?
     /// Whether opening an empty workspace creates a default Shell session.
@@ -1688,6 +1728,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAIBaseURL = ""
         openAIModel = ""
         openAITitleEnabled = false
+        relaySettings = WarrenDesktopRelaySettings()
         if configuration.url.hasPrefix("http://127.0.0.1:8789"),
            !configuration.token.isEmpty,
            let localBaseURL = URL(string: "http://127.0.0.1:8789/") {
@@ -1749,6 +1790,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         clearDeletionState()
         resetAttachmentState()
         webStatus = WarrenDesktopWebStatus()
+        relaySettings = WarrenDesktopRelaySettings()
         publishProjectionIfChanged(projection.withConnectionState(.disconnected))
         let ms = Int(Date().timeIntervalSince(disconnectStart) * 1000)
         TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
@@ -2098,30 +2140,50 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         Task { @MainActor [weak self] in
             do {
                 let data = try await wire.request("settings.get")
-                guard let self,
-                      let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-                if let kind = result["defaultRuntime"] as? String {
-                    self.defaultRuntime = kind
-                }
-                if let enabled = result["autoOpenShell"] as? Bool {
-                    self.autoOpenShell = enabled
-                }
-                if let enabled = result["autoStartAI"] as? Bool {
-                    self.autoStartAI = enabled
-                }
-                if let baseURL = result["openaiBaseURL"] as? String {
-                    self.openAIBaseURL = baseURL
-                }
-                if let model = result["openaiModel"] as? String {
-                    self.openAIModel = model
-                }
-                if let enabled = result["openaiTitleEnabled"] as? Bool {
-                    self.openAITitleEnabled = enabled
-                }
+                self?.applySettingsResponse(data)
             } catch {
                 // Settings are not critical; the picker keeps its default.
             }
         }
+    }
+
+    private func applySettingsResponse(_ data: Data) {
+        guard let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        if let kind = result["defaultRuntime"] as? String {
+            defaultRuntime = kind
+        }
+        if let enabled = result["autoOpenShell"] as? Bool {
+            autoOpenShell = enabled
+        }
+        if let enabled = result["autoStartAI"] as? Bool {
+            autoStartAI = enabled
+        }
+        if let baseURL = result["openaiBaseURL"] as? String {
+            openAIBaseURL = baseURL
+        }
+        if let model = result["openaiModel"] as? String {
+            openAIModel = model
+        }
+        if let enabled = result["openaiTitleEnabled"] as? Bool {
+            openAITitleEnabled = enabled
+        }
+        if let relay = result["relay"] as? [String: Any] {
+            relaySettings = Self.relaySettings(from: relay)
+        }
+    }
+
+    private static func relaySettings(from value: [String: Any]) -> WarrenDesktopRelaySettings {
+        WarrenDesktopRelaySettings(
+            enabled: value["enabled"] as? Bool ?? false,
+            relayURL: (value["url"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            hostID: (value["hostID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            routeID: (value["routeID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            relayKeyID: (value["relayKeyID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            relayPublicKey: (value["relayKey"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            lastError: (value["lastError"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 
     func setDefaultRuntime(_ kind: String) {
@@ -2177,6 +2239,101 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self?.present(error)
             }
         }
+    }
+
+    /// Persists editable Relay metadata without exposing the daemon's Host
+    /// Secret to Desktop. The pinned public key is carried through unchanged
+    /// so a URL or enabled-state edit cannot invalidate enrollment.
+    func setRelaySettings(
+        _ value: WarrenDesktopRelaySettings,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        guard let configuration = endpointConfiguration else {
+            let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard configuration.type.lowercased() != "relay" else {
+            let error = NSError(domain: "WarrenRemote", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Relay settings must be changed from the Host daemon, not a Relay endpoint.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard let wire else {
+            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.requestRelaySettings(value)
+                self?.settingsLoaded = true
+                self?.applySettingsResponse(data)
+                completion(.success(()))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Clears local Relay enrollment and stops the connector. The Host record
+    /// on Relay is intentionally not revoked; that operation requires a Relay
+    /// administrator token and remains an explicit Relay management action.
+    func resetRelay(completion: @escaping (Result<Void, Error>) -> Void = { _ in }) {
+        guard let configuration = endpointConfiguration else {
+            let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard configuration.type.lowercased() != "relay" else {
+            let error = NSError(domain: "WarrenRemote", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Relay enrollment must be reset from the Host daemon, not a Relay endpoint.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard let wire else {
+            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.requestRelayReset()
+                self?.settingsLoaded = true
+                self?.applySettingsResponse(data)
+                self?.relaySettings = WarrenDesktopRelaySettings()
+                self?.clearPublicAccessAfterRelayReset()
+                completion(.success(()))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private func clearPublicAccessAfterRelayReset() {
+        webStatus.relayURL = nil
+        webStatus.relayHostID = nil
+        webStatus.routeID = nil
+        webStatus.publicHostname = nil
+        webStatus.pathPrefix = nil
+        webStatus.authMode = nil
+        webStatus.secureURL = nil
+        webStatus.publicAccessEnabled = false
+        webStatus.publicAccessAuthenticated = false
+        webStatus.tunnelRunning = false
+        webStatus.publicAccessError = nil
     }
 
     /// Enrolls the selected local Headless daemon into an owned Relay using a

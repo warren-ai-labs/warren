@@ -12,6 +12,45 @@ public enum WarrenPublicAccessCopy {
     public static let resetLocalSetup = "Reset local route"
 }
 
+/// The non-secret Relay enrollment metadata reported by a Host daemon.
+///
+/// The daemon token remains in the Host credential store and is never part of
+/// this projection. `relayPublicKey` is a pinned public signing key; it is
+/// carried through settings updates so editing the URL or enabled state does
+/// not accidentally discard the pin.
+public struct WarrenDesktopRelaySettings: Hashable, Sendable {
+    public var enabled: Bool
+    public var relayURL: String
+    public var hostID: String
+    public var routeID: String
+    public var relayKeyID: String
+    public var relayPublicKey: String
+    public var lastError: String
+
+    public init(
+        enabled: Bool = false,
+        relayURL: String = "",
+        hostID: String = "",
+        routeID: String = "",
+        relayKeyID: String = "",
+        relayPublicKey: String = "",
+        lastError: String = ""
+    ) {
+        self.enabled = enabled
+        self.relayURL = relayURL
+        self.hostID = hostID
+        self.routeID = routeID
+        self.relayKeyID = relayKeyID
+        self.relayPublicKey = relayPublicKey
+        self.lastError = lastError
+    }
+
+    public var isEnrolled: Bool {
+        !relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !hostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var isRunning: Bool
     public var localURL: URL?

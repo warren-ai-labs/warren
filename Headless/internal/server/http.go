@@ -543,6 +543,28 @@ func (s *HTTPServer) syncRelayLifecycle() error {
 	return nil
 }
 
+// resetRelayEnrollment tears down the local Relay lifecycle and clears the
+// Host's enrollment metadata. A configured public route is disabled first when
+// the Relay is reachable; the Host record itself is deliberately retained and
+// can only be revoked with an explicit Relay administrator operation.
+func (s *HTTPServer) resetRelayEnrollment(ctx context.Context) error {
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+
+	if client, err := s.routeClient(); err == nil {
+		if disableErr := client.Disable(ctx); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
+			return disableErr
+		}
+	}
+	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
+		return err
+	}
+	if s.RelayStop != nil {
+		s.RelayStop()
+	}
+	return s.Service.UpdateRelaySettings(settings.RelaySettings{})
+}
+
 func (s *HTTPServer) settingsProjection() map[string]any {
 	value := s.Service.SettingsSnapshot()
 	return map[string]any{
@@ -1864,6 +1886,16 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiTitleEnabled": value.OpenAITitleEnabled,
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
+		})
+	case "relay.reset":
+		if err := p.server.resetRelayEnrollment(ctx); err != nil {
+			return err
+		}
+		value := p.server.Service.SettingsSnapshot()
+		return p.writeResult(command.ID, map[string]any{
+			"reset":        true,
+			"relay":        value.Relay,
+			"publicTunnel": value.PublicTunnel,
 		})
 	case "public-access.status", "public-access.enable", "public-access.test", "public-access.disable", "public-access.reset", "public-access.restart":
 		action := strings.TrimPrefix(command.Method, "public-access.")
