@@ -129,10 +129,27 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     public let kind: TerminalSessionKind
     public let state: WarrenDesktopSessionState
     public let agentStatus: AgentStatus?
+    /// The last client-observed activity transition. This is intentionally
+    /// separate from `AgentStatus`, whose wire representation has no
+    /// activity timestamp.
+    public let activityUpdatedAt: Date?
     public let runtimeProcess: String
     public let workingDirectory: String
 
     public var activity: AgentActivityState? { agentStatus?.activity }
+
+    /// Warren's structured Agent view is available for integrated providers
+    /// and for a shell that the Host has promoted through an Agent binding.
+    public var isAgentSession: Bool {
+        switch kind {
+        case .claude, .codex, .opencode:
+            true
+        case .shell, .custom:
+            agentStatus != nil
+        case .trae:
+            false
+        }
+    }
 
     /// Single display-name rule: a user-set custom title wins, otherwise the
     /// generated default title is shown.
@@ -153,6 +170,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         state: WarrenDesktopSessionState = .attached,
         activity: AgentActivityState? = nil,
         agentStatus: AgentStatus? = nil,
+        activityUpdatedAt: Date? = nil,
         runtimeProcess: String = "",
         workingDirectory: String = ""
     ) {
@@ -170,6 +188,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.kind = kind
         self.state = state
         self.agentStatus = agentStatus ?? activity.map { AgentStatus(activity: $0) }
+        self.activityUpdatedAt = activityUpdatedAt
         self.runtimeProcess = runtimeProcess
         self.workingDirectory = workingDirectory
     }
@@ -178,7 +197,10 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         withAgentStatus(activity.map { AgentStatus(activity: $0) })
     }
 
-    public func withAgentStatus(_ agentStatus: AgentStatus?) -> Self {
+    public func withAgentStatus(
+        _ agentStatus: AgentStatus?,
+        activityUpdatedAt: Date? = nil
+    ) -> Self {
         Self(
             id: id,
             workspaceID: workspaceID,
@@ -190,11 +212,33 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             kind: kind,
             state: state,
             agentStatus: agentStatus,
+            activityUpdatedAt: activityUpdatedAt ?? self.activityUpdatedAt,
             runtimeProcess: runtimeProcess,
             workingDirectory: workingDirectory
         )
     }
 
+}
+
+/// A running Agent collection grouped by its owning Workspace. The project
+/// and workspace remain outside the child rows so several sessions can share
+/// one context without repeating it for every activity item.
+public struct WarrenDesktopActiveAgentGroup: Identifiable, Hashable, Sendable {
+    public let project: Project
+    public let workspace: Workspace
+    public let sessions: [WarrenDesktopSession]
+
+    public var id: WorkspaceID { workspace.id }
+
+    public init(
+        project: Project,
+        workspace: Workspace,
+        sessions: [WarrenDesktopSession]
+    ) {
+        self.project = project
+        self.workspace = workspace
+        self.sessions = sessions
+    }
 }
 
 public enum WarrenDesktopSessionState: String, Hashable, Sendable {
@@ -608,6 +652,28 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         sessionsByTerminalGroupID[terminalGroupID] ?? []
     }
 
+    /// Returns active Agent sessions grouped in the same order as the project
+    /// tree. Ended sessions and plain shells stay out of this focused view.
+    public func activeAgentGroups() -> [WarrenDesktopActiveAgentGroup] {
+        var sessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
+
+        for session in sessions where session.state.isActive && session.isAgentSession {
+            guard let workspaceID = sessionWorkspaceIDs[session.id] else { continue }
+            sessionsByWorkspaceID[workspaceID, default: []].append(session)
+        }
+
+        return groups.flatMap { group in
+            group.workspaces.compactMap { workspace in
+                guard let sessions = sessionsByWorkspaceID[workspace.id] else { return nil }
+                return WarrenDesktopActiveAgentGroup(
+                    project: group.project,
+                    workspace: workspace,
+                    sessions: sessions
+                )
+            }
+        }
+    }
+
     /// Returns the most actionable state for a Workspace. A failure or input
     /// request must remain visible even when another Session is still working.
     public func activity(in workspaceID: WorkspaceID) -> AgentActivityState? {
@@ -638,14 +704,22 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public func withSessionAgentStatus(
         _ agentStatus: AgentStatus?,
+        activityUpdatedAt: Date? = nil,
         for sessionID: TerminalSessionID
     ) -> Self {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else {
             return self
         }
-        guard sessions[index].agentStatus != agentStatus else { return self }
+        let nextActivityUpdatedAt = activityUpdatedAt ?? sessions[index].activityUpdatedAt
+        guard sessions[index].agentStatus != agentStatus
+            || sessions[index].activityUpdatedAt != nextActivityUpdatedAt else {
+            return self
+        }
         var nextSessions = sessions
-        nextSessions[index] = nextSessions[index].withAgentStatus(agentStatus)
+        nextSessions[index] = nextSessions[index].withAgentStatus(
+            agentStatus,
+            activityUpdatedAt: nextActivityUpdatedAt
+        )
         return Self(
             host: host,
             groups: groups,

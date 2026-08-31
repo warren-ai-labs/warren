@@ -437,6 +437,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         if menuItem.action == #selector(selectTabNumber(_:)) {
             return true
         }
+        if menuItem.representedObject as? String == WarrenDesktopCommand.activeSessions.rawValue {
+            return true
+        }
         return menuItem.action != #selector(postCommand(_:))
     }
 
@@ -580,6 +583,16 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         closeTabItem.target = target
         closeTabItem.representedObject = WarrenDesktopCommand.closeTab.rawValue
+
+        sessionMenu.addItem(.separator())
+        let activeSessionsItem = sessionMenu.addItem(
+            withTitle: "Active Sessions…",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "a"
+        )
+        activeSessionsItem.target = target
+        activeSessionsItem.keyEquivalentModifierMask = [.command, .shift]
+        activeSessionsItem.representedObject = WarrenDesktopCommand.activeSessions.rawValue
 
         sessionMenu.addItem(.separator())
         let paletteItem = sessionMenu.addItem(

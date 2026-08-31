@@ -28,7 +28,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
         case .aiTitles: "Generate concise titles from the opening exchange."
         case .presets: "Choose visible presets and customize every launch command."
-        case .workspaces: "How projects import worktrees and enter sessions."
+        case .workspaces: "Configure workspace behavior and task visibility."
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
         case .relay: "Connect this Host to an independently deployed Warren Relay."
@@ -43,7 +43,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "trae", "agent", "visible", "hidden"]
-        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
+        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex", "sidebar", "tasks", "visibility"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .relay: [rawValue, detail, "owned", "relay", "enrollment", "ticket", "host", "signing key", "remote"]
@@ -106,6 +106,8 @@ struct WarrenDesktopSettingsView: View {
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
     private var agentCompletionSoundEnabled = true
+    @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
+    private var showsTasks = true
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
@@ -685,6 +687,21 @@ struct WarrenDesktopSettingsView: View {
 
     private func workspacesSection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Workspaces", section: .workspaces, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Text("Sidebar visibility")
+                    .font(WarrenTypography.settingsBody)
+                Toggle("Show Tasks", isOn: $showsTasks)
+                    .toggleStyle(.switch)
+                    .font(WarrenTypography.settingsControl)
+                    .accessibilityIdentifier("settings.workspaces.show-tasks")
+                Text(
+                    "Choose whether Tasks remains visible above Projects in the desktop sidebar."
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Toggle("Open a Shell when opening an empty workspace", isOn: Binding(
                 get: { autoOpenShell },
                 set: { onSetAutoOpenShell($0) }

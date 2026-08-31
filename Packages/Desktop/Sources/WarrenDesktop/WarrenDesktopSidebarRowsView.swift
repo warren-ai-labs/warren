@@ -15,9 +15,16 @@ struct WarrenDesktopSidebarRows: View {
     let groups: [WarrenDesktopProjectGroup]
     let terminalGroups: [WarrenDesktopTerminalGroup]
     let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
+    let activeAgentGroups: [WarrenDesktopActiveAgentGroup]
+    /// Kept for embedded callers that still render the legacy rows directly;
+    /// the production sidebar always disables this section in favor of the
+    /// dedicated Active Sessions switcher.
+    let showsActiveSessions: Bool
+    let showsTasks: Bool
     @Binding var tree: WarrenDesktopSidebarTreeState
     let isCollapsed: Bool
     let selection: WarrenDesktopSidebarSelection?
+    let selectedTabID: String?
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
@@ -30,6 +37,56 @@ struct WarrenDesktopSidebarRows: View {
     let onAction: (WarrenDesktopAction) -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
+
+    init(
+        taskGroups: [WarrenDesktopTaskGroup],
+        groups: [WarrenDesktopProjectGroup],
+        terminalGroups: [WarrenDesktopTerminalGroup],
+        workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary],
+        activeAgentGroups: [WarrenDesktopActiveAgentGroup] = [],
+        showsActiveSessions: Bool = true,
+        showsTasks: Bool = true,
+        tree: Binding<WarrenDesktopSidebarTreeState>,
+        isCollapsed: Bool,
+        selection: WarrenDesktopSidebarSelection?,
+        selectedTabID: String? = nil,
+        deletingProjectIDs: Set<ProjectID>,
+        deletingWorkspaceIDs: Set<WorkspaceID>,
+        endpointCapabilities: WarrenDesktopEndpointCapabilities,
+        isInteractionDisabled: Bool,
+        onAddProject: @escaping () -> Void,
+        onRequestTaskCreate: @escaping () -> Void,
+        onFocusTask: @escaping (TaskID) -> Void,
+        onRequestTerminalGroupCreate: @escaping () -> Void,
+        onRequestTerminalGroupEdit: @escaping (TerminalGroup) -> Void,
+        onAction: @escaping (WarrenDesktopAction) -> Void,
+        onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
+        onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void
+    ) {
+        self.taskGroups = taskGroups
+        self.groups = groups
+        self.terminalGroups = terminalGroups
+        self.workspaceActivitySummaries = workspaceActivitySummaries
+        self.activeAgentGroups = activeAgentGroups
+        self.showsActiveSessions = showsActiveSessions
+        self.showsTasks = showsTasks
+        self._tree = tree
+        self.isCollapsed = isCollapsed
+        self.selection = selection
+        self.selectedTabID = selectedTabID
+        self.deletingProjectIDs = deletingProjectIDs
+        self.deletingWorkspaceIDs = deletingWorkspaceIDs
+        self.endpointCapabilities = endpointCapabilities
+        self.isInteractionDisabled = isInteractionDisabled
+        self.onAddProject = onAddProject
+        self.onRequestTaskCreate = onRequestTaskCreate
+        self.onFocusTask = onFocusTask
+        self.onRequestTerminalGroupCreate = onRequestTerminalGroupCreate
+        self.onRequestTerminalGroupEdit = onRequestTerminalGroupEdit
+        self.onAction = onAction
+        self.onRequestRename = onRequestRename
+        self.onRequestDeletion = onRequestDeletion
+    }
 
     @State private var dragSession = WarrenDesktopSidebarDragSession()
     /// Ephemeral presentation state; persisted expansion preferences remain untouched.
@@ -46,39 +103,17 @@ struct WarrenDesktopSidebarRows: View {
         // feedback out of LazyVStack's placement cache during navigation.
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             terminalGroupsSection
-            tasksSection
+            if showsTasks {
+                tasksSection
+            }
+            if showsActiveSessions {
+                activeSessionsSection
+            }
             if !isCollapsed {
-                WarrenDesktopSidebarSectionHeader(
-                    title: "Projects",
-                    disclosureExpanded: !tree.projectsCollapsed,
-                    actionImage: "folder.badge.plus",
-                    actionLabel: "Add project",
-                    actionVisible: endpointCapabilities.canAddProject,
-                    actionEnabled: !isInteractionDisabled,
-                    onToggle: toggleProjects,
-                    onAction: onAddProject
-                )
+                projectsSectionHeader
             }
             if groups.isEmpty && !isCollapsed {
-                VStack(spacing: WarrenSpacing.xs) {
-                    Text("No workspaces yet")
-                        .font(WarrenTypography.body)
-                    Text(endpointCapabilities.canAddProject
-                        ? "Add a project or drop a Git repository folder"
-                        : "Add a project from the remote CLI on the host machine")
-                        .font(WarrenTypography.supporting)
-                        .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, WarrenSpacing.medium)
-                .padding(.vertical, WarrenSpacing.large)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(
-                    endpointCapabilities.canAddProject
-                        ? "No workspaces yet. Add a project or drop a Git repository folder."
-                        : "No workspaces yet. Add a project from the remote CLI on the host machine."
-                )
+                noProjectsMessage
             }
             if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
                 ForEach(visibleProjectGroups) { group in
@@ -199,6 +234,118 @@ struct WarrenDesktopSidebarRows: View {
         }
     }
 
+    private var projectsSectionHeader: some View {
+        let allProjectsExpanded = areAllProjectsExpanded
+        return WarrenDesktopSidebarSectionHeader(
+            title: "Projects",
+            disclosureExpanded: !tree.projectsCollapsed,
+            actionImage: "folder.badge.plus",
+            actionLabel: "Add project",
+            actionVisible: endpointCapabilities.canAddProject,
+            actionEnabled: !isInteractionDisabled,
+            onToggle: toggleProjects,
+            onAction: onAddProject,
+            additionalActions: [
+                WarrenDesktopSidebarSectionAction(
+                    id: "toggle-all-projects",
+                    image: allProjectsExpanded
+                        ? "rectangle.compress.vertical"
+                        : "rectangle.expand.vertical",
+                    label: allProjectsExpanded
+                        ? "Collapse all projects"
+                        : "Expand all projects",
+                    isEnabled: !isInteractionDisabled && !groups.isEmpty,
+                    action: toggleAllProjects
+                ),
+            ]
+        )
+    }
+
+    private var activeSessionsSection: some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            if !isCollapsed {
+                WarrenDesktopSidebarSectionHeader(
+                    title: "Active Sessions",
+                    disclosureExpanded: !tree.activeSessionsCollapsed,
+                    actionEnabled: !isInteractionDisabled,
+                    onToggle: toggleActiveSessions,
+                    additionalActions: []
+                )
+            }
+            if !tree.activeSessionsCollapsed || isCollapsed {
+                if activeSessionItems.isEmpty && !isCollapsed {
+                    Text("No active sessions")
+                        .font(WarrenTypography.supporting)
+                        .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                        .padding(.horizontal, WarrenSpacing.standard)
+                        .padding(.bottom, WarrenSpacing.compact)
+                } else {
+                    ForEach(activeSessionItems) { item in
+                        activeAgentRow(item.session, context: item.context)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
+    }
+
+    private var activeSessionItems: [WarrenDesktopActiveSessionItem] {
+        activeAgentGroups.flatMap { group in
+            let workspaceName = group.workspace.branch?.isEmpty == false
+                ? group.workspace.branch!
+                : group.workspace.name
+            let context = "\(group.project.name) · \(workspaceName.isEmpty ? "Workspace" : workspaceName)"
+            return group.sessions.map { session in
+                WarrenDesktopActiveSessionItem(session: session, context: context)
+            }
+        }
+    }
+
+    private var noProjectsMessage: some View {
+        VStack(spacing: WarrenSpacing.xs) {
+            Text("No workspaces yet")
+                .font(WarrenTypography.body)
+            Text(endpointCapabilities.canAddProject
+                ? "Add a project or drop a Git repository folder"
+                : "Add a project from the remote CLI on the host machine")
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.large)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            endpointCapabilities.canAddProject
+                ? "No workspaces yet. Add a project or drop a Git repository folder."
+                : "No workspaces yet. Add a project from the remote CLI on the host machine."
+        )
+    }
+
+    private func activeAgentRow(
+        _ session: WarrenDesktopSession,
+        context: String
+    ) -> some View {
+        WarrenDesktopActiveAgentRow(
+            session: session,
+            context: context,
+            isCollapsed: isCollapsed,
+            isSelected: isSessionSelected(session),
+            isInteractionDisabled: isInteractionDisabled,
+            onOpen: { onAction(.openSession(session.id)) }
+        )
+    }
+
+    private func isSessionSelected(
+        _ session: WarrenDesktopSession
+    ) -> Bool {
+        guard case .workspace = selection else { return false }
+        guard let selectedTabID else { return false }
+        return session.tabID == selectedTabID
+    }
+
     private var tasksSection: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             if !isCollapsed {
@@ -209,7 +356,8 @@ struct WarrenDesktopSidebarRows: View {
                     actionLabel: "New task",
                     actionEnabled: !isInteractionDisabled,
                     onToggle: toggleTasks,
-                    onAction: onRequestTaskCreate
+                    onAction: onRequestTaskCreate,
+                    additionalActions: []
                 )
             }
             if !tree.tasksCollapsed || isCollapsed {
@@ -354,7 +502,8 @@ struct WarrenDesktopSidebarRows: View {
                     actionImage: "plus",
                     actionLabel: "New terminal group",
                     actionEnabled: !isInteractionDisabled,
-                    onAction: onRequestTerminalGroupCreate
+                    onAction: onRequestTerminalGroupCreate,
+                    additionalActions: []
                 )
             }
             if terminalGroups.isEmpty {
@@ -478,6 +627,29 @@ struct WarrenDesktopSidebarRows: View {
         guard !isInteractionDisabled else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
             tree.projectsCollapsed.toggle()
+        }
+    }
+
+    private var areAllProjectsExpanded: Bool {
+        !groups.isEmpty
+            && groups.allSatisfy { tree.expandedProjectIDs.contains($0.project.id) }
+    }
+
+    private func toggleAllProjects() {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if areAllProjectsExpanded {
+                tree.expandedProjectIDs.removeAll()
+            } else {
+                tree.expandedProjectIDs.formUnion(groups.map(\.project.id))
+            }
+        }
+    }
+
+    private func toggleActiveSessions() {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            tree.activeSessionsCollapsed.toggle()
         }
     }
 
@@ -782,86 +954,178 @@ struct WarrenDesktopSidebarRows: View {
 
 }
 
-private struct WarrenDesktopSessionRow: View {
+private struct WarrenDesktopActiveSessionItem: Identifiable {
     let session: WarrenDesktopSession
-    let workspace: Workspace?
+    let context: String
+
+    var id: TerminalSessionID { session.id }
+}
+
+private struct WarrenDesktopActiveAgentRow: View {
+    let session: WarrenDesktopSession
+    let context: String
+    let isCollapsed: Bool
     let isSelected: Bool
+    let isInteractionDisabled: Bool
     let onOpen: () -> Void
-    let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isHovered = false
-    @FocusState private var isActionFocused: Bool
+    @FocusState private var isFocused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        HStack(spacing: WarrenSpacing.compact) {
-            Button(action: onOpen) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    if let activity = session.activity {
-                        WarrenDesktopActivityIndicator(activity: activity)
-                    }
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(session.displayTitle)
-                            .font(WarrenTypography.navigationItem)
-                            .foregroundStyle(tokens.foreground.opacity(0.86))
-                            .lineLimit(1)
-                        if let workspace {
-                            Text(workspace.branch?.isEmpty == false ? workspace.branch! : workspace.name)
-                                .font(WarrenTypography.navigationMeta)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(WarrenInteractiveRowStyle(isFocused: isActionFocused))
-            .focused($isActionFocused)
-            .warrenSemanticElement(
-                id: "session.\(session.id.description)",
-                role: .button,
-                label: "Open Session \(session.displayTitle)",
-                value: isSelected ? "Selected" : nil,
-                isSelected: isSelected,
-                action: onOpen
-            )
+        if isCollapsed {
+            compactRow
+        } else {
+            expandedRow
+        }
+    }
 
-            if isHovered {
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .regular))
-                        .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                               height: WarrenLayoutMetrics.sidebarActionButtonSize)
-                        .contentShape(.rect)
+    private var expandedRow: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        return Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                HStack(spacing: WarrenSpacing.compact) {
+                    Text(session.displayTitle.isEmpty ? "Session" : session.displayTitle)
+                        .font(WarrenTypography.navigationItem)
+                        .foregroundStyle(tokens.foreground.opacity(0.9))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    activityView(tokens: tokens)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(tokens.destructive)
-                .accessibilityLabel("Delete Session \(session.displayTitle)")
-                .help("Delete Session")
-                .warrenSemanticElement(
-                    id: "session.\(session.id.description).delete",
-                    role: .button,
-                    label: "Delete Session \(session.displayTitle)",
-                    action: onDelete
+                Text(context)
+                    .font(WarrenTypography.navigationMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+        .disabled(isInteractionDisabled)
+        .focused($isFocused)
+        .accessibilityLabel("Open Agent Session \(session.displayTitle)")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .warrenSemanticElement(
+            id: "active-agent.\(session.id.description)",
+            role: .button,
+            label: "Agent Session \(session.displayTitle)",
+            value: accessibilityValue,
+            isEnabled: !isInteractionDisabled,
+            isSelected: isSelected,
+            action: { if !isInteractionDisabled { onOpen() } }
+        )
+        .frame(
+            maxWidth: .infinity,
+            minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight + WarrenSpacing.xs
+        )
+        .padding(.leading, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .background(tokens.interactionBackground(for: .resolve(
+            disabled: isInteractionDisabled,
+            pressed: false,
+            selected: isSelected,
+            focused: isFocused,
+            hovered: false
+        )))
+        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .padding(.trailing, WarrenSpacing.compact)
+    }
+
+    private var compactRow: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        return Button(action: onOpen) {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .accessibilityHidden(true)
+                compactActivityView(tokens: tokens)
+                    .offset(x: 5, y: 5)
+            }
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+        .disabled(isInteractionDisabled)
+        .focused($isFocused)
+        .frame(width: 32, height: 32)
+        .contentShape(.rect)
+        .help(session.displayTitle)
+        .accessibilityLabel("Open Agent Session \(session.displayTitle)")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .warrenSemanticElement(
+            id: "active-agent.\(session.id.description)",
+            role: .button,
+            label: "Agent Session \(session.displayTitle)",
+            value: accessibilityValue,
+            isEnabled: !isInteractionDisabled,
+            isSelected: isSelected,
+            action: { if !isInteractionDisabled { onOpen() } }
+        )
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, WarrenSpacing.compact)
+    }
+
+    @ViewBuilder
+    private func activityView(tokens: WarrenColorTokens) -> some View {
+        HStack(spacing: WarrenSpacing.xs) {
+            if let activity = session.activity {
+                WarrenDesktopActivityIndicator(activity: activity)
+            } else {
+                WarrenStatusIndicator(
+                    color: tokens.amber,
+                    isActive: true,
+                    size: 7,
+                    accessibilityLabel: "Session running"
                 )
             }
         }
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
-        .padding(.leading, WarrenSpacing.standard)
-        .padding(.trailing, WarrenSpacing.compact)
-        .background(tokens.interactionBackground(for: .resolve(
-            disabled: false,
-            pressed: false,
-            selected: isSelected,
-            focused: isActionFocused,
-            hovered: isHovered
-        )))
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
-        .padding(.horizontal, WarrenSpacing.compact)
-        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .combine)
     }
+
+    @ViewBuilder
+    private func compactActivityView(tokens: WarrenColorTokens) -> some View {
+        if let activity = session.activity {
+            WarrenDesktopActivityIndicator(activity: activity)
+        } else {
+            WarrenStatusIndicator(
+                color: tokens.amber,
+                isActive: true,
+                size: 6,
+                accessibilityLabel: "Session running"
+            )
+        }
+    }
+
+    private var activityLabel: String {
+        guard let activity = session.activity else { return "Running" }
+        switch activity {
+        case .working: return "Working"
+        case .blocked, .stalled: return "Needs attention"
+        case .failed: return "Failed"
+        case .ready: return "Idle"
+        case .exited: return "Exited"
+        }
+    }
+
+    private var accessibilityValue: String {
+        var values = [activityLabel, context]
+        if isSelected {
+            values.append("Selected")
+        }
+        return values.joined(separator: " · ")
+    }
+}
+
+private struct WarrenDesktopSidebarSectionAction: Identifiable {
+    let id: String
+    let image: String
+    let label: String
+    let isEnabled: Bool
+    let action: () -> Void
 }
 
 private struct WarrenDesktopSidebarSectionHeader: View {
@@ -873,12 +1137,14 @@ private struct WarrenDesktopSidebarSectionHeader: View {
     var actionEnabled = true
     var onToggle: (() -> Void)?
     var onAction: (() -> Void)?
+    var additionalActions: [WarrenDesktopSidebarSectionAction]
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @FocusState private var isActionFocused: Bool
     @FocusState private var isToggleFocused: Bool
+    @FocusState private var focusedAdditionalActionID: String?
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -895,6 +1161,23 @@ private struct WarrenDesktopSidebarSectionHeader: View {
                 // the same label styling as collapsible sections instead of
                 // rendering a disabled, dimmed button.
                 titleLabel
+            }
+
+            ForEach(additionalActions) { action in
+                Button(action: action.action) {
+                    Image(systemName: action.image)
+                        .font(.system(size: 12, weight: .medium))
+                        .accessibilityHidden(true)
+                }
+                .buttonStyle(WarrenChromeButtonStyle(
+                    isFocused: focusedAdditionalActionID == action.id
+                ))
+                .disabled(!action.isEnabled)
+                .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
+                       height: WarrenLayoutMetrics.sidebarActionButtonSize)
+                .contentShape(.rect)
+                .focused($focusedAdditionalActionID, equals: action.id)
+                .accessibilityLabel(action.label)
             }
 
             if actionVisible, let actionImage, let onAction {

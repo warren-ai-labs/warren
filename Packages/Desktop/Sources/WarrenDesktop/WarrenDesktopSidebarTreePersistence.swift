@@ -2,24 +2,28 @@ import Foundation
 import WarrenDomain
 
 /// Device-local sidebar tree state (which tasks and projects are expanded and
-/// whether each list is collapsed). It is intentionally not Host state:
-/// ordering lives on the Host, while expansion is a per-endpoint UI preference.
+/// whether each sidebar section is collapsed). It is intentionally not Host
+/// state: ordering lives on the Host, while expansion is a per-endpoint UI
+/// preference.
 public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public var expandedTaskIDs: Set<TaskID>
     public var expandedProjectIDs: Set<ProjectID>
     public var tasksCollapsed: Bool
     public var projectsCollapsed: Bool
+    public var activeSessionsCollapsed: Bool
 
     public init(
         expandedTaskIDs: Set<TaskID> = [],
         expandedProjectIDs: Set<ProjectID> = [],
         tasksCollapsed: Bool = false,
-        projectsCollapsed: Bool = false
+        projectsCollapsed: Bool = false,
+        activeSessionsCollapsed: Bool = false
     ) {
         self.expandedTaskIDs = expandedTaskIDs
         self.expandedProjectIDs = expandedProjectIDs
         self.tasksCollapsed = tasksCollapsed
         self.projectsCollapsed = projectsCollapsed
+        self.activeSessionsCollapsed = activeSessionsCollapsed
     }
 }
 
@@ -39,7 +43,8 @@ public enum WarrenDesktopSidebarTreePersistence {
             expandedTaskIDs: Set(expandedTasks),
             expandedProjectIDs: Set(expanded),
             tasksCollapsed: defaults.bool(forKey: base + ".tasks.collapsed"),
-            projectsCollapsed: defaults.bool(forKey: base + ".collapsed")
+            projectsCollapsed: defaults.bool(forKey: base + ".collapsed"),
+            activeSessionsCollapsed: defaults.bool(forKey: base + ".active-sessions.collapsed")
         )
     }
 
@@ -60,6 +65,11 @@ public enum WarrenDesktopSidebarTreePersistence {
             forKey: base + ".expanded"
         )
         defaults.set(state.tasksCollapsed, forKey: base + ".tasks.collapsed")
+        defaults.set(
+            state.activeSessionsCollapsed,
+            forKey: base + ".active-sessions.collapsed"
+        )
         defaults.set(state.projectsCollapsed, forKey: base + ".collapsed")
     }
+
 }
