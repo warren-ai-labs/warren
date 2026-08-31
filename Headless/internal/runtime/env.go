@@ -1,9 +1,12 @@
 package runtime
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -12,6 +15,290 @@ import (
 // xterm-ghostty carries Tc (truecolor) and is bundled in Support/terminfo
 // so no external Ghostty install is required.
 const DefaultTerm = "xterm-ghostty"
+
+// controlledEnvironmentKeys are the non-secret, host-level values Warren may
+// carry across a process boundary. Session identity, task runner state,
+// terminal integration and credentials deliberately do not appear here.
+var controlledEnvironmentKeys = map[string]struct{}{
+	"DISPLAY":                           {},
+	"WAYLAND_DISPLAY":                   {},
+	"DBUS_SESSION_BUS_ADDRESS":          {},
+	"XAUTHORITY":                        {},
+	"XDG_CONFIG_HOME":                   {},
+	"XDG_DATA_HOME":                     {},
+	"XDG_CACHE_HOME":                    {},
+	"XDG_RUNTIME_DIR":                   {},
+	"WARREN_CONFIG":                     {},
+	"CODEX_HOME":                        {},
+	"CLAUDE_CONFIG_DIR":                 {},
+	"WARREN_DATA_DIR":                   {},
+	"WARREN_OPENCODE_DATA_DIR":          {},
+	"WARREN_OPENCODE_PLUGIN_PATH":       {},
+	"WARREN_WEB_ROOT":                   {},
+	"WARREN_GHOSTLINE_V0_COMPAT":        {},
+	"WARREN_GHOSTLINE_FORCE_HANDOFF":    {},
+	"WARREN_FORCE_HANDOFF":              {},
+	"WARREN_LISTEN":                     {},
+	"WARREN_LAN_HTTPS":                  {},
+	"WARREN_TLS_DIR":                    {},
+	"WARREN_STATE":                      {},
+	"WARREN_TOKEN_FILE":                 {},
+	"WARREN_HOST_NAME":                  {},
+	"WARREN_RUNTIME":                    {},
+	"WARREN_GHOSTLINE_SOCKET":           {},
+	"WARREN_GHOSTLINE_PROBE_FOREGROUND": {},
+	"WARREN_SETTINGS_FILE":              {},
+	"WARREN_LOG_FILE":                   {},
+	"WARREN_WORKTREE_ROOT":              {},
+	"WARREN_OUTPUT_DIR":                 {},
+	"WARREN_RELAY_URL":                  {},
+	"WARREN_RELAY_HOST_ID":              {},
+	"WARREN_RELAY_KEY_ID":               {},
+	"WARREN_RELAY_KEY":                  {},
+}
+
+var supportedShellNames = map[string]struct{}{
+	"bash": {},
+	"fish": {},
+	"sh":   {},
+	"zsh":  {},
+}
+
+// CleanEnvironment builds the environment that may be inherited by Warren's
+// daemon and Ghostline server. It intentionally starts from an allowlist:
+// project/task and terminal integration variables are recreated by the
+// session's login shell instead of leaking from the launching terminal.
+func CleanEnvironment(source []string) []string {
+	values := environmentMap(source)
+	home := strings.TrimSpace(values["HOME"])
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+
+	result := make(map[string]string, len(controlledEnvironmentKeys)+12)
+	copyNonEmpty := func(key string) {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			result[key] = values[key]
+		}
+	}
+	if home != "" {
+		result["HOME"] = home
+	}
+	copyNonEmpty("USER")
+	copyNonEmpty("LOGNAME")
+	if result["USER"] == "" {
+		if current, err := user.Current(); err == nil && current.Username != "" {
+			result["USER"] = current.Username
+		}
+	}
+	if result["LOGNAME"] == "" && result["USER"] != "" {
+		result["LOGNAME"] = result["USER"]
+	}
+	if values["TMPDIR"] != "" {
+		result["TMPDIR"] = values["TMPDIR"]
+	} else if temporary := os.TempDir(); temporary != "" {
+		result["TMPDIR"] = temporary
+	}
+	copyNonEmpty("LANG")
+	copyNonEmpty("TZ")
+	for key, value := range values {
+		if strings.HasPrefix(key, "LC_") && validEnvironmentKey(key) && strings.TrimSpace(value) != "" {
+			result[key] = value
+		}
+	}
+
+	result["SHELL"] = canonicalShell(values["SHELL"])
+	result["PATH"] = StablePath(home)
+	result["TERM"] = DefaultTerm
+	result["COLORTERM"] = "truecolor"
+	for key := range controlledEnvironmentKeys {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			result[key] = values[key]
+		}
+	}
+	if socket := strings.TrimSpace(values["SSH_AUTH_SOCK"]); validUnixSocket(socket) {
+		result["SSH_AUTH_SOCK"] = socket
+	}
+
+	return encodeEnvironment(result)
+}
+
+// ApplyCleanEnvironment replaces the current process environment with the
+// controlled environment. It is used at the daemon/serve entry point so
+// Ghostline's internal os.Environ() base is clean even though Ghostline v1
+// merges session overrides with its own process environment.
+func ApplyCleanEnvironment() {
+	ReplaceEnvironment(CleanEnvironment(os.Environ()))
+}
+
+// ReplaceEnvironment installs an explicit environment without logging any
+// values. It is kept small so tests and subprocess entry points can share the
+// same boundary behavior.
+func ReplaceEnvironment(environment []string) {
+	wanted := environmentMap(environment)
+	for key := range environmentMap(os.Environ()) {
+		if _, ok := wanted[key]; !ok {
+			_ = os.Unsetenv(key)
+		}
+	}
+	for key, value := range wanted {
+		_ = os.Setenv(key, value)
+	}
+}
+
+// StablePath returns a host-level PATH. Project-specific shims (mise,
+// direnv, virtualenv and similar) are intentionally absent; a login shell in
+// the session rebuilds those paths in the selected workspace.
+func StablePath(home string) string {
+	entries := []string{}
+	if home != "" {
+		entries = append(entries,
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, "go", "bin"),
+			filepath.Join(home, ".cargo", "bin"),
+		)
+	}
+	entries = append(entries,
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	)
+	seen := make(map[string]struct{}, len(entries))
+	result := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry == "" {
+			continue
+		}
+		if _, ok := seen[entry]; ok {
+			continue
+		}
+		seen[entry] = struct{}{}
+		result = append(result, entry)
+	}
+	return strings.Join(result, string(os.PathListSeparator))
+}
+
+// LoginShellPath returns a validated interactive shell path for new PTYs.
+// The caller's SHELL is only accepted when it points at a known shell binary;
+// otherwise Warren falls back to the platform's standard shells.
+func LoginShellPath() string {
+	values := environmentMap(os.Environ())
+	return canonicalShell(values["SHELL"])
+}
+
+// LoginShellArgs are passed directly to the shell so its startup files load
+// mise/direnv and other user project tooling inside the new session.
+func LoginShellArgs() []string { return []string{"-il"} }
+
+// ShellCommandWithUnsets returns a safe bootstrap command for the rare case
+// where a session explicitly requests variables to be unset. Ghostline's v1
+// environment API can override values but cannot remove keys from its own
+// process environment, so the login shell performs the final unsets.
+func ShellCommandWithUnsets(shell string, keys []string) (string, error) {
+	if shell == "" {
+		shell = LoginShellPath()
+	}
+	if !isSupportedShellPath(shell) {
+		return "", fmt.Errorf("unsupported login shell %q", shell)
+	}
+	unique := make(map[string]struct{}, len(keys))
+	ordered := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !validEnvironmentKey(key) {
+			return "", fmt.Errorf("invalid environment key %q", key)
+		}
+		if _, ok := unique[key]; ok {
+			continue
+		}
+		unique[key] = struct{}{}
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	if len(ordered) == 0 {
+		return "", nil
+	}
+	return "unset " + strings.Join(ordered, " ") + "; exec " + shellQuote(shell) + " -il", nil
+}
+
+func environmentMap(environment []string) map[string]string {
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		separator := strings.IndexByte(entry, '=')
+		if separator <= 0 {
+			continue
+		}
+		values[entry[:separator]] = entry[separator+1:]
+	}
+	return values
+}
+
+func encodeEnvironment(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, key+"="+values[key])
+	}
+	return result
+}
+
+func canonicalShell(value string) string {
+	candidates := []string{strings.TrimSpace(value), "/bin/zsh", "/usr/bin/zsh", "/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == "" || !filepath.IsAbs(candidate) {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if isSupportedShellPath(candidate) {
+			return candidate
+		}
+	}
+	return "/bin/sh"
+}
+
+func isSupportedShellPath(path string) bool {
+	base := filepath.Base(path)
+	if _, ok := supportedShellNames[base]; !ok {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+}
+
+func validUnixSocket(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode()&os.ModeSocket != 0
+}
+
+func validEnvironmentKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for index, character := range key {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character == '_' || (index > 0 && character >= '0' && character <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
 
 // SanitizeEnvironment removes launcher-only environment semantics that would
 // make Warren terminal sessions behave like non-interactive pipelines:

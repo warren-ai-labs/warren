@@ -295,8 +295,8 @@ func TestCreateSessionAppliesRuntimeEnvironmentOverrides(t *testing.T) {
 	if values["GIT_PAGER"] != "less" {
 		t.Fatalf("GIT_PAGER = %q, want less: %#v", values["GIT_PAGER"], env)
 	}
-	if _, ok := values["PAGER"]; ok {
-		t.Fatalf("empty runtime override must not be sent: %#v", env)
+	if value, ok := values["PAGER"]; !ok || value != "" {
+		t.Fatalf("empty runtime override must be sent as an explicit unset: %#v", env)
 	}
 	if values[agent.BindEnvSession] != session.ID {
 		t.Fatalf("session binding was lost: %#v", env)

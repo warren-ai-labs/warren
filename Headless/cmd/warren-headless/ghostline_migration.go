@@ -18,6 +18,7 @@ import (
 
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
@@ -340,8 +341,13 @@ func startGhostline(config ghostlineMigrationConfig, socketPath string, spawn []
 	ctx, cancel := context.WithTimeout(context.Background(), ghostlineMigrationTimeout)
 	defer cancel()
 	client, err := ghostline.ConnectManaged(ctx, ghostline.ManagedClientOptions{
-		Socket:       socketPath,
-		Spawn:        spawn,
+		Socket: socketPath,
+		Spawn:  spawn,
+		// Ghostline v1 merges this list with its own os.Environ(). The daemon
+		// has already installed a clean process environment, and passing the
+		// same explicit baseline documents the lifecycle boundary for callers
+		// that start a migration from a test or an embedded daemon.
+		Env:          runtime.CleanEnvironment(os.Environ()),
 		Log:          logFile,
 		ReadyTimeout: ghostlineMigrationTimeout,
 	})
