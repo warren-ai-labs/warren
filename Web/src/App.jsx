@@ -173,6 +173,12 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(() => localStorage.getItem(storageKeys.activeSession));
   const [navigationMemory, setNavigationMemory] = useState(() => loadNavigationMemory());
   const [attachedSession, setAttachedSession] = useState(null);
+  // Transport readiness and presentation readiness are deliberately separate.
+  // The daemon acknowledges a subscription before it sends the atomic state;
+  // accepting input at that point keeps PTY interaction responsive, while the
+  // neutral overlay remains in place until the snapshot and its live tail have
+  // rendered completely.
+  const [terminalReadySession, setTerminalReadySession] = useState(null);
   const [expandedTasks, setExpandedTasks] = useState(() => loadSet(storageKeys.expandedTasks));
   const [expandedProjects, setExpandedProjects] = useState(() => loadSet(storageKeys.expandedProjects));
   const [tasksCollapsed, setTasksCollapsed] = useState(() => {
