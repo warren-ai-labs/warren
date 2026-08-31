@@ -66,6 +66,13 @@ final class IOSPersistenceTests: XCTestCase {
         ])
     }
 
+    func testAgentDraftKeySeparatesEndpointAndSessionPunctuation() {
+        let first = IOSLocalStore.agentDraftKey(endpointIdentity: "host.a", sessionID: "session")
+        let second = IOSLocalStore.agentDraftKey(endpointIdentity: "host", sessionID: "a.session")
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(first.hasPrefix("warren.agent-draft."))
+    }
+
     @MainActor
     func testCreatedAgentSessionDefaultsToAgentDisplayMode() async throws {
         let task = IOSScriptedWebSocketTask()
@@ -488,7 +495,7 @@ final class IOSPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testQueuesAgentMessagesWhileWorkingUntilReady() async throws {
+    func testQueuesAgentMessagesWhileWorkingUntilExecutableBoundary() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
         await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
@@ -544,7 +551,7 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(binaryPayloads(from: sentWhileWorking).count, 0)
 
         await task.enqueue(.text(
-            "{\"t\":\"agent.status\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"status\":{\"activity\":\"ready\"}}"
+            "{\"t\":\"agent.status\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"status\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\"}}}"
         ))
         var sent = await task.sentMessages
         for _ in 0..<400 {

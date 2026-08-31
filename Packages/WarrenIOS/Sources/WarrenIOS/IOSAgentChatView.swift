@@ -1,6 +1,14 @@
 import SwiftUI
 import WarrenTransport
 
+#if os(iOS)
+import PhotosUI
+#endif
+
+#if canImport(UniformTypeIdentifiers)
+import UniformTypeIdentifiers
+#endif
+
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -139,6 +147,13 @@ public struct AgentChatView: View {
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var lastObservedUserEventKey: String?
     @State private var didInitializeUserTurnTracking = false
+    @State private var localAttachments: [IOSAgentLocalAttachment] = []
+    @State private var isUploadingAttachments = false
+    @State private var isFileImporterPresented = false
+    @State private var isQueueSheetPresented = false
+#if os(iOS)
+    @State private var photoItems: [PhotosPickerItem] = []
+#endif
     @FocusState private var composerFocused: Bool
 
     private let historyPullThreshold: CGFloat = 56
@@ -191,7 +206,17 @@ public struct AgentChatView: View {
                                     .frame(maxWidth: .infinity, minHeight: 240)
                             } else {
                                 ForEach(blocks) { block in
-                                    displayBlockView(block)
+                                    displayBlockView(
+                                        block,
+                                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
+                                    ) { requestID, kind, response in
+                                        model.respondToAgentInteraction(
+                                            sessionID: sessionID,
+                                            requestID: requestID,
+                                            kind: kind,
+                                            response: response
+                                        )
+                                    }
                                         .id(block.id)
                                 }
                             }
@@ -358,6 +383,14 @@ public struct AgentChatView: View {
                         AgentWorkingFooter(phrase: workingPhrase)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+                    if let actionError = model.agentActionError, !actionError.isEmpty {
+                        Text(actionError)
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.red)
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 4)
+                            .accessibilityLabel("Agent action failed: \(actionError)")
+                    }
                     composer
                 }
                 .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
@@ -366,12 +399,19 @@ public struct AgentChatView: View {
             }
         }
         .onAppear {
+            draft = model.agentDraft(for: sessionID)
             refreshRenderedBlocks()
             lastObservedUserEventKey = latestUserEventKey()
             didInitializeUserTurnTracking = model.agentHistoryLoaded(for: sessionID)
             if !model.agentHistoryLoaded(for: sessionID) {
                 model.loadOlderAgentHistory()
             }
+        }
+        .onChange(of: draft) { _, value in
+            model.updateAgentDraft(value, for: sessionID)
+        }
+        .onDisappear {
+            model.flushAgentDraft(draft, for: sessionID)
         }
         .onChange(of: model.currentSessionID) { _, selectedSessionID in
             guard selectedSessionID == sessionID else { return }
@@ -384,6 +424,9 @@ public struct AgentChatView: View {
             didInitializeUserTurnTracking = model.agentHistoryLoaded(for: sessionID)
             guard !model.agentHistoryLoaded(for: sessionID) else { return }
             model.loadOlderAgentHistory()
+        }
+        .sheet(isPresented: $isQueueSheetPresented) {
+            IOSAgentQueueSheet(model: model, sessionID: sessionID)
         }
     }
 
@@ -550,11 +593,9 @@ public struct AgentChatView: View {
                             .accessibilityLabel("Agent message")
 #endif
                     }
+                    attachmentControls
                     Button {
-                        let value = draft
-                        draft = ""
-                        workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
-                        model.sendAgentMessage(value)
+                        sendComposerMessage()
                     } label: {
                         Image(systemName: "arrow.up")
                             .font(.system(size: 12, weight: .bold))
@@ -568,6 +609,33 @@ public struct AgentChatView: View {
                     .opacity(canSend ? 1 : 0.32)
                     .accessibilityLabel("Send Agent message")
                     .padding(.bottom, 2)
+
+                    if model.canInterruptAgentTurn {
+                        Button {
+                            model.cancelAgentTurn()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(IOSTheme.red)
+                                .frame(width: 30, height: 30)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Cancel Agent turn")
+                        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button {
+                                sendComposerMessage(sendNow: true)
+                            } label: {
+                                Text("Send now")
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.amber)
+                                    .padding(.horizontal, 6)
+                                    .frame(minHeight: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isUploadingAttachments)
+                            .accessibilityLabel("Send message now and interrupt Agent turn")
+                        }
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -580,9 +648,15 @@ public struct AgentChatView: View {
                     if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
                         Text("·")
                             .foregroundStyle(IOSTheme.tertiaryText)
-                        Text("Queued \(queued)")
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.amber)
+                        Button {
+                            isQueueSheetPresented = true
+                        } label: {
+                            Text("Queued \(queued)")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.amber)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show \(queued) queued messages")
                     }
                     if let agentModel = model.agentModel(for: sessionID) {
                         Text("·")
@@ -611,6 +685,187 @@ public struct AgentChatView: View {
         }
         .padding(.top, 3)
         .background(IOSTheme.background)
+    }
+
+    @ViewBuilder
+    private var attachmentControls: some View {
+        if model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) {
+            HStack(spacing: 7) {
+#if os(iOS)
+                PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose photos")
+#endif
+                Button {
+                    isFileImporterPresented = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose a file")
+                if !localAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            ForEach(localAttachments) { attachment in
+                                attachmentChip(attachment)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 2)
+#if os(iOS)
+            .onChange(of: photoItems) { _, items in
+                loadPhotos(items)
+            }
+#endif
+            .fileImporter(
+                isPresented: $isFileImporterPresented,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true,
+                onCompletion: handleFileImporter
+            )
+        }
+    }
+
+    private func attachmentChip(_ attachment: IOSAgentLocalAttachment) -> some View {
+        HStack(spacing: 4) {
+            Text(attachment.name)
+                .font(IOSTypography.metadata)
+                .lineLimit(1)
+            switch attachment.state {
+            case .selected:
+                EmptyView()
+            case .uploading:
+                Text("\(Int(attachment.progress * 100))%")
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.amber)
+            case .ready:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(IOSTheme.green)
+            case .failed:
+                Button("Retry") { retryAttachment(attachment.id) }
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.red)
+            case .aborted:
+                Text("Aborted")
+                    .foregroundStyle(IOSTheme.secondaryText)
+            }
+            Button {
+                localAttachments.removeAll { $0.id == attachment.id }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(IOSTheme.tertiaryText)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(attachment.name)")
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(IOSTheme.muted.opacity(0.6), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(attachment.state.rawValue)
+    }
+
+    private func sendComposerMessage(sendNow: Bool = false) {
+        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !isUploadingAttachments else { return }
+        let selected = localAttachments
+        guard selected.allSatisfy({ $0.state == .selected || $0.state == .ready }) else { return }
+        guard !selected.isEmpty else {
+            let accepted = sendNow
+                ? model.sendAgentMessageNow(value)
+                : model.sendAgentMessage(value)
+            guard accepted else { return }
+            draft = ""
+            model.clearAgentDraft(for: sessionID)
+            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
+            return
+        }
+        isUploadingAttachments = true
+        Task { @MainActor in
+            var references: [WarrenRemoteAgentAttachmentRef] = []
+            for attachment in selected {
+                guard let index = localAttachments.firstIndex(where: { $0.id == attachment.id }) else { continue }
+                localAttachments[index].state = .uploading
+                localAttachments[index].failureReason = nil
+                do {
+                    let reference = try await model.uploadAgentAttachment(
+                        data: attachment.data,
+                        name: attachment.name,
+                        mime: attachment.mime,
+                        sessionID: sessionID
+                    ) { progress in
+                        guard let progressIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) else { return }
+                        localAttachments[progressIndex].progress = progress
+                    }
+                    references.append(reference)
+                    if let readyIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) {
+                        localAttachments[readyIndex].state = .ready
+                        localAttachments[readyIndex].reference = reference
+                    }
+                } catch {
+                    if let failedIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) {
+                        localAttachments[failedIndex].state = .failed
+                        localAttachments[failedIndex].failureReason = error.localizedDescription
+                    }
+                    isUploadingAttachments = false
+                    return
+                }
+            }
+            isUploadingAttachments = false
+            let accepted = sendNow
+                ? model.sendAgentMessageNow(value, attachments: references)
+                : model.sendAgentMessage(value, attachments: references)
+            guard accepted else { return }
+            draft = ""
+            model.clearAgentDraft(for: sessionID)
+            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
+            localAttachments.removeAll()
+        }
+    }
+
+    private func retryAttachment(_ id: String) {
+        guard let index = localAttachments.firstIndex(where: { $0.id == id }) else { return }
+        localAttachments[index].state = .selected
+        localAttachments[index].progress = 0
+        localAttachments[index].failureReason = nil
+    }
+
+#if os(iOS)
+    private func loadPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        photoItems = []
+        Task { @MainActor in
+            for item in items {
+                guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else { continue }
+                let type = item.supportedContentTypes.first?.preferredMIMEType ?? "image/*"
+                localAttachments.append(IOSAgentLocalAttachment(name: "Photo", mime: type, data: data))
+            }
+        }
+    }
+#endif
+
+    private func handleFileImporter(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            let secured = url.startAccessingSecurityScopedResource()
+            defer { if secured { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let mime = (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
+                ?? "application/octet-stream"
+            localAttachments.append(IOSAgentLocalAttachment(name: url.lastPathComponent, mime: mime, data: data))
+        }
     }
 
     private var agentStatus: WarrenRemoteAgentStatus? {
@@ -662,6 +917,115 @@ public struct AgentChatView: View {
         let session = model.roster?.sessions.first(where: { $0.id == sessionID })
         let provider = agentKind == "Agent" ? session?.kind : agentKind
         return agentModeLabel(provider: provider, command: session?.command)
+    }
+}
+
+private struct IOSAgentQueueSheet: View {
+    @ObservedObject var model: IOSApplicationModel
+    let sessionID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var editingID: String?
+    @State private var editingText = ""
+    @State private var deleteID: String?
+
+    private var items: [IOSAgentQueueItem] {
+        model.agentQueueBySessionID[sessionID]?.items ?? []
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if items.isEmpty {
+                    Text("No queued messages.")
+                        .foregroundStyle(IOSTheme.secondaryText)
+                } else {
+                    ForEach(items) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if editingID == item.id {
+                                TextField("Queued message", text: $editingText, axis: .vertical)
+                                    .textFieldStyle(.roundedBorder)
+                                HStack {
+                                    Button("Save") {
+                                        guard !editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                                        _ = model.editQueuedAgentMessage(sessionID: sessionID, itemID: item.id, text: editingText, attachments: item.attachments)
+                                        editingID = nil
+                                    }
+                                    Button("Cancel") { editingID = nil }
+                                }
+                            } else {
+                                Text(item.text)
+                                    .font(IOSTypography.body)
+                                    .foregroundStyle(IOSTheme.text)
+                                    .textSelection(.enabled)
+                            }
+                            if !item.attachments.isEmpty {
+                                Text(item.attachments.compactMap(\.name).joined(separator: ", "))
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                            }
+                            if let failure = item.failureReason {
+                                Text(failure)
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.red)
+                            }
+                            HStack(spacing: 12) {
+                                if item.status == .failed {
+                                    Button("Retry") { _ = model.retryQueuedAgentMessage(sessionID: sessionID, itemID: item.id) }
+                                }
+                                if item.status != .sending && editingID != item.id {
+                                    Button("Edit") {
+                                        editingID = item.id
+                                        editingText = item.text
+                                    }
+                                    Button("Move to front") { _ = model.moveQueuedAgentMessageToFront(sessionID: sessionID, itemID: item.id) }
+                                    Button("Delete", role: .destructive) { deleteID = item.id }
+                                } else if item.status == .sending {
+                                    Text("Sending…")
+                                        .foregroundStyle(IOSTheme.secondaryText)
+                                }
+                            }
+                            .font(IOSTypography.metadata)
+                        }
+                        .padding(.vertical, 4)
+                        .confirmationDialog("Delete queued message?", isPresented: Binding(
+                            get: { deleteID == item.id },
+                            set: { if !$0 { deleteID = nil } }
+                        ), titleVisibility: .visible) {
+                            Button("Delete", role: .destructive) {
+                                _ = model.deleteQueuedAgentMessage(sessionID: sessionID, itemID: item.id)
+                                deleteID = nil
+                            }
+                            Button("Cancel", role: .cancel) { deleteID = nil }
+                        }
+                    }
+                    .onMove { source, destination in
+                        guard let sourceIndex = source.first,
+                              items.indices.contains(sourceIndex) else { return }
+                        let itemID = items[sourceIndex].id
+                        // SwiftUI's destination is an insertion offset after
+                        // the source row has been removed. Resolve the target
+                        // against that remaining list; using the old array
+                        // makes a move-to-end land before the last row.
+                        var remaining = items
+                        remaining.remove(at: sourceIndex)
+                        let targetIndex = min(max(destination, 0), remaining.count)
+                        let beforeID = targetIndex < remaining.count ? remaining[targetIndex].id : nil
+                        _ = model.reorderQueuedAgentMessage(sessionID: sessionID, itemID: itemID, beforeID: beforeID)
+                    }
+                }
+            }
+            .navigationTitle("Queued messages")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+#if os(iOS)
+                ToolbarItem(placement: .topBarLeading) {
+                    EditButton()
+                }
+#endif
+            }
+        }
     }
 }
 
@@ -1064,6 +1428,23 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
     var activityEntries: [AgentActivityEntry] = []
     var pendingTools: [String: Int] = [:]
 
+    // Structured objects are append-only updates keyed by their provider ID.
+    // Keep the latest complete payload in the projection while preserving
+    // every ordinary event (including unknown events for sequence order).
+    var structuredByID: [String: WarrenRemoteAgentEvent] = [:]
+    var renderEvents: [WarrenRemoteAgentEvent] = []
+    for event in events where !event.isHiddenFromMobile {
+        let type = event.normalizedType.replacingOccurrences(of: "-", with: "_")
+        if IOSAgentStructuredEventKind(rawValue: type) != nil {
+            let identity = event.id.isEmpty ? "seq-\(event.sequence)" : event.id
+            structuredByID["\(type):\(identity)"] = event
+        } else {
+            renderEvents.append(event)
+        }
+    }
+    renderEvents.append(contentsOf: structuredByID.values)
+    renderEvents.sort { $0.sequence < $1.sequence }
+
     /// Activity is a timeline segment, not a whole user turn. Ending the
     /// segment at every visible conversation event keeps tool/thinking work
     /// between two assistant replies instead of folding the entire turn into
@@ -1075,8 +1456,7 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
         pendingTools.removeAll(keepingCapacity: true)
     }
 
-    for event in events {
-        guard !event.isHiddenFromMobile else { continue }
+    for event in renderEvents {
         if event.isUserEvent {
             guard event.hasRenderableConversationContent else { continue }
             flushActivity()
@@ -1217,10 +1597,14 @@ private extension WarrenRemoteAgentEvent {
 
 @ViewBuilder
 @MainActor
-private func displayBlockView(_ block: AgentDisplayBlock) -> some View {
+private func displayBlockView(
+    _ block: AgentDisplayBlock,
+    canInteract: Bool,
+    onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+) -> some View {
     switch block {
     case .event(let event):
-        AgentEventBlock(event: event)
+        AgentEventBlock(event: event, canInteract: canInteract, onInteraction: onInteraction)
     case .activity(let activity):
         AgentActivityGroupBlock(activity: activity)
     }
@@ -1228,8 +1612,21 @@ private func displayBlockView(_ block: AgentDisplayBlock) -> some View {
 
 private struct AgentEventBlock: View {
     let event: WarrenRemoteAgentEvent
+    let canInteract: Bool
+    let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+
+    init(
+        event: WarrenRemoteAgentEvent,
+        canInteract: Bool = false,
+        onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never> = { _, _, _ in Task { true } }
+    ) {
+        self.event = event
+        self.canInteract = canInteract
+        self.onInteraction = onInteraction
+    }
 
     var body: some View {
+        Group {
         if isUser {
             HStack {
                 Spacer(minLength: 34)
@@ -1260,13 +1657,8 @@ private struct AgentEventBlock: View {
                     .textSelection(.enabled)
             }
             .padding(.vertical, 7)
-        } else if normalizedType == "attachment" {
-            AgentSecondaryEventBlock(
-                title: "Attachment",
-                symbol: "paperclip",
-                content: event.content ?? "",
-                contentFont: IOSTypography.code
-            )
+        } else if ["question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment"].contains(normalizedType) {
+            AgentStructuredEventBlock(event: event, canInteract: canInteract, onInteraction: onInteraction)
         } else if normalizedType == "system" {
             AgentSecondaryEventBlock(
                 title: "System",
@@ -1285,6 +1677,18 @@ private struct AgentEventBlock: View {
             eventBody
                 .padding(.vertical, 7)
         }
+        }
+#if canImport(UIKit)
+        .contextMenu {
+            if let text = IOSAgentMessageActions.copyableText(for: event) {
+                Button {
+                    UIPasteboard.general.string = text
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+        }
+#endif
     }
 
     private var eventBody: some View {
@@ -1328,6 +1732,445 @@ private struct AgentEventBlock: View {
         }
     }
 
+}
+
+private struct AgentStructuredEventBlock: View {
+    let event: WarrenRemoteAgentEvent
+    let canInteract: Bool
+    let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+    @State private var expanded = false
+    @State private var selectedOption: String?
+    @State private var selectedOptions: [String: Set<String>] = [:]
+    @State private var customAnswers: [String: String] = [:]
+    @State private var submitting = false
+
+    private var kind: String {
+        event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+    }
+
+    private var payload: [String: WarrenRemoteJSONValue] { event.payload ?? [:] }
+
+    private var state: String {
+        payload.string("state")?.lowercased() ?? ""
+    }
+
+    private var requestID: String? {
+        payload.string("requestId")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 12)
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .medium))
+                    Text(title)
+                        .font(IOSTypography.label)
+                        .foregroundStyle(IOSTheme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(stateLabel)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(stateColor)
+                }
+                .frame(minHeight: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(stateLabel)
+
+            if expanded || kind == "question" || kind == "permission" {
+                detail
+                    .padding(.leading, 20)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .background(IOSTheme.muted.opacity(kind == "question" || kind == "permission" ? 0.34 : 0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .onChange(of: state) { _, nextState in
+            // A Host event is the source of truth for the final interaction
+            // state. Once it leaves pending/submitting, allow a fresh card
+            // update to render without retaining a local spinner forever.
+            if nextState != "pending" && nextState != "submitting" {
+                submitting = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch kind {
+        case "question":
+            if let requestID, !requestID.isEmpty, state == "pending" || state == "submitting" {
+                if let description = payload.string("description"), !description.isEmpty {
+                    Text(description)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+                ForEach(questionSpecs) { question in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(question.prompt)
+                            .font(IOSTypography.label)
+                            .foregroundStyle(IOSTheme.text)
+                        ForEach(question.options) { option in
+                            if canInteract {
+                                Button {
+                                    toggleQuestionOption(question, optionID: option.id)
+                                } label: {
+                                    interactionOptionRow(
+                                        option,
+                                        selected: isQuestionOptionSelected(question.id, optionID: option.id)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(IOSTheme.text)
+                                .disabled(submitting || state != "pending")
+                            } else {
+                                interactionOptionRow(
+                                    option,
+                                    selected: false
+                                )
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .accessibilityValue("Read only")
+                            }
+                        }
+                        if question.allowCustom {
+                            TextField(
+                                "Custom answer",
+                                text: Binding(
+                                    get: { customAnswers[question.id] ?? "" },
+                                    set: { customAnswers[question.id] = $0 }
+                                ),
+                                axis: .vertical
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .font(IOSTypography.status)
+                            .disabled(!canInteract || submitting || state != "pending")
+                            .accessibilityLabel("Custom answer for \(question.prompt)")
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+                if !canInteract {
+                    Text("This Host does not support responding here.")
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                }
+                if questionSpecs.isEmpty {
+                    Text(kind == "question" ? "Reply in the composer to continue." : "Review this request in Terminal.")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+                if canInteract {
+                    HStack(spacing: 10) {
+                        Button("Submit") { submitQuestion(requestID: requestID) }
+                            .disabled(submitting || state != "pending" || !questionsAreValid)
+                        Button("Cancel", role: .cancel) { cancelInteraction(requestID: requestID, kind: kind) }
+                            .disabled(submitting || state != "pending")
+                    }
+                    .font(IOSTypography.label)
+                }
+            } else if !state.isEmpty {
+                Text(stateLabel)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(stateColor)
+            }
+        case "permission":
+            if let requestID, !requestID.isEmpty, state == "pending" || state == "submitting" {
+                if let description = payload.string("description"), !description.isEmpty {
+                    Text(description)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+                ForEach(options) { option in
+                    if canInteract {
+                        Button {
+                            guard !submitting, state == "pending" else { return }
+                            submitting = true
+                            selectedOption = option.id
+                            let task = onInteraction(requestID, kind, ["decision": .string(option.id)])
+                            Task { @MainActor in
+                                if await !task.value { submitting = false }
+                            }
+                        } label: {
+                            interactionOptionRow(option, selected: selectedOption == option.id)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(IOSTheme.text)
+                        .disabled(submitting || state != "pending")
+                    } else {
+                        interactionOptionRow(option, selected: false)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .accessibilityValue("Read only")
+                    }
+                }
+                if !canInteract {
+                    Text("This Host does not support responding here.")
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                }
+                if canInteract {
+                    Button("Cancel", role: .cancel) {
+                        cancelInteraction(requestID: requestID, kind: kind)
+                    }
+                    .font(IOSTypography.label)
+                    .disabled(submitting || state != "pending")
+                }
+            } else if !state.isEmpty {
+                Text(stateLabel)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(stateColor)
+            }
+        case "plan", "todo":
+            ForEach(planItems) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: item.state == "completed" ? "checkmark.circle.fill" : item.state == "in_progress" ? "circle.lefthalf.filled" : "circle")
+                        .foregroundStyle(item.state == "completed" ? IOSTheme.green : IOSTheme.secondaryText)
+                    Text(item.label)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                    Spacer(minLength: 0)
+                }
+            }
+        default:
+            if let summary = payload.string("summary") ?? payload.string("detail") ?? event.content,
+               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(summary)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .textSelection(.enabled)
+            }
+            if kind == "attachment", let name = payload.string("name") {
+                Text(name)
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.text)
+            }
+        }
+    }
+
+    private func interactionOptionRow(_ option: AgentInteractionOption, selected: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(option.label)
+                    .font(IOSTypography.label)
+                if let description = option.description, !description.isEmpty {
+                    Text(description)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var title: String {
+        switch kind {
+        case "question": return payload.string("title") ?? "Question"
+        case "permission": return payload.string("title") ?? "Permission"
+        case "plan": return payload.string("title") ?? "Plan"
+        case "todo": return "Todo"
+        case "activity": return payload.string("label") ?? "Activity"
+        case "plugin": return payload.string("name") ?? "Plugin"
+        case "subagent": return payload.string("label") ?? "Subagent"
+        case "attachment": return "Attachment"
+        default: return event.type.capitalized
+        }
+    }
+
+    private var symbol: String {
+        switch kind {
+        case "question": return "questionmark.circle"
+        case "permission": return "checkmark.shield"
+        case "plan", "todo": return "checklist"
+        case "activity": return "bolt"
+        case "plugin": return "puzzlepiece.extension"
+        case "subagent": return "person.2"
+        case "attachment": return "paperclip"
+        default: return "info.circle"
+        }
+    }
+
+    private var stateLabel: String {
+        switch state {
+        case "pending": return "Pending"
+        case "submitting": return "Submitting…"
+        case "resolved", "completed": return "Completed"
+        case "cancelled", "canceled": return "Cancelled"
+        case "failed": return "Failed"
+        case "in_progress": return "In progress"
+        default: return state.isEmpty ? "Details" : state.capitalized
+        }
+    }
+
+    private var stateColor: Color {
+        switch state {
+        case "failed": return IOSTheme.red
+        case "pending", "submitting", "in_progress": return IOSTheme.amber
+        case "resolved", "completed": return IOSTheme.green
+        default: return IOSTheme.secondaryText
+        }
+    }
+
+    private var options: [AgentInteractionOption] {
+        if kind == "permission" {
+            return payload.array("options").compactMap { value in
+                guard case .object(let object) = value,
+                      let id = object.string("id") ?? object.string("value") else { return nil }
+                return AgentInteractionOption(id: id, questionID: "decision", label: object.string("label") ?? id, description: object.string("description"))
+            }
+        }
+        return payload.array("questions").flatMap { value -> [AgentInteractionOption] in
+            guard case .object(let question) = value,
+                  let questionID = question.string("id") else { return [] }
+            return question.array("options").compactMap { option in
+                guard case .object(let object) = option,
+                      let id = object.string("id") ?? object.string("value") else { return nil }
+                return AgentInteractionOption(id: id, questionID: questionID, label: object.string("label") ?? id, description: object.string("description"))
+            }
+        }
+    }
+
+    private var questionSpecs: [AgentQuestionSpec] {
+        payload.array("questions").enumerated().compactMap { index, value in
+            guard case .object(let question) = value else { return nil }
+            let id = question.string("id")?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? "question-\(index)"
+            guard !id.isEmpty else { return nil }
+            let prompt = question.string("prompt") ?? question.string("title") ?? "Question"
+            let selection = question.string("selection")?.lowercased() == "multiple" ? "multiple" : "single"
+            let required = question.bool("required") ?? true
+            let allowCustom = question.bool("allowCustom") ?? false
+            let values = question.array("options").enumerated().compactMap { optionIndex, value -> AgentInteractionOption? in
+                guard case .object(let object) = value else { return nil }
+                let optionID = object.string("id") ?? object.string("value") ?? "option-\(optionIndex)"
+                return AgentInteractionOption(
+                    id: optionID,
+                    questionID: id,
+                    label: object.string("label") ?? optionID,
+                    description: object.string("description")
+                )
+            }
+            return AgentQuestionSpec(
+                id: id,
+                prompt: prompt,
+                selection: selection,
+                required: required,
+                allowCustom: allowCustom,
+                options: values
+            )
+        }
+    }
+
+    private var questionsAreValid: Bool {
+        questionSpecs.allSatisfy { question in
+            guard question.required else { return true }
+            return !(selectedOptions[question.id] ?? []).isEmpty
+                || !(customAnswers[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private func isQuestionOptionSelected(_ questionID: String, optionID: String) -> Bool {
+        selectedOptions[questionID]?.contains(optionID) == true
+    }
+
+    private func toggleQuestionOption(_ question: AgentQuestionSpec, optionID: String) {
+        guard !submitting, state == "pending" else { return }
+        var selected = selectedOptions[question.id] ?? []
+        if question.selection == "multiple" {
+            if selected.contains(optionID) { selected.remove(optionID) }
+            else { selected.insert(optionID) }
+        } else {
+            selected = [optionID]
+        }
+        selectedOptions[question.id] = selected
+    }
+
+    private func submitQuestion(requestID: String) {
+        guard !submitting, state == "pending", questionsAreValid else { return }
+        var answers: [String: WarrenRemoteJSONValue] = [:]
+        var custom: [String: WarrenRemoteJSONValue] = [:]
+        for question in questionSpecs {
+            let selected = question.options.compactMap { option -> WarrenRemoteJSONValue? in
+                isQuestionOptionSelected(question.id, optionID: option.id) ? .string(option.id) : nil
+            }
+            answers[question.id] = .array(selected)
+            let customValue = customAnswers[question.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !customValue.isEmpty { custom[question.id] = .string(customValue) }
+        }
+        var response: [String: WarrenRemoteJSONValue] = ["answers": .object(answers)]
+        if !custom.isEmpty { response["customAnswers"] = .object(custom) }
+        submitting = true
+        let task = onInteraction(requestID, kind, response)
+        Task { @MainActor in
+            if await !task.value { submitting = false }
+        }
+    }
+
+    private func cancelInteraction(requestID: String, kind: String) {
+        guard !submitting, state == "pending" else { return }
+        submitting = true
+        let task = onInteraction(requestID, kind, ["cancelled": .boolean(true)])
+        Task { @MainActor in
+            if await !task.value { submitting = false }
+        }
+    }
+
+    private var planItems: [AgentPlanItem] {
+        payload.array("items").compactMap { value in
+            guard case .object(let object) = value else { return nil }
+            let label = object.string("label") ?? object.string("title") ?? object.string("prompt")
+            guard let label, !label.isEmpty else { return nil }
+            return AgentPlanItem(label: label, state: object.string("state")?.lowercased() ?? "pending")
+        }
+    }
+}
+
+private struct AgentInteractionOption: Identifiable {
+    let id: String
+    let questionID: String
+    let label: String
+    let description: String?
+}
+
+private struct AgentQuestionSpec: Identifiable {
+    let id: String
+    let prompt: String
+    let selection: String
+    let required: Bool
+    let allowCustom: Bool
+    let options: [AgentInteractionOption]
+}
+
+private struct AgentPlanItem: Identifiable {
+    let id = UUID()
+    let label: String
+    let state: String
+}
+
+private extension Dictionary where Key == String, Value == WarrenRemoteJSONValue {
+    func string(_ key: String) -> String? {
+        guard case .string(let value) = self[key] else { return nil }
+        return value
+    }
+
+    func array(_ key: String) -> [WarrenRemoteJSONValue] {
+        guard case .array(let value) = self[key] else { return [] }
+        return value
+    }
+
+    func bool(_ key: String) -> Bool? {
+        guard case .boolean(let value) = self[key] else { return nil }
+        return value
+    }
 }
 
 /// Provider metadata is useful when diagnosing a transcript, but it is not

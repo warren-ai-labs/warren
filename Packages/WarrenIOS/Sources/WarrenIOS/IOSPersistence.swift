@@ -317,6 +317,16 @@ public final class IOSLocalStore: @unchecked Sendable {
         _ = keychain.remove(account: endpointName)
     }
 
+    // Kept internal so feature-specific stores can share the same
+    // UserDefaults suite without exposing the defaults object itself.
+    func localObject(forKey key: String) -> Any? { defaults.object(forKey: key) }
+
+    func setLocalObject(_ value: Any?, forKey key: String) {
+        if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+    }
+
+    func removeLocalObject(forKey key: String) { defaults.removeObject(forKey: key) }
+
     private enum Keys {
         static let endpoint = "warren.ios.endpoint"
         static let endpoints = "warren.ios.endpoints"

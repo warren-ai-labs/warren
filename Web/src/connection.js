@@ -1,6 +1,13 @@
 const connecting = 0;
 const open = 1;
 
+export const agentCapabilities = [
+  "agent-timeline-v1",
+  "agent-interactions-v1",
+  "agent-interrupt-v1",
+  "agent-attachments-v1",
+];
+
 export function reconnectDelay(attempt, random = Math.random) {
   const base = Math.min(30_000, 500 * (2 ** attempt));
   return Math.round(base * (0.8 + random() * 0.4));
@@ -28,6 +35,7 @@ export class WarrenConnection {
     setTimer = setTimeout,
     clearTimer = clearTimeout,
     random = Math.random,
+    capabilities = ["roster-delta"],
   }) {
     this.url = url;
     this.token = token;
@@ -40,6 +48,8 @@ export class WarrenConnection {
     this.setTimer = (...args) => setTimer(...args);
     this.clearTimer = (...args) => clearTimer(...args);
     this.random = random;
+    this.capabilities = [...new Set(capabilities.filter(value => typeof value === "string" && value.trim()))];
+    this.negotiatedCapabilities = new Set();
     this.socket = null;
     this.timer = null;
     this.attempt = 0;
@@ -114,6 +124,7 @@ export class WarrenConnection {
     const socket = new this.WebSocketClass(this.url);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    this.negotiatedCapabilities = new Set();
 
     socket.onopen = () => {
       if (socket !== this.socket) return;
@@ -121,7 +132,7 @@ export class WarrenConnection {
       const auth = {
         t: "auth",
         version: "2.0",
-        capabilities: ["roster-delta"],
+        capabilities: this.capabilities,
         terminalStateFormats: ["ghostline-vt-replay-v1"],
       };
       const currentToken = this.getToken ? this.getToken() : this.token;
@@ -134,7 +145,20 @@ export class WarrenConnection {
       this.sendJSON(auth);
     };
     socket.onmessage = event => {
-      if (socket === this.socket) this.onMessage(event);
+      if (socket !== this.socket) return;
+      if (typeof event.data === "string") {
+        try {
+          const message = JSON.parse(event.data);
+          if (message?.t === "welcome" && Array.isArray(message.capabilities)) {
+            this.negotiatedCapabilities = new Set(
+              message.capabilities.filter(value => typeof value === "string"),
+            );
+          }
+        } catch {
+          // The application owns protocol error reporting.
+        }
+      }
+      this.onMessage(event);
     };
     socket.onerror = () => socket.close();
     socket.onclose = () => {
@@ -148,6 +172,10 @@ export class WarrenConnection {
         this.connect();
       }, delay);
     };
+  }
+
+  supportsCapability(capability) {
+    return this.negotiatedCapabilities.has(capability);
   }
 
   cancelTimer() {

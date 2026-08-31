@@ -848,6 +848,47 @@ func TestAgentHistoryConversationPriorityCoalescesOpenCodeDeltas(t *testing.T) {
 	}
 }
 
+func TestAgentHistoryConversationPriorityKeepsStructuredEvents(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	service.agentsMu.Lock()
+	service.agents["session-conversation-structured"] = &agentSession{}
+	service.agentsMu.Unlock()
+
+	service.recordAgentEvents(
+		"session-conversation-structured",
+		[]api.AgentEvent{
+			{Sequence: 1, Type: "user", Content: "prompt"},
+			{Sequence: 2, Type: "question", ID: "question-1", Payload: map[string]any{
+				"requestId": "request-1", "state": "pending", "questions": []any{},
+			}},
+			{Sequence: 3, Type: "tool_call", ToolName: "shell"},
+			{Sequence: 4, Type: "plan", ID: "plan-1", Payload: map[string]any{
+				"planId": "plan-1", "state": "in_progress", "items": []any{},
+			}},
+			{Sequence: 5, Type: "assistant", Content: "answer"},
+		},
+		api.AgentStatus{Activity: api.AgentActivityReady},
+	)
+
+	page := service.agentHistoryPageWithOptions(
+		"session-conversation-structured", 0, 3, true,
+	)
+	if got := page.Events; len(got) != 3 || got[0].Sequence != 2 || got[1].Sequence != 4 || got[2].Sequence != 5 {
+		t.Fatalf("priority page = %#v, want structured sequences 2,4 and assistant 5", got)
+	}
+	if page.Cursor != 2 || !page.HasMore {
+		t.Fatalf("priority metadata = cursor=%d hasMore=%t, want cursor=2 hasMore=true", page.Cursor, page.HasMore)
+	}
+
+	older := service.agentHistoryPageWithOptions(
+		"session-conversation-structured", page.Cursor, 3, true,
+	)
+	if got := older.Events; len(got) != 1 || got[0].Sequence != 1 {
+		t.Fatalf("older priority page = %#v, want user sequence 1", got)
+	}
+}
+
 func TestSplitAgentEventsBoundsBatches(t *testing.T) {
 	events := make([]api.AgentEvent, 100)
 	for index := range events {
