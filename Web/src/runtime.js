@@ -14,23 +14,81 @@ const authFragment = location.hash.startsWith("#t=")
   : null;
 const relayHostID = relayHostMeta?.content || "__WARREN_RELAY_HOST_ID__";
 const usesControlPlane = !relayHostID.startsWith("__WARREN_");
-// The daemon can serve the UI from a path prefix (for example gnar's
+// A Relay may be mounted below a reverse-proxy path prefix (for example
+// /relay). Preserve that prefix for every browser request; absolute root URLs
+// would otherwise escape the mounted Relay and lose the host namespace.
+const relayHostPath = `/h/${encodeURIComponent(relayHostID)}`;
+const relayPathPrefix = usesControlPlane
+  ? (() => {
+      const marker = relayHostPath;
+      const index = location.pathname.indexOf(marker);
+      return index >= 0 ? location.pathname.slice(0, index).replace(/\/+$/, "") : "";
+    })()
+  : "";
+const relayPath = (value) => `${relayPathPrefix}/${String(value).replace(/^\/+/, "")}`;
+// The daemon can serve the UI from a path prefix (for example a Relay route's
 // /t/<name>), so app-level URLs must resolve relative to the current
 // directory instead of the origin root.
 const appBase = location.pathname.endsWith("/")
   ? location.pathname
   : `${location.pathname}/`;
-const tokenStorageKey = usesControlPlane
-  ? `warren.accessToken.${relayHostID}`
-  : "warren.accessToken";
 const suppliedToken = authFragment?.get("t") || "";
+const memoryToken = { value: "" };
+if (!usesControlPlane) memoryToken.value = suppliedToken;
 
-if (suppliedToken) localStorage.setItem(tokenStorageKey, suppliedToken);
+const relaySessionBase = usesControlPlane
+  ? relayPath(`${relayHostPath}/v1/session`)
+  : "";
+
+// Relay links carry a one-time pairing ticket in the fragment. Exchange it
+// immediately over HTTPS and scrub the URL before rendering or navigating;
+// only the short-lived access capability remains in memory.
+export const tokenReady = usesControlPlane
+  ? (suppliedToken
+      ? fetch(`${relaySessionBase}/exchange`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ pairing_ticket: suppliedToken }),
+        })
+          .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
+          .then(result => {
+            memoryToken.value = result.access_token || "";
+            return memoryToken.value;
+          })
+          .catch(() => {
+            memoryToken.value = "";
+            return memoryToken.value;
+          })
+      : refreshRelayToken().catch(() => ""))
+  : Promise.resolve("");
+
+export async function refreshRelayToken() {
+  if (!usesControlPlane) return memoryToken.value;
+  const response = await fetch(`${relaySessionBase}/refresh`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!response.ok) throw new Error("refresh capability failed");
+  const result = await response.json();
+  memoryToken.value = result.access_token || "";
+  return memoryToken.value;
+}
+
+if (typeof history !== "undefined" && suppliedToken) {
+  const clean = `${location.pathname}${location.search}`;
+  history.replaceState(history.state, document.title, clean);
+}
 
 export const runtime = {
   relayHostID,
   usesControlPlane,
-  token: suppliedToken || localStorage.getItem(tokenStorageKey) || "",
+  get token() { return memoryToken.value; },
+  set token(value) {
+    memoryToken.value = value || "";
+  },
+  tokenReady,
+  refresh: refreshRelayToken,
 };
 
 export function webSocketURL() {
@@ -43,20 +101,20 @@ export function webSocketURL() {
     : (hostParam || location.hostname || "127.0.0.1");
   const port = usesControlPlane || hostParam ? "" : (location.port || "8789");
   const path = usesControlPlane
-    ? `/v1/client/connect?host_id=${encodeURIComponent(relayHostID)}`
+    ? relayPath(`${relayHostPath}/v1/client/connect`)
     : `${appBase}v1/ws`;
   return `${protocol}//${host}${port ? `:${port}` : ""}${path}`;
 }
 
 export function serviceWorkerURL() {
   return usesControlPlane
-    ? `/h/${encodeURIComponent(relayHostID)}/service-worker.js`
+    ? relayPath(`${relayHostPath}/service-worker.js`)
     : `${appBase}service-worker.js`;
 }
 
 export function webAssetURL(name) {
   const resource = String(name).replace(/^\/+/, "");
   return usesControlPlane
-    ? `/h/${encodeURIComponent(relayHostID)}/${resource}`
+    ? relayPath(`${relayHostPath}/${resource}`)
     : `${appBase}${resource}`;
 }

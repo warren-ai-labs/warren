@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +24,8 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/client"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
+	"github.com/abcdlsj/warren/Headless/internal/sshclient"
 )
 
 var version = "dev"
@@ -30,6 +36,16 @@ var endpointToken string
 var configPath string
 
 const defaultEndpointName = "local"
+
+var relayHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	// Relay enrollment carries the canonical Host Secret in the request body.
+	// Never follow a redirect to an untrusted origin where that body (or an
+	// Authorization header on another Relay operation) could be replayed.
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -96,12 +112,431 @@ func run(arguments []string) error {
 		return resourceCommand(args)
 	case "headless":
 		return headlessCommand(args[1:])
+	case "relay":
+		return relayCommand(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return nil
 	default:
 		return newUsageError(fmt.Sprintf("unknown command %q; run 'warren help'", args[0]), usageText())
 	}
+}
+
+func relayCommand(args []string) error {
+	if len(args) == 0 || isHelpArgument(args[0]) {
+		fmt.Print(relayUsageText())
+		return nil
+	}
+	flags := parseFlags(args[1:])
+	if boolValue(flags, "help") || boolValue(flags, "h") {
+		fmt.Print(relayUsageText())
+		return nil
+	}
+	switch args[0] {
+	case "enroll", "pair", "pairing", "begin-pairing", "status", "tunnel", "revoke":
+	default:
+		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
+	}
+	if label := missingRelayPositionals(args[0], flags); label != "" {
+		return newUsageError("missing "+label, relayUsageText())
+	}
+	if err := validateRelayFlags(args[0], flags); err != nil {
+		return err
+	}
+	base, hostID, token, err := relayEndpointValues(flags)
+	if err != nil {
+		return err
+	}
+	if base == "" {
+		return newUsageError("--url RELAY_URL is required", relayUsageText())
+	}
+	base, err = normalizeRelayBase(base)
+	if err != nil {
+		return newUsageError(err.Error(), relayUsageText())
+	}
+	switch args[0] {
+	case "enroll":
+		ticket := stringValue(flags, "ticket")
+		secret := stringValueDefault(flags, "secret", daemonToken())
+		if hostID == "" || ticket == "" || secret == "" {
+			return newUsageError("--host, --ticket, and --secret are required", relayUsageText())
+		}
+		// Enrollment authenticates with the one-time ticket and the existing
+		// daemon token. Do not also send an unrelated admin/endpoint token in
+		// Authorization; doing so makes accidental credential forwarding more
+		// likely when the command is run with global --token.
+		return relayEnroll(base+"/v1/hosts/"+url.PathEscape(hostID)+"/enroll", base, hostID, ticket, secret)
+	case "pair":
+		code := stringValue(flags, "code")
+		if hostID == "" || code == "" {
+			return newUsageError("--host and --code are required", relayUsageText())
+		}
+		return relayRequest(http.MethodPost, base+"/v1/pair", "", map[string]any{"host_id": hostID, "pairing_code": code})
+	case "pairing", "begin-pairing":
+		credential, credentialErr := relayManagementCredential(flags, true)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		if hostID == "" {
+			return newUsageError("--host is required", relayUsageText())
+		}
+		return relayRequest(http.MethodPost, base+"/v1/hosts/"+url.PathEscape(hostID)+"/pairing", credential, nil)
+	case "status":
+		token = relayAccessCredential(flags, token)
+		if hostID == "" || token == "" {
+			return newUsageError("--host and --token are required", relayUsageText())
+		}
+		return relayStatus(base, hostID, token)
+	case "revoke":
+		credential, credentialErr := relayManagementCredential(flags, false)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		if hostID == "" {
+			return newUsageError("--host is required", relayUsageText())
+		}
+		return relayRequest(http.MethodDelete, base+"/v1/hosts/"+url.PathEscape(hostID), credential, nil)
+	case "tunnel":
+		credential, credentialErr := relayManagementCredential(flags, true)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		if hostID == "" {
+			return newUsageError("--host is required", relayUsageText())
+		}
+		if len(args) < 2 || (args[1] != "enable" && args[1] != "disable") {
+			return newUsageError("tunnel requires enable or disable", relayUsageText())
+		}
+		if args[1] == "disable" {
+			return relayRequest(http.MethodDelete, base+"/v1/hosts/"+url.PathEscape(hostID)+"/route", credential, nil)
+		}
+		authMode := strings.ToLower(strings.TrimSpace(stringValueDefault(flags, "auth-mode", "owner")))
+		if authMode != "owner" && authMode != "public" {
+			return newUsageError("--auth-mode must be owner or public", relayUsageText())
+		}
+		body := map[string]any{"enabled": true, "auth_mode": authMode}
+		if value := strings.TrimSpace(stringValue(flags, "public-hostname")); value != "" {
+			body["public_hostname"] = value
+		}
+		if value := strings.TrimSpace(stringValue(flags, "path-prefix")); value != "" {
+			body["path_prefix"] = value
+		}
+		return relayRequest(http.MethodPost, base+"/v1/hosts/"+url.PathEscape(hostID)+"/route", credential, body)
+	default:
+		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
+	}
+}
+
+func missingRelayPositionals(command string, flags map[string]any) string {
+	items := positionals(flags)
+	switch command {
+	case "tunnel":
+		if len(items) == 0 {
+			return "ENABLE|DISABLE"
+		}
+		if len(items) > 1 {
+			return ""
+		}
+		if items[0] != "enable" && items[0] != "disable" {
+			return "ENABLE|DISABLE"
+		}
+	default:
+		if len(items) > 0 {
+			return ""
+		}
+	}
+	return ""
+}
+
+func validateRelayFlags(command string, flags map[string]any) error {
+	allowed := map[string]bool{"url": true, "relay-url": true, "host": true, "host-id": true, "help": true, "h": true}
+	switch command {
+	case "enroll":
+		allowed["ticket"], allowed["secret"] = true, true
+	case "pair":
+		allowed["code"] = true
+	case "pairing", "begin-pairing", "status", "revoke":
+		allowed["token"] = true
+		allowed["host-secret"], allowed["admin-token"] = true, true
+	case "tunnel":
+		allowed["token"] = true
+		allowed["host-secret"], allowed["admin-token"] = true, true
+		allowed["auth-mode"], allowed["public-hostname"], allowed["path-prefix"] = true, true, true
+	}
+	for key := range flags {
+		if key == "_" || allowed[key] {
+			continue
+		}
+		return newUsageError("unknown relay option --"+key, relayUsageText())
+	}
+	if command != "tunnel" && len(positionals(flags)) != 0 {
+		return newUsageError("relay "+command+" does not accept positional arguments", relayUsageText())
+	}
+	if command == "tunnel" && len(positionals(flags)) > 1 {
+		return newUsageError("relay tunnel accepts exactly one action", relayUsageText())
+	}
+	return nil
+}
+
+// relayAccessCredential resolves the short-lived access capability used by
+// read-only Relay operations. An explicitly supplied management credential is
+// also accepted for status because Relay permits Host Secret and admin tokens
+// on that endpoint, but a configured Relay endpoint token remains an access
+// capability only.
+func relayAccessCredential(flags map[string]any, fallback string) string {
+	for _, key := range []string{"token", "host-secret", "admin-token"} {
+		if value := strings.TrimSpace(stringValue(flags, key)); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// relayManagementCredential resolves credentials for Relay control-plane
+// mutations. Endpoint.Token is intentionally not a fallback here: Relay
+// endpoints store a short-lived access capability, while route configuration,
+// pairing, and revocation require a Host Secret or administrator token.
+func relayManagementCredential(flags map[string]any, allowHostSecret bool) (string, error) {
+	hostSecret := strings.TrimSpace(stringValue(flags, "host-secret"))
+	adminToken := strings.TrimSpace(stringValue(flags, "admin-token"))
+	legacyToken := strings.TrimSpace(stringValue(flags, "token"))
+	if hostSecret != "" && adminToken != "" {
+		return "", newUsageError("--host-secret and --admin-token are mutually exclusive", relayUsageText())
+	}
+	if (hostSecret != "" || adminToken != "") && legacyToken != "" {
+		return "", newUsageError("--token cannot be combined with --host-secret or --admin-token", relayUsageText())
+	}
+	if adminToken != "" {
+		return adminToken, nil
+	}
+	if hostSecret != "" {
+		if !allowHostSecret {
+			return "", newUsageError("--admin-token is required for relay revoke", relayUsageText())
+		}
+		return hostSecret, nil
+	}
+	// --token remains a compatibility alias when it is explicitly supplied on
+	// the relay command. A global --token is likewise an intentional caller
+	// credential; it is never populated from a configured Relay endpoint.
+	if legacyToken != "" {
+		return legacyToken, nil
+	}
+	if value := strings.TrimSpace(endpointToken); value != "" {
+		return value, nil
+	}
+	if allowHostSecret {
+		if value := strings.TrimSpace(os.Getenv("WARREN_RELAY_HOST_SECRET")); value != "" {
+			return value, nil
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("WARREN_RELAY_ADMIN_TOKEN")); value != "" {
+		return value, nil
+	}
+	if allowHostSecret {
+		return "", newUsageError("--host-secret or --admin-token is required (configured Relay access tokens cannot mutate routes)", relayUsageText())
+	}
+	return "", newUsageError("--admin-token is required for relay revoke", relayUsageText())
+}
+
+func relayEndpointValues(flags map[string]any) (string, string, string, error) {
+	base := stringValue(flags, "url")
+	if base == "" {
+		base = stringValue(flags, "relay-url")
+	}
+	if base == "" {
+		base = env("WARREN_RELAY_URL", endpointURL)
+	}
+	hostID := stringValue(flags, "host")
+	if hostID == "" {
+		hostID = stringValue(flags, "host-id")
+	}
+	if hostID == "" {
+		hostID = env("WARREN_RELAY_HOST_ID", "")
+	}
+	token := stringValueDefault(flags, "token", env("WARREN_RELAY_TOKEN", endpointToken))
+	// --endpoint selects a configured Relay endpoint. It is also useful when
+	// the current endpoint is Relay, so fill only values the caller omitted.
+	if endpointName != "" || base == "" || hostID == "" || token == "" {
+		configured, err := config.Load(configPath)
+		if err != nil {
+			return "", "", "", err
+		}
+		var value config.Endpoint
+		if endpointName != "" {
+			value, err = resolveConfiguredEndpoint(configured)
+			if err != nil {
+				return "", "", "", err
+			}
+		} else if configured.Current != "" {
+			value, _ = configured.Resolve(configured.Current)
+		}
+		if base == "" {
+			base = value.URL
+		}
+		if hostID == "" {
+			hostID = value.HostID
+		}
+		if token == "" {
+			token = value.Token
+		}
+	}
+	return strings.TrimSpace(base), strings.TrimSpace(hostID), strings.TrimSpace(token), nil
+}
+
+func normalizeRelayBase(raw string) (string, error) {
+	value := strings.TrimRight(strings.TrimSpace(raw), "/")
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid Relay URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("Relay URL must use http or https")
+	}
+	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\x00") || strings.HasPrefix(parsed.Path, "//") {
+		return "", errors.New("invalid Relay URL")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return "", errors.New("Relay URL path traversal is not allowed")
+		}
+	}
+	return value, nil
+}
+
+func relayStatus(base, hostID, token string) error {
+	host, err := doRelayRequest(http.MethodGet, base+"/v1/hosts/"+url.PathEscape(hostID), token, nil)
+	if err != nil {
+		return err
+	}
+	route, routeErr := doRelayRequest(http.MethodGet, base+"/v1/hosts/"+url.PathEscape(hostID)+"/route", token, nil)
+	if routeErr != nil {
+		var responseErr *relayHTTPError
+		if !errors.As(routeErr, &responseErr) || responseErr.status != http.StatusNotFound {
+			return routeErr
+		}
+		route = nil
+	}
+	return printValue(map[string]any{"host": host, "route": route})
+}
+
+func relayRequest(method, endpoint, token string, body any) error {
+	value, err := doRelayRequest(method, endpoint, token, body)
+	if err != nil {
+		return err
+	}
+	if outputJSON || value != nil {
+		return printValue(value)
+	}
+	return nil
+}
+
+type relayHTTPError struct {
+	status int
+	body   string
+}
+
+func (err *relayHTTPError) Error() string {
+	if err.body == "" {
+		return fmt.Sprintf("relay returned HTTP %d", err.status)
+	}
+	return fmt.Sprintf("relay returned HTTP %d: %s", err.status, err.body)
+}
+
+func doRelayRequest(method, endpoint, token string, body any) (any, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(data)
+	}
+	request, err := http.NewRequest(method, endpoint, reader)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := relayHTTPClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	if readErr != nil {
+		return nil, readErr
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, &relayHTTPError{status: response.StatusCode, body: strings.TrimSpace(string(data))}
+	}
+	var value any
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &value); err != nil {
+			return nil, fmt.Errorf("decode relay response: %w", err)
+		}
+	}
+	return value, nil
+}
+
+func relayEnroll(endpoint, relayURL, hostID, ticket, secret string) error {
+	value, err := doRelayRequest(http.MethodPost, endpoint, "", map[string]any{"enrollment_ticket": ticket, "host_secret": secret})
+	if err != nil {
+		return err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("relay enrollment returned an invalid response")
+	}
+	keyID, _ := object["relay_key_id"].(string)
+	key, _ := object["relay_public_key"].(string)
+	if strings.TrimSpace(keyID) == "" || strings.TrimSpace(key) == "" {
+		return errors.New("relay enrollment did not return a signing key")
+	}
+	settingsPath := env("WARREN_SETTINGS_FILE", settings.DefaultPath())
+	loaded, err := settings.Load(settingsPath)
+	if err != nil {
+		return fmt.Errorf("load Warren settings: %w", err)
+	}
+	loaded.Relay.Enabled = true
+	loaded.Relay.URL = strings.TrimRight(strings.TrimSpace(relayURL), "/")
+	loaded.Relay.HostID = strings.TrimSpace(hostID)
+	loaded.Relay.RelayKeyID = strings.TrimSpace(keyID)
+	loaded.Relay.RelayKey = strings.TrimSpace(key)
+	loaded.Relay.LastError = ""
+	if err := settings.Save(settingsPath, loaded); err != nil {
+		return fmt.Errorf("save Warren Relay settings: %w", err)
+	}
+	if outputJSON {
+		return printValue(value)
+	}
+	return nil
+}
+
+func daemonToken() string {
+	if value := strings.TrimSpace(os.Getenv("WARREN_TOKEN")); value != "" {
+		return value
+	}
+	path := strings.TrimSpace(os.Getenv("WARREN_TOKEN_FILE"))
+	if path == "" {
+		path = filepath.Join(defaultWarrenDirectory(), "token")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func defaultWarrenDirectory() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".warren"
+	}
+	return filepath.Join(home, ".warren")
 }
 
 var globalFlagNames = map[string]bool{
@@ -120,16 +555,23 @@ func hoistGlobalFlags(arguments []string) []string {
 	extracted := make([]string, 0, len(arguments))
 	rest := make([]string, 0, len(arguments))
 	endpointAdd := isEndpointAdd(arguments)
+	relayCommandSeen := false
 	for index := 0; index < len(arguments); index++ {
 		item := arguments[index]
 		name, _, hasValue := splitFlag(item)
 		if !globalFlagNames[name] {
 			rest = append(rest, item)
+			if item == "relay" && !relayCommandSeen {
+				relayCommandSeen = true
+			}
 			continue
 		}
 		// endpoint add accepts its own --token; keep it local so the
 		// subcommand receives it instead of treating it as the server token.
-		if endpointAdd && name == "token" {
+		// Relay subcommands likewise own --token: it may be an explicit
+		// access capability or the compatibility spelling for a management
+		// credential. A --token before `relay` remains a global flag.
+		if name == "token" && (endpointAdd || relayCommandSeen) {
 			rest = append(rest, item)
 			continue
 		}
@@ -303,22 +745,116 @@ func connect() (context.Context, *client.Client, error) {
 	dialContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	url, token := endpointURL, endpointToken
+	endpointType := "daemon"
+	hostID := ""
+	var tunnel *sshclient.Tunnel
 	if url == "" {
 		settings, err := config.Load(configPath)
 		if err != nil {
 			return nil, nil, err
 		}
-		value, err := resolveEndpoint(settings, endpointName)
+		value, err := resolveConfiguredEndpoint(settings)
 		if err != nil {
 			return nil, nil, err
 		}
 		url, token = value.URL, value.Token
+		endpointType = strings.ToLower(strings.TrimSpace(value.Type))
+		if endpointType == "" {
+			endpointType = "daemon"
+		}
+		hostID = strings.TrimSpace(value.HostID)
+		if strings.TrimSpace(value.SSH) != "" {
+			var ready sshclient.Ready
+			remoteAddress := value.SSHRemote
+			if strings.TrimSpace(remoteAddress) == "" {
+				remoteAddress = "127.0.0.1:8789"
+			}
+			tunnel, ready, err = sshclient.Start(dialContext, sshclient.Options{
+				Target:        value.SSH,
+				RemoteAddress: remoteAddress,
+				LocalAddress:  "127.0.0.1:0",
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("start SSH endpoint %q: %w", value.SSH, err)
+			}
+			url, token = ready.URL, ready.Token
+		}
 	}
 	if token == "" {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
 		return nil, nil, errors.New("endpoint token is required")
 	}
-	value, err := client.Dial(dialContext, url, token)
-	return context.Background(), value, err
+	var value *client.Client
+	var err error
+	if endpointType == "relay" {
+		if hostID == "" {
+			return nil, nil, errors.New("Relay endpoint host ID is required")
+		}
+		value, err = client.DialRelay(dialContext, url, hostID, token)
+	} else {
+		value, err = client.Dial(dialContext, url, token)
+	}
+	if err != nil {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, nil, err
+	}
+	if tunnel != nil {
+		value.SetCloseHook(func() { _ = tunnel.Close() })
+	}
+	return context.Background(), value, nil
+}
+
+// resolveConfiguredEndpoint keeps the Desktop's synthetic "local" catalog
+// selection usable by the CLI even when an older/fresh config has no explicit
+// local row. Installed builds normally persist this row; the fallback reads
+// the daemon-owned token without copying it into endpoint metadata.
+func resolveConfiguredEndpoint(settings config.Config) (config.Endpoint, error) {
+	name := endpointName
+	if name == "" {
+		name = settings.Current
+		if name == "" {
+			if len(settings.Endpoints) > 1 {
+				return config.Endpoint{}, errors.New("multiple endpoints configured; run 'warren endpoint list', then retry with --endpoint NAME")
+			}
+			if _, ok := settings.Endpoints[defaultEndpointName]; ok {
+				name = defaultEndpointName
+			} else {
+				// A fresh checkout has no catalog row yet, but the local daemon
+				// still owns a token file. Treat that daemon as the implicit
+				// endpoint instead of requiring a one-time endpoint setup command.
+				name = defaultEndpointName
+			}
+		}
+	}
+	if name == defaultEndpointName {
+		if value, ok := settings.Endpoints[defaultEndpointName]; ok &&
+			(strings.TrimSpace(value.SSH) != "" || strings.TrimSpace(value.Token) != "") {
+			return value, nil
+		}
+		tokenPath := strings.TrimSpace(os.Getenv("WARREN_TOKEN_FILE"))
+		if tokenPath == "" {
+			home, _ := os.UserHomeDir()
+			tokenPath = filepath.Join(home, ".warren", "token")
+		}
+		data, err := os.ReadFile(tokenPath)
+		if err != nil {
+			return config.Endpoint{}, fmt.Errorf("read local endpoint token %s: %w", tokenPath, err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return config.Endpoint{}, fmt.Errorf("local endpoint token is empty: %s", tokenPath)
+		}
+		return config.Endpoint{Name: "local", URL: "http://127.0.0.1:8789", Token: token}, nil
+	}
+	value, err := settings.Resolve(name)
+	if err != nil {
+		return config.Endpoint{}, fmt.Errorf("%w; add one with 'warren endpoint add' or pass --server and --token", err)
+	}
+	return value, nil
 }
 
 func resolveEndpoint(settings config.Config, name string) (config.Endpoint, error) {
@@ -2146,9 +2682,13 @@ func endpointCommand(args []string) error {
 			if name == settings.Current {
 				marker = "*"
 			}
-			rows = append(rows, []string{marker, name, value.URL, displayValue(value.SSH)})
+			endpointType := strings.TrimSpace(value.Type)
+			if endpointType == "" {
+				endpointType = "daemon"
+			}
+			rows = append(rows, []string{marker, name, endpointType, value.URL, displayValue(value.HostID), displayValue(value.SSH)})
 		}
-		printTable([]string{"CURRENT", "NAME", "URL", "SSH"}, rows...)
+		printTable([]string{"CURRENT", "NAME", "TYPE", "URL", "HOST ID", "SSH"}, rows...)
 		return nil
 	}
 	if isHelpArgument(args[0]) || (len(args) >= 2 && isHelpArgument(args[1])) {
@@ -2168,14 +2708,47 @@ func endpointCommand(args []string) error {
 		name := positional(flags, 0, "endpoint name")
 		url := stringValue(flags, "url")
 		token := stringValue(flags, "token")
-		if url == "" || token == "" {
+		sshTarget := strings.TrimSpace(stringValue(flags, "ssh"))
+		if sshTarget != "" && name == "local" {
+			return newUsageError("local is reserved for the local daemon; choose another SSH endpoint name", endpointUsageText())
+		}
+		if sshTarget != "" && (url != "" || token != "") {
+			return newUsageError("--ssh cannot be combined with --url or --token", endpointUsageText())
+		}
+		if sshTarget == "" && (url == "" || token == "") {
 			return newUsageError("--url and --token are required", endpointUsageText())
 		}
-		settings.Endpoints[name] = config.Endpoint{Name: name, URL: url, Token: token, SSH: stringValue(flags, "ssh")}
-		if settings.Current == "" || boolValue(flags, "use") {
-			settings.Current = name
+		endpointType := strings.ToLower(strings.TrimSpace(stringValueDefault(flags, "type", "daemon")))
+		if endpointType == "" {
+			endpointType = "daemon"
 		}
-		if err := config.Save(configPath, settings); err != nil {
+		if endpointType != "daemon" && endpointType != "relay" {
+			return newUsageError("--type must be daemon or relay", endpointUsageText())
+		}
+		if endpointType == "relay" && sshTarget != "" {
+			return newUsageError("--type relay cannot be combined with --ssh", endpointUsageText())
+		}
+		if endpointType == "relay" && strings.TrimSpace(stringValueDefault(flags, "host-id", stringValue(flags, "host"))) == "" {
+			return newUsageError("--host-id is required for relay endpoints", endpointUsageText())
+		}
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			// SSH endpoints keep only durable connection metadata. The helper
+			// obtains a fresh loopback URL/token for each command invocation.
+			if sshTarget != "" {
+				url, token = "", ""
+			}
+			settings.Endpoints[name] = config.Endpoint{
+				Name: name, URL: url, Token: token, SSH: sshTarget,
+				SSHRemote: stringValue(flags, "ssh-remote"),
+				Type:      endpointType,
+				HostID:    strings.TrimSpace(stringValueDefault(flags, "host-id", stringValue(flags, "host"))),
+				RouteID:   strings.TrimSpace(stringValue(flags, "route-id")),
+			}
+			if settings.Current == "" || boolValue(flags, "use") {
+				settings.Current = name
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"added": true, "name": name})
@@ -2183,11 +2756,15 @@ func endpointCommand(args []string) error {
 		if len(args) < 2 {
 			return newUsageError("missing ENDPOINT_NAME", endpointUsageText())
 		}
-		if _, ok := settings.Endpoints[args[1]]; !ok {
-			return fmt.Errorf("endpoint not found: %s", args[1])
-		}
-		settings.Current = args[1]
-		if err := config.Save(configPath, settings); err != nil {
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			if args[1] != "local" {
+				if _, ok := settings.Endpoints[args[1]]; !ok {
+					return fmt.Errorf("endpoint not found: %s", args[1])
+				}
+			}
+			settings.Current = args[1]
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"current": args[1]})
@@ -2195,16 +2772,18 @@ func endpointCommand(args []string) error {
 		if len(args) < 2 {
 			return newUsageError("missing ENDPOINT_NAME", endpointUsageText())
 		}
-		delete(settings.Endpoints, args[1])
-		if settings.Current == args[1] {
-			settings.Current = ""
-		}
-		if err := config.Save(configPath, settings); err != nil {
+		if err := config.Update(configPath, func(settings *config.Config) error {
+			delete(settings.Endpoints, args[1])
+			if settings.Current == args[1] {
+				settings.Current = ""
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		return printValue(map[string]any{"removed": true, "name": args[1]})
 	case "current":
-		value, err := settings.Resolve("")
+		value, err := resolveConfiguredEndpoint(settings)
 		if err != nil {
 			return err
 		}
@@ -2219,6 +2798,32 @@ func sshCommand(args []string) error {
 		fmt.Print(sshUsageText())
 		return nil
 	}
+	if len(args) >= 1 && args[0] == "list" {
+		flags := parseFlags(args[1:])
+		if boolValue(flags, "help") || boolValue(flags, "h") {
+			fmt.Print(sshUsageText())
+			return nil
+		}
+		if len(positionals(flags)) > 0 {
+			return newUsageError("ssh list does not accept a target", sshUsageText())
+		}
+		entries, err := sshclient.ListHosts(stringValue(flags, "ssh-config"))
+		if err != nil {
+			return err
+		}
+		rows := make([]sshHostRow, 0, len(entries))
+		for _, entry := range entries {
+			rows = append(rows, sshHostRow{
+				Name:          entry.Name,
+				Host:          entry.Config.Host,
+				User:          entry.Config.User,
+				Port:          entry.Config.Port,
+				IdentityFiles: len(entry.Config.IdentityFile),
+				Error:         entry.Error,
+			})
+		}
+		return printValue(rows)
+	}
 	flags := parseFlags(args)
 	if boolValue(flags, "help") || boolValue(flags, "h") {
 		fmt.Print(sshUsageText())
@@ -2227,34 +2832,52 @@ func sshCommand(args []string) error {
 	if label := missingPositional(flags, []string{"SSH_TARGET"}); label != "" {
 		return newUsageError("missing "+label, sshUsageText())
 	}
+	if len(positionals(flags)) > 1 {
+		return newUsageError("ssh accepts exactly one target", sshUsageText())
+	}
 	target := positional(flags, 0, "SSH target")
-	localPort := stringValueDefault(flags, "local-port", "8789")
+	// Use an ephemeral loopback port by default so a local daemon on 8789 and
+	// multiple SSH-backed endpoints can coexist without manual coordination.
+	localPort := stringValueDefault(flags, "local-port", "0")
 	remotePort := stringValueDefault(flags, "remote-port", "8789")
 	name := stringValueDefault(flags, "name", strings.NewReplacer("@", "-", ":", "-").Replace(target))
-	remoteStart := "command -v warren-headless >/dev/null || { echo 'warren-headless is not installed' >&2; exit 127; }; mkdir -p ~/.warren; test -s ~/.warren/token || (umask 077; openssl rand -hex 32 > ~/.warren/token); (curl -fsS http://127.0.0.1:" + remotePort + "/healthz >/dev/null 2>&1 || nohup warren-headless --listen 127.0.0.1:" + remotePort + " > ~/.warren/headless.log 2>&1 &); cat ~/.warren/token"
-	output, err := exec.Command("ssh", target, remoteStart).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("start remote headless: %s: %w", strings.TrimSpace(string(output)), err)
+	if name == "local" {
+		return newUsageError("local is reserved for the local daemon; choose another --name", sshUsageText())
 	}
-	token := strings.TrimSpace(string(output))
-	if token == "" {
-		return errors.New("remote headless returned an empty token")
+	localAddress := localPort
+	if !strings.Contains(localAddress, ":") {
+		localAddress = "127.0.0.1:" + localAddress
 	}
-	settings, err := config.Load(configPath)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	tunnel, ready, err := sshclient.Start(ctx, sshclient.Options{
+		Target:         target,
+		RemoteAddress:  "127.0.0.1:" + remotePort,
+		LocalAddress:   localAddress,
+		SSHConfigPath:  stringValue(flags, "ssh-config"),
+		KnownHostsPath: stringValue(flags, "known-hosts"),
+	})
 	if err != nil {
 		return err
 	}
-	settings.Endpoints[name] = config.Endpoint{Name: name, URL: "http://127.0.0.1:" + localPort, Token: token, SSH: target}
-	settings.Current = name
-	if err := config.Save(configPath, settings); err != nil {
+	defer tunnel.Close()
+	if err := config.Update(configPath, func(settings *config.Config) error {
+		// Do not persist the helper's ephemeral listener or token. Persisting
+		// either value makes a later process reuse a dead tunnel and can leak
+		// credentials to unrelated Desktop/CLI instances.
+		settings.Endpoints[name] = config.Endpoint{Name: name, SSH: target, SSHRemote: "127.0.0.1:" + remotePort}
+		settings.Current = name
+		return nil
+	}); err != nil {
 		return err
 	}
-	command := exec.Command("ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-L", localPort+":127.0.0.1:"+remotePort, target)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	fmt.Fprintf(os.Stderr, "Warren endpoint %q active at http://127.0.0.1:%s; keep this process running.\n", name, localPort)
-	return command.Run()
+	fmt.Fprintf(os.Stderr, "Warren endpoint %q active at %s; keep this process running.\n", name, ready.URL)
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-tunnel.Done():
+		return errors.New("SSH tunnel stopped unexpectedly")
+	}
 }
 
 func headlessCommand(args []string) error {
@@ -2657,6 +3280,15 @@ func taskWorkspaceRows(state api.State, taskID string, available bool) ([]Worksp
 	return result, nil
 }
 
+type sshHostRow struct {
+	Name          string `json:"name"`
+	Host          string `json:"host"`
+	User          string `json:"user"`
+	Port          int    `json:"port"`
+	IdentityFiles int    `json:"identityFiles"`
+	Error         string `json:"error,omitempty"`
+}
+
 func printValue(value any) error {
 	if outputJSON {
 		data, err := json.MarshalIndent(value, "", "  ")
@@ -2673,6 +3305,28 @@ func printValue(value any) error {
 			rows = append(rows, taskRowCells(item))
 		}
 		printTable([]string{"ID", "NAME", "SOURCE", "EXTERNAL ID", "URL", "WORKSPACES", "PINNED", "CREATED"}, rows...)
+	case []sshHostRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, []string{
+				item.Name,
+				item.User,
+				item.Host,
+				func() string {
+					if item.Port == 0 {
+						return "-"
+					}
+					return strconv.Itoa(item.Port)
+				}(),
+				func() string {
+					if item.Error != "" {
+						return item.Error
+					}
+					return strconv.Itoa(item.IdentityFiles)
+				}(),
+			})
+		}
+		printTable([]string{"NAME", "USER", "HOST", "PORT", "IDENTITIES / STATUS"}, rows...)
 	case []ProjectRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
@@ -2736,13 +3390,19 @@ func printValue(value any) error {
 	case config.Endpoint:
 		printKVTable([][2]string{
 			{"NAME", items.Name},
+			{"TYPE", endpointType(items.Type)},
 			{"URL", items.URL},
+			{"HOST ID", displayValue(items.HostID)},
+			{"ROUTE ID", displayValue(items.RouteID)},
 			{"SSH", displayValue(items.SSH)},
 		})
 	case *config.Endpoint:
 		printKVTable([][2]string{
 			{"NAME", items.Name},
+			{"TYPE", endpointType(items.Type)},
 			{"URL", items.URL},
+			{"HOST ID", displayValue(items.HostID)},
+			{"ROUTE ID", displayValue(items.RouteID)},
 			{"SSH", displayValue(items.SSH)},
 		})
 	case map[string]bool:
@@ -3041,6 +3701,14 @@ func displayValue(value string) string {
 	return value
 }
 
+func endpointType(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "daemon"
+	}
+	return value
+}
+
 func displayBool(value bool) string {
 	if value {
 		return "yes"
@@ -3071,13 +3739,33 @@ func env(key, fallback string) string {
 
 func usage() { fmt.Print(usageText()) }
 
+func relayUsageText() string {
+	return `Usage:
+  warren relay enroll --url RELAY_URL --host HOST_ID --ticket TICKET --secret HOST_SECRET
+  warren relay pairing --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
+  warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE
+  warren relay status --url RELAY_URL --host HOST_ID --token ACCESS_TOKEN
+  warren relay tunnel enable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET [--auth-mode owner|public] [--public-hostname HOSTNAME] [--path-prefix PREFIX]
+  warren relay tunnel disable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
+  warren relay revoke --url RELAY_URL --host HOST_ID --admin-token ADMIN_TOKEN
+
+relay pairing issues a one-time code; relay pair consumes that code and prints a
+short-lived access capability. Add a Relay endpoint explicitly with
+  warren endpoint add NAME --type relay --url RELAY_URL --token ACCESS_TOKEN --host-id HOST_ID
+Relay capabilities are short-lived and are never written by relay pair. The
+legacy --token spelling remains accepted when supplied explicitly on a Relay
+management command; it is never inferred from a configured Relay endpoint.
+`
+}
+
 func usageText() string {
 	return `Warren CLI
 
 Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
 
-Commands:
+	Commands:
+	  relay enroll|pairing|pair|status|tunnel enable|disable|revoke
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   task list|create|remove|rename|pin|move|attach|detach|workspace
@@ -3085,7 +3773,7 @@ Commands:
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
   session list|current|create|delete|rename|pin|move|send|read|attach|undo
-  ssh USER@HOST                     start daemon, save endpoint, keep SSH tunnel
+  ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
 
 Global flags:
@@ -3415,7 +4103,9 @@ func actionUsageText(commandName, action string) string {
 func endpointUsageText() string {
 	return `Usage:
   warren endpoint list
-  warren endpoint add NAME --url URL --token TOKEN [--ssh SSH] [--use]
+  warren endpoint add NAME --url URL --token TOKEN [--use]
+  warren endpoint add NAME --ssh SSH [--ssh-remote 127.0.0.1:8789] [--use]
+  warren endpoint add NAME --type relay --url RELAY_URL --token ACCESS_TOKEN --host-id HOST_ID [--route-id ROUTE_ID] [--use]
   warren endpoint use NAME
   warren endpoint remove NAME
   warren endpoint current
@@ -3424,6 +4114,29 @@ func endpointUsageText() string {
 
 func sshUsageText() string {
 	return `Usage:
-  warren ssh USER@HOST [--local-port PORT] [--remote-port PORT] [--name NAME]
+  warren ssh list [--ssh-config PATH] [--json]
+  warren ssh TARGET [--local-port PORT] [--remote-port PORT] [--name NAME] [--ssh-config PATH] [--known-hosts PATH]
+
+TARGET is an SSH alias from ~/.ssh/config or user@host. The embedded client
+resolves OpenSSH config (Host, Include, HostName, User, Port, IdentityFile,
+UserKnownHostsFile, GlobalKnownHostsFile, IdentityAgent, HostKeyAlias), verifies
+host keys against known_hosts, and authenticates via ssh-agent or IdentityFile.
+It bootstraps warren-headless on the remote host
+and forwards a loopback port to 127.0.0.1:8789.
+
+Unsupported ProxyJump/ProxyCommand aliases are reported by 'warren ssh list';
+use a direct host or keep an external 'ssh -L' tunnel with 'warren endpoint add'.
+
+Options:
+  --local-port PORT     local loopback port (default 0 = ephemeral random port)
+  --remote-port PORT    remote daemon port (default 8789)
+  --name NAME           endpoint name (default TARGET with @/: replaced by -)
+  --ssh-config PATH     SSH config path (default ~/.ssh/config)
+  --known-hosts PATH    known_hosts path (default OpenSSH user/system files)
+
+Examples:
+  warren ssh list
+  warren ssh tenc_sh
+  warren ssh user@vps --local-port 8789 --name vps
 `
 }

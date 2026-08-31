@@ -6,10 +6,6 @@ import WebKit
 
 enum WebCommand {
     static let copyLocalURL = Notification.Name("Web.copyLocalURL")
-    static let startCloudflare = Notification.Name("Web.startCloudflare")
-    static let stopCloudflare = Notification.Name("Web.stopCloudflare")
-    static let startTailscale = Notification.Name("Web.startTailscaleServe")
-    static let stopTailscale = Notification.Name("Web.stopTailscaleServe")
     static let copySecureURL = Notification.Name("Web.copySecureURL")
 }
 
@@ -108,11 +104,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         launchDaemonMenuBar()
         presentMainWindowIfNeeded()
         NSApp.mainMenu = buildMainMenu(target: self)
-        applyEndpointCapabilities(
-            (UserDefaults.standard.string(forKey: "executionEndpoint") ?? "local") == "local"
-                ? .local
-                : .remote
-        )
+        // The catalog is shared with the CLI and is now the authoritative
+        // endpoint selection. Keep the old UserDefaults value only for
+        // catalogs created before the shared file existed.
+        let catalog = WarrenEndpointCatalog.load()
+        let selectedEndpoint = catalog.current
+            ?? UserDefaults.standard.string(forKey: "executionEndpoint")
+            ?? "local"
+        applyEndpointCapabilities(selectedEndpoint == "local" ? .local : .remote)
         endpointCapabilitiesObserver = NotificationCenter.default.addObserver(
             forName: WarrenDesktopEndpointCapabilitiesNotification.didChange,
             object: nil,
@@ -464,22 +463,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         NotificationCenter.default.post(name: WebCommand.copyLocalURL, object: nil)
     }
 
-    @objc private func startCloudflareWebAccess(_ sender: NSMenuItem) {
-        NotificationCenter.default.post(name: WebCommand.startCloudflare, object: nil)
-    }
-
-    @objc private func stopCloudflareWebAccess(_ sender: NSMenuItem) {
-        NotificationCenter.default.post(name: WebCommand.stopCloudflare, object: nil)
-    }
-
-    @objc private func startTailscaleWebAccess(_ sender: NSMenuItem) {
-        NotificationCenter.default.post(name: WebCommand.startTailscale, object: nil)
-    }
-
-    @objc private func stopTailscaleWebAccess(_ sender: NSMenuItem) {
-        NotificationCenter.default.post(name: WebCommand.stopTailscale, object: nil)
-    }
-
     @objc private func copySecureWebURL(_ sender: NSMenuItem) {
         NotificationCenter.default.post(name: WebCommand.copySecureURL, object: nil)
     }
@@ -652,30 +635,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let copyWebURLSeparator = NSMenuItem.separator()
         webMenu.addItem(copyWebURLSeparator)
         copyLocalWebURLSeparator = copyWebURLSeparator
-        let startCloudflare = webMenu.addItem(
-            withTitle: "Start Cloudflare Tunnel",
-            action: #selector(WarrenAppDelegate.startCloudflareWebAccess(_:)),
-            keyEquivalent: ""
-        )
-        startCloudflare.target = target
-        let stopCloudflare = webMenu.addItem(
-            withTitle: "Stop Cloudflare Tunnel",
-            action: #selector(WarrenAppDelegate.stopCloudflareWebAccess(_:)),
-            keyEquivalent: ""
-        )
-        stopCloudflare.target = target
-        let startTailscale = webMenu.addItem(
-            withTitle: "Start Tailscale Serve",
-            action: #selector(WarrenAppDelegate.startTailscaleWebAccess(_:)),
-            keyEquivalent: ""
-        )
-        startTailscale.target = target
-        let stopTailscale = webMenu.addItem(
-            withTitle: "Stop Tailscale Serve",
-            action: #selector(WarrenAppDelegate.stopTailscaleWebAccess(_:)),
-            keyEquivalent: ""
-        )
-        stopTailscale.target = target
         webMenu.addItem(.separator())
         let copySecureURL = webMenu.addItem(
             withTitle: "Copy Secure Web URL",

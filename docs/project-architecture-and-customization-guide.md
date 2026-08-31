@@ -105,7 +105,7 @@ The current source contains implementations for:
 - SSH bootstrap and port forwarding for remote Hosts;
 - reconnect recovery using output anchors, rings, cursor streams, and native snapshots;
 - structured Codex, Claude, and OpenCode transcript projection on the Web;
-- optional gnar, Cloudflare, and Tailscale reachability adapters;
+- Relay route and SSH reachability;
 - one-time Superset Project/Workspace import;
 - semantic UI and terminal probes for non-intrusive acceptance testing;
 - a Relay control-plane server for registration, pairing, revocation, and
@@ -139,7 +139,7 @@ The Relay end-to-end path is not source-closed in this checkout. See
 | `Headless/internal/runtime/` | Runtime metadata and environment policy | Backend core |
 | `Headless/internal/output/` | Output Ring and DENB binary envelope | Backend core |
 | `Headless/internal/agent/` | Agent binding, transcript parsing, and activity | Backend core |
-| `Headless/internal/tunnel/` | gnar, cloudflared, and Tailscale lifecycle | Optional runtime path |
+| `Headless/internal/relay/` | Relay connector and route lifecycle | Main path |
 | `Web/` | React application, xterm renderer, Agent view, and PWA | Main path |
 | `RelayService/` | Relay registry, auth, pairing, and frame routing | Server side exists; Host connector not located |
 | `scripts/` and `mise.toml` | Build, package, install, Relay development, and verification workflows | Tooling |
@@ -423,16 +423,20 @@ can lose visual continuity, scrollback, or produce black frames.
 
 ### 10.1 SSH endpoint
 
-`warren ssh user@host`:
+`warren ssh user@host` (or an alias selected from the Desktop execution-server
+menu):
 
 1. checks that `warren-headless` exists remotely;
 2. starts it on remote loopback when necessary;
 3. reads its token;
-4. stores a local endpoint in `~/.warren/config.json`;
-5. keeps an SSH local port forward running.
+4. stores only the durable SSH endpoint metadata in `~/.warren/config.json`;
+5. keeps an embedded SSH local port forward running.
 
-After bootstrap, Desktop and CLI still speak the normal `/v1/ws` protocol.
-SSH provides reachability only and does not enter Warren's domain model.
+The Desktop picker reads concrete aliases from `~/.ssh/config`, including
+relative `Include` files, and saves the selected alias as an SSH-backed
+endpoint before connecting. After bootstrap, Desktop and CLI still speak the
+normal `/v1/ws` protocol. SSH provides reachability only and does not enter
+Warren's domain model.
 
 ### 10.2 direct Web/PWA
 
@@ -452,18 +456,13 @@ Host resources or Session availability.
 The current Web catalog remains primarily Workspace-based and does not fully
 project Terminal Groups.
 
-### 10.3 direct reachability adapters
+### 10.3 Relay route reachability
 
-The daemon can manage gnar, cloudflared, and Tailscale Serve processes. These
-adapters expose the local Web endpoint but do not own Projects, Sessions, or
-terminal data.
-
-The intended running state is persisted in `settings.json`, so tunnels left
-enabled can be restored after a daemon restart. On shutdown, the daemon stops
-the adapter processes so a Public Endpoint does not outlive its owner. The
-self-hosted gnar Public Access API keeps Invite and Approval Keys in memory
-only; Approval Key takes precedence, and the legacy tunnel response remains
-the only compatibility path that can carry a Web token fragment.
+The daemon maintains one outbound Relay connector. Relay routes expose the
+local Web endpoint without owning Projects, Sessions, or terminal data. Route
+intent is persisted in `settings.json`; after restart the connector reconnects
+and Relay restores an enabled route. SSH remains a separate loopback bootstrap
+path for Hosts that are directly reachable by the operator.
 
 ### 10.4 Relay control plane
 
@@ -645,7 +644,7 @@ Default Host files:
 | --- | --- |
 | `state.json` | Host resources, Runtime bindings, lifecycle, output positions |
 | `config.json` | Desktop/CLI endpoint catalog and selected endpoint |
-| `settings.json` | Default Runtime, Runtime environment, optional gnar Edge override/account label, tunnel intent, and empty-workspace Shell/AI defaults; the release default Edge is injected at build time and Invite/Approval Keys are never persisted; an omitted account derives from the Warren Host/system name; worktree import policy lives on each Project |
+| `settings.json` | Default Runtime, Runtime environment, Relay metadata, Public Access route intent, empty-workspace Shell/AI defaults, and project worktree import policy |
 | `token` | Direct Host bearer token |
 | `output/` | Ghostline-owned durable output history |
 | `agent-bind/` | Warren Session to external agent conversation binding |

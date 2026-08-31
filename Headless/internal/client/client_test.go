@@ -13,6 +13,82 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestDialRelayUsesScopedPathAndAccessAuthentication(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	observed := make(chan struct {
+		path string
+		auth map[string]any
+	}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		var auth map[string]any
+		if connection.ReadJSON(&auth) != nil {
+			return
+		}
+		observed <- struct {
+			path string
+			auth map[string]any
+		}{path: request.URL.Path, auth: auth}
+		_ = connection.WriteJSON(map[string]any{"t": "welcome"})
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	value, err := DialRelay(context.Background(), server.URL+"/relay/", "00000000-0000-4000-8000-000000000001", "access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Close()
+	result := <-observed
+	if result.path != "/relay/h/00000000-0000-4000-8000-000000000001/v1/client/connect" {
+		t.Fatalf("path = %q, want scoped Relay path", result.path)
+	}
+	if result.auth["t"] != "auth" || result.auth["version"] != "2.0" || result.auth["access_token"] != "access-token" {
+		t.Fatalf("unexpected Relay auth: %#v", result.auth)
+	}
+	if _, ok := result.auth["client_id"].(string); !ok {
+		t.Fatalf("Relay auth missing client_id: %#v", result.auth)
+	}
+	if formats, ok := result.auth["terminalStateFormats"].([]any); !ok || len(formats) != 1 || formats[0] != terminalStateFormatANSI {
+		t.Fatalf("Relay auth formats = %#v", result.auth["terminalStateFormats"])
+	}
+}
+
+func TestRelayEndpointDoesNotDuplicateScopedPath(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	endpoint, err := relayEndpoint(
+		"https://relay.example.test/relay/h/"+hostID+"/v1/client/connect/",
+		hostID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "wss://relay.example.test/relay/h/"+hostID+"/v1/client/connect" {
+		t.Fatalf("endpoint = %q", endpoint)
+	}
+}
+
+func TestRelayEndpointRejectsUnsafeURLs(t *testing.T) {
+	for _, raw := range []string{
+		"relay.example.test",
+		"ftp://relay.example.test",
+		"https://relay.example.test?token=secret",
+		"https://relay.example.test/../private",
+		"https://user:pass@relay.example.test",
+	} {
+		if endpoint, err := relayEndpoint(raw, "host"); err == nil {
+			t.Errorf("relayEndpoint(%q) accepted %q", raw, endpoint)
+		}
+	}
+	if endpoint, err := relayEndpoint("https://relay.example.test", "host/id"); err == nil {
+		t.Errorf("relayEndpoint accepted unsafe host ID as %q", endpoint)
+	}
+}
+
 func TestReadOutputHonorsContextDeadline(t *testing.T) {
 	release := make(chan struct{})
 	upgrader := websocket.Upgrader{}

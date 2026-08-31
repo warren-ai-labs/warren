@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import Darwin
 import GhosttyAdapter
 import WarrenClientCore
 import WarrenDesktop
@@ -29,16 +30,92 @@ struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable, Senda
     let url: String
     let token: String
     let ssh: String?
+    let sshRemote: String?
+    let type: String
+    let hostID: String?
+    let routeID: String?
 
     var id: String { name }
+
+    init(
+        name: String,
+        url: String,
+        token: String,
+        ssh: String?,
+        sshRemote: String? = nil,
+        type: String = "daemon",
+        hostID: String? = nil,
+        routeID: String? = nil
+    ) {
+        self.name = name
+        self.url = url
+        self.token = token
+        self.ssh = ssh
+        self.sshRemote = sshRemote
+        self.type = type
+        self.hostID = hostID
+        self.routeID = routeID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, url, token, ssh, sshRemote, type
+        case hostID = "host_id"
+        case routeID = "route_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            name: try values.decode(String.self, forKey: .name),
+            url: try values.decode(String.self, forKey: .url),
+            token: try values.decode(String.self, forKey: .token),
+            ssh: try values.decodeIfPresent(String.self, forKey: .ssh),
+            sshRemote: try values.decodeIfPresent(String.self, forKey: .sshRemote),
+            type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
+            hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
+            routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
+        )
+    }
 }
 
-private struct WarrenEndpointConfigurationFile: Decodable {
+private struct WarrenEndpointConfigurationFile: Codable {
     let current: String?
     let endpoints: [String: WarrenRemoteEndpointConfiguration]
+
+    init(
+        current: String?,
+        endpoints: [String: WarrenRemoteEndpointConfiguration]
+    ) {
+        self.current = current
+        self.endpoints = endpoints
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        current = try container.decodeIfPresent(String.self, forKey: .current)
+        // Older or hand-created catalogs may omit `endpoints` (or set it to
+        // null). Treat that as an empty catalog so the Desktop can still
+        // connect to its synthetic Local endpoint and the next write repairs
+        // the shape.
+        endpoints = try container.decodeIfPresent(
+            [String: WarrenRemoteEndpointConfiguration].self,
+            forKey: .endpoints
+        ) ?? [:]
+    }
+}
+
+private struct WarrenLoadedEndpointConfiguration {
+    let catalog: (current: String?, endpoints: [WarrenRemoteEndpointConfiguration])
+    let needsRewrite: Bool
 }
 
 enum WarrenEndpointCatalog {
+    // fcntl record locks coordinate separate processes, but are associated
+    // with the process on Darwin. The UI and detached catalog monitor can
+    // therefore still race when they open independent descriptors; serialize
+    // Swift callers before taking the shared sidecar lock.
+    private static let processLock = NSLock()
+
     static func configurationURL() -> URL {
         let environment = ProcessInfo.processInfo.environment
         if let value = environment["WARREN_CONFIG"], !value.isEmpty {
@@ -55,11 +132,231 @@ enum WarrenEndpointCatalog {
     static func load(
         from configURL: URL
     ) -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
-        guard let data = try? Data(contentsOf: configURL),
-              let file = try? JSONDecoder().decode(WarrenEndpointConfigurationFile.self, from: data) else {
-            return (nil, [])
+        (try? loadThrowing(from: configURL)) ?? (nil, [])
+    }
+
+    static func loadThrowing(
+        from configURL: URL
+    ) throws -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
+        try withLock(configURL) {
+            let loaded = try loadUnlocked(from: configURL)
+            if loaded.needsRewrite {
+                try writeUnlocked(
+                    WarrenEndpointConfigurationFile(
+                        current: loaded.catalog.current,
+                        endpoints: endpointDictionary(loaded.catalog.endpoints)
+                    ),
+                    to: configURL
+                )
+            }
+            return loaded.catalog
         }
-        return (file.current, file.endpoints.values.sorted { $0.name < $1.name })
+    }
+
+    static func save(
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        current: String?,
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let file = WarrenEndpointConfigurationFile(
+                current: current,
+                endpoints: endpointDictionary(endpoints)
+            )
+            try writeUnlocked(file, to: configURL)
+        }
+    }
+
+    static func setCurrent(
+        _ current: String?,
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            try writeUnlocked(
+                WarrenEndpointConfigurationFile(
+                    current: current,
+                    endpoints: endpointDictionary(existing.endpoints)
+                ),
+                to: configURL
+            )
+        }
+    }
+
+    static func upsert(
+        _ endpoint: WarrenRemoteEndpointConfiguration,
+        current: String? = nil,
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            var endpoints = endpointDictionary(existing.endpoints)
+            endpoints[endpoint.name] = endpoint
+            try writeUnlocked(
+                WarrenEndpointConfigurationFile(
+                    current: current ?? existing.current,
+                    endpoints: endpoints
+                ),
+                to: configURL
+            )
+        }
+    }
+
+    private static func loadUnlocked(
+        from configURL: URL
+    ) throws -> WarrenLoadedEndpointConfiguration {
+        let data: Data
+        do {
+            data = try Data(contentsOf: configURL)
+        } catch {
+            let nsError = error as NSError
+            if nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError {
+                return WarrenLoadedEndpointConfiguration(catalog: (nil, []), needsRewrite: false)
+            }
+            throw error
+        }
+        let file: WarrenEndpointConfigurationFile
+        do {
+            file = try JSONDecoder().decode(WarrenEndpointConfigurationFile.self, from: data)
+        } catch {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Unable to decode endpoint catalog: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ]
+            )
+        }
+        var needsRewrite = false
+        let endpoints = file.endpoints.values.map { endpoint in
+            guard endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                  !endpoint.url.isEmpty || !endpoint.token.isEmpty else {
+                return endpoint
+            }
+            needsRewrite = true
+            // Older catalogs stored the helper's ephemeral URL/token beside
+            // SSH metadata. SSH is now the durable identity; never expose a
+            // stale bearer token through the UI or a subsequent write.
+            return WarrenRemoteEndpointConfiguration(
+                name: endpoint.name,
+                url: "",
+                token: "",
+                ssh: endpoint.ssh,
+                sshRemote: endpoint.sshRemote,
+                type: endpoint.type,
+                hostID: endpoint.hostID,
+                routeID: endpoint.routeID
+            )
+        }
+        return WarrenLoadedEndpointConfiguration(
+            catalog: (file.current, endpoints.sorted { $0.name < $1.name }),
+            needsRewrite: needsRewrite
+        )
+    }
+
+    private static func writeUnlocked(
+        _ file: WarrenEndpointConfigurationFile,
+        to configURL: URL
+    ) throws {
+        let endpoints = file.endpoints.values.map { endpoint in
+            guard endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return endpoint
+            }
+            return WarrenRemoteEndpointConfiguration(
+                name: endpoint.name,
+                url: "",
+                token: "",
+                ssh: endpoint.ssh,
+                sshRemote: endpoint.sshRemote,
+                type: endpoint.type,
+                hostID: endpoint.hostID,
+                routeID: endpoint.routeID
+            )
+        }
+        let normalizedFile = WarrenEndpointConfigurationFile(
+            current: file.current,
+            endpoints: endpointDictionary(endpoints)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(normalizedFile)
+        let directory = configURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let temporaryURL = directory.appendingPathComponent(
+            ".\(configURL.lastPathComponent).tmp-\(UUID().uuidString)"
+        )
+        var output = data
+        output.append(0x0A)
+        try output.write(to: temporaryURL, options: [])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryURL.path)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            _ = try FileManager.default.replaceItemAt(configURL, withItemAt: temporaryURL)
+        } else {
+            try FileManager.default.moveItem(at: temporaryURL, to: configURL)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+    }
+
+    private static func endpointDictionary(
+        _ endpoints: [WarrenRemoteEndpointConfiguration]
+    ) -> [String: WarrenRemoteEndpointConfiguration] {
+        endpoints.reduce(into: [:]) { result, endpoint in
+            // Keep the last value for duplicate names instead of trapping on
+            // malformed or concurrently edited catalogs.
+            result[endpoint.name] = endpoint
+        }
+    }
+
+    private static func withLock<Value>(
+        _ configURL: URL,
+        _ body: () throws -> Value
+    ) throws -> Value {
+        processLock.lock()
+        defer { processLock.unlock() }
+        let directory = configURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let lockURL = configURL.appendingPathExtension("lock")
+        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: lockURL.path])
+        }
+        guard Darwin.fchmod(descriptor, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+            Darwin.close(descriptor)
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: lockURL.path])
+        }
+        var exclusive = flock(
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+            l_type: Int16(F_WRLCK),
+            l_whence: Int16(SEEK_SET)
+        )
+        guard Darwin.fcntl(descriptor, F_SETLKW, &exclusive) == 0 else {
+            Darwin.close(descriptor)
+            throw CocoaError(.fileLocking, userInfo: [NSFilePathErrorKey: lockURL.path])
+        }
+        defer {
+            var unlocked = flock(
+                l_start: 0,
+                l_len: 0,
+                l_pid: 0,
+                l_type: Int16(F_UNLCK),
+                l_whence: Int16(SEEK_SET)
+            )
+            _ = Darwin.fcntl(descriptor, F_SETLK, &unlocked)
+            Darwin.close(descriptor)
+        }
+        return try body()
     }
 }
 
@@ -622,6 +919,7 @@ private actor WarrenRemoteWire {
     private var receiveTask: Task<Void, Never>?
     private var continuations: [String: CheckedContinuation<Data, Error>] = [:]
     private var requestContexts: [String: WarrenRemoteRequestContext] = [:]
+    private var requestTimeoutTasks: [String: Task<Void, Never>] = [:]
     private var daemonProtocolVersion: String?
     private var pendingInput = Data()
     private var inputTask: Task<Void, Never>?
@@ -630,6 +928,23 @@ private actor WarrenRemoteWire {
     // stream and let the consumer take the newest snapshot.
     private var latestRosterSignal = WarrenLatestValueSignal<RemoteRoster>()
     private let eventBuffer = WarrenLosslessAsyncBuffer<RemoteWireEvent>(capacity: 64)
+
+    private static func relayHostIDPathSegment(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let bytes = Array(value.utf8)
+        guard bytes.count == 36,
+              [8, 13, 18, 23].allSatisfy({ bytes[$0] == 45 }),
+              bytes[14] >= 49, bytes[14] <= 53,
+              [56, 57, 97, 98].contains(bytes[19]) else {
+            return nil
+        }
+        for (index, byte) in bytes.enumerated() where ![8, 13, 18, 23].contains(index) {
+            guard (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102) else {
+                return nil
+            }
+        }
+        return value
+    }
 
     init(configuration: WarrenRemoteEndpointConfiguration) { self.configuration = configuration }
 
@@ -640,36 +955,136 @@ private actor WarrenRemoteWire {
         guard var components = URLComponents(string: configuration.url) else {
             throw URLError(.badURL)
         }
-        components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = "/v1/ws"
+        guard let scheme = components.scheme?.lowercased() else {
+            throw URLError(.badURL)
+        }
+        switch scheme {
+        case "https", "wss":
+            components.scheme = "wss"
+        case "http", "ws":
+            components.scheme = "ws"
+        default:
+            throw URLError(.unsupportedURL)
+        }
+        // Endpoint URLs are transport roots. Query strings/fragments are not
+        // part of the Warren protocol and can otherwise carry credentials into
+        // URLSession request metadata or browser history.
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        let isRelay = configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+        if isRelay {
+            guard let configuredHostID = configuration.hostID,
+                  let hostID = Self.relayHostIDPathSegment(configuredHostID)
+            else { throw URLError(.badURL) }
+            if components.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) {
+                throw URLError(.badURL)
+            }
+            let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let suffix = "/h/\(hostID)/v1/client/connect"
+            let normalizedPath = prefix.isEmpty ? "/" : "/\(prefix)"
+            if normalizedPath.hasSuffix(suffix) {
+                components.path = normalizedPath
+            } else {
+                components.path = prefix.isEmpty ? suffix : "\(normalizedPath)\(suffix)"
+            }
+        } else {
+            components.path = "/v1/ws"
+        }
         guard let url = components.url else { throw URLError(.badURL) }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = Self.maximumWebSocketMessageBytes
         let token = configuration.token
         task = socket
         socket.resume()
-        // A daemon that accepts TCP but never completes the WebSocket
-        // handshake or answers auth would otherwise hang the desktop on a
-        // "Connecting…" spinner forever. Bound the handshake so the
-        // connection loop can tear this wire down and retry or fail visibly.
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await socket.send(.string(Self.json([
-                    "t": "auth",
-                    "token": token,
-                    "version": "2.0",
-                    "capabilities": ["roster-delta"],
-                    "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
-                ])))
+        do {
+            // A daemon that accepts TCP but never completes the WebSocket
+            // handshake or answers auth would otherwise hang the desktop on
+            // a "Connecting…" spinner forever. Bound both send and receive;
+            // the timeout task cancels the socket so URLSession's receive can
+            // leave the task group instead of being stranded indefinitely.
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    var auth: [String: Any] = [
+                        "t": "auth",
+                        "version": "2.0",
+                        "capabilities": ["roster-delta"],
+                        "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
+                    ]
+                    auth[isRelay ? "access_token" : "token"] = token
+                    if isRelay {
+                        auth["client_id"] = UUID().uuidString.lowercased()
+                    }
+                    try await socket.send(.string(Self.json(auth)))
+                }
+                group.addTask {
+                    try await Task.sleep(for: Self.connectTimeout)
+                    socket.cancel(with: .goingAway, reason: nil)
+                    throw URLError(.timedOut)
+                }
+                guard try await group.next() != nil else {
+                    throw URLError(.cancelled)
+                }
+                group.cancelAll()
             }
-            group.addTask {
-                try await Task.sleep(for: Self.connectTimeout)
-                throw URLError(.timedOut)
+            let message = try await withThrowingTaskGroup(
+                of: URLSessionWebSocketTask.Message.self
+            ) { group in
+                group.addTask { try await socket.receive() }
+                group.addTask {
+                    try await Task.sleep(for: Self.connectTimeout)
+                    socket.cancel(with: .goingAway, reason: nil)
+                    throw URLError(.timedOut)
+                }
+                guard let message = try await group.next() else {
+                    throw URLError(.cancelled)
+                }
+                group.cancelAll()
+                return message
             }
-            try await group.next()
-            group.cancelAll()
+            try acceptWelcome(message)
+        } catch {
+            socket.cancel(with: .goingAway, reason: nil)
+            task = nil
+            throw error
         }
         receiveTask = Task { [weak self] in await self?.receiveLoop(socket) }
+    }
+
+    private func acceptWelcome(_ message: URLSessionWebSocketTask.Message) throws {
+        guard case .string(let text) = message,
+              let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+              let type = object["t"] as? String else {
+            throw NSError(
+                domain: "WarrenRemote",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "The daemon did not return a valid welcome message."]
+            )
+        }
+        if type == "error" {
+            throw NSError(
+                domain: "WarrenRemote",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: object["error"] as? String ?? "Remote authentication failed"]
+            )
+        }
+        guard type == "welcome" else {
+            throw NSError(
+                domain: "WarrenRemote",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "The daemon returned an unexpected handshake message."]
+            )
+        }
+        let version = object["version"] as? String ?? "unknown"
+        daemonProtocolVersion = version
+        guard Self.compatibleProtocolVersion(version, with: "2.0") else {
+            throw NSError(
+                domain: "WarrenRemote",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Warren Desktop is incompatible with the daemon protocol (desktop=2.0, daemon=\(version)); update both together."]
+            )
+        }
     }
 
     func close() {
@@ -687,6 +1102,10 @@ private actor WarrenRemoteWire {
         }
         continuations.removeAll()
         requestContexts.removeAll()
+        for timeoutTask in requestTimeoutTasks.values {
+            timeoutTask.cancel()
+        }
+        requestTimeoutTasks.removeAll()
         daemonProtocolVersion = nil
     }
 
@@ -709,9 +1128,13 @@ private actor WarrenRemoteWire {
                 // A daemon can accept the WebSocket and then stall on a request
                 // (for example a wedged attach). Fail the request instead of
                 // leaving the terminal pane on its "Connecting…" spinner forever.
-                Task {
-                    try? await Task.sleep(for: Self.requestTimeout)
-                    self.failRequest(id, error: URLError(.timedOut))
+                requestTimeoutTasks[id] = Task { [weak self] in
+                    do {
+                        try await Task.sleep(for: Self.requestTimeout)
+                    } catch {
+                        return
+                    }
+                    await self?.failRequest(id, error: URLError(.timedOut))
                 }
                 if Task.isCancelled {
                     self.failRequest(id, error: URLError(.cancelled))
@@ -749,6 +1172,7 @@ private actor WarrenRemoteWire {
     }
 
     private func failRequest(_ id: String, error: Error) {
+        requestTimeoutTasks.removeValue(forKey: id)?.cancel()
         let context = requestContexts.removeValue(forKey: id)
         continuations.removeValue(forKey: id)?.resume(
             throwing: makeRequestError(error: error, context: context)
@@ -866,6 +1290,7 @@ private actor WarrenRemoteWire {
         if type == "response" {
             if let id = object["id"] as? String,
                let continuation = continuations.removeValue(forKey: id) {
+                requestTimeoutTasks.removeValue(forKey: id)?.cancel()
                 let context = requestContexts.removeValue(forKey: id)
                 if object["ok"] as? Bool == true {
                     let result = object["result"] ?? NSNull()
@@ -886,7 +1311,7 @@ private actor WarrenRemoteWire {
         } else if type == "welcome" {
             let version = object["version"] as? String ?? "unknown"
             daemonProtocolVersion = version
-            guard Self.compatibleProtocolVersion(version, with: "2.0") else {
+            guard version == "2.0" else {
                 return await eventBuffer.send(.disconnected(
                     "Warren Desktop is incompatible with the daemon protocol "
                         + "(desktop=2.0, daemon=\(version)); update both together."
@@ -1021,7 +1446,12 @@ private enum WarrenRemoteDiagnostics {
     }
 
     private static func redactedEndpoint(_ raw: String) -> String {
-        guard var components = URLComponents(string: raw) else { return raw }
+        guard var components = URLComponents(string: raw) else {
+            // Keep malformed user input useful in diagnostics without
+            // carrying a query/fragment that may contain a bearer token.
+            let withoutFragment = raw.split(separator: "#", maxSplits: 1).first.map(String.init) ?? raw
+            return withoutFragment.split(separator: "?", maxSplits: 1).first.map(String.init) ?? withoutFragment
+        }
         components.user = nil
         components.password = nil
         components.query = nil
@@ -1045,6 +1475,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// ready again. Keep that expected gap out of the notice center;
     /// persistent failures still become visible after the grace period.
     private static let transientConnectionIssueDelay: Duration = .seconds(5)
+    /// A bounded number of consecutive failures keeps a bad SSH target from
+    /// spinning forever in the background. RetryConnection starts a fresh
+    /// budget after the user fixes credentials or host-key configuration.
+    private static let maxReconnectAttempts = 8
 
     @Published private(set) var projection = WarrenDesktopProjection
         .empty(host: WarrenDomain.Host(name: "Server"))
@@ -1082,6 +1516,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published private(set) var attachingSessionID: TerminalSessionID?
 
     private var wire: WarrenRemoteWire?
+    private var embeddedSSHTunnel: WarrenEmbeddedSSHTunnel?
+    /// The endpoint currently backed by the live transport. SSH endpoints
+    /// keep a durable alias in `endpointConfiguration`, while the helper
+    /// supplies a fresh loopback URL and token for each connection attempt.
+    private var activeEndpointConfiguration: WarrenRemoteEndpointConfiguration?
+    private var connectionGeneration: UInt64 = 0
     private var endpointConfiguration: WarrenRemoteEndpointConfiguration?
     private var isLocalEndpoint = false
     private var eventTask: Task<Void, Never>?
@@ -1229,11 +1669,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // terminal teardown deadlock, so keep the live connection instead.
             return
         }
-        TerminalDiagnostics.log("remote_connect_begin", ["endpoint": configuration.name, "url": configuration.url])
+        // Endpoint URLs may be user-supplied and can carry credentials in a
+        // query or fragment. Diagnostics only need the stable endpoint name;
+        // never put the URL (or a bearer token embedded in it) in logs.
+        TerminalDiagnostics.log("remote_connect_begin", ["endpoint": configuration.name])
         disconnect()
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         cancelTransientConnectionIssue()
         restorePersistedTabOrders()
         endpointConfiguration = configuration
+        activeEndpointConfiguration = nil
         isLocalEndpoint = isLocal
         settingsLoaded = false
         defaultRuntime = nil
@@ -1263,7 +1709,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 .withConnectionState(.connecting)
         )
         eventTask = Task { @MainActor [weak self] in
-            await self?.runConnectionLoop(configuration)
+            await self?.runConnectionLoop(configuration, generation: generation)
         }
     }
 
@@ -1279,12 +1725,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let disconnectStart = Date()
         let prevEndpoint = endpointConfiguration?.name ?? "none"
         TerminalDiagnostics.log("remote_disconnect_begin", ["endpoint": prevEndpoint, "surfaces": String(surfaceManager.retainedSurfaceCount)])
+        connectionGeneration &+= 1
         eventTask?.cancel()
         eventTask = nil
         endpointConfiguration = nil
+        activeEndpointConfiguration = nil
         isLocalEndpoint = false
         cancelTransientConnectionIssue()
         clearMaintenance()
+        embeddedSSHTunnel?.stop()
+        embeddedSSHTunnel = nil
         if let wire { Task { await wire.close() } }
         wire = nil
         currentRoster = nil
@@ -1304,6 +1754,40 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
     }
 
+    /// Retries the currently selected endpoint after a terminal connection
+    /// failure. Keeping this explicit avoids an unbounded retry loop and gives
+    /// keyboard/accessibility clients a deterministic action target.
+    func retryConnection() {
+        guard let configuration = endpointConfiguration else { return }
+        let local = isLocalEndpoint
+        disconnect()
+        connect(configuration, isLocal: local)
+    }
+
+    /// Publishes a terminal connection failure for callers that could not
+    /// create a transport yet (for example, the local daemon token is absent).
+    /// Keeping this on the model gives the endpoint popover a deterministic
+    /// failed state and makes its Retry action usable for that path too.
+    func markConnectionFailed(_ error: Error) {
+        failConnection(error)
+    }
+
+    /// Updates the projection while a local daemon token is still being
+    /// published. There is no wire/event task yet in that window, so the
+    /// regular connect loop cannot provide the loading state itself.
+    func markConnectionConnecting() {
+        publishProjectionIfChanged(projection.withConnectionState(.connecting))
+    }
+
+    /// Stops either an active transport or a pending pre-transport wait. The
+    /// latter has no endpointConfiguration/eventTask for `disconnect()` to
+    /// tear down, but it still needs a stable state so the Stop action does
+    /// not leave the popover stuck on Connecting….
+    func stopConnection() {
+        disconnect()
+        publishProjectionIfChanged(projection.withConnectionState(.disconnected))
+    }
+
     func isConnected(to configuration: WarrenRemoteEndpointConfiguration) -> Bool {
         endpointConfiguration == configuration && eventTask != nil
     }
@@ -1311,10 +1795,53 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Keeps the endpoint alive across daemon restarts and transient network
     /// failures. A fresh wire is created per attempt; the old wire's event
     /// stream is finished by `close()` so it can never be reused.
-    private func runConnectionLoop(_ configuration: WarrenRemoteEndpointConfiguration) async {
+    private func runConnectionLoop(
+        _ configuration: WarrenRemoteEndpointConfiguration,
+        generation: UInt64
+    ) async {
         var attempt = 0
-        while !Task.isCancelled {
-            let wire = WarrenRemoteWire(configuration: configuration)
+        while !Task.isCancelled, isCurrentConnection(configuration, generation: generation) {
+            var wireConfiguration = configuration
+            var tunnel: WarrenEmbeddedSSHTunnel?
+            var helper: WarrenEmbeddedSSHTunnel?
+            defer {
+                tunnel?.stop()
+                if let helper, embeddedSSHTunnel === helper {
+                    embeddedSSHTunnel = nil
+                }
+            }
+            if let target = configuration.ssh, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let embedded = WarrenEmbeddedSSHTunnel()
+                helper = embedded
+                embeddedSSHTunnel = embedded
+                do {
+                    wireConfiguration = try await embedded.start(
+                        name: configuration.name,
+                        target: target,
+                        remoteAddress: configuration.sshRemote
+                    )
+                    tunnel = embedded
+                } catch {
+                    guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
+                    if Self.isPermanentConnectionError(error)
+                        || attempt >= Self.maxReconnectAttempts - 1 {
+                        failConnection(error)
+                        return
+                    }
+                    if attempt == 0, maintenanceMessage == nil { present(error) }
+                    resetAttachmentState()
+                    publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
+                    let delay = Self.reconnectDelay(attempt: attempt)
+                    attempt += 1
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    continue
+                }
+            }
+            guard isCurrentConnection(configuration, generation: generation) else {
+                return
+            }
+            activeEndpointConfiguration = wireConfiguration
+            let wire = WarrenRemoteWire(configuration: wireConfiguration)
             self.wire = wire
             let events = wire.events()
             do {
@@ -1341,10 +1868,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     await consume(event)
                 }
             } catch {
-                guard !Task.isCancelled else { return }
-                if attempt == 0, maintenanceMessage == nil {
-                    present(error)
+                guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
+                if Self.isPermanentConnectionError(error)
+                    || attempt >= Self.maxReconnectAttempts - 1 {
+                    failConnection(error)
+                    return
                 }
+                if attempt == 0, maintenanceMessage == nil { present(error) }
             }
             // Invalidate request tasks before closing the old wire. Otherwise
             // a late cancellation can report an error against a new
@@ -1356,13 +1886,49 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 stopDeletionReconciliation()
             }
             await wire.close()
-            guard !Task.isCancelled else { return }
+            if activeEndpointConfiguration == wireConfiguration {
+                activeEndpointConfiguration = nil
+            }
+            guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
             resetAttachmentState()
             publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
+            if attempt >= Self.maxReconnectAttempts - 1 {
+                failConnection(NSError(
+                    domain: "WarrenRemote",
+                    code: 30,
+                    userInfo: [NSLocalizedDescriptionKey: "The connection could not be restored after several attempts."]
+                ))
+                return
+            }
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
             try? await Task.sleep(for: .milliseconds(delay))
         }
+        if isCurrentConnection(configuration, generation: generation) {
+            eventTask = nil
+            activeEndpointConfiguration = nil
+            embeddedSSHTunnel = nil
+        }
+    }
+
+    private func isCurrentConnection(
+        _ configuration: WarrenRemoteEndpointConfiguration,
+        generation: UInt64
+    ) -> Bool {
+        connectionGeneration == generation && endpointConfiguration == configuration
+    }
+
+    /// Returns the configuration that can reach the daemon right now. Direct
+    /// endpoints are usable as soon as they are selected; SSH endpoints only
+    /// become usable after the helper has supplied a live loopback URL/token.
+    private var liveEndpointConfiguration: WarrenRemoteEndpointConfiguration? {
+        if let activeEndpointConfiguration {
+            return activeEndpointConfiguration
+        }
+        guard let endpointConfiguration, endpointConfiguration.ssh == nil else {
+            return nil
+        }
+        return endpointConfiguration
     }
 
     /// Drops client-side attachment state so the next roster re-attaches the
@@ -1471,6 +2037,43 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return try WarrenRemoteTaskProtocol.taskID(from: data)
     }
 
+    nonisolated static func isPermanentConnectionError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        let permanentMarkers = [
+            "host key verification failed",
+            "known_hosts",
+            "known hosts",
+            "no ssh authentication method",
+            "unable to authenticate",
+            "remote authentication failed",
+            "rejected the bootstrap token",
+            "ssh identity",
+            "warren-ssh-tunnel",
+            "embedded ssh helper is not installed",
+            "warren-headless is not installed",
+            "proxyjump",
+            "proxycommand",
+            "invalid ssh",
+            "invalid local ssh",
+            "remote warren address",
+            "strict host-key verification",
+            "remote warren returned an invalid token",
+        ]
+        return permanentMarkers.contains(where: message.contains)
+    }
+
+    private func failConnection(_ error: Error) {
+        presentDiagnostic(error)
+        cancelTransientConnectionIssue()
+        if let wire {
+            self.wire = nil
+            Task { await wire.close() }
+        }
+        activeEndpointConfiguration = nil
+        eventTask = nil
+        publishProjectionIfChanged(projection.withConnectionState(.failed))
+    }
+
     func createWorkspace(
         projectID: ProjectID,
         taskID: TaskID? = nil,
@@ -1576,6 +2179,48 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Enrolls the selected local Headless daemon into an owned Relay using a
+    /// one-time setup ticket. The daemon supplies its canonical token to the
+    /// Relay; Desktop never receives or forwards that Host Secret.
+    func enrollRelay(
+        relayURL: String,
+        hostID: String,
+        enrollmentTicket: String,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        guard let configuration = endpointConfiguration else {
+            let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        guard configuration.type.lowercased() != "relay" else {
+            let error = NSError(domain: "WarrenRemote", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Relay enrollment must be started from the Host daemon, not a Relay endpoint.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.relayEnrollmentRequest(
+                    configuration: configuration,
+                    relayURL: relayURL,
+                    hostID: hostID,
+                    enrollmentTicket: enrollmentTicket
+                )
+                self.settingsLoaded = false
+                self.loadSettings()
+                completion(.success(()))
+            } catch {
+                self.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
     func testOpenAITitle(
         baseURL: String,
         model: String,
@@ -1591,6 +2236,52 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             params["openaiKey"] = key
         }
         _ = try await wire.request("settings.testOpenAI", params: params)
+    }
+
+    private func relayEnrollmentRequest(
+        configuration: WarrenRemoteEndpointConfiguration,
+        relayURL: String,
+        hostID: String,
+        enrollmentTicket: String
+    ) async throws {
+        let base = configuration.url.hasSuffix("/")
+            ? String(configuration.url.dropLast())
+            : configuration.url
+        guard let url = URL(string: base + "/v1/relay/enroll") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(RelayEnrollmentRequest(
+            relayURL: relayURL,
+            hostID: hostID,
+            enrollmentTicket: enrollmentTicket
+        ))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "Relay enrollment failed."
+            throw NSError(domain: "WarrenRemote", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+    }
+
+    private struct RelayEnrollmentRequest: Encodable {
+        let relayURL: String
+        let hostID: String
+        let enrollmentTicket: String
+
+        enum CodingKeys: String, CodingKey {
+            case relayURL = "relayUrl"
+            case hostID = "hostId"
+            case enrollmentTicket
+        }
     }
 
     func setProjectAutoImportGitWorktrees(_ projectID: ProjectID, enabled: Bool) {
@@ -1938,12 +2629,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         controlPublicAccess(.disable)
     }
 
-    func enablePublicAccess(
-        edgeURL: String,
-        accountName: String,
-        inviteKey: String,
-        approvalKey: String
-    ) {
+    func enablePublicAccess(publicHostname: String = "", pathPrefix: String = "") {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
         Task {
@@ -1951,38 +2637,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             do {
                 try await publicAccessRequest(
                     .enable,
-                    edgeURL: edgeURL,
-                    accountName: accountName,
-                    inviteKey: inviteKey,
-                    approvalKey: approvalKey
+                    publicHostname: publicHostname,
+                    pathPrefix: pathPrefix
                 )
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
-                if inviteKey.isEmpty, approvalKey.isEmpty, isMissingPublicAccessEndpoint(error) {
-                    do {
-                        try await tunnelRequest(.start, kind: "gnar")
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 present(error)
             }
         }
     }
 
-    /// Persists the non-secret Public Access configuration and verifies the
-    /// gnar Edge. Bootstrap keys are forwarded only through the headless API;
-    /// Settings clears them after a successful response and keeps only a mask.
-    func testPublicAccess(
-        edgeURL: String,
-        accountName: String,
-        inviteKey: String,
-        approvalKey: String
-    ) {
+    /// Persists the non-secret Relay route configuration and verifies the
+    /// route without changing its enabled intent.
+    func testPublicAccess(publicHostname: String, pathPrefix: String) {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
         webStatus.publicAccessAuthenticated = false
@@ -1991,45 +2658,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             do {
                 try await publicAccessRequest(
                     .test,
-                    edgeURL: edgeURL,
-                    accountName: accountName,
-                    inviteKey: inviteKey,
-                    approvalKey: approvalKey
+                    publicHostname: publicHostname,
+                    pathPrefix: pathPrefix
                 )
             } catch {
-                // Older headless builds do not know the first-class test
-                // route. A token-only check can still use the compatibility
-                // tunnel lifecycle; bootstrap keys cannot be forwarded to an
-                // old daemon because it has no enrollment contract.
-                if isMissingPublicAccessEndpoint(error) {
-                    if !inviteKey.isEmpty || !approvalKey.isEmpty {
-                        let unsupported = NSError(domain: "WarrenRemote", code: 404, userInfo: [
-                            NSLocalizedDescriptionKey: "This Warren daemon does not support Public Access enrollment. Upgrade the daemon or sign in to gnar first, then retry without a key.",
-                        ])
-                        webStatus.publicAccessError = unsupported.localizedDescription
-                        present(unsupported)
-                        return
-                    }
-                    do {
-                        try await tunnelRequest(.start, kind: "gnar")
-                        try await tunnelRequest(.stop, kind: "gnar")
-                        webStatus.publicAccessAuthenticated = true
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 webStatus.publicAccessError = error.localizedDescription
                 present(error)
             }
         }
     }
 
-    /// Clears only Warren's local Public Access setup. The remote Edge is not
-    /// released; its operator can clean up any reservation independently.
+    /// Disables the Relay route and clears Warren's local route metadata.
     func resetPublicAccess() {
         webStatus.publicAccessBusy = true
         webStatus.publicAccessError = nil
@@ -2062,17 +2701,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 try await publicAccessRequest(action)
             } catch {
                 webStatus.publicAccessError = error.localizedDescription
-                if isMissingPublicAccessEndpoint(error) {
-                    do {
-                        try await tunnelRequest(action == .disable ? .stop : .start, kind: "gnar")
-                        webStatus.publicAccessError = nil
-                        return
-                    } catch {
-                        webStatus.publicAccessError = error.localizedDescription
-                        present(error)
-                        return
-                    }
-                }
                 present(error)
             }
         }
@@ -2081,7 +2709,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let browserURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: webAuthToken
         )
         NSWorkspace.shared.open(browserURL)
     }
@@ -2089,7 +2717,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let clipboardURL = Self.publicAccessBrowserURL(
             url,
             currentEndpoint: webStatus.secureURL,
-            daemonToken: endpointConfiguration?.token ?? ""
+            daemonToken: webAuthToken
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
@@ -2097,31 +2725,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
     }
-    func startCloudflareWebAccess() {
-        controlTunnel(.start, kind: "cloudflared")
-    }
-    func stopCloudflareWebAccess() {
-        controlTunnel(.stop, kind: "cloudflared")
-    }
-    func startTailscaleWebAccess() {
-        controlTunnel(.start, kind: "tailscale")
-    }
-    func stopTailscaleWebAccess() {
-        controlTunnel(.stop, kind: "tailscale")
-    }
     func copySecureWebURL() {
         Task {
             await refreshTunnelStatus()
             guard let url = webStatus.secureURL else {
                 present(NSError(domain: "WarrenRemote", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Edge URL and one Invite Key or Approval Key in Settings → Public Access, then use Save & Test.",
+                    NSLocalizedDescriptionKey: "Public Access is not ready. Configure the Relay route in Settings → Public Access, then use Save & Test.",
                 ]))
                 return
             }
             let clipboardURL = Self.publicAccessBrowserURL(
                 url,
                 currentEndpoint: webStatus.secureURL,
-                daemonToken: endpointConfiguration?.token ?? ""
+                daemonToken: webAuthToken
             )
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(
@@ -2131,12 +2747,21 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Relay endpoints authenticate the control WebSocket with a short-lived
+    /// capability; that value must never be copied into a public URL fragment.
+    /// Only the local daemon path needs a token fragment when explicitly
+    /// opening a protected Web URL. Relay capabilities stay in memory.
+    private var webAuthToken: String {
+        guard endpointConfiguration?.type.lowercased() != "relay" else { return "" }
+        return endpointConfiguration?.token ?? ""
+    }
+
     /// Returns the URL used only for an explicit browser-open action. Public
     /// Public Access responses stay canonical and credential-free; explicit
     /// browser and clipboard actions add the existing Warren fragment at the
     /// last possible moment so the protected WebSocket can authenticate. This
-    /// compatibility mechanism remains a residual risk for browser history
-    /// and is never persisted or sent through analytics.
+    /// Local daemon authentication remains a residual browser-history risk and
+    /// is never persisted or sent through analytics.
     static func publicAccessBrowserURL(
         _ url: URL,
         currentEndpoint: URL?,
@@ -2154,7 +2779,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return authenticatedWebURL(components.url ?? url, daemonToken: daemonToken)
     }
 
-    /// Adds the legacy Warren Web authentication fragment only to a URL being
+    /// Adds the local daemon authentication fragment only to a URL being
     /// opened in a browser. The value is encoded as an RFC3986 fragment field
     /// so base64 tokens containing `+`, `/`, or `=` survive URLSearchParams.
     static func authenticatedWebURL(_ url: URL, daemonToken: String) -> URL {
@@ -2193,86 +2818,35 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return components.url ?? url
     }
 
-    private enum TunnelAction: String {
-        case start
-        case stop
-    }
-
-    private func controlTunnel(_ action: TunnelAction, kind: String) {
-        Task {
-            do {
-                try await tunnelRequest(action, kind: kind)
-            } catch {
-                present(error)
-            }
-        }
-    }
-
-    private func tunnelRequest(_ action: TunnelAction, kind: String) async throws {
-        guard let configuration = endpointConfiguration else {
-            throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
-            ])
-        }
-        let base = configuration.url.hasSuffix("/")
-            ? String(configuration.url.dropLast())
-            : configuration.url
-        guard let url = URL(string: base + "/v1/tunnels/" + action.rawValue) else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10
-        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["kind": kind])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let message = String(data: data, encoding: .utf8) ?? "Tunnel request failed."
-            throw NSError(domain: "WarrenRemote", code: 13, userInfo: [
-                NSLocalizedDescriptionKey: message,
-            ])
-        }
-        applyTunnelStatus(from: data)
-    }
-
     private func refreshTunnelStatus() async {
-        guard let configuration = endpointConfiguration else { return }
-        let publicAccessAvailable = await refreshPublicAccessStatus(configuration: configuration)
-        if publicAccessAvailable && webStatus.tunnelRunning {
-            return
-        }
-        await refreshLegacyTunnelStatus(configuration: configuration)
-    }
-
-    private func refreshLegacyTunnelStatus(configuration: WarrenRemoteEndpointConfiguration) async {
-        let base = configuration.url.hasSuffix("/")
-            ? String(configuration.url.dropLast())
-            : configuration.url
-        guard let url = URL(string: base + "/v1/tunnels") else { return }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 5
-        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-            applyTunnelStatus(from: data)
-        } catch {
-            return
-        }
+        guard let configuration = liveEndpointConfiguration else { return }
+        _ = await refreshPublicAccessStatus(configuration: configuration)
     }
 
     private func publicAccessRequest(
         _ action: PublicAccessAction,
-        edgeURL: String = "",
-        accountName: String = "",
-        inviteKey: String = "",
-        approvalKey: String = ""
+        publicHostname: String = "",
+        pathPrefix: String = ""
     ) async throws {
-        guard let configuration = endpointConfiguration else {
+        guard let configuration = liveEndpointConfiguration else {
             throw NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+                NSLocalizedDescriptionKey: "The selected SSH endpoint is still connecting.",
             ])
+        }
+        if configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay" {
+            guard let wire else { throw URLError(.notConnectedToInternet) }
+            var params: [String: String] = [:]
+            if action == .enable || action == .test {
+                if !publicHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    params["publicHostname"] = publicHostname
+                }
+                if !pathPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    params["pathPrefix"] = pathPrefix
+                }
+            }
+            let data = try await wire.request("public-access.\(action.rawValue)", params: params)
+            applyPublicAccessStatus(from: data)
+            return
         }
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
@@ -2285,21 +2859,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         request.timeoutInterval = 30
         request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if action == .enable {
-            request.httpBody = try JSONEncoder().encode(PublicAccessEnableRequest(
-                edgeURL: edgeURL.isEmpty ? nil : edgeURL,
-                accountName: accountName.isEmpty ? nil : accountName,
-                inviteKey: inviteKey,
-                approvalKey: approvalKey,
-                enrollmentKey: approvalKey
-            ))
-        } else if action == .test {
-            request.httpBody = try JSONEncoder().encode(PublicAccessTestRequest(
-                edgeURL: edgeURL,
-                accountName: accountName,
-                inviteKey: inviteKey,
-                approvalKey: approvalKey
-            ))
+        if action == .enable || action == .test {
+            let body = PublicAccessRouteRequest(
+                publicHostname: publicHostname.isEmpty ? nil : publicHostname,
+                pathPrefix: pathPrefix.isEmpty ? nil : pathPrefix
+            )
+            request.httpBody = try JSONEncoder().encode(body)
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -2317,11 +2882,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         applyPublicAccessStatus(from: data)
     }
 
-    private func isMissingPublicAccessEndpoint(_ error: Error) -> Bool {
-        (error as NSError).code == 404
-    }
-
     private func refreshPublicAccessStatus(configuration: WarrenRemoteEndpointConfiguration) async -> Bool {
+        if configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay" {
+            guard let wire else { return false }
+            do {
+                let data = try await wire.request("public-access.status")
+                applyPublicAccessStatus(from: data)
+                return true
+            } catch {
+                return false
+            }
+        }
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
@@ -2339,50 +2910,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private struct PublicAccessEnableRequest: Encodable {
-        /// The top chrome sends nil so an enable action keeps the configured
-        /// Edge/account. Settings uses the test route when it needs to save
-        /// an explicit empty value and return to the release default.
-        let edgeURL: String?
-        let accountName: String?
-        let inviteKey: String
-        let approvalKey: String
-        /// Legacy Warren daemons called the approval key an enrollment key.
-        /// Sending the alias only on the compatibility enable request keeps
-        /// older headless clients usable without changing the v1.7 gnar call.
-        let enrollmentKey: String
+    private struct PublicAccessRouteRequest: Encodable {
+        let publicHostname: String?
+        let pathPrefix: String?
 
         enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case accountName
-            case inviteKey
-            case approvalKey
-            case enrollmentKey
-        }
-    }
-
-    private struct PublicAccessTestRequest: Encodable {
-        let edgeURL: String?
-        let accountName: String
-        let inviteKey: String
-        let approvalKey: String
-
-        enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case accountName
-            case inviteKey
-            case approvalKey
+            case publicHostname
+            case pathPrefix
         }
     }
 
     private struct PublicAccessStatus: Decodable {
-        let edgeURL: String?
-        let configuredEdgeURL: String?
-        let defaultEdgeURL: String?
-        let usingDefaultEdge: Bool?
-        let accountName: String?
-        let configuredAccountName: String?
-        let usingDefaultAccount: Bool?
+        let relayURL: String?
+        let hostID: String?
+        let routeID: String?
+        let publicHostname: String?
+        let pathPrefix: String?
+        let authMode: String?
         let enabled: Bool
         let authenticated: Bool?
         let running: Bool
@@ -2390,13 +2934,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let error: String?
 
         enum CodingKeys: String, CodingKey {
-            case edgeURL = "edgeUrl"
-            case configuredEdgeURL = "configuredEdgeUrl"
-            case defaultEdgeURL = "defaultEdgeUrl"
-            case usingDefaultEdge = "usingDefaultEdge"
-            case accountName
-            case configuredAccountName = "configuredAccountName"
-            case usingDefaultAccount = "usingDefaultAccount"
+            case relayURL = "relayUrl"
+            case hostID = "hostId"
+            case routeID = "routeId"
+            case publicHostname
+            case pathPrefix
+            case authMode
             case enabled
             case authenticated
             case running
@@ -2409,22 +2952,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard let response = try? JSONDecoder().decode(PublicAccessStatus.self, from: data) else {
             webStatus.secureURL = nil
             webStatus.tunnelRunning = false
-            webStatus.configuredEdgeURL = nil
-            webStatus.defaultEdgeURL = nil
-            webStatus.usingDefaultEdge = false
-            webStatus.configuredAccountName = nil
-            webStatus.effectiveAccountName = nil
-            webStatus.usingDefaultAccount = false
+            webStatus.relayURL = nil
+            webStatus.relayHostID = nil
+            webStatus.routeID = nil
+            webStatus.publicHostname = nil
+            webStatus.pathPrefix = nil
+            webStatus.authMode = nil
             webStatus.publicAccessEnabled = false
             webStatus.publicAccessAuthenticated = false
             return
         }
-        webStatus.configuredEdgeURL = response.configuredEdgeURL.flatMap(URL.init(string:))
-        webStatus.defaultEdgeURL = response.defaultEdgeURL.flatMap(URL.init(string:))
-        webStatus.usingDefaultEdge = response.usingDefaultEdge ?? (response.configuredEdgeURL == nil)
-        webStatus.configuredAccountName = response.configuredAccountName
-        webStatus.effectiveAccountName = response.accountName
-        webStatus.usingDefaultAccount = response.usingDefaultAccount ?? (response.configuredAccountName == nil)
+        webStatus.relayURL = response.relayURL.flatMap(URL.init(string:))
+        webStatus.relayHostID = response.hostID
+        webStatus.routeID = response.routeID
+        webStatus.publicHostname = response.publicHostname
+        webStatus.pathPrefix = response.pathPrefix
+        webStatus.authMode = response.authMode
         webStatus.publicAccessEnabled = response.enabled
         webStatus.publicAccessAuthenticated = response.authenticated ?? false
         webStatus.publicAccessError = response.error.flatMap { error in
@@ -2440,42 +2983,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         webStatus.secureURL = url
         webStatus.tunnelRunning = true
         webStatus.publicAccessAuthenticated = true
-    }
-
-    private func applyTunnelStatus(from data: Data) {
-        struct Response: Decodable {
-            let tunnels: [String: Tunnel]
-        }
-        struct Tunnel: Decodable {
-            let running: Bool
-            let webURL: String?
-
-            enum CodingKeys: String, CodingKey {
-                case running
-                case webURL = "web_url"
-            }
-        }
-        guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
-            webStatus.secureURL = nil
-            webStatus.tunnelRunning = false
-            return
-        }
-        let active = response.tunnels.first(where: { kind, tunnel in
-            kind == "gnar" && tunnel.running && tunnel.webURL != nil
-        }) ?? response.tunnels.first(where: { $0.value.running && $0.value.webURL != nil })
-        guard let active,
-              let rawURL = active.value.webURL,
-              let url = URL(string: rawURL) else {
-            webStatus.secureURL = nil
-            webStatus.tunnelRunning = false
-            return
-        }
-        webStatus.secureURL = Self.normalizeAuthenticatedWebURL(url)
-        webStatus.tunnelRunning = true
-        if active.key == "gnar" {
-            webStatus.publicAccessAuthenticated = true
-            webStatus.publicAccessError = nil
-        }
     }
 
     func previewSupersetImport() async throws -> SupersetImportPreview {
@@ -4270,7 +4777,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func presentDiagnostic(_ error: Error) {
         let detail = Self.diagnosticText(
             error: error,
-            endpoint: endpointConfiguration?.url,
+            endpoint: endpointConfiguration?.ssh ?? endpointConfiguration?.url,
             selectedSessionID: selectedSessionID,
             attachedSessionID: attachedSessionID,
             focusedSessionID: focusedSessionID

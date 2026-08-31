@@ -88,7 +88,6 @@ go test -race ./Headless/...
 3. Build the release archive from the tagged release commit:
 
    ```sh
-   WARREN_GNAR_DEFAULT_EDGE="https://edge.example.com" \
    bash scripts/package.sh
    ```
 
@@ -103,24 +102,9 @@ go test -race ./Headless/...
    `libghostty-vt.dylib` only for one-time v0 migration. No separate Ghostty
    checkout or architecture-specific environment variable is required.
 
-   `WARREN_GNAR_DEFAULT_EDGE` is injected into the headless binaries at
-   release build time. It is a public, credential-free URL; do not put an
-   enrollment key or account token in it. Users who saved a custom Edge in
-   Settings keep that override across releases, while users without an
-   override follow the newly embedded default.
-
-   Warren can ship the matching gnar worker in
-   `Warren.app/Contents/Resources/gnar`. Set `WARREN_GNAR_BINARY` to the
-   release gnar binary before running `scripts/build-app.sh`, or place a
-   release binary at `../gnar/target/release/gnar` for local packaging. The
-   The bundled worker must be an arm64 macOS executable. If the auto-discovered
-   sibling binary is unavailable, packaging skips it and falls back to
-   `WARREN_GNAR_PATH`/system discovery; an explicit `WARREN_GNAR_BINARY` must
-   point to an executable file.
-   The bundled worker uses `~/.warren/gnar` for its credential store; an explicit
-   `WARREN_GNAR_PATH` continues to use the system gnar store unless
-   `WARREN_GNAR_CONFIG_DIR` is supplied. Existing system credentials are not
-   migrated.
+   Public Access is provided by the independently deployed Relay. Confirm that
+   the release contains the headless Relay connector and that no external
+   worker or credential directory is packaged into `Warren.app`.
 
    Confirm that `Warren.app/Contents/Info.plist` contains the release version,
    `Warren.app/Contents/Resources/build-variant.txt` contains `release`,

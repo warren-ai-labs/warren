@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,17 +20,18 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
+	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/server"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/abcdlsj/warren/Headless/internal/tlscert"
-	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 )
 
 var (
@@ -83,34 +87,15 @@ func main() {
 	logFile := flag.String("log-file", env("WARREN_LOG_FILE", filepath.Join(configDir, "headless.log")), "daemon log file (empty disables file logging)")
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
 	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
-	cloudflaredPath := flag.String("cloudflared-path", os.Getenv("WARREN_CLOUDFLARED_PATH"), "cloudflared binary path")
-	tailscalePath := flag.String("tailscale-path", os.Getenv("WARREN_TAILSCALE_PATH"), "tailscale binary path")
-	gnarPath := flag.String("gnar-path", os.Getenv("WARREN_GNAR_PATH"), "gnar binary path")
-	gnarConfigDir := flag.String("gnar-config-dir", os.Getenv("WARREN_GNAR_CONFIG_DIR"), "gnar credential directory (bundled gnar defaults to ~/.warren/gnar)")
-	gnarEdge := flag.String("gnar-edge", env("WARREN_GNAR_EDGE", ""), "gnar edge URL (overrides settings.json and the release default)")
+	relayURL := flag.String("relay-url", env("WARREN_RELAY_URL", ""), "owned Relay URL (optional)")
+	relayHostID := flag.String("relay-host-id", env("WARREN_RELAY_HOST_ID", ""), "Relay Host UUID (optional)")
+	relayKeyID := flag.String("relay-key-id", env("WARREN_RELAY_KEY_ID", ""), "pinned Relay signing key ID (optional)")
+	relayKey := flag.String("relay-key", env("WARREN_RELAY_KEY", ""), "pinned Relay signing public key (base64, optional)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
-	}
-	gnarPathExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_PATH")) != ""
-	gnarConfigDirExplicit := strings.TrimSpace(os.Getenv("WARREN_GNAR_CONFIG_DIR")) != ""
-	flag.Visit(func(entry *flag.Flag) {
-		switch entry.Name {
-		case "gnar-path":
-			gnarPathExplicit = true
-		case "gnar-config-dir":
-			gnarConfigDirExplicit = true
-		}
-	})
-	if !gnarPathExplicit {
-		if bundled := bundledGnarPath(); bundled != "" {
-			*gnarPath = bundled
-			if !gnarConfigDirExplicit && strings.TrimSpace(*gnarConfigDir) == "" {
-				*gnarConfigDir = filepath.Join(configDir, "gnar")
-			}
-		}
 	}
 	ghostlineSocketExplicit := os.Getenv("WARREN_GHOSTLINE_SOCKET") != ""
 	flag.Visit(func(entry *flag.Flag) {
@@ -134,33 +119,6 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	builtInGnarEdge := settings.BuiltInGnarEdge()
-	if builtInGnarEdge != "" {
-		if err := tunnel.ValidateEdgeURL(builtInGnarEdge); err != nil {
-			fatal(fmt.Errorf("invalid release gnar Edge: %w", err))
-		}
-	}
-	// A launcher override remains useful for development and operators. When
-	// it is absent, the release-injected Edge is the non-persisted fallback.
-	gnarDefaultEdge := strings.TrimSpace(*gnarEdge)
-	if gnarDefaultEdge == "" {
-		gnarDefaultEdge = builtInGnarEdge
-	}
-	gnarEdgeValue := loadedSettings.GnarEdge
-	gnarEdgeExplicit := false
-	flag.Visit(func(entry *flag.Flag) {
-		if entry.Name == "gnar-edge" {
-			gnarEdgeExplicit = true
-		}
-	})
-	if gnarEdgeExplicit {
-		gnarEdgeValue = *gnarEdge
-	} else if gnarEdgeValue == "" {
-		// Fall back to the launcher environment, then the release default, when
-		// settings.json does not pin an Edge. The source-build default is a safe
-		// documented placeholder and release builds may replace it at link time.
-		gnarEdgeValue = gnarDefaultEdge
-	}
 	// Strip launcher-only pager/TERM semantics (agent/CI shells export
 	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline children
 	// inherit the daemon environment, then let settings.json override the
@@ -168,6 +126,22 @@ func main() {
 	// inherits this final environment and must not re-sanitize it.
 	runtime.SanitizeEnvironment()
 	loadedSettings.ApplyRuntimeEnv()
+	// Launcher overrides are intentionally process-local. Enrollment persists
+	// the same non-secret values in settings.json, while this path lets a
+	// supervisor or development script bootstrap a daemon before persistence is
+	// available. The Host Secret itself is still read only from tokenPath.
+	if strings.TrimSpace(*relayURL) != "" {
+		loadedSettings.Relay.URL = strings.TrimSpace(*relayURL)
+	}
+	if strings.TrimSpace(*relayHostID) != "" {
+		loadedSettings.Relay.HostID = strings.TrimSpace(*relayHostID)
+	}
+	if strings.TrimSpace(*relayKeyID) != "" {
+		loadedSettings.Relay.RelayKeyID = strings.TrimSpace(*relayKeyID)
+	}
+	if strings.TrimSpace(*relayKey) != "" {
+		loadedSettings.Relay.RelayKey = strings.TrimSpace(*relayKey)
+	}
 
 	logger := newLogger(*logFile)
 	ghostlineCleanupContext, stopGhostlineCleanup := context.WithCancel(context.Background())
@@ -277,36 +251,15 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	webBaseURL := "http://127.0.0.1:" + listenerPort(listener)
-	tunnelManager := tunnel.NewManager(logger, webBaseURL, *cloudflaredPath, *tailscalePath, *gnarPath)
-	tunnelManager.SetGnarConfigDir(*gnarConfigDir)
-	// Only the bundled worker's default store belongs to Warren. An explicit
-	// gnar path/config directory may be a system installation and must survive
-	// Public Access reset.
-	tunnelManager.SetGnarConfigDirOwned(!gnarPathExplicit && !gnarConfigDirExplicit)
-	tunnelManager.SetGnarDefaultEdge(gnarDefaultEdge)
-	tunnelManager.SetGnarEdge(gnarEdgeValue)
-	// Restore the tunnels the user left running before the previous daemon
-	// exited, so the Public Endpoint survives Warren restarts and upgrades. Start is
-	// asynchronous: the daemon must not block readiness on a slow edge.
-	for _, kind := range []string{tunnel.KindGnar, tunnel.KindCloudflared, tunnel.KindTailscale} {
-		if !loadedSettings.TunnelEnabled[kind] {
-			continue
+	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), strings.TrimSpace(*relayHostID), logger)
+	httpHandler.RelayStart = relaySupervisor.Start
+	httpHandler.RelayStop = relaySupervisor.Stop
+	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
+	if service.Settings.Relay.Enabled || service.Settings.PublicTunnel.Enabled || strings.TrimSpace(*relayURL) != "" {
+		if err := relaySupervisor.Start(); err != nil {
+			logger.Warn("relay connector disabled", "error", err)
 		}
-		go func() {
-			status, err := tunnelManager.Start(kind)
-			if err != nil {
-				logger.Warn("restore tunnel failed", "kind", kind, "error", err)
-				return
-			}
-			if kind == tunnel.KindGnar && (!status.Running || status.URL == "") {
-				logger.Warn("restore tunnel did not produce a public endpoint", "kind", kind, "error", status.Error)
-				return
-			}
-			logger.Info("restored tunnel", "kind", kind)
-		}()
 	}
-	httpHandler.Tunnels = tunnelManager
 	logger.Info(
 		"warren headless ready",
 		"listen", listener.Addr().String(),
@@ -349,11 +302,144 @@ func main() {
 	if lanHTTPServer != nil {
 		_ = lanHTTPServer.Close()
 	}
-	// A public tunnel must never outlive its daemon: stop every reachability
-	// adapter so the Public Endpoint stops working as soon as the owner exits.
-	tunnelManager.StopAll()
+	relaySupervisor.Stop()
 	stopService()
 	service.Shutdown()
+}
+
+// relaySupervisor owns the single outbound Host connection. It is deliberately
+// independent from Service lifecycle so changing Relay/public-tunnel settings
+// cannot tear down Sessions or PTYs. A changed URL, Host ID, or pinned key
+// rebuilds the connector only after the previous one has stopped.
+type relaySupervisor struct {
+	mu          sync.Mutex
+	lifecycleMu sync.Mutex
+	service     *server.Service
+	httpHandler *server.HTTPServer
+	context     context.Context
+	token       string
+	hostName    string
+	overrideURL string
+	overrideID  string
+	logger      *slog.Logger
+	connector   *relay.Connector
+	configKey   string
+}
+
+func newRelaySupervisor(service *server.Service, handler *server.HTTPServer, context context.Context, token, hostName, overrideURL, overrideID string, logger *slog.Logger) *relaySupervisor {
+	return &relaySupervisor{
+		service: service, httpHandler: handler, context: context, token: token,
+		hostName: hostName, overrideURL: overrideURL, overrideID: overrideID, logger: logger,
+	}
+}
+
+func (supervisor *relaySupervisor) desiredSettings() (settings.RelaySettings, string, error) {
+	if supervisor.service == nil {
+		return settings.RelaySettings{}, "", errors.New("Relay service is unavailable")
+	}
+	value := supervisor.service.RelaySettingsSnapshot()
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	if urlValue == "" || hostID == "" {
+		return value, "", errors.New("Relay URL and Host ID are required")
+	}
+	// Do not persist secrets in the key used for lifecycle comparison. The
+	// pinned public key is non-secret and changes must still rebuild the socket.
+	configKey := strings.Join([]string{urlValue, hostID, strings.TrimSpace(value.RelayKeyID), strings.TrimSpace(value.RelayKey)}, "\x00")
+	return value, configKey, nil
+}
+
+func (supervisor *relaySupervisor) Start() error {
+	supervisor.lifecycleMu.Lock()
+	defer supervisor.lifecycleMu.Unlock()
+	value, configKey, err := supervisor.desiredSettings()
+	if err != nil {
+		return err
+	}
+	supervisor.mu.Lock()
+	if supervisor.connector != nil && supervisor.configKey == configKey {
+		supervisor.mu.Unlock()
+		return nil
+	}
+	previous := supervisor.connector
+	supervisor.connector = nil
+	supervisor.configKey = ""
+	supervisor.mu.Unlock()
+	if previous != nil {
+		previous.Stop()
+	}
+	publicKeys := relayPublicKeys(value)
+	if len(publicKeys) == 0 {
+		return errors.New("pinned Relay signing key is required")
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	var candidate *relay.Connector
+	candidate, err = relay.New(relay.Config{
+		URL: urlValue, HostID: hostID, Name: supervisor.hostName, Secret: supervisor.token,
+		Handler: supervisor.httpHandler.Handler(), RelayPublicKeys: publicKeys,
+		OnState: func(state string) {
+			if supervisor.logger != nil {
+				supervisor.logger.Info("relay connector state", "state", state)
+			}
+		},
+		OnControl: func(ctx context.Context, open relay.StreamOpen, frame relay.Frame) error {
+			return supervisor.httpHandler.HandleRelayControl(ctx, open, frame, candidate.Send)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	supervisor.mu.Lock()
+	supervisor.connector = candidate
+	supervisor.configKey = configKey
+	supervisor.mu.Unlock()
+	candidate.Start(supervisor.context)
+	return nil
+}
+
+func (supervisor *relaySupervisor) Stop() {
+	supervisor.lifecycleMu.Lock()
+	defer supervisor.lifecycleMu.Unlock()
+	supervisor.mu.Lock()
+	connector := supervisor.connector
+	supervisor.connector = nil
+	supervisor.configKey = ""
+	supervisor.mu.Unlock()
+	if connector != nil {
+		connector.Stop()
+	}
+}
+
+// RouteClient returns a short-lived authenticated client for Relay's route
+// lifecycle API. Route changes use the same Host Secret as the single BRLY/2
+// connector; no second credential or transport is created.
+func (supervisor *relaySupervisor) RouteClient() (*relay.RouteClient, error) {
+	value, _, err := supervisor.desiredSettings()
+	if err != nil {
+		return nil, err
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	return relay.NewRouteClient(urlValue, hostID, supervisor.token)
 }
 
 func listenerPort(listener net.Listener) string {
@@ -368,7 +454,7 @@ const maxLogFileBytes = 5 * 1024 * 1024
 
 // newLogger writes structured logs to stderr and, when a path is configured,
 // to a 0600 append-only file. Only high-signal events reach the file: daemon
-// start/stop, tunnel starts, restores, and errors. The file rotates once it
+// start/stop, Relay route changes, and errors. The file rotates once it
 // exceeds maxLogFileBytes so a long-running daemon never grows without bound.
 func newLogger(path string) *slog.Logger {
 	writers := []io.Writer{os.Stderr}
@@ -528,35 +614,6 @@ func defaultConfigDirectory() string {
 	return filepath.Join(home, ".warren")
 }
 
-// bundledGnarPath returns the gnar binary shipped beside the headless daemon
-// in a Warren.app bundle. Development checkouts intentionally fall back to
-// normal system discovery, so a missing release asset never makes source
-// builds unusable.
-func bundledGnarPath() string {
-	executable, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return bundledGnarPathFor(executable)
-}
-
-func bundledGnarPathFor(executable string) string {
-	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
-		executable = resolved
-	}
-	macOSDirectory := filepath.Dir(executable)
-	if filepath.Base(macOSDirectory) != "MacOS" ||
-		filepath.Base(filepath.Dir(macOSDirectory)) != "Contents" {
-		return ""
-	}
-	candidate := filepath.Join(macOSDirectory, "..", "Resources", "gnar")
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return ""
-	}
-	return candidate
-}
-
 // validateGhostlinePaths prevents a temporary or alternate Warren state from
 // accidentally connecting to the default Ghostline server. The default
 // socket is shared by the production daemon, so custom state/output paths
@@ -607,3 +664,23 @@ func envBool(key string, fallback bool) bool {
 	return parsed
 }
 func fatal(err error) { fmt.Fprintln(os.Stderr, "warren-headless:", err); os.Exit(1) }
+
+func relayPublicKeys(value settings.RelaySettings) map[string]ed25519.PublicKey {
+	keyText := strings.TrimSpace(value.RelayKey)
+	if keyText == "" {
+		return nil
+	}
+	data, err := base64.RawStdEncoding.DecodeString(keyText)
+	if err != nil {
+		data, err = base64.StdEncoding.DecodeString(keyText)
+	}
+	if err != nil || len(data) != ed25519.PublicKeySize {
+		return nil
+	}
+	keyID := strings.TrimSpace(value.RelayKeyID)
+	if keyID == "" {
+		digest := sha256.Sum256(data)
+		keyID = base64.RawURLEncoding.EncodeToString(digest[:8])
+	}
+	return map[string]ed25519.PublicKey{keyID: ed25519.PublicKey(data)}
+}

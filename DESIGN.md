@@ -176,13 +176,15 @@ The macOS Client uses a versioned WebSocket API for both Local and Server. `warr
 
 SSH only bootstraps the remote daemon and forwards a loopback port. Once `warren ssh` establishes reachability, Desktop and CLI continue over the same WebSocket API; Git, Runtime, and resource semantics must not be encoded into the SSH transport.
 
-Tailscale, LAN, Cloudflare Tunnel, and gnar only provide network reachability; they are not part of the business model. The central Relay Service only provides Host registration, discovery, pairing, revocation, signaling, and WebSocket relay; Sessions and processes remain owned by the Host.
+LAN and SSH only provide network reachability; the central Relay Service provides
+Host registration, discovery, pairing, revocation, signaling, public routes, and
+WebSocket relay. Sessions and processes remain owned by the Host.
 
-The daemon serves the Web UI over HTTP on `0.0.0.0:8789` (Desktop and CLI keep using the loopback address) and over HTTPS on `0.0.0.0:8788` for LAN devices; the HTTPS listener uses a locally generated CA so phones only need to trust it once. Public Access uses an explicitly started self-hosted gnar Edge and reports a credential-free Public Endpoint. Warren Web authentication still requires the daemon token at the WebSocket boundary; only the legacy `/v1/tunnels` compatibility response may carry that token in a URL fragment, which remains a documented residual exposure risk. Slow Web clients use a bounded non-blocking send queue and must never block the macOS main thread or Host output.
+The daemon serves the Web UI over HTTP on `0.0.0.0:8789` (Desktop and CLI keep using the loopback address) and over HTTPS on `0.0.0.0:8788` for LAN devices; the HTTPS listener uses a locally generated CA so phones only need to trust it once. Public Access uses an explicitly configured Relay route and reports a credential-free Public Endpoint. Warren Web authentication still requires the daemon token at the WebSocket boundary; route status APIs return only canonical public URLs, while explicit browser-open actions add authentication at the last possible moment. Slow Web clients use a bounded non-blocking send queue and must never block the macOS main thread or Host output.
 
 The Web/PWA client uses React + Vite, with source in `Web/`. React owns the component tree and client state; xterm owns terminal rendering. `Web/dist` contains build output only and is embedded by both the Go daemon and the Go Relay Service; do not maintain single-file inline copies of the script.
 
-The remote control plane is an independently deployable process. Each Host is issued a separate credential by an admin and only makes outbound WSS connections to the Relay; the Relay multiplexes Web clients by connection ID and never connects to an inbound macOS port. A short-lived, one-time pairing code is exchanged for an HMAC access token bound to the Host and credential generation; revoking or rotating a Host credential must disconnect the Host immediately and invalidate old tokens. The Relay persists credential hashes, generations, and online metadata, but never Project/Workspace/Session state, terminal output, or user input. Public deployments must sit behind TLS, enforce a strict Origin, use strong random secrets, and use a persistent data volume.
+The remote control plane is an independently deployable process. Each Host reuses its daemon token as the Host Secret and only makes one outbound WSS connection to the Relay; the Relay multiplexes Web clients by connection ID and never connects to an inbound macOS port. A short-lived, one-time pairing code is exchanged for an Ed25519 capability bound to the Host, scope, route, client, and credential generation; revoking or rotating a Host credential must disconnect the Host immediately and invalidate old capabilities. The Relay persists credential hashes, generations, and online metadata, but never Project/Workspace/Session state, terminal output, or user input. Public deployments must sit behind TLS, enforce a strict Origin, use strong random secrets, and use a persistent data volume.
 
 Session sharing is added incrementally through Principals, Share Grants, Capabilities, and multiple Attachments, without changing the resource tree.
 
@@ -219,7 +221,7 @@ Default files under `~/.warren/`:
 ~/.warren/
 ├── state.json        # Tasks, Projects, Workspaces, Sessions, sidebar order, runtime bindings, import receipts
 ├── config.json       # CLI/Desktop endpoint list and current endpoint
-├── settings.json     # daemon settings such as defaultRuntime, optional gnarEdge override, and gnarAccount
+├── settings.json     # daemon settings such as defaultRuntime, Relay metadata, and route intent
 ├── token             # authentication token
 ├── output/           # Ghostline-owned durable output history
 ├── worktrees/        # Git worktrees created by Warren

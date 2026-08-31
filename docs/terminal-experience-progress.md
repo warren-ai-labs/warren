@@ -249,7 +249,7 @@ Passing checks recorded for this checkout:
 - Onboarding: 3 tests;
 - `go test ./Headless/...`;
 - `go test -race -count=1 ./Headless/internal/server`;
-- cloudflared fake-tunnel unit tests;
+- Relay route integration tests;
 - `git diff --check`.
 
 The Onboarding production build also passes after `npm ci`; no current

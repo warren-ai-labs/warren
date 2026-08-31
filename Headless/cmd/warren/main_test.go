@@ -18,7 +18,189 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/gorilla/websocket"
 )
+
+func TestDoRelayRequestDoesNotFollowRedirect(t *testing.T) {
+	targetHit := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		targetHit <- struct{}{}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	if _, err := doRelayRequest(http.MethodPost, redirect.URL, "host-secret", map[string]string{"secret": "host-secret"}); err == nil {
+		t.Fatal("redirect response was treated as a successful Relay request")
+	}
+	select {
+	case <-targetHit:
+		t.Fatal("Relay client followed a redirect and replayed the request")
+	default:
+	}
+}
+
+func TestRelayTunnelEnableSendsRouteOptions(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	var received struct {
+		method string
+		auth   string
+		body   map[string]any
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received.method = request.Method
+		received.auth = request.Header.Get("Authorization")
+		if err := json.NewDecoder(request.Body).Decode(&received.body); err != nil {
+			http.Error(writer, "invalid body", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"route_id":"route-1","host_id":"`+hostID+`","public_hostname":"public.example","path_prefix":"/warren","auth_mode":"public","enabled":true}`)
+	}))
+	defer server.Close()
+
+	previousJSON, previousURL, previousToken, previousHost := outputJSON, endpointURL, endpointToken, endpointName
+	outputJSON, endpointURL, endpointToken, endpointName = true, "", "", ""
+	t.Cleanup(func() {
+		outputJSON, endpointURL, endpointToken, endpointName = previousJSON, previousURL, previousToken, previousHost
+	})
+	if err := run([]string{
+		"relay", "tunnel", "enable", "--url", server.URL, "--host", hostID,
+		"--token", "host-secret", "--auth-mode", "public",
+		"--public-hostname", "public.example", "--path-prefix", "/warren",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if received.method != http.MethodPost || received.auth != "Bearer host-secret" {
+		t.Fatalf("request = %s/%q", received.method, received.auth)
+	}
+	if received.body["enabled"] != true || received.body["auth_mode"] != "public" ||
+		received.body["public_hostname"] != "public.example" || received.body["path_prefix"] != "/warren" {
+		t.Fatalf("route body = %#v", received.body)
+	}
+}
+
+func TestRelayManagementDoesNotUseConfiguredAccessToken(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "relay",
+		Endpoints: map[string]config.Endpoint{
+			"relay": {Name: "relay", URL: server.URL, Token: "access-only", Type: "relay", HostID: hostID},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := struct {
+		json                     bool
+		url, token, name, config string
+	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "relay", path
+	t.Cleanup(func() {
+		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.config
+	})
+	err := run([]string{"relay", "tunnel", "enable"})
+	if err == nil || !strings.Contains(err.Error(), "configured Relay access tokens cannot mutate routes") {
+		t.Fatalf("relay tunnel with access token error = %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("configured access token triggered a route mutation request")
+	}
+}
+
+func TestRelayStatusReadsHostAndRoute(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/hosts/" + hostID:
+			_, _ = io.WriteString(writer, `{"id":"`+hostID+`","online":true}`)
+		case "/v1/hosts/" + hostID + "/route":
+			_, _ = io.WriteString(writer, `{"route_id":"route-1","host_id":"`+hostID+`","enabled":true}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	previousJSON, previousURL, previousToken, previousHost := outputJSON, endpointURL, endpointToken, endpointName
+	outputJSON, endpointURL, endpointToken, endpointName = true, "", "", ""
+	t.Cleanup(func() {
+		outputJSON, endpointURL, endpointToken, endpointName = previousJSON, previousURL, previousToken, previousHost
+	})
+	if err := run([]string{"relay", "status", "--url", server.URL, "--host", hostID, "--token", "host-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/hosts/"+hostID || paths[1] != "/v1/hosts/"+hostID+"/route" {
+		t.Fatalf("status paths = %#v", paths)
+	}
+}
+
+func TestConnectUsesRelayEndpointType(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000001"
+	upgrader := websocket.Upgrader{}
+	observed := make(chan struct {
+		path string
+		auth map[string]any
+	}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		var auth map[string]any
+		if connection.ReadJSON(&auth) != nil {
+			return
+		}
+		observed <- struct {
+			path string
+			auth map[string]any
+		}{path: request.URL.Path, auth: auth}
+		_ = connection.WriteJSON(map[string]any{"t": "welcome"})
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "relay",
+		Endpoints: map[string]config.Endpoint{
+			"relay": {Name: "relay", URL: server.URL, Token: "access-token", Type: "relay", HostID: hostID},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousURL, previousToken, previousName, previousPath := endpointURL, endpointToken, endpointName, configPath
+	endpointURL, endpointToken, endpointName, configPath = "", "", "relay", path
+	t.Cleanup(func() {
+		endpointURL, endpointToken, endpointName, configPath = previousURL, previousToken, previousName, previousPath
+	})
+
+	_, value, err := connect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Close()
+	result := <-observed
+	if result.path != "/h/"+hostID+"/v1/client/connect" {
+		t.Fatalf("Relay endpoint path = %q", result.path)
+	}
+	if result.auth["access_token"] != "access-token" || result.auth["token"] != nil {
+		t.Fatalf("Relay endpoint auth = %#v", result.auth)
+	}
+}
 
 func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	now := time.Now().UTC()
@@ -62,6 +244,64 @@ func TestSessionRowsJoinsWorkspaceAndProject(t *testing.T) {
 	}
 	if row.Session.ID != "session-1" || row.Title != "Codex" {
 		t.Errorf("embedded session lost: %+v", row.Session)
+	}
+}
+
+func TestResolveConfiguredEndpointDefaultsToLocalDaemon(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+	previousEndpoint := endpointName
+	endpointName = ""
+	t.Cleanup(func() { endpointName = previousEndpoint })
+
+	value, err := resolveConfiguredEndpoint(config.Config{Endpoints: map[string]config.Endpoint{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestResolveConfiguredEndpointFallsBackWhenLocalTokenIsEmpty(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("local-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARREN_TOKEN_FILE", tokenPath)
+
+	value, err := resolveConfiguredEndpoint(config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"local": {Name: "local", URL: "http://127.0.0.1:8789"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "local" || value.URL != "http://127.0.0.1:8789" || value.Token != "local-token" {
+		t.Fatalf("local fallback = %+v", value)
+	}
+}
+
+func TestEndpointUseAllowsSyntheticLocalEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	previousPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = previousPath })
+
+	if err := run([]string{"--config", path, "endpoint", "use", "local"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Current != "local" {
+		t.Fatalf("current endpoint = %q, want local", settings.Current)
 	}
 }
 
@@ -996,6 +1236,16 @@ func TestHoistGlobalFlagsMovesFlagsFromAnyPosition(t *testing.T) {
 			args: []string{"session", "list", "--token"},
 			want: []string{"session", "list", "--token"},
 		},
+		{
+			name: "relay token stays local",
+			args: []string{"relay", "status", "--token", "access"},
+			want: []string{"relay", "status", "--token", "access"},
+		},
+		{
+			name: "global token before relay is hoisted",
+			args: []string{"--token", "access", "relay", "status"},
+			want: []string{"--token", "access", "relay", "status"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1323,7 +1573,7 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		{[]string{"task", "workspace", "create", "task-1", "project-1"}, "missing --branch BRANCH", "warren task workspace create TASK_ID PROJECT_ID"},
 		{[]string{"session", "send"}, "missing SESSION_ID", "warren session send SESSION_ID"},
 		{[]string{"endpoint", "add"}, "missing ENDPOINT_NAME", "warren endpoint add NAME"},
-		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh USER@HOST"},
+		{[]string{"ssh"}, "missing SSH_TARGET", "warren ssh TARGET"},
 	}
 	for _, test := range tests {
 		err := run(test.arguments)
@@ -1338,6 +1588,20 @@ func TestRunMissingArgumentsReturnUsageError(t *testing.T) {
 		if !contains(usageErr.text, test.usage) {
 			t.Errorf("run(%v) usage = %q, want it to contain %q", test.arguments, usageErr.text, test.usage)
 		}
+	}
+}
+
+func TestSSHListReadsAnExplicitOpenSSHConfig(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	if err := os.WriteFile(configPath, []byte("Host staging\n    HostName 192.0.2.10\n    User deploy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousJSON := outputJSON
+	outputJSON = true
+	defer func() { outputJSON = previousJSON }()
+	if err := run([]string{"ssh", "list", "--ssh-config", configPath}); err != nil {
+		t.Fatalf("ssh list returned an error: %v", err)
 	}
 }
 

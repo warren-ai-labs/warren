@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,8 +24,8 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
+	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
-	"github.com/abcdlsj/warren/Headless/internal/tunnel"
 	"github.com/gorilla/websocket"
 )
 
@@ -39,13 +41,21 @@ const (
 )
 
 type HTTPServer struct {
-	Service       *Service
-	Token         string
-	Logger        *slog.Logger
-	Tunnels       *tunnel.Manager
-	BuildVersion  string
-	BuildRevision string
-	BuildDirty    bool
+	Service *Service
+	Token   string
+	Logger  *slog.Logger
+	// RelayStart and RelayStop are installed by the daemon entrypoint. Keeping
+	// lifecycle hooks on the HTTP server lets settings.put toggle the supervised
+	// connector without touching Session or PTY ownership; tests and embedded
+	// callers may leave them nil.
+	RelayStart func() error
+	RelayStop  func()
+	// RelayRouteClient creates an authenticated client for the Relay route API.
+	// Route lifecycle uses the same Host Secret as the BRLY/2 connector.
+	RelayRouteClient func() (*relay.RouteClient, error)
+	BuildVersion     string
+	BuildRevision    string
+	BuildDirty       bool
 	// GhostlineVersion is the legacy health field and aliases the RPC version.
 	GhostlineVersion string
 	// GhostlineRPCVersion is the protocol version reported by the running
@@ -59,11 +69,13 @@ type HTTPServer struct {
 
 	peersMu sync.Mutex
 	peers   map[*wsPeer]struct{}
-	// tunnelMu serializes configuration persistence with all lifecycle routes.
-	// Manager has its own process-operation lock, but this server-level lock also
-	// keeps an enable/test/restart from observing half-written Edge/account
-	// settings while a legacy route is changing the enabled intent.
-	tunnelMu sync.Mutex
+	// relayPeers maps one authenticated BRLY control stream to the same
+	// service peer implementation used by local WebSocket clients. The Relay
+	// connector owns the transport; this map only carries lifecycle state.
+	relayPeersMu sync.Mutex
+	relayPeers   map[relay.ConnectionID]*relayControlPeer
+	// routeMu serializes route configuration persistence with lifecycle calls.
+	routeMu sync.Mutex
 }
 
 type rosterMessage struct {
@@ -71,12 +83,21 @@ type rosterMessage struct {
 	State api.State `json:"state"`
 }
 
+type relayControlPeer struct {
+	peer          *wsPeer
+	open          relay.StreamOpen
+	stateMu       sync.Mutex
+	authenticated bool
+	ctx           context.Context
+}
+
 func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPServer {
 	server := &HTTPServer{
-		Service: service,
-		Token:   token,
-		Logger:  logger,
-		peers:   make(map[*wsPeer]struct{}),
+		Service:    service,
+		Token:      token,
+		Logger:     logger,
+		peers:      make(map[*wsPeer]struct{}),
+		relayPeers: make(map[relay.ConnectionID]*relayControlPeer),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 256 * 1024, WriteBufferSize: 256 * 1024,
 			CheckOrigin: func(request *http.Request) bool {
@@ -125,7 +146,7 @@ func sameOrigin(request *http.Request, origin string) bool {
 }
 
 // effectiveScheme returns the scheme the browser actually used, honoring TLS
-// termination by cloudflared or Tailscale Serve.
+// termination by the Relay or another trusted reverse proxy.
 func effectiveScheme(request *http.Request) string {
 	if forwarded := request.Header.Get("X-Forwarded-Proto"); forwarded != "" {
 		if fields := strings.Fields(forwarded); len(fields) > 0 {
@@ -177,11 +198,9 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
+	mux.HandleFunc("POST /v1/relay/enroll", s.handleRelayEnroll)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /v1/runtime/refresh", s.handleRuntimeRefresh)
-	mux.HandleFunc("GET /v1/tunnels", s.handleTunnels)
-	mux.HandleFunc("POST /v1/tunnels/start", s.handleTunnelStart)
-	mux.HandleFunc("POST /v1/tunnels/stop", s.handleTunnelStop)
 	mux.HandleFunc("GET /v1/public-access", s.handlePublicAccess)
 	mux.HandleFunc("POST /v1/public-access/enable", s.handlePublicAccessEnable)
 	mux.HandleFunc("POST /v1/public-access/test", s.handlePublicAccessTest)
@@ -197,6 +216,140 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /apple-touch-icon.png", s.handleWebAsset)
 	mux.HandleFunc("GET /tls/ca.pem", s.handleCACert)
 	return mux
+}
+
+var relayHostIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// handleRelayEnroll consumes a one-time Relay ticket with the daemon's
+// canonical token. The token never comes from the request body and is not
+// written to settings; only the Relay URL, Host identity, and signing key are
+// persisted after the remote enrollment succeeds.
+func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		RelayURL         string `json:"relayUrl"`
+		HostID           string `json:"hostId"`
+		EnrollmentTicket string `json:"enrollmentTicket"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(writer, "invalid request", http.StatusBadRequest)
+		return
+	}
+	relayURL := strings.TrimSpace(body.RelayURL)
+	hostID := strings.ToLower(strings.TrimSpace(body.HostID))
+	ticket := strings.TrimSpace(body.EnrollmentTicket)
+	if !relayHostIDPattern.MatchString(hostID) || ticket == "" {
+		http.Error(writer, "invalid request", http.StatusBadRequest)
+		return
+	}
+	base, err := normalizeRelayEnrollmentURL(relayURL)
+	if err != nil {
+		http.Error(writer, "invalid relay URL", http.StatusBadRequest)
+		return
+	}
+	endpoint := base + "/v1/hosts/" + url.PathEscape(hostID) + "/enroll"
+	payload, _ := json.Marshal(map[string]string{
+		"enrollment_ticket": ticket,
+		"host_secret":       s.Token,
+	})
+	upstream, err := http.NewRequestWithContext(request.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	upstream.Header.Set("Content-Type", "application/json")
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		// The enrollment payload contains the canonical daemon token. Never
+		// follow a redirect supplied by a Relay endpoint, otherwise an
+		// operator typo or a compromised endpoint could receive that secret.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	result, err := client.Do(upstream)
+	if err != nil {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	defer result.Body.Close()
+	data, readErr := io.ReadAll(io.LimitReader(result.Body, 64*1024))
+	if readErr != nil || result.StatusCode < 200 || result.StatusCode >= 300 {
+		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		return
+	}
+	var response struct {
+		RelayKeyID     string `json:"relay_key_id"`
+		RelayPublicKey string `json:"relay_public_key"`
+	}
+	if json.Unmarshal(data, &response) != nil || strings.TrimSpace(response.RelayKeyID) == "" || strings.TrimSpace(response.RelayPublicKey) == "" {
+		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
+		return
+	}
+	key, err := decodeRelayPublicKey(response.RelayPublicKey)
+	if err != nil {
+		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
+		return
+	}
+	value := s.Service.RelaySettingsSnapshot()
+	value.Enabled = true
+	value.URL = base
+	value.HostID = hostID
+	value.RelayKeyID = strings.TrimSpace(response.RelayKeyID)
+	value.RelayKey = base64.RawStdEncoding.EncodeToString(key)
+	value.LastError = ""
+	if err := s.Service.UpdateRelaySettings(value); err != nil {
+		http.Error(writer, "Relay settings could not be saved", http.StatusInternalServerError)
+		return
+	}
+	if err := s.syncRelayLifecycle(); err != nil {
+		http.Error(writer, "Relay connector could not start", http.StatusBadGateway)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"enrolled":     true,
+		"relay":        value,
+		"relay_key_id": value.RelayKeyID,
+	})
+}
+
+func normalizeRelayEnrollmentURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid Relay URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("Relay URL must use http or https")
+	}
+	if strings.ContainsAny(parsed.Host, "\r\n\x00") || strings.HasPrefix(parsed.Path, "//") || strings.ContainsAny(parsed.Path, "\r\n\x00") {
+		return "", errors.New("invalid Relay URL")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return "", errors.New("Relay URL path traversal is not allowed")
+		}
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func decodeRelayPublicKey(value string) ([]byte, error) {
+	data, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		data, err = base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	}
+	if err != nil || len(data) != 32 {
+		return nil, errors.New("invalid Relay public key")
+	}
+	return data, nil
 }
 
 func (s *HTTPServer) handleCACert(writer http.ResponseWriter, request *http.Request) {
@@ -291,66 +444,32 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("Content-Type", "application/json")
 	switch request.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":        s.Service.DefaultRuntime,
-			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":           s.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
-			"autoStartAI":           s.Service.Settings.AutoStartAI,
-			"openaiBaseURL":         s.Service.Settings.OpenAIBaseURL,
-			"openaiModel":           s.Service.Settings.OpenAIModel,
-			"openaiTitleEnabled":    s.Service.Settings.OpenAITitleEnabled,
-		})
+		_ = json.NewEncoder(writer).Encode(s.settingsProjection())
 	case http.MethodPut:
 		var body struct {
-			DefaultRuntime     string            `json:"defaultRuntime"`
-			RuntimeEnv         map[string]string `json:"runtimeEnv"`
-			GnarEdge           *string           `json:"gnarEdge"`
-			GnarAccount        *string           `json:"gnarAccount"`
-			AutoOpenShell      *bool             `json:"autoOpenShell"`
-			AutoStartAI        *bool             `json:"autoStartAI"`
-			OpenAIBaseURL      *string           `json:"openaiBaseURL"`
-			OpenAIModel        *string           `json:"openaiModel"`
-			OpenAIKey          *string           `json:"openaiKey"`
-			OpenAITitleEnabled *bool             `json:"openaiTitleEnabled"`
+			DefaultRuntime     string                         `json:"defaultRuntime"`
+			RuntimeEnv         map[string]string              `json:"runtimeEnv"`
+			AutoOpenShell      *bool                          `json:"autoOpenShell"`
+			AutoStartAI        *bool                          `json:"autoStartAI"`
+			OpenAIBaseURL      *string                        `json:"openaiBaseURL"`
+			OpenAIModel        *string                        `json:"openaiModel"`
+			OpenAIKey          *string                        `json:"openaiKey"`
+			OpenAITitleEnabled *bool                          `json:"openaiTitleEnabled"`
+			Relay              *settings.RelaySettings        `json:"relay"`
+			PublicTunnel       *settings.PublicTunnelSettings `json:"publicTunnel"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
 			http.Error(writer, "invalid settings", http.StatusBadRequest)
 			return
 		}
+		current := s.Service.SettingsSnapshot()
 		runtimeEnv := body.RuntimeEnv
 		if runtimeEnv == nil {
-			runtimeEnv = s.Service.Settings.RuntimeEnv
+			runtimeEnv = current.RuntimeEnv
 		}
-		gnarEdge := s.Service.Settings.GnarEdge
-		if body.GnarEdge != nil {
-			gnarEdge = *body.GnarEdge
-		}
-		var normalizedAccount string
-		if body.GnarAccount != nil {
-			var err error
-			normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(*body.GnarAccount)
-			if err != nil {
-				http.Error(writer, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if err := s.Service.UpdateSettings(body.DefaultRuntime, runtimeEnv, gnarEdge); err != nil {
+		if err := s.Service.UpdateSettings(body.DefaultRuntime, runtimeEnv); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
-		}
-		if body.GnarAccount != nil {
-			s.Service.Settings.GnarAccount = normalizedAccount
-			if s.Service.SettingsPath != "" {
-				if err := settings.Save(s.Service.SettingsPath, s.Service.Settings); err != nil {
-					http.Error(writer, err.Error(), http.StatusBadRequest)
-					return
-				}
-			}
 		}
 		if body.AutoOpenShell != nil {
 			if err := s.Service.SetAutoOpenShell(*body.AutoOpenShell); err != nil {
@@ -384,92 +503,64 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 				}
 			}
 		}
-		if s.Tunnels != nil {
-			s.Tunnels.SetGnarEdgeOverride(s.Service.Settings.GnarEdge)
+		if body.Relay != nil {
+			if err := s.Service.UpdateRelaySettings(*body.Relay); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"defaultRuntime":        s.Service.DefaultRuntime,
-			"runtimeEnv":            s.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(s.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(s.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(s.gnarEffectiveEdge()),
-			"gnarAccount":           s.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": s.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         s.Service.Settings.AutoOpenShell,
-			"autoStartAI":           s.Service.Settings.AutoStartAI,
-			"openaiBaseURL":         s.Service.Settings.OpenAIBaseURL,
-			"openaiModel":           s.Service.Settings.OpenAIModel,
-			"openaiTitleEnabled":    s.Service.Settings.OpenAITitleEnabled,
-		})
+		if body.PublicTunnel != nil {
+			if err := s.Service.UpdatePublicTunnelSettings(*body.PublicTunnel); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := s.syncRelayLifecycle(); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(s.settingsProjection())
 	default:
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *HTTPServer) handleTunnels(writer http.ResponseWriter, request *http.Request) {
-	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
-		http.Error(writer, "unauthorized", http.StatusUnauthorized)
-		return
+func (s *HTTPServer) syncRelayLifecycle() error {
+	if s.Service == nil {
+		return nil
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
-		return
+	value := s.Service.SettingsSnapshot()
+	enabled := value.Relay.Enabled || value.PublicTunnel.Enabled
+	if enabled {
+		if s.RelayStart != nil {
+			return s.RelayStart()
+		}
+		return nil
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status(), s.Token))
+	if s.RelayStop != nil {
+		s.RelayStop()
+	}
+	return nil
 }
 
-func (s *HTTPServer) handleTunnelStart(writer http.ResponseWriter, request *http.Request) {
-	s.handleTunnelControl(writer, request, true)
-}
-
-func (s *HTTPServer) handleTunnelStop(writer http.ResponseWriter, request *http.Request) {
-	s.handleTunnelControl(writer, request, false)
-}
-
-func (s *HTTPServer) handleTunnelControl(writer http.ResponseWriter, request *http.Request, start bool) {
-	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
-		http.Error(writer, "unauthorized", http.StatusUnauthorized)
-		return
+func (s *HTTPServer) settingsProjection() map[string]any {
+	value := s.Service.SettingsSnapshot()
+	return map[string]any{
+		"defaultRuntime":     value.DefaultRuntime,
+		"runtimeEnv":         value.RuntimeEnv,
+		"autoOpenShell":      value.AutoOpenShell,
+		"autoStartAI":        value.AutoStartAI,
+		"openaiBaseURL":      value.OpenAIBaseURL,
+		"openaiModel":        value.OpenAIModel,
+		"openaiTitleEnabled": value.OpenAITitleEnabled,
+		"relay":              value.Relay,
+		"publicTunnel":       value.PublicTunnel,
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	var body struct {
-		Kind string `json:"kind"`
-	}
-	if json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body) != nil {
-		http.Error(writer, "invalid request", http.StatusBadRequest)
-		return
-	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	var err error
-	if start {
-		_, err = s.Tunnels.Start(body.Kind)
-	} else {
-		err = s.Tunnels.Stop(body.Kind)
-	}
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.Service.UpdateTunnelEnabled(body.Kind, start); err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(tunnelResponse(s.Tunnels.Status(), s.Token))
 }
 
 func (s *HTTPServer) handlePublicAccess(writer http.ResponseWriter, request *http.Request) {
 	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
@@ -480,229 +571,122 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	var body api.PublicAccessEnableRequest
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
 		return
 	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	edge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	if body.EdgeURL != nil {
-		edge = strings.TrimSpace(*body.EdgeURL)
-	}
-	if edge != "" {
-		if err := tunnel.ValidateEdgeURL(edge); err != nil {
-			s.writePublicAccessError(writer, http.StatusBadRequest, err)
-			return
-		}
-	}
-	approvalKey := body.ApprovalKey
-	if strings.TrimSpace(approvalKey) == "" {
-		// enrollmentKey is the legacy JSON spelling for an approval key.
-		approvalKey = body.EnrollmentKey
-	}
-	inviteKey := body.InviteKey
-	keyKind := tunnel.LoginKeyKind("")
-	keyValue := ""
-	if strings.TrimSpace(approvalKey) != "" {
-		keyKind = tunnel.LoginKeyApproval
-		keyValue = approvalKey
-	} else if strings.TrimSpace(inviteKey) != "" {
-		keyKind = tunnel.LoginKeyInvite
-		keyValue = inviteKey
-	}
-	if keyValue != "" && s.gnarEffectiveEdge() == "" && edge == "" {
-		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when enrolling gnar"))
-		return
-	}
-	configuredAccount := s.Service.Settings.GnarAccount
-	if body.AccountName != nil {
-		configuredAccount = *body.AccountName
-	}
-	normalizedAccount := settings.ConfiguredGnarAccount(configuredAccount)
-	if body.AccountName != nil {
-		var err error
-		normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(configuredAccount)
-		if err != nil {
-			s.writePublicAccessError(writer, http.StatusBadRequest, err)
-			return
-		}
-	}
-	account := settings.EffectiveGnarAccount(normalizedAccount, s.Service.HostName)
-	previousEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	previousAccount := s.Service.EffectiveGnarAccount()
-	if err := s.Service.UpdatePublicAccessConfig(edge, normalizedAccount); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, true); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	// Keep the effective launcher/release fallback in the manager when the
-	// request explicitly clears the persisted override.
-	if body.EdgeURL != nil {
-		// An explicit empty edge clears the persisted override and returns to
-		// the release/launcher default. An omitted edge keeps the current
-		// configured override for compatibility with existing callers.
-		s.Tunnels.SetGnarEdgeOverride(edge)
-	} else if edge != "" {
-		s.Tunnels.SetGnarEdge(edge)
-	}
-	// Re-enrollment or a changed non-secret configuration must not leave an
-	// older gnar process serving the previous account or Edge URL.
-	if keyValue != "" || previousEdge != edge || previousAccount != account {
-		if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok && current.Running {
-			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
-				s.writePublicAccessError(writer, http.StatusBadRequest, err)
-				return
-			}
-		}
-	}
-	key := []byte(keyValue)
-	// Do not retain the request string after converting it to the private
-	// stdin buffer. The manager clears this byte slice after login returns.
-	body.InviteKey = ""
-	body.ApprovalKey = ""
-	body.EnrollmentKey = ""
-	status, err := s.Tunnels.StartPublicAccessWithKey(edge, account, keyKind, key)
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	client, err := s.routeClient()
 	if err != nil {
-		projected := s.publicAccessStatus()
-		projected.Error = err.Error()
-		if status.Error != "" {
-			projected.Error = status.Error
+		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		return
+	}
+	if s.RelayStart != nil {
+		if err := s.RelayStart(); err != nil {
+			s.writePublicAccessError(writer, http.StatusBadGateway, err)
+			return
 		}
-		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+	}
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	route := relay.Route{
+		ID:             current.RouteID,
+		PublicHostname: current.PublicHostname,
+		PathPrefix:     current.PathPrefix,
+		AuthMode:       "public",
+		Enabled:        true,
+	}
+	if body.PublicHostname != nil {
+		route.PublicHostname = strings.TrimSpace(*body.PublicHostname)
+	}
+	if body.PathPrefix != nil {
+		route.PathPrefix = strings.TrimSpace(*body.PathPrefix)
+	}
+	configured, err := client.Configure(request.Context(), route)
+	if err != nil {
+		s.writePublicAccessError(writer, http.StatusBadGateway, err)
+		return
+	}
+	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+		Enabled:        true,
+		RouteID:        configured.ID,
+		Owner:          configured.HostID,
+		PublicHostname: configured.PublicHostname,
+		PathPrefix:     configured.PathPrefix,
+		AuthMode:       configured.AuthMode,
+	}); err != nil {
+		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
-// handlePublicAccessTest saves only the non-secret Edge/account configuration
-// and verifies one complete gnar connection. It deliberately does not set the
-// user's enabled intent; the Web chrome starts the live Public Endpoint later.
+// handlePublicAccessTest validates the Relay route configuration without
+// changing the user's enabled intent.
 func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request *http.Request) {
 	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	var body api.PublicAccessTestRequest
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access test request"))
 		return
 	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	if body.EdgeURL != nil {
-		configuredEdge = strings.TrimSpace(*body.EdgeURL)
-	}
-	if configuredEdge != "" {
-		if err := tunnel.ValidateEdgeURL(configuredEdge); err != nil {
-			s.writePublicAccessError(writer, http.StatusBadRequest, err)
-			return
-		}
-	}
-	configuredAccount := settings.ConfiguredGnarAccount(s.Service.Settings.GnarAccount)
-	account := s.Service.EffectiveGnarAccount()
-	if body.AccountName != nil {
-		var err error
-		configuredAccount, err = settings.NormalizeConfiguredGnarAccount(*body.AccountName)
-		if err != nil {
-			s.writePublicAccessError(writer, http.StatusBadRequest, err)
-			return
-		}
-		account = settings.EffectiveGnarAccount(configuredAccount, s.Service.HostName)
-	}
-	// Stop any existing process before applying the new configuration. Manager.Start
-	// is intentionally idempotent, so testing first would otherwise reuse the old
-	// Edge/account connection and report a false success.
-	approvalKey := body.ApprovalKey
-	if strings.TrimSpace(approvalKey) == "" {
-		approvalKey = body.EnrollmentKey
-	}
-	inviteKey := body.InviteKey
-	keyKind := tunnel.LoginKeyKind("")
-	keyValue := ""
-	if strings.TrimSpace(approvalKey) != "" {
-		keyKind = tunnel.LoginKeyApproval
-		keyValue = approvalKey
-	} else if strings.TrimSpace(inviteKey) != "" {
-		keyKind = tunnel.LoginKeyInvite
-		keyValue = inviteKey
-	}
-	prospectiveEdge := s.gnarEffectiveEdge()
-	if body.EdgeURL != nil {
-		prospectiveEdge = configuredEdge
-		if prospectiveEdge == "" {
-			prospectiveEdge = s.Tunnels.GnarDefaultEdge()
-		}
-	}
-	if keyValue != "" && strings.TrimSpace(prospectiveEdge) == "" {
-		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when testing gnar"))
-		return
-	}
-	sameAuthenticated := s.Tunnels.GnarAuthenticatedFor(prospectiveEdge, account)
-	wasRunning := false
-	if current, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok {
-		wasRunning = current.Running && current.URL != ""
-		if current.Running && !sameAuthenticated {
-			if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
-				s.writePublicAccessError(writer, http.StatusBadGateway, err)
-				return
-			}
-		}
-	}
-	if err := s.Service.UpdatePublicAccessConfig(configuredEdge, configuredAccount); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	if body.EdgeURL != nil {
-		s.Tunnels.SetGnarEdgeOverride(configuredEdge)
-	} else if configuredEdge != "" {
-		s.Tunnels.SetGnarEdge(configuredEdge)
-	}
-	effectiveEdge := s.gnarEffectiveEdge()
-	if keyValue != "" && effectiveEdge == "" {
-		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("an Edge URL is required when testing gnar"))
-		return
-	}
-	key := []byte(keyValue)
-	// Clear the request fields before handing the private buffer to the tunnel
-	// manager. The manager clears the byte slice after gnar consumes it.
-	body.InviteKey = ""
-	body.ApprovalKey = ""
-	body.EnrollmentKey = ""
-	status, err := s.Tunnels.TestPublicAccess(effectiveEdge, account, keyKind, key)
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	client, err := s.routeClient()
 	if err != nil {
-		projected := s.publicAccessStatus()
-		projected.Error = err.Error()
-		if status.Error != "" {
-			projected.Error = status.Error
-		}
-		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
 		return
 	}
-	// A bootstrap-key test is complete after gnar login succeeds. Do not make
-	// that first authentication depend on restarting the live tunnel; the top
-	// Web control owns the subsequent Public Endpoint start. Token-only tests
-	// still restore an endpoint that was already running before the test.
-	if wasRunning && keyValue == "" {
-		if _, restartErr := s.Tunnels.StartPublicAccess(effectiveEdge, account, nil); restartErr != nil {
-			projected := s.publicAccessStatus()
-			projected.Error = restartErr.Error()
-			s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	route := relay.Route{
+		ID:             current.RouteID,
+		PublicHostname: current.PublicHostname,
+		PathPrefix:     current.PathPrefix,
+		AuthMode:       "public",
+		Enabled:        current.Enabled,
+	}
+	if body.PublicHostname != nil {
+		route.PublicHostname = strings.TrimSpace(*body.PublicHostname)
+	}
+	if body.PathPrefix != nil {
+		route.PathPrefix = strings.TrimSpace(*body.PathPrefix)
+	}
+	// A test only reads the current route. If the caller supplied a new
+	// hostname/prefix, validate it by asking Relay to configure it disabled;
+	// the user's enabled intent remains unchanged.
+	if body.PublicHostname != nil || body.PathPrefix != nil {
+		route.Enabled = false
+		configured, configureErr := client.Configure(request.Context(), route)
+		if configureErr != nil {
+			s.writePublicAccessError(writer, http.StatusBadGateway, configureErr)
 			return
 		}
+		route = configured
+	} else {
+		route, err = client.Get(request.Context())
+		if err != nil {
+			s.writePublicAccessError(writer, http.StatusBadGateway, err)
+			return
+		}
+	}
+	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+		Enabled:        current.Enabled,
+		RouteID:        route.ID,
+		Owner:          route.HostID,
+		PublicHostname: route.PublicHostname,
+		PathPrefix:     route.PathPrefix,
+		AuthMode:       route.AuthMode,
+	}); err != nil {
+		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
+		return
 	}
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
@@ -712,55 +696,45 @@ func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, reque
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	client, err := s.routeClient()
+	if err != nil {
+		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
 		return
 	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+	if err := client.Disable(request.Context()); err != nil && !errors.Is(err, relay.ErrRouteNotFound) {
+		s.writePublicAccessError(writer, http.StatusBadGateway, err)
 		return
 	}
-	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, false); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	current.Enabled = false
+	if err := s.Service.UpdatePublicTunnelSettings(current); err != nil {
+		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
-// handlePublicAccessReset clears only Warren's local Public Access setup. It
-// does not call gnar release/revoke, so a remote Edge reservation remains
-// owned by the Edge operator and can be cleaned up independently.
+// handlePublicAccessReset disables the Relay route and clears Warren's local
+// route metadata. The Relay Host record remains enrolled for later use.
 func (s *HTTPServer) handlePublicAccessReset(writer http.ResponseWriter, request *http.Request) {
 	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	if client, err := s.routeClient(); err == nil {
+		if disableErr := client.Disable(request.Context()); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
+			s.writePublicAccessError(writer, http.StatusBadGateway, disableErr)
+			return
+		}
+	}
+	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
+		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	// Persist the non-secret reset first. If the settings file is unavailable,
-	// leave gnar's local token untouched so a retry cannot silently require a
-	// new enrollment.
-	if err := s.Service.UpdatePublicAccessConfig("", ""); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, false); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.Tunnels.ResetGnarLocalSetup(); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	// Restore the release/launcher default in the manager after clearing the
-	// persisted override. The account default remains derived from the host.
-	s.Tunnels.SetGnarEdgeOverride("")
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
@@ -769,121 +743,216 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.Tunnels == nil {
-		http.Error(writer, "tunnel manager unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	s.tunnelMu.Lock()
-	defer s.tunnelMu.Unlock()
-	edge := s.gnarEffectiveEdge()
-	if edge != "" {
-		if err := tunnel.ValidateEdgeURL(edge); err != nil {
-			s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("Public Access is not configured: "+err.Error()))
-			return
-		}
-	}
-	account := s.Service.EffectiveGnarAccount()
-	if err := s.Tunnels.Stop(tunnel.KindGnar); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.Service.UpdateTunnelEnabled(tunnel.KindGnar, true); err != nil {
-		s.writePublicAccessError(writer, http.StatusBadRequest, err)
-		return
-	}
-	status, err := s.Tunnels.StartPublicAccess(edge, account, nil)
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+	client, err := s.routeClient()
 	if err != nil {
-		projected := s.publicAccessStatus()
-		projected.Error = err.Error()
-		if status.Error != "" {
-			projected.Error = status.Error
-		}
-		s.writePublicAccessStatus(writer, http.StatusBadGateway, projected)
+		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		return
+	}
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	route := relay.Route{ID: current.RouteID, PublicHostname: current.PublicHostname, PathPrefix: current.PathPrefix, AuthMode: "public", Enabled: true}
+	configured, err := client.Configure(request.Context(), route)
+	if err != nil {
+		s.writePublicAccessError(writer, http.StatusBadGateway, err)
+		return
+	}
+	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+		Enabled: true, RouteID: configured.ID, Owner: configured.HostID,
+		PublicHostname: configured.PublicHostname, PathPrefix: configured.PathPrefix,
+		AuthMode: configured.AuthMode,
+	}); err != nil {
+		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
 }
 
+// publicAccessRPC exposes the same Relay-owned route lifecycle to clients
+// connected through the Relay control WebSocket. The daemon performs route
+// mutations with its locally held Host Secret; neither that secret nor the
+// Relay route capability is placed on the control stream.
+func (s *HTTPServer) publicAccessRPC(ctx context.Context, action, publicHostname, pathPrefix string) (api.PublicAccessStatus, error) {
+	if action == "status" {
+		return s.publicAccessStatus(), nil
+	}
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+
+	current := s.Service.PublicTunnelSettingsSnapshot()
+	switch action {
+	case "enable":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if s.RelayStart != nil {
+			if err := s.RelayStart(); err != nil {
+				return api.PublicAccessStatus{}, err
+			}
+		}
+		route := relay.Route{
+			ID:             current.RouteID,
+			PublicHostname: current.PublicHostname,
+			PathPrefix:     current.PathPrefix,
+			AuthMode:       "public",
+			Enabled:        true,
+		}
+		if strings.TrimSpace(publicHostname) != "" {
+			route.PublicHostname = strings.TrimSpace(publicHostname)
+		}
+		if strings.TrimSpace(pathPrefix) != "" {
+			route.PathPrefix = strings.TrimSpace(pathPrefix)
+		}
+		configured, err := client.Configure(ctx, route)
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        true,
+			RouteID:        configured.ID,
+			Owner:          configured.HostID,
+			PublicHostname: configured.PublicHostname,
+			PathPrefix:     configured.PathPrefix,
+			AuthMode:       configured.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "test":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		route := relay.Route{
+			ID:             current.RouteID,
+			PublicHostname: current.PublicHostname,
+			PathPrefix:     current.PathPrefix,
+			AuthMode:       "public",
+			Enabled:        current.Enabled,
+		}
+		provided := strings.TrimSpace(publicHostname) != "" || strings.TrimSpace(pathPrefix) != ""
+		if strings.TrimSpace(publicHostname) != "" {
+			route.PublicHostname = strings.TrimSpace(publicHostname)
+		}
+		if strings.TrimSpace(pathPrefix) != "" {
+			route.PathPrefix = strings.TrimSpace(pathPrefix)
+		}
+		if provided {
+			route.Enabled = false
+			route, err = client.Configure(ctx, route)
+		} else {
+			route, err = client.Get(ctx)
+		}
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        current.Enabled,
+			RouteID:        route.ID,
+			Owner:          route.HostID,
+			PublicHostname: route.PublicHostname,
+			PathPrefix:     route.PathPrefix,
+			AuthMode:       route.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "disable":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := client.Disable(ctx); err != nil && !errors.Is(err, relay.ErrRouteNotFound) {
+			return api.PublicAccessStatus{}, err
+		}
+		current.Enabled = false
+		if err := s.Service.UpdatePublicTunnelSettings(current); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "reset":
+		if client, err := s.routeClient(); err == nil {
+			if disableErr := client.Disable(ctx); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
+				return api.PublicAccessStatus{}, disableErr
+			}
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	case "restart":
+		client, err := s.routeClient()
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		route := relay.Route{ID: current.RouteID, PublicHostname: current.PublicHostname, PathPrefix: current.PathPrefix, AuthMode: "public", Enabled: true}
+		configured, err := client.Configure(ctx, route)
+		if err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
+			Enabled:        true,
+			RouteID:        configured.ID,
+			Owner:          configured.HostID,
+			PublicHostname: configured.PublicHostname,
+			PathPrefix:     configured.PathPrefix,
+			AuthMode:       configured.AuthMode,
+		}); err != nil {
+			return api.PublicAccessStatus{}, err
+		}
+	default:
+		return api.PublicAccessStatus{}, fmt.Errorf("unknown public access action: %s", action)
+	}
+	return s.publicAccessStatus(), nil
+}
+
 func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
-	edge := s.gnarEffectiveEdge()
-	configuredEdge := strings.TrimSpace(s.Service.Settings.GnarEdge)
-	defaultEdge := s.gnarDefaultEdge()
+	current := s.Service.SettingsSnapshot()
 	status := api.PublicAccessStatus{
-		EdgeURL:               edge,
-		ConfiguredEdgeURL:     configuredEdge,
-		DefaultEdgeURL:        defaultEdge,
-		UsingDefaultEdge:      configuredEdge == "",
-		AccountName:           s.Service.EffectiveGnarAccount(),
-		ConfiguredAccountName: s.Service.ConfiguredGnarAccount(),
-		UsingDefaultAccount:   s.Service.ConfiguredGnarAccount() == "",
-		Enabled:               s.Service.PublicAccessEnabled(),
-		Authenticated:         s.Tunnels != nil && s.Tunnels.GnarAuthenticated(),
+		RelayURL:       current.Relay.URL,
+		HostID:         current.Relay.HostID,
+		RouteID:        current.PublicTunnel.RouteID,
+		PublicHostname: current.PublicTunnel.PublicHostname,
+		PathPrefix:     current.PublicTunnel.PathPrefix,
+		AuthMode:       current.PublicTunnel.AuthMode,
+		Enabled:        current.PublicTunnel.Enabled,
 	}
-	if status.EdgeURL != "" {
-		if err := tunnel.ValidateEdgeURL(status.EdgeURL); err != nil {
-			status.Error = err.Error()
-			// Do not echo an invalid Edge URL: it may contain userinfo or other
-			// material that must never cross the Public Access API boundary.
-			status.EdgeURL = ""
-		}
-	}
-	if status.ConfiguredEdgeURL != "" {
-		if err := tunnel.ValidateEdgeURL(status.ConfiguredEdgeURL); err != nil {
-			// Never echo a malformed or credential-bearing override through the
-			// status API, but retain an actionable configuration error.
-			status.ConfiguredEdgeURL = ""
-			if status.Error == "" {
-				status.Error = err.Error()
-			}
-		}
-	}
-	if status.DefaultEdgeURL != "" {
-		if err := tunnel.ValidateEdgeURL(status.DefaultEdgeURL); err != nil {
-			status.DefaultEdgeURL = ""
-			if status.Error == "" {
-				status.Error = err.Error()
-			}
-		}
-	}
-	if s.Tunnels == nil {
+	if s.RelayRouteClient == nil {
 		return status
 	}
-	if value, ok := s.Tunnels.Status()[tunnel.KindGnar]; ok {
-		status.Running = value.Running && value.URL != ""
-		if status.Running {
-			status.PublicEndpoint = value.URL
+	client, err := s.RelayRouteClient()
+	if err != nil {
+		if status.Enabled {
+			status.Error = err.Error()
 		}
-		if value.Error != "" {
-			status.Error = value.Error
+		return status
+	}
+	route, err := client.Get(context.Background())
+	if err != nil {
+		if !errors.Is(err, relay.ErrRouteNotFound) {
+			status.Error = err.Error()
+		}
+		return status
+	}
+	status.Authenticated = true
+	status.RouteID = route.ID
+	status.PublicHostname = route.PublicHostname
+	status.PathPrefix = route.PathPrefix
+	status.AuthMode = route.AuthMode
+	status.Running = route.Enabled
+	if route.Enabled {
+		if endpoint, endpointErr := route.PublicURL(current.Relay.URL); endpointErr == nil {
+			status.PublicEndpoint = endpoint
+		} else {
+			status.Error = endpointErr.Error()
+			status.Running = false
 		}
 	}
 	return status
 }
 
-func (s *HTTPServer) gnarDefaultEdge() string {
-	if s.Tunnels != nil {
-		if edge := s.Tunnels.GnarDefaultEdge(); edge != "" {
-			return edge
-		}
+func (s *HTTPServer) routeClient() (*relay.RouteClient, error) {
+	if s.RelayRouteClient == nil {
+		return nil, errors.New("Relay route is not configured")
 	}
-	return settings.BuiltInGnarEdge()
-}
-
-func (s *HTTPServer) gnarEffectiveEdge() string {
-	if s.Tunnels != nil {
-		if edge := s.Tunnels.GnarEdge(); edge != "" || strings.TrimSpace(s.Service.Settings.GnarEdge) == "" {
-			return edge
-		}
-	}
-	return strings.TrimSpace(s.Service.Settings.GnarEdge)
-}
-
-func safeEdgeURL(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || tunnel.ValidateEdgeURL(value) != nil {
-		return ""
-	}
-	return value
+	return s.RelayRouteClient()
 }
 
 func (s *HTTPServer) writePublicAccessStatus(writer http.ResponseWriter, code int, status api.PublicAccessStatus) {
@@ -896,38 +965,6 @@ func (s *HTTPServer) writePublicAccessError(writer http.ResponseWriter, code int
 	status := s.publicAccessStatus()
 	status.Error = err.Error()
 	s.writePublicAccessStatus(writer, code, status)
-}
-
-func tunnelResponse(status map[string]tunnel.Status, token string) map[string]any {
-	result := make(map[string]any, len(status))
-	for kind, value := range status {
-		item := map[string]any{"running": value.Running}
-		if value.URL != "" {
-			item["url"] = value.URL
-			item["web_url"] = authenticatedWebURL(value.URL, token)
-		}
-		if value.Error != "" {
-			item["error"] = value.Error
-		}
-		result[kind] = item
-	}
-	return map[string]any{"tunnels": result}
-}
-
-// authenticatedWebURL is retained only for the lower-level legacy tunnel
-// routes. Public Access responses stay credential-free; browser-open code adds
-// the same fragment at the last possible moment. QueryEscape gives the Web UI
-// a form-safe value, while replacing its space encoding keeps arbitrary legacy
-// tokens RFC3986-compatible as well.
-func authenticatedWebURL(raw, token string) string {
-	if token == "" {
-		return raw
-	}
-	base := raw
-	if fragment := strings.IndexByte(base, '#'); fragment >= 0 {
-		base = base[:fragment]
-	}
-	return base + "#t=" + strings.ReplaceAll(url.QueryEscape(token), "+", "%20")
 }
 
 func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.Request) {
@@ -1024,9 +1061,145 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	}
 }
 
+// HandleRelayControl adapts one BRLY/2 control stream to the daemon's normal
+// wsPeer protocol. The Relay has already authenticated the client capability;
+// the Host still validates the stream metadata and never forwards its Host
+// Secret back across the transport. send is Connector.Send for the owning
+// stream and is kept as a callback to avoid coupling this package to relay's
+// connection state.
+func (s *HTTPServer) HandleRelayControl(
+	ctx context.Context,
+	open relay.StreamOpen,
+	value relay.Frame,
+	send func(relay.Frame) error,
+) error {
+	if open.Class != "control" {
+		return fmt.Errorf("unsupported Relay control class: %s", open.Class)
+	}
+	if send == nil {
+		return errors.New("Relay control transport is unavailable")
+	}
+	transport := func(item outboundMessage) bool {
+		kind := relay.FrameText
+		if item.kind == websocket.BinaryMessage {
+			kind = relay.FrameBinary
+		}
+		return send(relay.Frame{Kind: kind, ID: value.ID, Payload: append([]byte(nil), item.data...)}) == nil
+	}
+
+	s.relayPeersMu.Lock()
+	entry := s.relayPeers[value.ID]
+	if value.Kind == relay.FrameOpen {
+		if entry != nil {
+			s.relayPeersMu.Unlock()
+			return errors.New("duplicate Relay control stream")
+		}
+		entry = &relayControlPeer{peer: newRelayPeer(s, transport), open: open, ctx: ctx}
+		s.relayPeers[value.ID] = entry
+	}
+	s.relayPeersMu.Unlock()
+	if entry == nil {
+		return errors.New("unknown Relay control stream")
+	}
+
+	peer := entry.peer
+	if value.Kind == relay.FrameClose || value.Kind == relay.FrameError || value.Kind == relay.FrameEnd {
+		s.removeRelayControl(value.ID, entry)
+		return nil
+	}
+	if value.Kind != relay.FrameText && value.Kind != relay.FrameBinary {
+		return nil
+	}
+	entry.stateMu.Lock()
+	authenticated := entry.authenticated
+	entry.stateMu.Unlock()
+	if !authenticated {
+		if value.Kind != relay.FrameText {
+			return errors.New("Relay control authentication must be text")
+		}
+		var auth struct {
+			Type         string   `json:"t"`
+			AccessToken  string   `json:"access_token"`
+			ClientID     string   `json:"client_id"`
+			Version      string   `json:"version"`
+			Capabilities []string `json:"capabilities"`
+			Formats      []string `json:"terminalStateFormats"`
+		}
+		if err := json.Unmarshal(value.Payload, &auth); err != nil || auth.Type != "auth" || auth.Version != api.Version {
+			return errors.New("invalid Relay control authentication")
+		}
+		if auth.AccessToken == "" || open.Token == "" || auth.AccessToken != open.Token {
+			return errors.New("Relay control capability mismatch")
+		}
+		if open.ClientID != "" && auth.ClientID != open.ClientID {
+			return errors.New("Relay control client mismatch")
+		}
+		peer.terminalStateFormat = selectTerminalStateFormat(auth.Formats)
+		if peer.terminalStateFormat == "" {
+			return errors.New("Relay control has no compatible terminal state format")
+		}
+		// The local wsPeer implementation expects the daemon token in its
+		// envelope. This substitution happens entirely inside Headless; the
+		// Host Secret is never put on the Relay wire.
+		entry.stateMu.Lock()
+		entry.authenticated = true
+		entry.stateMu.Unlock()
+		s.registerPeer(peer)
+		state, revision := s.Service.RosterVersion(ctx)
+		if err := peer.writeJSON(map[string]any{"t": "welcome", "version": api.Version, "host": state.Host}); err != nil {
+			s.removeRelayControl(value.ID, entry)
+			return err
+		}
+		if err := peer.writeJSON(makeRoster(state)); err != nil {
+			s.removeRelayControl(value.ID, entry)
+			return err
+		}
+		peer.startRoster(ctx, state, revision, supportsRosterDeltas(auth.Capabilities))
+		return nil
+	}
+
+	if value.Kind == relay.FrameBinary {
+		return peer.input(ctx, value.Payload)
+	}
+	var command api.Envelope
+	if err := json.Unmarshal(value.Payload, &command); err != nil {
+		return peer.writeError("", fmt.Errorf("invalid request: %w", err))
+	}
+	if command.Type != "request" {
+		return peer.writeError(command.ID, errors.New("unsupported message type"))
+	}
+	if isSlowMutation(command.Method) || isBackgroundRequest(command.Method) {
+		go func() {
+			if err := peer.handle(ctx, command); err != nil {
+				_ = peer.writeError(command.ID, err)
+			}
+		}()
+		return nil
+	}
+	return peer.handle(ctx, command)
+}
+
+func (s *HTTPServer) removeRelayControl(id relay.ConnectionID, entry *relayControlPeer) {
+	s.relayPeersMu.Lock()
+	if current := s.relayPeers[id]; current == entry {
+		delete(s.relayPeers, id)
+	}
+	s.relayPeersMu.Unlock()
+	entry.stateMu.Lock()
+	authenticated := entry.authenticated
+	entry.authenticated = false
+	entry.stateMu.Unlock()
+	if authenticated {
+		s.unregisterPeer(entry.peer)
+	}
+	entry.peer.close()
+}
+
 func isSlowMutation(method string) bool {
 	switch method {
-	case "project.remove", "workspace.remove":
+	case "project.remove", "workspace.remove",
+		"public-access.enable", "public-access.test", "public-access.disable",
+		"public-access.reset", "public-access.restart":
 		return true
 	default:
 		return false
@@ -1120,12 +1293,6 @@ func (s *HTTPServer) peerCount() int {
 	return len(s.peers)
 }
 
-func compatibleProtocolVersion(client, server string) bool {
-	clientMajor := strings.SplitN(client, ".", 2)[0]
-	serverMajor := strings.SplitN(server, ".", 2)[0]
-	return clientMajor != "" && clientMajor == serverMajor
-}
-
 func supportsRosterDeltas(capabilities []string) bool {
 	for _, capability := range capabilities {
 		if capability == "roster-delta" {
@@ -1164,6 +1331,9 @@ type wsPeer struct {
 	server     *HTTPServer
 	connection *websocket.Conn
 	outbound   chan outboundMessage
+	// transport is set for a Relay control peer. It bypasses the WebSocket
+	// writer while preserving the same bounded peer and service lifecycle.
+	transport func(outboundMessage) bool
 
 	enqueueMu sync.Mutex
 	closed    chan struct{}
@@ -1211,6 +1381,14 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 	}
 	go peer.writeLoop()
 	return peer
+}
+
+func newRelayPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsPeer {
+	return &wsPeer{
+		server:    server,
+		transport: transport,
+		closed:    make(chan struct{}),
+	}
 }
 
 // beginPendingSubscription installs a cancellable marker for one session. A
@@ -1282,6 +1460,9 @@ func (p *wsPeer) close() {
 }
 
 func (p *wsPeer) writeLoop() {
+	if p.connection == nil {
+		return
+	}
 	for item := range p.outbound {
 		_ = p.connection.SetWriteDeadline(time.Now().Add(outboundWriteTimeout))
 		if err := p.connection.WriteMessage(item.kind, item.data); err != nil {
@@ -1302,6 +1483,11 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		p.enqueueMu.Unlock()
 		return false
 	default:
+	}
+	if p.transport != nil {
+		ok := p.transport(item)
+		p.enqueueMu.Unlock()
+		return ok
 	}
 	select {
 	case p.outbound <- item:
@@ -1363,7 +1549,9 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 		sessionIDs = append(sessionIDs, p.attached.ID)
 	}
 	close(p.closed)
-	close(p.outbound)
+	if p.outbound != nil {
+		close(p.outbound)
+	}
 	return sessionIDs, p.agentSession
 }
 
@@ -1665,20 +1853,25 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: publicSession(session), Snapshot: snapshot})
 	case "settings.get":
+		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":        p.server.Service.DefaultRuntime,
-			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
-			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
-			"openaiBaseURL":         p.server.Service.Settings.OpenAIBaseURL,
-			"openaiModel":           p.server.Service.Settings.OpenAIModel,
-			"openaiTitleEnabled":    p.server.Service.Settings.OpenAITitleEnabled,
+			"defaultRuntime":     value.DefaultRuntime,
+			"runtimeEnv":         value.RuntimeEnv,
+			"autoOpenShell":      value.AutoOpenShell,
+			"autoStartAI":        value.AutoStartAI,
+			"openaiBaseURL":      value.OpenAIBaseURL,
+			"openaiModel":        value.OpenAIModel,
+			"openaiTitleEnabled": value.OpenAITitleEnabled,
+			"relay":              value.Relay,
+			"publicTunnel":       value.PublicTunnel,
 		})
+	case "public-access.status", "public-access.enable", "public-access.test", "public-access.disable", "public-access.reset", "public-access.restart":
+		action := strings.TrimPrefix(command.Method, "public-access.")
+		value, err := p.server.publicAccessRPC(ctx, action, stringParam(params, "publicHostname"), stringParam(params, "pathPrefix"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "settings.testOpenAI":
 		if err := p.server.Service.TestOpenAITitle(
 			ctx,
@@ -1690,23 +1883,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"ok": true})
 	case "settings.put":
+		current := p.server.Service.SettingsSnapshot()
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
 		if runtimeEnv == nil {
-			runtimeEnv = p.server.Service.Settings.RuntimeEnv
+			runtimeEnv = current.RuntimeEnv
 		}
-		gnarEdge := p.server.Service.Settings.GnarEdge
-		if _, specified := params["gnarEdge"]; specified {
-			gnarEdge = stringParam(params, "gnarEdge")
-		}
-		var normalizedAccount string
-		if _, specified := params["gnarAccount"]; specified {
-			var err error
-			normalizedAccount, err = settings.NormalizeConfiguredGnarAccount(stringParam(params, "gnarAccount"))
-			if err != nil {
-				return err
-			}
-		}
-		if err := p.server.Service.UpdateSettings(stringParam(params, "defaultRuntime"), runtimeEnv, gnarEdge); err != nil {
+		if err := p.server.Service.UpdateSettings(stringParam(params, "defaultRuntime"), runtimeEnv); err != nil {
 			return err
 		}
 		if _, specified := params["autoOpenShell"]; specified {
@@ -1738,30 +1920,40 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 				}
 			}
 		}
-		if p.server.Tunnels != nil {
-			p.server.Tunnels.SetGnarEdgeOverride(p.server.Service.Settings.GnarEdge)
-		}
-		if _, specified := params["gnarAccount"]; specified {
-			p.server.Service.Settings.GnarAccount = normalizedAccount
-			if p.server.Service.SettingsPath != "" {
-				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
-					return err
-				}
+		if value, specified := params["relay"]; specified {
+			data, err := json.Marshal(value)
+			var relayValue settings.RelaySettings
+			if err != nil || json.Unmarshal(data, &relayValue) != nil {
+				return errors.New("invalid relay settings")
+			}
+			if err := p.server.Service.UpdateRelaySettings(relayValue); err != nil {
+				return err
 			}
 		}
+		if value, specified := params["publicTunnel"]; specified {
+			data, err := json.Marshal(value)
+			var tunnelValue settings.PublicTunnelSettings
+			if err != nil || json.Unmarshal(data, &tunnelValue) != nil {
+				return errors.New("invalid public tunnel settings")
+			}
+			if err := p.server.Service.UpdatePublicTunnelSettings(tunnelValue); err != nil {
+				return err
+			}
+		}
+		if err := p.server.syncRelayLifecycle(); err != nil {
+			return err
+		}
+		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{
-			"defaultRuntime":        p.server.Service.DefaultRuntime,
-			"runtimeEnv":            p.server.Service.Settings.RuntimeEnv,
-			"gnarEdge":              safeEdgeURL(p.server.Service.Settings.GnarEdge),
-			"gnarDefaultEdge":       safeEdgeURL(p.server.gnarDefaultEdge()),
-			"gnarEffectiveEdge":     safeEdgeURL(p.server.gnarEffectiveEdge()),
-			"gnarAccount":           p.server.Service.EffectiveGnarAccount(),
-			"gnarConfiguredAccount": p.server.Service.ConfiguredGnarAccount(),
-			"autoOpenShell":         p.server.Service.Settings.AutoOpenShell,
-			"autoStartAI":           p.server.Service.Settings.AutoStartAI,
-			"openaiBaseURL":         p.server.Service.Settings.OpenAIBaseURL,
-			"openaiModel":           p.server.Service.Settings.OpenAIModel,
-			"openaiTitleEnabled":    p.server.Service.Settings.OpenAITitleEnabled,
+			"defaultRuntime":     value.DefaultRuntime,
+			"runtimeEnv":         value.RuntimeEnv,
+			"autoOpenShell":      value.AutoOpenShell,
+			"autoStartAI":        value.AutoStartAI,
+			"openaiBaseURL":      value.OpenAIBaseURL,
+			"openaiModel":        value.OpenAIModel,
+			"openaiTitleEnabled": value.OpenAITitleEnabled,
+			"relay":              value.Relay,
+			"publicTunnel":       value.PublicTunnel,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(
