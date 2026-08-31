@@ -744,8 +744,9 @@ public final class TerminalSurfaceManager {
 
         let currentSurface = entry.surface.state.surface
         let currentSurfaceID = currentSurface.map(ObjectIdentifier.init)
-        let currentEpoch = entry.surface.outputWriter.bufferEpoch
-        let currentSequence = entry.surface.outputWriter.enqueuedSequence
+        let currentBoundary = entry.surface.outputWriter.enqueuedBoundary
+        let currentEpoch = currentBoundary.epoch
+        let currentSequence = currentBoundary.sequence
         if entry.displayVisible,
            entry.surface.terminalViewIsPresentable,
            entry.surface.terminalSurfaceIsReady,
@@ -762,11 +763,15 @@ public final class TerminalSurfaceManager {
         }
 
         let presentationGeneration = entry.presentationGeneration
-        // Jump to latest: warm surfaces are kept current while hidden
-        // (output subscription + retained grid), so promotion reveals the
-        // current frame immediately without replaying the backlog visibly.
-        // No fast-forward, no Zeno chase; backlog drains hidden or is
-        // superseded by the next snapshot.
+        // Capture a fixed output boundary. The writer may still be draining a
+        // burst when a surface is promoted; revealing before this boundary is
+        // consumed exposes a partially applied TUI frame. Bytes enqueued
+        // after this point remain live output and do not extend the promotion
+        // wait (the Zeno case).
+        let targetEpoch = currentEpoch
+        let targetSequence = currentSequence
+        let waitsForOutput = !entry.displayVisible
+        let stallDeadline = ContinuousClock.now.advanced(by: .seconds(2))
         if !entry.displayVisible {
             prepareHiddenRendering(for: entry)
         }
@@ -797,21 +802,38 @@ public final class TerminalSurfaceManager {
                     continue
                 }
 
+                let outputReady = !waitsForOutput || outputHasReached(
+                    entry.surface,
+                    targetEpoch: targetEpoch,
+                    targetSequence: targetSequence
+                )
+                let timedOut = waitsForOutput && ContinuousClock.now >= stallDeadline
                 let viewReady = entry.surface.terminalViewIsPresentable
-                if viewReady, entry.surface.terminalSurfaceIsReady {
+                if (outputReady || timedOut), viewReady, entry.surface.terminalSurfaceIsReady {
+                    if timedOut, !outputReady {
+                        TerminalDiagnostics.log("present_wait_timeout", [
+                            "session": sessionID.description,
+                            "targetEpoch": targetEpoch.map(String.init) ?? "nil",
+                            "targetSequence": String(targetSequence),
+                            "renderedEpoch": String(entry.surface.renderedEpoch),
+                            "renderedSequence": String(entry.surface.renderedSequence),
+                            "enqueuedSequence": String(entry.surface.outputWriter.enqueuedSequence),
+                        ])
+                    }
                     if entry.surface.presentNow() {
                         entry.view.isHidden = false
                         entry.view.alphaValue = 1
                         setDisplayVisible(true, for: entry)
                         let presentedSurface = entry.surface.state.surface
                         entry.lastPresentedSurface = presentedSurface.map(ObjectIdentifier.init)
-                        entry.lastPresentedEpoch = entry.surface.outputWriter.bufferEpoch
-                        entry.lastPresentedSequence = entry.surface.outputWriter.enqueuedSequence
+                        let presentedBoundary = entry.surface.outputWriter.enqueuedBoundary
+                        entry.lastPresentedEpoch = presentedBoundary.epoch
+                        entry.lastPresentedSequence = presentedBoundary.sequence
                         TerminalDiagnostics.log("present_complete", [
                             "session": sessionID.description,
-                            "targetEpoch": entry.lastPresentedEpoch.map(String.init) ?? "nil",
-                            "targetSequence": String(entry.lastPresentedSequence),
-                            "enqueuedNow": String(entry.surface.outputWriter.enqueuedSequence),
+                            "targetEpoch": targetEpoch.map(String.init) ?? "nil",
+                            "targetSequence": String(targetSequence),
+                            "enqueuedNow": String(presentedBoundary.sequence),
                             "renderedEpoch": String(entry.surface.renderedEpoch),
                             "renderedSequence": String(entry.surface.renderedSequence),
                             "recoveryPhase": entry.recoveryPhase.rawValue,
@@ -821,7 +843,9 @@ public final class TerminalSurfaceManager {
                 }
 
                 do {
-                    try await Task.sleep(for: .milliseconds(16))
+                    try await Task.sleep(
+                        for: timedOut ? .milliseconds(250) : .milliseconds(16)
+                    )
                 } catch {
                     return
                 }
@@ -858,9 +882,11 @@ public final class TerminalSurfaceManager {
         targetSequence: UInt64
     ) -> Bool {
         guard let targetEpoch else { return true }
-        return surface.renderedEpoch > targetEpoch
-            || (surface.renderedEpoch == targetEpoch
-                && surface.renderedSequence >= targetSequence)
+        let rendered = surface.outputWriter.renderedBoundary
+        guard let renderedEpoch = rendered.epoch else { return false }
+        return renderedEpoch > targetEpoch
+            || (renderedEpoch == targetEpoch
+                && rendered.sequence >= targetSequence)
     }
 
     private func installWindowObservers(for window: NSWindow?) {

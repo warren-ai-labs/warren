@@ -11,6 +11,18 @@ public enum TerminalSnapshotRestoreResult: Equatable, Sendable {
     case rejected
 }
 
+/// A point in the ordered output stream used to synchronize presentation with
+/// the bytes that have already entered the writer.
+public struct WarrenGhosttyOutputBoundary: Equatable, Sendable {
+    public let epoch: UInt64?
+    public let sequence: UInt64
+
+    public init(epoch: UInt64?, sequence: UInt64) {
+        self.epoch = epoch
+        self.sequence = sequence
+    }
+}
+
 /// Feeds Host output into one Ghostty surface off the main thread.
 ///
 /// Ghostty's own terminal reads PTY bytes on a background termio thread and
@@ -33,6 +45,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     }
 
     private struct Slice: Sendable {
+        let generation: UInt64
         let epoch: UInt64
         let sequence: UInt64
         let endSequence: UInt64
@@ -40,6 +53,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     }
 
     private struct Buffer {
+        private(set) var generation: UInt64 = 0
         private(set) var epoch: UInt64?
         private(set) var enqueuedSequence: UInt64 = 0
         private var chunks: [Chunk] = []
@@ -49,8 +63,21 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         var isEmpty: Bool { headIndex >= chunks.count }
 
         mutating func reset(epoch: UInt64, sequence: UInt64) {
+            generation &+= 1
             self.epoch = epoch
             enqueuedSequence = sequence
+            chunks.removeAll(keepingCapacity: true)
+            headIndex = 0
+            headOffset = 0
+        }
+
+        /// Invalidates slices already handed to a drain without establishing a
+        /// new output anchor. This is used during shutdown so a cancelled
+        /// drain cannot publish a sequence after its buffer was cleared.
+        mutating func invalidate() {
+            generation &+= 1
+            epoch = nil
+            enqueuedSequence = 0
             chunks.removeAll(keepingCapacity: true)
             headIndex = 0
             headOffset = 0
@@ -87,6 +114,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 ? chunk.payload
                 : Data(chunk.payload[start..<end])
             let slice = Slice(
+                generation: generation,
                 epoch: chunk.epoch,
                 sequence: chunk.sequence + UInt64(start),
                 endSequence: chunk.sequence + UInt64(end),
@@ -131,6 +159,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private var latestRenderedSequence: UInt64 = 0
     private var rawEpoch: UInt64 = 1
     private var rawSequence: UInt64 = 0
+    /// Internal suspension point used by deterministic writer race tests. The
+    /// hook is read under `lock`, then awaited outside it so production feeds
+    /// retain the same lock ordering as the normal path.
+    private var beforeWriteHook: (@Sendable () async -> Void)?
     private var shutdownCompletion: (@MainActor @Sendable () -> Void)?
     private var shutdownWaitingGeneration: UInt64?
     private var shutdownCompletionDelivered = false
@@ -173,6 +205,18 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         lock.withLock { buffer.enqueuedSequence }
     }
 
+    /// The enqueued epoch and sequence captured under one lock. Presentation
+    /// must use this snapshot rather than reading the two properties separately
+    /// across a concurrent recovery reset.
+    public var enqueuedBoundary: WarrenGhosttyOutputBoundary {
+        lock.withLock {
+            WarrenGhosttyOutputBoundary(
+                epoch: buffer.epoch,
+                sequence: buffer.enqueuedSequence
+            )
+        }
+    }
+
     /// Last (epoch, sequence) actually written into Ghostty.
     public var renderedEpoch: UInt64 {
         lock.withLock { latestRenderedEpoch }
@@ -180,6 +224,24 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
     public var renderedSequence: UInt64 {
         lock.withLock { latestRenderedSequence }
+    }
+
+    public var renderedBoundary: WarrenGhosttyOutputBoundary {
+        lock.withLock {
+            WarrenGhosttyOutputBoundary(
+                epoch: latestRenderedEpoch,
+                sequence: latestRenderedSequence
+            )
+        }
+    }
+
+    /// Installs a deterministic suspension point immediately before a slice
+    /// enters Ghostty. This is intentionally internal; callers use it only to
+    /// reproduce reset-versus-drain races in the adapter test suite.
+    func setBeforeWriteHook(_ hook: (@Sendable () async -> Void)?) {
+        lock.withLock {
+            beforeWriteHook = hook
+        }
     }
 
     /// Whether Ghostty is currently inside a synchronized-output block.
@@ -279,6 +341,9 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// Records that Ghostty has consumed bytes through `sequence` for `epoch`.
     public func markRendered(epoch: UInt64, sequence: UInt64) {
         lock.withLock {
+            guard epoch > latestRenderedEpoch
+                || (epoch == latestRenderedEpoch && sequence >= latestRenderedSequence)
+            else { return }
             latestRenderedEpoch = epoch
             latestRenderedSequence = sequence
         }
@@ -374,7 +439,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             isShutdown = true
             shutdownWaitingGeneration = feedTaskGeneration
             feedTask?.cancel()
-            buffer = Buffer()
+            buffer.invalidate()
         }
         let hasDrainToWaitFor = shutdownWaitingGeneration != nil
             && feedTaskGeneration == shutdownWaitingGeneration
@@ -425,6 +490,11 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 continue
             }
 
+            let beforeWrite = lock.withLock { beforeWriteHook }
+            if let beforeWrite {
+                await beforeWrite()
+            }
+
             // Ghostty's host-managed write path can block until the main
             // runloop services the surface. Never hold the writer lock across
             // this call: the main thread enqueues the next slice and would
@@ -432,7 +502,9 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             // session also never holds its own lock across Ghostty, so a
             // teardown on the main thread cannot wait behind this call.
             let writeResult = terminalFeedLock.withLock { () -> (isCurrent: Bool, received: Bool) in
-                guard lock.withLock({ buffer.epoch == slice.epoch }) else {
+                guard lock.withLock({
+                    buffer.generation == slice.generation && buffer.epoch == slice.epoch
+                }) else {
                     return (false, false)
                 }
                 ansiObserver.receive(slice.payload)
@@ -440,11 +512,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 				let received = inMemory.receive(slice.payload)
 				if received {
 					onOutputReceived?()
-					lock.withLock {
-                        latestRenderedEpoch = slice.epoch
-                        latestRenderedSequence = slice.endSequence
-                    }
-                }
+				}
                 return (true, received)
             }
             guard writeResult.isCurrent else {
@@ -458,6 +526,26 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 continue
             }
             heldSlice = nil
+
+            let committed = lock.withLock { () -> Bool in
+                // A reset that does not need Ghostty's feed lock (shutdown or
+                // an epoch-changing enqueue) may land after the native write.
+                // Do not let that completed stale slice move the published
+                // boundary backwards.
+                guard buffer.generation == slice.generation,
+                      buffer.epoch == slice.epoch else {
+                    return false
+                }
+                if slice.epoch > latestRenderedEpoch
+                    || (slice.epoch == latestRenderedEpoch
+                        && slice.endSequence > latestRenderedSequence)
+                {
+                    latestRenderedEpoch = slice.epoch
+                    latestRenderedSequence = slice.endSequence
+                }
+                return true
+            }
+            guard committed else { continue }
 
             let hasMore = lock.withLock { !buffer.isEmpty }
             if !hasMore, shouldExitDrain(generation: generation) {
