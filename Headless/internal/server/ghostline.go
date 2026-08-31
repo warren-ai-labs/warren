@@ -33,10 +33,26 @@ func (r *GhostlineRuntime) Check(ctx context.Context) error {
 func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command string, env []string) error {
 	// The PTY always starts an interactive login shell and the requested
 	// command is typed into it, so quitting an agent TUI leaves a usable
-	// terminal behind. The daemon removes ambient NO_COLOR before starting the
-	// ghostline server; do not pass NO_COLOR= here because presence of an empty
-	// variable still disables colors for Codex.
-	sessionEnv := append([]string(nil), env...)
+	// terminal behind. Empty entries are handled by the bootstrap shell below:
+	// Ghostline can override an inherited value but cannot remove it from its
+	// own process environment.
+	sessionEnv := make([]string, 0, len(env))
+	unsetKeys := make([]string, 0)
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && value == "" {
+			// A PTY without TERM is not a usable terminal. Ghostline also
+			// supplies this default when the value is missing, so keep the
+			// terminal contract even when a session override is empty.
+			if key == "TERM" {
+				sessionEnv = append(sessionEnv, key+"="+runtime.DefaultTerm)
+				continue
+			}
+			unsetKeys = append(unsetKeys, key)
+			continue
+		}
+		sessionEnv = append(sessionEnv, entry)
+	}
 	if !hasEnv(sessionEnv, "TERM") || hasEnvValue(sessionEnv, "TERM", "dumb") {
 		sessionEnv = append(sessionEnv, "TERM="+runtime.DefaultTerm)
 	}
@@ -49,12 +65,22 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 			sessionEnv = append(sessionEnv, "TERMINFO="+terminfoDir)
 		}
 	}
+	process := ghostline.ProcessSpec{
+		Directory:   directory,
+		Environment: sessionEnv,
+	}
+	shell := runtime.LoginShellPath()
+	if bootstrap, err := runtime.ShellCommandWithUnsets(shell, unsetKeys); err != nil {
+		return err
+	} else if bootstrap != "" {
+		process.ShellCommand = bootstrap
+	} else {
+		process.Path = shell
+		process.Args = runtime.LoginShellArgs()
+	}
 	session, err := r.client.Start(ctx, ghostline.SessionOptions{
-		Name: name,
-		Process: ghostline.ProcessSpec{
-			Directory:   directory,
-			Environment: sessionEnv,
-		},
+		Name:    name,
+		Process: process,
 	})
 	if err != nil {
 		return err

@@ -2303,22 +2303,24 @@ func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, 
 // sessionEnvironment returns the per-session bindings together with the
 // current runtime overrides. The overrides are sent with every new session so
 // a detached Ghostline server can apply settings changed after it started;
-// existing sessions keep the environment they were created with.
-func (s *Service) sessionEnvironment(id, kind string) []string {
+// existing sessions keep the environment they were created with. Empty values
+// are retained as explicit unset requests and are handled by the login-shell
+// bootstrap in GhostlineRuntime.
+func (s *Service) sessionEnvironment(id, kind string) ([]string, error) {
 	env := agent.BindEnvironment(id, kind)
 	runtimeEnv := s.SettingsSnapshot().RuntimeEnv
+	if err := settings.ValidateRuntimeEnv(runtimeEnv); err != nil {
+		return nil, err
+	}
 	keys := make([]string, 0, len(runtimeEnv))
-	for key, value := range runtimeEnv {
-		if key == "" || value == "" {
-			continue
-		}
+	for key := range runtimeEnv {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
 		env = append(env, key+"="+runtimeEnv[key])
 	}
-	return env
+	return env, nil
 }
 
 func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
@@ -2403,7 +2405,10 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	// Every session gets the binding environment so a CLI started manually
 	// inside a plain shell is bound to the same Warren session by its own
 	// lifecycle hooks.
-	env := s.sessionEnvironment(id, kind)
+	env, err := s.sessionEnvironment(id, kind)
+	if err != nil {
+		return api.Session{}, fmt.Errorf("build session environment: %w", err)
+	}
 	// Capture the Warren creation time before launching the provider. OpenCode
 	// creates its SQLite session during process startup, so recording the time
 	// afterwards can make a valid first session look older than Warren's
@@ -2535,6 +2540,9 @@ func (s *Service) UpdatePublicTunnelSettings(value settings.PublicTunnelSettings
 // runtime environment overrides, persisting them when a settings file is
 // configured. Existing sessions keep their own runtimeKind.
 func (s *Service) UpdateSettings(kind string, runtimeEnv map[string]string) error {
+	if err := settings.ValidateRuntimeEnv(runtimeEnv); err != nil {
+		return err
+	}
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	if kind == "" {
