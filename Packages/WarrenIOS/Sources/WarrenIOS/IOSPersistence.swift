@@ -1,0 +1,406 @@
+import Foundation
+import WarrenTransport
+
+#if canImport(Security)
+import Security
+#endif
+
+/// The small amount of navigation state a phone can safely restore. Layout
+/// geometry and desktop pane/window state deliberately do not cross this
+/// boundary.
+public struct IOSNavigationState: Codable, Equatable, Sendable {
+    public var workspaceID: String?
+    public var terminalGroupID: String?
+    public var sessionID: String?
+    public var displayMode: IOSSessionDisplayMode
+
+    public init(
+        workspaceID: String? = nil,
+        terminalGroupID: String? = nil,
+        sessionID: String? = nil,
+        displayMode: IOSSessionDisplayMode = .terminal
+    ) {
+        self.workspaceID = workspaceID
+        self.terminalGroupID = terminalGroupID
+        self.sessionID = sessionID
+        self.displayMode = displayMode
+    }
+}
+
+public enum IOSSessionDisplayMode: String, Codable, CaseIterable, Sendable {
+    case terminal
+    case agent
+}
+
+/// The scope to which the native client should return after the currently
+/// visible Session is deleted. This is an ephemeral routing hint, not a
+/// persisted resource reference.
+public enum IOSSessionScopeDestination: Equatable, Sendable {
+    case workspace(String)
+    case terminalGroup(String)
+}
+
+/// Non-secret endpoint information exposed to the settings UI. The token is
+/// intentionally represented only by a presence flag; its value remains in
+/// the Keychain and is never published through SwiftUI state.
+public struct IOSEndpointMetadata: Equatable, Sendable {
+    public let name: String
+    public let url: String
+    public let hasToken: Bool
+    public let type: String
+    public let hostID: String?
+    public let routeID: String?
+
+    public init(
+        name: String,
+        url: String,
+        hasToken: Bool = false,
+        type: String = "daemon",
+        hostID: String? = nil,
+        routeID: String? = nil
+    ) {
+        self.name = name
+        self.url = url
+        self.hasToken = hasToken
+        self.type = type
+        self.hostID = hostID
+        self.routeID = routeID
+    }
+
+    public init(configuration: WarrenRemoteEndpointConfiguration) {
+        self.init(
+            name: configuration.name,
+            url: configuration.url,
+            hasToken: !configuration.token.isEmpty,
+            type: configuration.type,
+            hostID: configuration.hostID,
+            routeID: configuration.routeID
+        )
+    }
+
+    public var isRelay: Bool {
+        type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+    }
+}
+
+/// Keychain-backed secret storage. The UserDefaults store below never writes
+/// endpoint tokens, even when an endpoint is edited or removed.
+public struct IOSKeychainStore: Sendable {
+    public let service: String
+
+    public init(service: String = "com.warren.ios") {
+        self.service = service
+    }
+
+    public func read(account: String) -> String? {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    @discardableResult
+    public func write(_ value: String, account: String) -> Bool {
+        #if canImport(Security)
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let attributes: [String: Any] = [kSecValueData as String: data]
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query
+            item[kSecValueData as String] = data
+            return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        }
+        return status == errSecSuccess
+        #else
+        return false
+        #endif
+    }
+
+    @discardableResult
+    public func remove(account: String) -> Bool {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+        #else
+        return true
+        #endif
+    }
+}
+
+/// Device-local non-sensitive preferences. Host tokens are represented by
+/// their local names only; the values themselves stay in `IOSKeychainStore`.
+public final class IOSLocalStore: @unchecked Sendable {
+    private let defaults: UserDefaults
+    public let keychain: IOSKeychainStore
+
+    public init(
+        defaults: UserDefaults = .standard,
+        keychain: IOSKeychainStore = IOSKeychainStore()
+    ) {
+        self.defaults = defaults
+        self.keychain = keychain
+    }
+
+    /// All configured Hosts in display order. The first release of the iOS
+    /// client persisted one endpoint under `warren.ios.endpoint`; reading
+    /// that key as a one-item list keeps existing installs intact while the
+    /// next write upgrades them to the multi-Host format.
+    public var endpoints: [WarrenRemoteEndpointConfiguration] {
+        get {
+            if let values = storedEndpoints() {
+                return values.map(configuration(from:))
+            }
+            guard let legacy = legacyEndpoint() else { return [] }
+            return [configuration(from: legacy)]
+        }
+        set {
+            let previousNames = Set(endpoints.map(\.name))
+            writeEndpoints(newValue)
+            let nextNames = Set(newValue.map(\.name))
+            for name in previousNames.subtracting(nextNames) {
+                _ = keychain.remove(account: name)
+            }
+            for value in newValue {
+                if !value.token.isEmpty {
+                    _ = keychain.write(value.token, account: value.name)
+                } else {
+                    _ = keychain.remove(account: value.name)
+                }
+            }
+            if defaults.string(forKey: Keys.activeEndpoint).map(nextNames.contains) != true {
+                if let first = newValue.first?.name {
+                    defaults.set(first, forKey: Keys.activeEndpoint)
+                } else {
+                    defaults.removeObject(forKey: Keys.activeEndpoint)
+                }
+            }
+        }
+    }
+
+    /// The currently selected Host. This compatibility property remains the
+    /// single endpoint API used by app bootstrap and older callers.
+    public var endpoint: WarrenRemoteEndpointConfiguration? {
+        get {
+            let values = endpoints
+            if let activeName = defaults.string(forKey: Keys.activeEndpoint),
+               let active = values.first(where: { $0.name == activeName }) {
+                return active
+            }
+            return values.first
+        }
+        set {
+            guard let value = newValue else {
+                endpoints.forEach { _ = keychain.remove(account: $0.name) }
+                defaults.removeObject(forKey: Keys.endpoints)
+                defaults.removeObject(forKey: Keys.endpoint)
+                defaults.removeObject(forKey: Keys.activeEndpoint)
+                return
+            }
+            let previousName = endpoint?.name
+            saveEndpoint(value, replacingName: previousName, activate: true)
+        }
+    }
+
+    /// Returns a configured Host by its local display name.
+    public func endpoint(named name: String) -> WarrenRemoteEndpointConfiguration? {
+        endpoints.first(where: { $0.name == name })
+    }
+
+    /// Persists an endpoint, optionally replacing an existing list item. The
+    /// token is written only to the Keychain; the list remains metadata-only.
+    public func saveEndpoint(
+        _ value: WarrenRemoteEndpointConfiguration,
+        replacingName: String? = nil,
+        activate: Bool = true
+    ) {
+        var values = endpoints
+        let replacementIndex = replacingName.flatMap { name in
+            values.firstIndex(where: { $0.name == name })
+        }
+        var insertionIndex = replacementIndex ?? values.count
+        if let replacementIndex {
+            values.remove(at: replacementIndex)
+        }
+        if let duplicateIndex = values.firstIndex(where: { $0.name == value.name }) {
+            values.remove(at: duplicateIndex)
+            if duplicateIndex < insertionIndex {
+                insertionIndex -= 1
+            }
+        }
+        values.insert(value, at: min(insertionIndex, values.count))
+        writeEndpoints(values)
+
+        if let replacingName, replacingName != value.name {
+            _ = keychain.remove(account: replacingName)
+        }
+        if !value.token.isEmpty {
+            _ = keychain.write(value.token, account: value.name)
+        } else {
+            // Saving an endpoint without credentials is an explicit logout
+            // for that account; do not leave an older token behind.
+            _ = keychain.remove(account: value.name)
+        }
+        if activate {
+            defaults.set(value.name, forKey: Keys.activeEndpoint)
+        }
+    }
+
+    /// Selects a list item without rewriting its metadata or token.
+    @discardableResult
+    public func activateEndpoint(named name: String) -> Bool {
+        guard endpoints.contains(where: { $0.name == name }) else { return false }
+        defaults.set(name, forKey: Keys.activeEndpoint)
+        return true
+    }
+
+    /// Removes one Host and its corresponding Keychain credential. Callers
+    /// should keep at least one item active when the app is connected.
+    @discardableResult
+    public func removeEndpoint(named name: String) -> Bool {
+        var values = endpoints
+        guard let index = values.firstIndex(where: { $0.name == name }) else { return false }
+        values.remove(at: index)
+        writeEndpoints(values)
+        _ = keychain.remove(account: name)
+        if defaults.string(forKey: Keys.activeEndpoint) == name {
+            if let replacement = values.first?.name {
+                defaults.set(replacement, forKey: Keys.activeEndpoint)
+            } else {
+                defaults.removeObject(forKey: Keys.activeEndpoint)
+            }
+        }
+        return true
+    }
+
+    public var navigation: IOSNavigationState {
+        get {
+            guard let data = defaults.data(forKey: Keys.navigation),
+                  let value = try? JSONDecoder().decode(IOSNavigationState.self, from: data)
+            else { return IOSNavigationState() }
+            return value
+        }
+        set {
+            defaults.set(try? JSONEncoder().encode(newValue), forKey: Keys.navigation)
+        }
+    }
+
+    /// The last Session kind chosen in the creation sheet. Keeping this small
+    /// preference local makes repeated mobile Session creation predictable
+    /// without persisting any Host data or credentials.
+    public var lastSessionKind: String {
+        get { defaults.string(forKey: Keys.lastSessionKind) ?? "shell" }
+        set { defaults.set(newValue, forKey: Keys.lastSessionKind) }
+    }
+
+    public func clearToken(for endpointName: String) {
+        _ = keychain.remove(account: endpointName)
+    }
+
+    private enum Keys {
+        static let endpoint = "warren.ios.endpoint"
+        static let endpoints = "warren.ios.endpoints"
+        static let activeEndpoint = "warren.ios.active-endpoint"
+        static let navigation = "warren.ios.navigation"
+        static let lastSessionKind = "warren.ios.last-session-kind"
+    }
+
+    private struct StoredEndpoint: Codable, Sendable {
+        let name: String
+        let url: String
+        let ssh: String?
+        let type: String
+        let hostID: String?
+        let routeID: String?
+
+        init(
+            name: String,
+            url: String,
+            ssh: String?,
+            type: String = "daemon",
+            hostID: String? = nil,
+            routeID: String? = nil
+        ) {
+            self.name = name
+            self.url = url
+            self.ssh = ssh
+            self.type = type
+            self.hostID = hostID
+            self.routeID = routeID
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case name, url, ssh, type, hostID, routeID
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                name: try values.decode(String.self, forKey: .name),
+                url: try values.decode(String.self, forKey: .url),
+                ssh: try values.decodeIfPresent(String.self, forKey: .ssh),
+                type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
+                hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
+                routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
+            )
+        }
+    }
+
+    private func storedEndpoints() -> [StoredEndpoint]? {
+        guard let data = defaults.data(forKey: Keys.endpoints) else { return nil }
+        return try? JSONDecoder().decode([StoredEndpoint].self, from: data)
+    }
+
+    private func legacyEndpoint() -> StoredEndpoint? {
+        guard let data = defaults.data(forKey: Keys.endpoint) else { return nil }
+        return try? JSONDecoder().decode(StoredEndpoint.self, from: data)
+    }
+
+    private func configuration(from value: StoredEndpoint) -> WarrenRemoteEndpointConfiguration {
+        WarrenRemoteEndpointConfiguration(
+            name: value.name,
+            url: value.url,
+            token: keychain.read(account: value.name) ?? "",
+            ssh: value.ssh,
+            type: value.type,
+            hostID: value.hostID,
+            routeID: value.routeID
+        )
+    }
+
+    private func writeEndpoints(_ values: [WarrenRemoteEndpointConfiguration]) {
+        let metadata = values.map {
+            StoredEndpoint(
+                name: $0.name,
+                url: $0.url,
+                ssh: $0.ssh,
+                type: $0.type,
+                hostID: $0.hostID,
+                routeID: $0.routeID
+            )
+        }
+        defaults.set(try? JSONEncoder().encode(metadata), forKey: Keys.endpoints)
+        // A successful write upgrades any legacy single-endpoint record.
+        defaults.removeObject(forKey: Keys.endpoint)
+    }
+}

@@ -202,6 +202,7 @@ export default function App() {
     loadAgentCompletionSoundEnabled()
   ));
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
+  const [focusedSessionID, setFocusedSessionID] = useState(null);
   const [emptyOverride, setEmptyOverride] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -979,12 +980,15 @@ export default function App() {
         || appStateRef.current.attachedSession !== sessionID) return;
       if (focused) {
         focusedSessionRef.current = result?.focused ? sessionID : null;
+        setFocusedSessionID(result?.focused ? sessionID : null);
       } else if (focusedSessionRef.current === sessionID) {
         focusedSessionRef.current = null;
+        setFocusedSessionID(null);
       }
     });
     if (!sent) return false;
     focusedSessionRef.current = focused ? sessionID : null;
+    setFocusedSessionID(focused ? sessionID : null);
     return true;
   }, [request]);
 
@@ -1045,6 +1049,7 @@ export default function App() {
     stagedRecoveryOutputRef.current = [];
     batcherRef.current?.reset();
     focusedSessionRef.current = null;
+    setFocusedSessionID(null);
     if (changed) inputQueueRef.current.clear();
     setActiveSession(sessionID);
     setAttachedSession(null);
@@ -1124,6 +1129,7 @@ export default function App() {
     state.attachedSession = null;
     setTerminalReadySession(null);
     focusedSessionRef.current = null;
+    setFocusedSessionID(null);
     setActiveWorkspace(workspaceID);
     if (previousWorkspaceID !== workspaceID) {
       restoreGitUIForWorkspace(workspaceID);
@@ -1246,6 +1252,7 @@ export default function App() {
       state.attachedSession = null;
       setTerminalReadySession(null);
       focusedSessionRef.current = null;
+      setFocusedSessionID(null);
       setActiveSession(null);
       setAttachedSession(null);
       setAgentViewOverride(null);
@@ -1386,6 +1393,7 @@ export default function App() {
         || subscription.status !== "acknowledged") break;
       subscription.status = "syncing";
       focusedSessionRef.current = null;
+      setFocusedSessionID(null);
       setActiveSession(message.session);
       // `attached` only acknowledges the subscription. The terminal remains
       // behind the neutral loading surface until the atomic state has been
@@ -1419,6 +1427,7 @@ export default function App() {
       appStateRef.current.attachedSession = null;
       setTerminalReadySession(null);
       focusedSessionRef.current = null;
+      setFocusedSessionID(null);
       setActiveSession(null);
       setAttachedSession(null);
       setEmptyOverride(null);
@@ -1588,6 +1597,7 @@ export default function App() {
         appStateRef.current.attachedSession = null;
         setTerminalReadySession(null);
         focusedSessionRef.current = null;
+        setFocusedSessionID(null);
         setActiveSession(null);
         setAttachedSession(null);
         batcherRef.current?.reset();
@@ -1608,6 +1618,7 @@ export default function App() {
         appStateRef.current.attachedSession = null;
         setTerminalReadySession(null);
         focusedSessionRef.current = null;
+        setFocusedSessionID(null);
         setActiveSession(null);
         setAttachedSession(null);
         batcherRef.current?.reset();
@@ -1696,6 +1707,7 @@ export default function App() {
     creatingSessionWorkspaceIDsRef.current.clear();
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
+    setFocusedSessionID(null);
     setAttachedSession(null);
     setTerminalReadySession(null);
     sentTerminalSizeRef.current = null;
@@ -1788,6 +1800,7 @@ export default function App() {
       if (!sessionID) return;
       appStateRef.current.attachedSession = null;
       focusedSessionRef.current = null;
+      setFocusedSessionID(null);
       setAttachedSession(null);
       setTerminalReadySession(null);
       if (!beginSubscription(sessionID, terminal)) {
@@ -2865,7 +2878,9 @@ export default function App() {
                 events={selectedAgentEvents}
                 status={agentStateBySession[selectedSession.id]?.status || null}
                 onSend={sendAgentInput}
+                onOpenTerminal={() => toggleAgentView("terminal")}
                 ready={agentViewReady}
+                hasControl={focusedSessionID === selectedSession.id}
                 hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
                 loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
                 onLoadMore={() => {
