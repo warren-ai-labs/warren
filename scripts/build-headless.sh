@@ -15,17 +15,15 @@ fi
 headless_ldflags="-X main.version=$build_version -X main.revision=$build_revision -X main.dirty=$build_dirty"
 
 build_non_macos() {
-    # Ghostline requires libghostty-vt at runtime; do not allow a caller's
-    # CGO_ENABLED=0 environment to produce a daemon that cannot create sessions.
-    CGO_ENABLED=1 go build \
+    go build \
         -ldflags "$headless_ldflags" \
         -o "$output_directory/warren-headless" \
         "$repository_root/Headless/cmd/warren-headless"
-    CGO_ENABLED=1 go build \
+    go build \
         -ldflags "$headless_ldflags" \
         -o "$output_directory/warren" \
         "$repository_root/Headless/cmd/warren"
-    CGO_ENABLED=1 go build \
+    go build \
         -ldflags "$headless_ldflags" \
         -o "$output_directory/warren-ssh-tunnel" \
         "$repository_root/Headless/cmd/warren-ssh-tunnel"
