@@ -7,7 +7,6 @@
 
 import Foundation
 import GhosttyKit
-import MSDisplayLink
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -106,7 +105,6 @@ final class TerminalSurfaceCoordinator {
     /// does not receive a focus-loss report for a UI-only lifecycle change.
     private var suppressFocusLossReports = false
     private var pendingImmediateTick = true
-    private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
     private var lastCreateFailureAt: TimeInterval?
 
@@ -136,11 +134,17 @@ final class TerminalSurfaceCoordinator {
         scheduleTickIfNeeded()
     }
 
-    func startDisplayLink() {
-        scheduleTickIfNeeded()
+    /// Ghostty owns frame pacing with its renderer-thread CVDisplayLink. This
+    /// compatibility hook only asks the app mailbox to make one progress turn;
+    /// it must not create a second display loop in Swift.
+    func startRenderScheduling() {
+        requestImmediateTick()
     }
 
-    func stopDisplayLink() {
+    /// Kept as a lifecycle hook for platform views. Focus and occlusion are
+    /// propagated through the surface APIs; there is no Swift display loop to
+    /// stop here.
+    func stopRenderScheduling() {
         tickScheduled = false
     }
 
@@ -308,7 +312,7 @@ final class TerminalSurfaceCoordinator {
         if canRenderFrame {
             requestImmediateTick()
         } else {
-            stopDisplayLink()
+            stopRenderScheduling()
         }
     }
 
@@ -317,7 +321,7 @@ final class TerminalSurfaceCoordinator {
             if active {
                 renderImmediately()
             } else {
-                stopDisplayLink()
+                stopRenderScheduling()
             }
             return
         }
@@ -329,18 +333,17 @@ final class TerminalSurfaceCoordinator {
             synchronizeMetrics()
             renderImmediately()
         } else {
-            stopDisplayLink()
+            stopRenderScheduling()
         }
     }
 
     // MARK: - Frame Rendering
 
-    func tick(context: DisplayLinkCallbackContext) {
-        guard shouldRenderFrame(at: context.timestamp) else {
+    func tick() {
+        guard shouldRenderFrame else {
             return
         }
         pendingImmediateTick = false
-        lastTickTimestamp = context.timestamp
         TerminalDebugLog.log(.render, "tick")
         controller?.tick()
         // Never pair this with `surface.draw()`: draw presents inline on the
@@ -488,7 +491,6 @@ final class TerminalSurfaceCoordinator {
         lastMetrics = nil
         lastSentSize = nil
         pendingImmediateTick = true
-        lastTickTimestamp = 0
         if hadSurface, detachIsCurrent {
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()
@@ -517,11 +519,8 @@ final class TerminalSurfaceCoordinator {
         onCellSizeDidChange?()
     }
 
-    private func shouldRenderFrame(at _: TimeInterval) -> Bool {
-        guard canRenderFrame else {
-            return false
-        }
-        return pendingImmediateTick || lastTickTimestamp == 0
+    private var shouldRenderFrame: Bool {
+        canRenderFrame && pendingImmediateTick
     }
 
     private func scheduleTickIfNeeded() {
@@ -537,14 +536,7 @@ final class TerminalSurfaceCoordinator {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             tickScheduled = false
-            let timestamp = Self.monotonicTimestamp()
-            tick(
-                context: .init(
-                    duration: 0,
-                    timestamp: timestamp,
-                    targetTimestamp: timestamp
-                )
-            )
+            tick()
         }
     }
 
@@ -586,13 +578,6 @@ final class TerminalSurfaceCoordinator {
 
         pendingImmediateTick = true
         tickScheduled = false
-        let timestamp = Self.monotonicTimestamp()
-        tick(
-            context: .init(
-                duration: 0,
-                timestamp: timestamp,
-                targetTimestamp: timestamp
-            )
-        )
+        tick()
     }
 }

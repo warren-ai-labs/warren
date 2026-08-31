@@ -41,7 +41,7 @@ public final class GhosttySurface: Identifiable {
         attachmentID: TerminalAttachmentID,
         workingDirectory: String,
         font: TerminalFontPreference = .init(),
-        outputRenderBudgetBytes: Int = 8 * 1024 * 1024,
+        outputRenderBudgetBytes: Int = 64 * 1024,
         outputRenderYield: Duration = .milliseconds(1),
         onInput: @escaping @Sendable (Data) -> Void,
         onResize: @escaping @Sendable (Int, Int) -> Void
@@ -166,10 +166,8 @@ public final class GhosttySurface: Identifiable {
         )
     }
 
-    /// Requests an immediate Ghostty display tick. The first reanchor
-    /// snapshot can be written before the surface's display loop has painted
-    /// anything; an explicit tick renders it without waiting for the next
-    /// resize or keystroke.
+    /// Requests one app-mailbox progress turn. Ghostty's renderer owns frame
+    /// pacing; this is not a replacement display loop.
     public func requestDisplayRefresh() {
         TerminalDiagnostics.logVerbose("display_refresh", [
             "session": id.description,
@@ -382,14 +380,10 @@ public final class GhosttySurface: Identifiable {
     /// The user-visible workaround for all of these is a resize, which forces
     /// Ghostty to reflow and repaint. This reproduces the essential part
     /// without changing the pixel size: pin the viewport to the live bottom
-    /// (resetting any stale pin/offset cache) and draw immediately so the
-    /// surface repaints even when no new output arrived.
+    /// (resetting any stale pin/offset cache) and leave the final draw to the
+    /// manager's single presentation path.
     public func resyncForActivation() {
         scrollToBottom()
-        requestDisplayRefresh()
-        if terminalViewIsPresentable {
-            _ = presentNow()
-        }
     }
 
     /// Capture the current viewport content as the anchor for the next

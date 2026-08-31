@@ -77,7 +77,7 @@
                     // cleanup runs. Do not deliver a stale focus loss to a
                     // view that is already back in a window.
                     guard let self, self.window == nil else { return }
-                    self.core.stopDisplayLink()
+                    self.core.stopRenderScheduling()
                     self.core.setFocus(false)
                 }
                 return
@@ -133,8 +133,7 @@
                 }
                 self.updateMetalLayerMetrics()
                 self.updateColorScheme()
-                self.core.startDisplayLink()
-                self.core.requestImmediateTick()
+                self.core.startRenderScheduling()
             }
         }
 
