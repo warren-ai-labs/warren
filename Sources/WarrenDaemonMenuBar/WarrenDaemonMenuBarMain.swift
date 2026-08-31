@@ -149,7 +149,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
         let process = Process()
         process.executableURL = executable
-        process.environment = WarrenProcessEnvironment.clean(source: sourceEnvironment)
+        process.environment = WarrenProcessEnvironment.daemonEnvironment(from: sourceEnvironment)
         do {
             try process.run()
         } catch {

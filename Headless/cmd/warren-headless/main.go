@@ -100,7 +100,7 @@ func main() {
 	// Capture all flag values before replacing the process environment. Warren
 	// is often launched from mise/direnv-aware terminals; those task variables
 	// must not become Ghostline's inheritance base.
-	runtime.ApplyCleanEnvironment()
+	runtime.ApplyDaemonEnvironment()
 	ghostlineSocketExplicit := os.Getenv("WARREN_GHOSTLINE_SOCKET") != ""
 	flag.Visit(func(entry *flag.Flag) {
 		if entry.Name == "ghostline-socket" {
@@ -479,6 +479,11 @@ func openLogFile(path string) (*os.File, error) {
 // it detached with --ghostline-serve; it listens on the Unix socket until
 // terminated, so daemon upgrades and restarts never end sessions.
 func runGhostlineServe(socketPath, outputDir, adoptFrom string, probeForeground bool) {
+	// Ghostline v1 merges the server's os.Environ() with each session's
+	// overrides. The daemon keeps Warren/provider configuration in its own
+	// environment, so strip those control-plane values before constructing the
+	// detached terminal server.
+	runtime.ApplyTerminalEnvironment()
 	pidPath := socketPath + ".pid"
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, "ghostline serve: write pid:", err)

@@ -10,7 +10,10 @@ import Darwin
 enum WarrenProcessEnvironment {
     static let defaultTerm = "xterm-ghostty"
 
-    private static let controlledKeys: Set<String> = [
+    // Only these host/session-independent values belong in a terminal
+    // baseline. Warren and provider configuration is kept for the daemon but
+    // must not become part of a Ghostline shell's inherited environment.
+    private static let terminalKeys: Set<String> = [
         "DISPLAY",
         "WAYLAND_DISPLAY",
         "DBUS_SESSION_BUS_ADDRESS",
@@ -19,6 +22,11 @@ enum WarrenProcessEnvironment {
         "XDG_DATA_HOME",
         "XDG_CACHE_HOME",
         "XDG_RUNTIME_DIR",
+    ]
+
+    // Configuration and executable-path overrides used by Warren-owned
+    // control-plane processes. These are deliberately absent from `clean`.
+    private static let daemonOnlyKeys: Set<String> = [
         "WARREN_CONFIG",
         "WARREN_INSTANCE_LOCK",
         "WARREN_CODE_SERVER_PATH",
@@ -87,7 +95,7 @@ enum WarrenProcessEnvironment {
         result["TERM"] = defaultTerm
         result["COLORTERM"] = "truecolor"
 
-        for key in controlledKeys {
+        for key in terminalKeys {
             copyNonEmpty(key, from: source, into: &result)
         }
         if let socket = nonEmpty(source["SSH_AUTH_SOCK"]), isSocket(atPath: socket) {
@@ -97,13 +105,17 @@ enum WarrenProcessEnvironment {
     }
 
     /// Returns the environment passed to the headless daemon. It is the clean
-    /// host environment plus the explicit Warren configuration/path keys that
-    /// are needed to locate its files and sibling executables.
+    /// host environment plus explicit Warren/provider configuration needed by
+    /// control-plane code. Ghostline uses `clean` instead.
     static func daemonEnvironment(
         from source: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> [String: String] {
-        clean(source: source, homeDirectory: homeDirectory)
+        var result = clean(source: source, homeDirectory: homeDirectory)
+        for key in daemonOnlyKeys {
+            copyNonEmpty(key, from: source, into: &result)
+        }
+        return result
     }
 
     static func stablePath(homeDirectory: URL) -> String {

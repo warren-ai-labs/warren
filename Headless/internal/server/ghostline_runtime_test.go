@@ -133,6 +133,30 @@ func TestGhostlineRuntimeUsesSanitizedEnvironment(t *testing.T) {
 	waitGhostlineOutput(t, runtime, "warren_ghost_color", "NO_COLOR=[]")
 }
 
+func TestGhostlineRuntimeDoesNotInheritDaemonConfiguration(t *testing.T) {
+	// The production daemon keeps these values for control-plane work. The
+	// detached --ghostline-serve entry point removes them before the server
+	// starts, so they must not appear in a new PTY.
+	t.Setenv("CODEX_HOME", "/tmp/provider")
+	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/claude")
+	t.Setenv("WARREN_DATA_DIR", "/tmp/warren")
+	t.Setenv("WARREN_WEB_ROOT", "/tmp/web")
+	t.Setenv("WARREN_LISTEN", "127.0.0.1:8789")
+	original := os.Environ()
+	t.Cleanup(func() { warrenruntime.ReplaceEnvironment(original) })
+	warrenruntime.ApplyTerminalEnvironment()
+
+	runtime, _ := startGhostlineRuntime(t)
+	ctx := context.Background()
+	if err := runtime.Create(ctx, "warren_ghost_boundary", t.TempDir(), "sh", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := runtime.Input(ctx, "warren_ghost_boundary", []byte("printf 'CODEX_HOME=[%s] WARREN_DATA_DIR=[%s] WARREN_WEB_ROOT=[%s] WARREN_LISTEN=[%s]\\n' \"$CODEX_HOME\" \"$WARREN_DATA_DIR\" \"$WARREN_WEB_ROOT\" \"$WARREN_LISTEN\"\r")); err != nil {
+		t.Fatalf("Input: %v", err)
+	}
+	waitGhostlineOutput(t, runtime, "warren_ghost_boundary", "CODEX_HOME=[] WARREN_DATA_DIR=[] WARREN_WEB_ROOT=[] WARREN_LISTEN=[]")
+}
+
 func TestGhostlineRuntimeMetadataDisabledByDefault(t *testing.T) {
 	runtime, _ := startGhostlineRuntime(t)
 	ctx := context.Background()

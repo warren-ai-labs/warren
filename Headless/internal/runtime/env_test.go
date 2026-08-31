@@ -25,9 +25,12 @@ func TestCleanEnvironmentFiltersLauncherContext(t *testing.T) {
 		"DIRENV_DIFF=secret-diff",
 		"CODEX_SESSION_ID=thread-from-installer",
 		"CODEX_HOME=/home/test/.codex",
+		"CLAUDE_CONFIG_DIR=/home/test/.claude",
 		"WARREN_SESSION_ID=foreign-session",
 		"WARREN_STATE_FILE=/tmp/foreign.state",
 		"WARREN_DATA_DIR=/home/test/.warren",
+		"WARREN_WEB_ROOT=/home/test/web",
+		"WARREN_LISTEN=127.0.0.1:8789",
 		"HTTP_PROXY=http://proxy.invalid",
 		"OPENAI_API_KEY=must-not-cross",
 		"NO_COLOR=1",
@@ -35,17 +38,15 @@ func TestCleanEnvironmentFiltersLauncherContext(t *testing.T) {
 
 	values := environmentMap(CleanEnvironment(source))
 	for key, want := range map[string]string{
-		"HOME":            "/home/test",
-		"USER":            "test",
-		"LOGNAME":         "test",
-		"TMPDIR":          "/tmp/test",
-		"LANG":            "en_US.UTF-8",
-		"LC_CTYPE":        "UTF-8",
-		"SHELL":           "/bin/sh",
-		"TERM":            DefaultTerm,
-		"COLORTERM":       "truecolor",
-		"CODEX_HOME":      "/home/test/.codex",
-		"WARREN_DATA_DIR": "/home/test/.warren",
+		"HOME":      "/home/test",
+		"USER":      "test",
+		"LOGNAME":   "test",
+		"TMPDIR":    "/tmp/test",
+		"LANG":      "en_US.UTF-8",
+		"LC_CTYPE":  "UTF-8",
+		"SHELL":     "/bin/sh",
+		"TERM":      DefaultTerm,
+		"COLORTERM": "truecolor",
 	} {
 		if values[key] != want {
 			t.Errorf("%s = %q, want %q", key, values[key], want)
@@ -56,11 +57,42 @@ func TestCleanEnvironmentFiltersLauncherContext(t *testing.T) {
 	}
 	for _, key := range []string{
 		"TERM_PROGRAM", "MISE_TASK", "DIRENV_DIFF", "CODEX_SESSION_ID", "WARREN_SESSION_ID",
-		"WARREN_STATE_FILE", "HTTP_PROXY", "OPENAI_API_KEY", "NO_COLOR",
+		"WARREN_STATE_FILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "WARREN_CONFIG", "WARREN_DATA_DIR",
+		"WARREN_WEB_ROOT", "WARREN_LISTEN", "HTTP_PROXY", "OPENAI_API_KEY", "NO_COLOR",
 	} {
 		if _, ok := values[key]; ok {
 			t.Errorf("%s leaked into clean environment", key)
 		}
+	}
+}
+
+func TestDaemonEnvironmentKeepsControlPlaneConfiguration(t *testing.T) {
+	values := environmentMap(DaemonEnvironment([]string{
+		"HOME=/home/test",
+		"SHELL=/bin/sh",
+		"CODEX_HOME=/home/test/.codex",
+		"CLAUDE_CONFIG_DIR=/home/test/.claude",
+		"WARREN_DATA_DIR=/home/test/.warren",
+		"WARREN_WEB_ROOT=/home/test/web",
+		"WARREN_LISTEN=127.0.0.1:8789",
+		"MISE_TASK=install",
+	}))
+	for key, want := range map[string]string{
+		"CODEX_HOME":        "/home/test/.codex",
+		"CLAUDE_CONFIG_DIR": "/home/test/.claude",
+		"WARREN_DATA_DIR":   "/home/test/.warren",
+		"WARREN_WEB_ROOT":   "/home/test/web",
+		"WARREN_LISTEN":     "127.0.0.1:8789",
+	} {
+		if values[key] != want {
+			t.Errorf("%s = %q, want %q", key, values[key], want)
+		}
+	}
+	if _, ok := values["MISE_TASK"]; ok {
+		t.Fatal("MISE_TASK leaked into daemon environment")
+	}
+	if _, ok := values["WARREN_SESSION_ID"]; ok {
+		t.Fatal("session identity leaked into daemon environment")
 	}
 }
 

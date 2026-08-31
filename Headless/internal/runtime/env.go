@@ -16,18 +16,26 @@ import (
 // so no external Ghostty install is required.
 const DefaultTerm = "xterm-ghostty"
 
-// controlledEnvironmentKeys are the non-secret, host-level values Warren may
-// carry across a process boundary. Session identity, task runner state,
-// terminal integration and credentials deliberately do not appear here.
-var controlledEnvironmentKeys = map[string]struct{}{
-	"DISPLAY":                           {},
-	"WAYLAND_DISPLAY":                   {},
-	"DBUS_SESSION_BUS_ADDRESS":          {},
-	"XAUTHORITY":                        {},
-	"XDG_CONFIG_HOME":                   {},
-	"XDG_DATA_HOME":                     {},
-	"XDG_CACHE_HOME":                    {},
-	"XDG_RUNTIME_DIR":                   {},
+// terminalEnvironmentKeys are the host-level values that define the baseline
+// of a Warren terminal. Warren configuration, provider configuration, session
+// identity, task-runner state, and credentials deliberately do not appear
+// here: those values belong to the daemon or to an individual session.
+var terminalEnvironmentKeys = map[string]struct{}{
+	"DISPLAY":                  {},
+	"WAYLAND_DISPLAY":          {},
+	"DBUS_SESSION_BUS_ADDRESS": {},
+	"XAUTHORITY":               {},
+	"XDG_CONFIG_HOME":          {},
+	"XDG_DATA_HOME":            {},
+	"XDG_CACHE_HOME":           {},
+	"XDG_RUNTIME_DIR":          {},
+}
+
+// daemonEnvironmentKeys are configuration and executable-path overrides that
+// may be inherited by Warren-owned control-plane processes. They are never
+// used as the Ghostline or PTY baseline; the Ghostline serve entry point
+// applies TerminalEnvironment before constructing its server.
+var daemonEnvironmentKeys = map[string]struct{}{
 	"WARREN_CONFIG":                     {},
 	"CODEX_HOME":                        {},
 	"CLAUDE_CONFIG_DIR":                 {},
@@ -64,10 +72,10 @@ var supportedShellNames = map[string]struct{}{
 	"zsh":  {},
 }
 
-// CleanEnvironment builds the environment that may be inherited by Warren's
-// daemon and Ghostline server. It intentionally starts from an allowlist:
-// project/task and terminal integration variables are recreated by the
-// session's login shell instead of leaking from the launching terminal.
+// CleanEnvironment builds the terminal baseline inherited by Ghostline and
+// new PTYs. It intentionally starts from an allowlist: project/task state and
+// Warren/provider control variables are supplied by the daemon or session
+// boundary instead of leaking from the launching terminal.
 func CleanEnvironment(source []string) []string {
 	values := environmentMap(source)
 	home := strings.TrimSpace(values["HOME"])
@@ -75,7 +83,7 @@ func CleanEnvironment(source []string) []string {
 		home, _ = os.UserHomeDir()
 	}
 
-	result := make(map[string]string, len(controlledEnvironmentKeys)+12)
+	result := make(map[string]string, len(terminalEnvironmentKeys)+12)
 	copyNonEmpty := func(key string) {
 		if value := strings.TrimSpace(values[key]); value != "" {
 			result[key] = values[key]
@@ -111,7 +119,7 @@ func CleanEnvironment(source []string) []string {
 	result["PATH"] = StablePath(home)
 	result["TERM"] = DefaultTerm
 	result["COLORTERM"] = "truecolor"
-	for key := range controlledEnvironmentKeys {
+	for key := range terminalEnvironmentKeys {
 		if value := strings.TrimSpace(values[key]); value != "" {
 			result[key] = values[key]
 		}
@@ -123,12 +131,47 @@ func CleanEnvironment(source []string) []string {
 	return encodeEnvironment(result)
 }
 
+// TerminalEnvironment is the explicit name for CleanEnvironment at process
+// boundaries that own a terminal. Keep CleanEnvironment as the short,
+// backwards-compatible API used by existing callers and tests.
+func TerminalEnvironment(source []string) []string {
+	return CleanEnvironment(source)
+}
+
+// DaemonEnvironment builds the environment for Warren's control-plane
+// processes. It retains Warren/provider configuration needed by the daemon,
+// while keeping the terminal baseline itself deterministic.
+func DaemonEnvironment(source []string) []string {
+	values := environmentMap(source)
+	result := environmentMap(TerminalEnvironment(source))
+	for key := range daemonEnvironmentKeys {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			result[key] = values[key]
+		}
+	}
+	return encodeEnvironment(result)
+}
+
 // ApplyCleanEnvironment replaces the current process environment with the
-// controlled environment. It is used at the daemon/serve entry point so
-// Ghostline's internal os.Environ() base is clean even though Ghostline v1
-// merges session overrides with its own process environment.
+// terminal baseline. Call ApplyDaemonEnvironment for a Warren control-plane
+// process and ApplyTerminalEnvironment for a Ghostline serve process.
 func ApplyCleanEnvironment() {
-	ReplaceEnvironment(CleanEnvironment(os.Environ()))
+	ApplyTerminalEnvironment()
+}
+
+// ApplyDaemonEnvironment installs the clean daemon environment while
+// retaining explicit Warren/provider configuration used by control-plane
+// code.
+func ApplyDaemonEnvironment() {
+	ReplaceEnvironment(DaemonEnvironment(os.Environ()))
+}
+
+// ApplyTerminalEnvironment removes daemon-only configuration from the current
+// process before it constructs a Ghostline server. Ghostline v1 merges its
+// own os.Environ() with per-session overrides, so this boundary is required
+// even when the parent supplied an explicit terminal environment to Spawn.
+func ApplyTerminalEnvironment() {
+	ReplaceEnvironment(TerminalEnvironment(os.Environ()))
 }
 
 // ReplaceEnvironment installs an explicit environment without logging any
