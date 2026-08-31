@@ -131,9 +131,9 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     }
 
     private func launchForegroundApplication() {
-        let environment = ProcessInfo.processInfo.environment
+        let sourceEnvironment = ProcessInfo.processInfo.environment
         let executable: URL
-        if let configured = environment["WARREN_APP_PATH"], !configured.isEmpty {
+        if let configured = sourceEnvironment["WARREN_APP_PATH"], !configured.isEmpty {
             executable = URL(fileURLWithPath: configured)
         } else {
             let sibling = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -149,6 +149,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
         let process = Process()
         process.executableURL = executable
+        process.environment = WarrenProcessEnvironment.clean(source: sourceEnvironment)
         do {
             try process.run()
         } catch {
@@ -270,24 +271,15 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         let process = Process()
         process.executableURL = daemonExecutableURL()
         process.arguments = []
-        var childEnvironment = ProcessInfo.processInfo.environment
-        // A background daemon must not inherit an ambient NO_COLOR that only
-        // applies to the launching agent's non-interactive commands. Terminal
-        // sessions can still opt out by setting NO_COLOR in their own shell
-        // config; dropping the inherited value keeps interactive TUIs colored
-        // by default.
-        childEnvironment.removeValue(forKey: "NO_COLOR")
-        // Force handoff is a one-shot control signal. `open` may launch this
-        // helper with the install shell's environment, but that ambient value
-        // must not be forwarded to every daemon restart (or to Ghostline).
-        childEnvironment.removeValue(forKey: "WARREN_GHOSTLINE_FORCE_HANDOFF")
-        childEnvironment.removeValue(forKey: "WARREN_FORCE_HANDOFF")
-        childEnvironment["PATH"] = executableSearchPath(from: childEnvironment["PATH"])
+        let childEnvironment = WarrenProcessEnvironment.daemonEnvironment()
         if pendingForceHandoff {
-            childEnvironment["WARREN_GHOSTLINE_FORCE_HANDOFF"] = "1"
+            var environment = childEnvironment
+            environment["WARREN_GHOSTLINE_FORCE_HANDOFF"] = "1"
             writeForceHandoffMarker()
+            process.environment = environment
+        } else {
+            process.environment = childEnvironment
         }
-        process.environment = childEnvironment
         process.terminationHandler = { [weak self] _ in
             Task { @MainActor in
                 self?.daemonProcess = nil
@@ -360,14 +352,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         let bundleBinary = Bundle.main.bundleURL
             .appendingPathComponent("Contents/MacOS/warren-headless")
         return bundleBinary
-    }
-
-    private func executableSearchPath(from value: String?) -> String {
-        var entries = (value ?? "").split(separator: ":").map(String.init)
-        for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] where !entries.contains(path) {
-            entries.append(path)
-        }
-        return entries.joined(separator: ":")
     }
 
     private func warrenMenuBarImage() -> NSImage? {

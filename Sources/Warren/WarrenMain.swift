@@ -385,9 +385,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     private func launchDaemonMenuBar() {
         guard daemonMenuBarProcess == nil else { return }
-        let environment = ProcessInfo.processInfo.environment
+        let sourceEnvironment = ProcessInfo.processInfo.environment
         let executable: URL?
-        if let configured = environment["WARREN_DAEMON_MENUBAR_PATH"], !configured.isEmpty {
+        if let configured = sourceEnvironment["WARREN_DAEMON_MENUBAR_PATH"], !configured.isEmpty {
             executable = URL(fileURLWithPath: configured)
         } else {
             let sibling = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -399,7 +399,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         guard let executable else { return }
         let process = Process()
         process.executableURL = executable
-        var childEnvironment = environment
+        var childEnvironment = WarrenProcessEnvironment.daemonEnvironment(from: sourceEnvironment)
         childEnvironment["WARREN_APP_PATH"] = URL(fileURLWithPath: CommandLine.arguments[0]).path
         if childEnvironment["WARREN_HEADLESS_PATH"] == nil {
             let sibling = executable.deletingLastPathComponent().appendingPathComponent("warren-headless")

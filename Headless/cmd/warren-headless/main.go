@@ -97,6 +97,10 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	// Capture all flag values before replacing the process environment. Warren
+	// is often launched from mise/direnv-aware terminals; those task variables
+	// must not become Ghostline's inheritance base.
+	runtime.ApplyCleanEnvironment()
 	ghostlineSocketExplicit := os.Getenv("WARREN_GHOSTLINE_SOCKET") != ""
 	flag.Visit(func(entry *flag.Flag) {
 		if entry.Name == "ghostline-socket" {
@@ -119,13 +123,8 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	// Strip launcher-only pager/TERM semantics (agent/CI shells export
-	// GIT_PAGER=cat, PAGER=cat, TERM=dumb) before ghostline children
-	// inherit the daemon environment, then let settings.json override the
-	// result so explicit user values always win. The ghostline serve child
-	// inherits this final environment and must not re-sanitize it.
-	runtime.SanitizeEnvironment()
-	loadedSettings.ApplyRuntimeEnv()
+	// RuntimeEnv is intentionally session-scoped. Applying it to the daemon
+	// would contaminate the detached Ghostline server and every future session.
 	// Launcher overrides are intentionally process-local. Enrollment persists
 	// the same non-secret values in settings.json, while this path lets a
 	// supervisor or development script bootstrap a daemon before persistence is
