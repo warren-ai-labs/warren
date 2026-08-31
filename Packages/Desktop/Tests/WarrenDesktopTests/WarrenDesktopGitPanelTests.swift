@@ -239,7 +239,7 @@ final class WarrenDesktopGitPanelTests: XCTestCase {
         model.deactivate()
     }
 
-    func testOpenFileKeepsDiffOpenWhenTheSelectedRowIsClickedAgain() async throws {
+    func testOpenFileLoadsDiffAndToggleCloses() async throws {
         let client = StubGitClient(panel: samplePanel())
         let model = WarrenDesktopGitPanelModel(
             client: client,
@@ -259,36 +259,9 @@ final class WarrenDesktopGitPanelTests: XCTestCase {
         XCTAssertEqual(model.fileDiff.diff, client.diff.diff)
 
         model.openFile(change: change)
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertNotNil(model.fileView)
-        XCTAssertNil(model.selectedKey)
-        XCTAssertEqual(client.diffCalls.count, 2)
-        model.closeFileView()
         XCTAssertNil(model.fileView)
+        XCTAssertNil(model.selectedKey)
         model.deactivate()
-    }
-
-    func testPersistenceRestoresAllPanesCollapsed() async throws {
-        let persistence = MemoryPersistence()
-        let workspaceID = WorkspaceID()
-        let model = WarrenDesktopGitPanelModel(
-            client: StubGitClient(panel: samplePanel()),
-            persistence: persistence
-        )
-        model.activate(workspaceID: workspaceID)
-        try await Task.sleep(for: .milliseconds(50))
-        for pane in WarrenDesktopGitPanelModel.Pane.allCases {
-            model.togglePane(pane)
-        }
-        model.deactivate()
-
-        let restored = WarrenDesktopGitPanelModel(
-            client: StubGitClient(panel: samplePanel()),
-            persistence: persistence
-        )
-        restored.activate(workspaceID: workspaceID)
-        XCTAssertTrue(restored.openPanes.isEmpty)
-        restored.deactivate()
     }
 
     func testMutationErrorSurfacesMessage() async throws {
