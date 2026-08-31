@@ -110,7 +110,7 @@ events that describe the attach and draw path:
 
 ```sh
 diagnostics=~/Library/Logs/Warren/terminal-diagnostics.log
-rg '"event":"(workspace_switch|terminal_tab_switch|terminal_view_appear|select_session|attach_start|attach_size|attach_complete|atomic_recovery_installed|atomic_recovery_failed|recovery_anchor|feed_output|present_now|present_stall_suspected|present_complete|present_wait_extended|activation_resync|roster_apply|resize_request|viewport_sync)"' \
+rg '"event":"(workspace_switch|terminal_tab_switch|terminal_view_appear|select_session|attach_start|attach_size|attach_complete|atomic_recovery_installed|atomic_recovery_failed|recovery_anchor|feed_output|present_now|present_stall_suspected|present_complete|present_wait_timeout|present_wait_extended|activation_resync|roster_apply|resize_request|viewport_sync)"' \
   "$diagnostics" | tail -150
 ```
 
@@ -124,8 +124,9 @@ Use the events as a sequence rather than treating one line as a root cause:
 | `feed_output` | Output was accepted by the selected desktop surface; correlate its `session` and `bytes` with the incident window |
 | `present_now` with `surfaceReady`, `viewAttached`, `viewHidden`, `viewVisible` | Whether a draw was attempted and whether the native view was actually able to show it |
 | `present_stall_suspected` with `reason` | A draw happened while the view was absent, unattached, hidden, or not visible; this strongly favors a lifecycle/presentation issue |
-| `present_complete` | Recovery reached a ready surface and presentable view. Warm promotions log `targetEpoch/targetSequence=jump` (jump to latest) and reveal in one tick (~16ms); cold attaches log the atomic anchor. |
-| `present_wait_extended` | Legacy diagnostic for the previous 2-second Zeno wait; warm promotions no longer use this gate. |
+| `present_complete` | Recovery reached a ready surface and presentable view. Warm promotions log the fixed `targetEpoch/targetSequence` boundary they waited for; cold attaches log the atomic anchor. |
+| `present_wait_timeout` | A promotion did not consume its fixed output boundary within two seconds. The pane is revealed as a bounded fallback; correlate the rendered and enqueued sequences with writer/reset events. |
+| `present_wait_extended` | Legacy diagnostic from the previous Zeno wait; current promotions use a fixed boundary and `present_wait_timeout` fallback. |
 | `activation_resync` | A warm surface reattach detected that the viewport did not return to its pre-demotion anchor (captured at `demote`) and forced a live-bottom jump (no animation) plus immediate draw; scrollback remains intact so upward scroll after the jump still works. Its absence means the reattach kept the user's scroll position |
 | `roster_apply` | Roster processing and retained-surface count; repeated events indicate churn but do not prove that a changed projection was published |
 | `resize_request`, `viewport_sync` | Grid-size negotiation. Rapid resizes are debounced (50ms) and promotion defers 250ms after resize to let actively outputting shells settle at the new width; a brief buffered delay replaces 1-2s of missing color blocks. |

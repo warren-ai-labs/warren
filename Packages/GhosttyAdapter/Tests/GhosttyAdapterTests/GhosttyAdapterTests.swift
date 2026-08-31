@@ -555,6 +555,54 @@ final class GhosttyAdapterTests: XCTestCase {
         surface.outputWriter.shutdown()
     }
 
+    @MainActor
+    func testSameEpochSnapshotDropsSliceTakenBeforeReset() async throws {
+        let recorder = LockedInputRecorder()
+        let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
+
+        let writeGate = AsyncWriteGate()
+        defer {
+            surface.outputWriter.setBeforeWriteHook(nil)
+            Task { await writeGate.release() }
+            surface.outputWriter.shutdown()
+            window.orderOut(nil)
+        }
+        surface.outputWriter.setBeforeWriteHook {
+            await writeGate.enterAndWait()
+        }
+        surface.outputWriter.enqueue(
+            epoch: 7,
+            sequence: 0,
+            payload: Data("STALE".utf8)
+        )
+
+        await writeGate.waitUntilEntered()
+
+        let snapshot = try XCTUnwrap(Data(base64Encoded: Self.atomicSnapshotFixture))
+        XCTAssertTrue(surface.restoreSnapshot(snapshot, epoch: 7, sequence: 100))
+        // The old slice is already held by the drain, but it must be rejected
+        // after the same-epoch snapshot reset rather than appended to the new
+        // native state when the barrier is released.
+        surface.outputWriter.setBeforeWriteHook(nil)
+        await writeGate.release()
+
+        try await Task.sleep(for: .milliseconds(50))
+        let restored = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertFalse(
+            restored.contains("STALE"),
+            "a slice taken before a same-epoch snapshot must not write after it"
+        )
+
+        surface.outputWriter.enqueue(
+            epoch: 7,
+            sequence: 100,
+            payload: Data("LIVE".utf8)
+        )
+        try await waitUntilRendered(surface, atLeast: 104)
+        let continued = try XCTUnwrap(surface.inMemory.readViewportText())
+        XCTAssertTrue(continued.contains("LIVE"))
+    }
+
     func testSnapshotRestoreRejectsEmptyOrMissingSurface() {
         let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
         XCTAssertFalse(session.restoreSnapshot(Data()))
@@ -640,6 +688,38 @@ private final class LockedInputRecorder: @unchecked Sendable {
     }
 }
 
+private actor AsyncWriteGate {
+    private var hasEntered = false
+    private var isReleased = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enterAndWait() async {
+        hasEntered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !hasEntered else { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        isReleased = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 private extension Data {
     func containsSubsequence(_ needle: Data) -> Bool {
         guard !needle.isEmpty, needle.count <= count else { return false }
@@ -692,6 +772,22 @@ private func makeMountedTerminal(
 
     _ = try await waitUntilSurfaceAvailable(on: surface.state)
     return (surface, view, window)
+}
+
+@MainActor
+private func waitUntilRendered(
+    _ surface: GhosttySurface,
+    atLeast sequence: UInt64,
+    timeout: Duration = .seconds(2)
+) async throws {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while surface.renderedSequence < sequence, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    guard surface.renderedSequence >= sequence else {
+        struct RenderTimeout: Error {}
+        throw RenderTimeout()
+    }
 }
 
 @MainActor

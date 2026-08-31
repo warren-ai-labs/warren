@@ -192,12 +192,14 @@ final class TerminalSurfaceManagerTests: XCTestCase {
                 && manager.isDisplayVisible(first.id)
         }
 
-        // Warm promotion now jumps to latest: even with a backlog the
-        // display reveals immediately without visible fast-forward.
-        first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 500_000))
+        // Capture the promotion boundary before switching away. The display
+        // must remain occluded until the hidden writer consumes this fixed
+        // boundary; output arriving after it must not extend the wait.
+        first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 100_000))
         try await waitUntil {
             first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
         }
+        let promotionTarget = first.outputWriter.enqueuedBoundary
 
         manager.insert(second)
         submit(second.id, to: manager, host: host)
@@ -208,10 +210,21 @@ final class TerminalSurfaceManagerTests: XCTestCase {
             manager.snapshot().activeSessionID == first.id
                 && first.terminalViewIsPresentable
         }
+        if first.outputWriter.renderedBoundary != promotionTarget {
+            XCTAssertFalse(
+                manager.isDisplayVisible(first.id),
+                "promotion must not reveal a partially drained output boundary"
+            )
+        }
         try await waitUntil(timeout: 5) {
             manager.isDisplayVisible(first.id)
         }
         XCTAssertTrue(manager.isDisplayVisible(first.id))
+        XCTAssertTrue(
+            first.outputWriter.renderedBoundary.epoch == promotionTarget.epoch
+                && first.outputWriter.renderedBoundary.sequence >= promotionTarget.sequence,
+            "promotion must render its captured boundary before reveal"
+        )
     }
 
     func testWarmPromotionDoesNotWaitForAContinuouslyGrowingQueue() async throws {

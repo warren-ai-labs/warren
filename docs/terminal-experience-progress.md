@@ -139,9 +139,10 @@ The native implementation contains the main persistent-warm experience:
 - `TerminalSurfaceManager` keeps one AppKit host, reparents the selected view,
   hides warm views without destroying their native Ghostty surface, guards
   transitions with generations, and cancels stale present/focus commands.
-  Warm promotion now jumps to latest: the surface is kept current by a live
-  background subscription while hidden, so entering reveals the current frame
-  in one display tick (~16ms) without replaying the backlog visibly.
+  Warm promotion captures a fixed enqueued output boundary and keeps the view
+  transparent until the hidden writer consumes it, so entering cannot reveal a
+  partially applied TUI frame. Bytes arriving after the captured boundary do
+  not extend the wait.
   Resize is debounced (50ms coalesce + 250ms hidden defer) so an actively
   outputting shell settles at the new width before reveal, avoiding 1-2s of
   missing background color blocks.
@@ -149,10 +150,12 @@ The native implementation contains the main persistent-warm experience:
   and the native grid has a positive viewport. This prevents a snapshot from
   being consumed by a nil or zero-sized renderer.
 - `WarrenGhosttyOutputWriter` drains live output off the main actor, tracks
-  `(epoch, sequence)`, serializes snapshot installation with live writes, and
-  drops stale in-flight slices. Native snapshots are restored directly into
-  Ghostty; ANSI frames use the background VT drain. During a resize the writer
-  continues buffering; promotion does not wait for the full backlog.
+  `(epoch, sequence)`, stamps slices with a reset generation, serializes
+  snapshot installation with live writes, and drops stale in-flight slices.
+  Native snapshots are restored directly into Ghostty; ANSI frames use the
+  background VT drain. During a resize the writer continues buffering;
+  promotion waits only for its captured boundary, not a continuously growing
+  queue.
 - Warm reattachment captures and compares a viewport anchor, resynchronizing
   only when the retained viewport moved (jump to bottom without animation;
   scrollback stays intact for upward scroll after the jump). Scrollback
