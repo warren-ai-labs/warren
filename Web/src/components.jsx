@@ -635,7 +635,6 @@ export function MobileShell({
   connection,
   agentSession,
   agentViewActive,
-  agentModel,
   onAttachSession,
   onToggleAgentView,
   onOpenMenu,
@@ -671,7 +670,7 @@ export function MobileShell({
           </span>
         </div>
         {agentSession && (
-          <div className="agent-view-toggle" role="group" aria-label="View" title={agentModel ? `Model: ${agentModel}` : undefined}>
+          <div className="agent-view-toggle" role="group" aria-label="View">
             <button
               type="button"
               className={agentViewActive ? undefined : "active"}

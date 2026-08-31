@@ -1005,32 +1005,6 @@ button:disabled {
   transition-timing-function: var(--ease-out);
 }
 
-.pane-title .pane-agent-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  min-width: 0;
-  margin-inline-start: auto;
-  overflow: hidden;
-}
-
-.pane-title .pane-agent-meta ~ .pane-action {
-  margin-inline-start: var(--space-md);
-}
-
-.pane-title .pane-agent-model {
-  color: var(--color-brand-solid);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-
-.pane-title .pane-agent-session {
-  color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 .terminal-shell {
   position: relative;
   min-width: 0;
@@ -1728,9 +1702,29 @@ button:disabled {
 .agent-structured-items li.completed { color: var(--success, #7ec699); }
 .agent-structured-items li span { display: inline-block; width: 1.3em; }
 .agent-structured-readonly { margin: 8px 0 0; color: var(--color-text-secondary); font-size: .8rem; }
-.agent-message-actions { display: flex; gap: 6px; margin-top: 4px; opacity: .72; }
-.agent-message-actions button { border: 0; padding: 2px 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font-size: .72rem; }
-.agent-message-actions button:hover, .agent-message-actions button:focus-visible { color: var(--color-text-primary); text-decoration: underline; }
+.agent-message-actions { display: flex; gap: 4px; margin-top: 4px; opacity: .72; }
+.agent-message-actions button,
+.agent-queue-actions .agent-icon-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.agent-message-actions button:hover,
+.agent-message-actions button:focus-visible,
+.agent-queue-actions .agent-icon-button:hover,
+.agent-queue-actions .agent-icon-button:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--fill-hover);
+}
+.agent-message-actions svg,
+.agent-queue-actions .agent-icon-button svg { width: 14px; height: 14px; }
 .agent-copy-status { position: absolute; inset-inline-end: 16px; bottom: 76px; z-index: var(--layer-inline-overlay); padding: 5px 8px; border-radius: 6px; background: var(--color-bg-raised); color: var(--color-text-secondary); font-size: .75rem; }
 .agent-queue-panel { position: absolute; z-index: var(--layer-popover); right: 12px; bottom: 70px; width: min(420px, calc(100% - 24px)); max-height: min(60vh, 420px); overflow: auto; padding: 12px; border: 1px solid var(--border, rgba(255,255,255,.15)); border-radius: 10px; background: var(--panel, #211c1a); box-shadow: 0 10px 28px rgba(0,0,0,.35); }
 .agent-queue-panel-head { justify-content: space-between; margin-bottom: 8px; }
@@ -1762,15 +1756,6 @@ button:disabled {
   padding: 5px 4px 0;
   color: var(--color-text-secondary);
   font-size: 10.5px;
-}
-
-.agent-input-meta code {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-secondary);
-  font: 10.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-input-reason {
@@ -3522,10 +3507,6 @@ button:disabled {
 
   .agent-tool-summary {
     max-width: 42vw;
-  }
-
-  .pane-title .pane-agent-session {
-    display: none;
   }
 
   .context-menu {

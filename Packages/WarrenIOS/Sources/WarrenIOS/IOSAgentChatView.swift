@@ -638,39 +638,27 @@ public struct AgentChatView: View {
                     }
                 }
 
-                HStack(spacing: 8) {
-                    Text(agentKind)
-                        .font(IOSTypography.label)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                    if let mode = agentMode {
-                        AgentModeBadge(title: mode)
-                    }
-                    if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
-                        Text("·")
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                        Button {
-                            isQueueSheetPresented = true
-                        } label: {
-                            Text("Queued \(queued)")
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.amber)
+                if agentMode != nil || (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
+                    HStack(spacing: 8) {
+                        if let mode = agentMode {
+                            AgentModeBadge(title: mode)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Show \(queued) queued messages")
+                        if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
+                            Button {
+                                isQueueSheetPresented = true
+                            } label: {
+                                Text("Queued \(queued)")
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.amber)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show \(queued) queued messages")
+                        }
+                        Spacer(minLength: 0)
                     }
-                    if let agentModel = model.agentModel(for: sessionID) {
-                        Text("·")
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                        Text(agentModel)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 0)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 3)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 3)
             }
             .padding(.leading, 12)
             .padding(.trailing, 6)
@@ -973,10 +961,13 @@ private struct IOSAgentQueueSheet: View {
                                     Button("Retry") { _ = model.retryQueuedAgentMessage(sessionID: sessionID, itemID: item.id) }
                                 }
                                 if item.status != .sending && editingID != item.id {
-                                    Button("Edit") {
+                                    Button {
                                         editingID = item.id
                                         editingText = item.text
+                                    } label: {
+                                        Image(systemName: "pencil")
                                     }
+                                    .accessibilityLabel("Edit queued message")
                                     Button("Move to front") { _ = model.moveQueuedAgentMessageToFront(sessionID: sessionID, itemID: item.id) }
                                     Button("Delete", role: .destructive) { deleteID = item.id }
                                 } else if item.status == .sending {
@@ -1684,8 +1675,9 @@ private struct AgentEventBlock: View {
                 Button {
                     UIPasteboard.general.string = text
                 } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
+                    Image(systemName: "doc.on.doc")
                 }
+                .accessibilityLabel("Copy message")
             }
         }
 #endif
