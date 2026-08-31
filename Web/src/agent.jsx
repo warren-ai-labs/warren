@@ -71,6 +71,7 @@ export function AgentView({
   const canInterrupt = running && capabilities.includes("agent-interrupt-v1");
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
+  const showInputMeta = Boolean(mode || disabledReason || queueItems.length > 0 || canInterrupt);
   const lastUserEvent = [...events].reverse().find(event => normalizeAgentEventType(event?.type) === "user") || null;
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
 
@@ -406,23 +407,23 @@ export function AgentView({
               <SendIcon />
             </button>
           </div>
-          <div className="agent-input-meta" aria-label="Agent details">
-            <span>{agentKindLabel(session?.kind) || displayTitle}</span>
-            {mode && <span className="agent-mode-badge">{mode}</span>}
-            {agentModel(session, events) && <code>{agentModel(session, events)}</code>}
-            {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
-            {queueItems.length > 0 && (
-              <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
-                Queue {queueItems.length}
-              </button>
-            )}
-            {canInterrupt && (
-              <>
-                <button type="button" className="agent-cancel-button" onClick={onCancel}>Cancel</button>
-                {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments} onClick={() => { void submit(true); }}>Send now</button>}
-              </>
-            )}
-          </div>
+          {showInputMeta && (
+            <div className="agent-input-meta" aria-label="Agent controls">
+              {mode && <span className="agent-mode-badge">{mode}</span>}
+              {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
+              {queueItems.length > 0 && (
+                <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
+                  Queue {queueItems.length}
+                </button>
+              )}
+              {canInterrupt && (
+                <>
+                  <button type="button" className="agent-cancel-button" onClick={onCancel}>Cancel</button>
+                  {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments} onClick={() => { void submit(true); }}>Send now</button>}
+                </>
+              )}
+            </div>
+          )}
         </form>
       ) : (
         <div className="agent-starting">
@@ -433,22 +434,6 @@ export function AgentView({
       )}
     </div>
   );
-}
-
-function agentKindLabel(kind) {
-  switch (String(kind || "").trim().toLowerCase()) {
-  case "codex": return "Codex";
-  case "claude":
-  case "claude-code": return "Claude";
-  case "opencode":
-  case "open-code": return "OpenCode";
-  default: return "";
-  }
-}
-
-function agentModel(session, events = []) {
-  const model = String(session?.agentModel || [...events].reverse().find(event => event.model)?.model || "").trim();
-  return model || "";
 }
 
 function agentModeLabel(session) {
@@ -582,8 +567,14 @@ function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEdit
             <MarkdownContent value={event.content || ""} />
           </div>
           <div className="agent-message-actions">
-            <button type="button" onClick={() => onCopy(event)}>Copy</button>
-            {isLastUser && <button type="button" onClick={() => onEditResend(event.content || "")}>Edit &amp; resend</button>}
+            <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
+              <CopyIcon />
+            </button>
+            {isLastUser && (
+              <button type="button" onClick={() => onEditResend(event.content || "")} aria-label="Edit and resend message" title="Edit and resend message">
+                <EditIcon />
+              </button>
+            )}
           </div>
           <div className="agent-message-meta">
             {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
@@ -596,7 +587,9 @@ function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEdit
       <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
         <MarkdownContent value={event.content || ""} />
         <div className="agent-message-actions">
-          <button type="button" onClick={() => onCopy(event)}>Copy</button>
+          <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
+            <CopyIcon />
+          </button>
         </div>
         <div className="agent-message-meta">
           {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
@@ -902,7 +895,11 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
                 <button type="button" onClick={() => setEditingID(null)}>Cancel</button>
               </>
             ) : item.status === "failed" && <button type="button" onClick={() => onRetry(item.id)}>Retry</button>}
-            {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => beginEdit(item)}>Edit</button>}
+            {item.status !== "sending" && editingID !== item.id && (
+              <button type="button" className="agent-icon-button" onClick={() => beginEdit(item)} aria-label="Edit queued message" title="Edit queued message">
+                <EditIcon />
+              </button>
+            )}
             {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => onMoveToFront(item.id)}>Move to front</button>}
             {item.status !== "sending" && editingID !== item.id && (deleteID === item.id ? (
               <>
@@ -1089,6 +1086,24 @@ function displayToolName(name) {
     Write: "Write file",
   };
   return names[name] || name || "Tool";
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="8" y="8" width="11" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m4 16.5-.8 4.3 4.3-.8L19 8.5a2.1 2.1 0 0 0-3-3z" />
+      <path d="m14.5 7.5 2 2" />
+    </svg>
+  );
 }
 
 function SendIcon() {

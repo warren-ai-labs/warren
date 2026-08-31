@@ -3087,12 +3087,6 @@ export default function App() {
   const selectedAgentEvents = selectedSession
     ? agentStateBySession[selectedSession.id]?.events || []
     : [];
-  const agentModel = useMemo(() => {
-    for (let index = selectedAgentEvents.length - 1; index >= 0; index--) {
-      if (selectedAgentEvents[index].model) return selectedAgentEvents[index].model;
-    }
-    return "";
-  }, [selectedAgentEvents]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
   // An integrated Codex/Claude session is only safe to message once its CLI
   // has actually started. Before the binding/transcript exists, the TUI may
@@ -3159,7 +3153,6 @@ export default function App() {
               connection={connectionStatus}
               agentSession={isAgentSession ? selectedSession : null}
               agentViewActive={agentViewActive}
-              agentModel={agentModel}
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
               onOpenMenu={() => setDrawerOpen(true)}
@@ -3195,19 +3188,6 @@ export default function App() {
                 >
                   {paneDisplayTitle}
                 </span>
-                {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
-                  <span className="pane-agent-meta">
-                    {agentModel && <span className="pane-agent-model">{agentModel}</span>}
-                    {selectedSession?.agentSessionId && (
-                      <code
-                        className="pane-agent-session"
-                        title={selectedSession.agentSessionId}
-                      >
-                        {selectedSession.agentSessionId}
-                      </code>
-                    )}
-                  </span>
-                )}
                 {isAgentSession && (agentViewActive ? (
                   <button type="button" className="pane-action" onClick={() => toggleAgentView("terminal")}>
                     Terminal
