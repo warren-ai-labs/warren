@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   AgentCompletionEventChannel,
+  AgentCompletionSound,
   AgentTurnCompletionTracker,
   agentCompletionSoundStorageKey,
   loadAgentCompletionSoundEnabled,
@@ -84,3 +85,65 @@ test("agent completion sound preference defaults on and persists explicit values
   saveAgentCompletionSoundEnabled(true, storage);
   assert.equal(loadAgentCompletionSoundEnabled(storage), true);
 });
+
+test("agent completion sound schedules the ascending chime melody", async () => {
+  const context = new FakeAudioContext();
+  const sound = new AgentCompletionSound(function AudioContext() {
+    return context;
+  });
+
+  assert.equal(await sound.play(), true);
+  assert.deepEqual(
+    context.oscillators.filter((_, index) => index % 2 === 0).map(oscillator => oscillator.startTime),
+    [10, 10.1, 10.21],
+  );
+  assert.deepEqual(
+    context.oscillators.filter((_, index) => index % 2 === 0).map(oscillator => oscillator.frequency.events[0].value),
+    [523.25, 659.25, 783.99],
+  );
+  assert.equal(context.oscillators.length, 6);
+});
+
+class FakeAudioContext {
+  constructor() {
+    this.currentTime = 10;
+    this.destination = {};
+    this.oscillators = [];
+    this.state = "running";
+  }
+
+  createOscillator() {
+    const oscillator = {
+      frequency: new FakeAudioParam(),
+      start: time => { oscillator.startTime = time; },
+      stop: time => { oscillator.stopTime = time; },
+      connect: () => {},
+      startTime: null,
+      stopTime: null,
+      type: null,
+    };
+    this.oscillators.push(oscillator);
+    return oscillator;
+  }
+
+  createGain() {
+    return {
+      gain: new FakeAudioParam(),
+      connect: () => {},
+    };
+  }
+}
+
+class FakeAudioParam {
+  constructor() {
+    this.events = [];
+  }
+
+  setValueAtTime(value, time) {
+    this.events.push({ value, time });
+  }
+
+  exponentialRampToValueAtTime(value, time) {
+    this.events.push({ value, time });
+  }
+}
