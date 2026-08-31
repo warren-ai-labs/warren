@@ -1,6 +1,15 @@
 export const agentCompletionSoundStorageKey = "warren.agentCompletionSoundEnabled";
 export const defaultAgentCompletionSoundEnabled = true;
 
+// A short, gently ascending major triad keeps completion positive without
+// sounding like an urgent alert. The final note lingers slightly longer to
+// give the melody a natural resolution.
+const agentCompletionMelody = [
+  { frequency: 523.25, delay: 0, duration: 0.24, peak: 0.064 },
+  { frequency: 659.25, delay: 0.1, duration: 0.3, peak: 0.058 },
+  { frequency: 783.99, delay: 0.21, duration: 0.46, peak: 0.052 },
+];
+
 export function loadAgentCompletionSoundEnabled(storage) {
   try {
     const stored = (storage === undefined ? browserStorage() : storage)
@@ -115,8 +124,9 @@ export class AgentCompletionSound {
     if (!context) return false;
 
     try {
-      playTone(context, 659.25, 0, 0.14);
-      playTone(context, 783.99, 0.16, 0.2);
+      for (const note of agentCompletionMelody) {
+        playTone(context, note.frequency, note.delay, note.duration, note.peak);
+      }
       return true;
     } catch {
       return false;
@@ -151,17 +161,25 @@ function isNewCompletion(turn, previous) {
   return turn.id > previous.id || previous.status !== "completed";
 }
 
-function playTone(context, frequency, delay, duration) {
+function playTone(context, frequency, delay, duration, peak) {
   const start = context.currentTime + delay;
-  const oscillator = context.createOscillator();
-  const gain = context.createGain();
-  oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(frequency, start);
-  gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(0.09, start + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-  oscillator.connect(gain);
-  gain.connect(context.destination);
-  oscillator.start(start);
-  oscillator.stop(start + duration + 0.02);
+  const partials = [
+    { ratio: 1, level: 1, type: "sine" },
+    { ratio: 2, level: 0.16, type: "sine" },
+  ];
+
+  for (const partial of partials) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const partialFrequency = frequency * partial.ratio;
+    oscillator.type = partial.type;
+    oscillator.frequency.setValueAtTime(partialFrequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(peak * partial.level, start + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.02);
+  }
 }
