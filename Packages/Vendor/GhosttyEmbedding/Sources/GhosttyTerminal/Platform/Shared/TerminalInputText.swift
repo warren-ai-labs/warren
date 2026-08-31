@@ -11,14 +11,6 @@
 import Foundation
 
 enum TerminalInputText {
-    /// True when the first scalar is an ASCII control character (C0 or DEL).
-    /// AppKit can report Ctrl-key input through `insertText`; those bytes must
-    /// instead be encoded from the physical key and its modifiers by Ghostty.
-    static func startsWithASCIIControlCharacter(_ text: String) -> Bool {
-        guard let scalar = text.unicodeScalars.first else { return false }
-        return scalar.value < 0x20 || scalar.value == 0x7F
-    }
-
     static func filteredFunctionKeyText(_ text: String?) -> String? {
         guard let text else { return nil }
         if isUIKitNamedFunctionKey(text) {
