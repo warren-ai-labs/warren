@@ -400,6 +400,53 @@ final class GhosttyAdapterTests: XCTestCase {
     }
 
     @MainActor
+    func testCtrlCCommittedByAppKitIsEncodedFromHardwareKey() async throws {
+        let recorder = LockedInputRecorder()
+        let controlTextView = ControlTextTerminalView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let (_, view, window) = try await makeMountedTerminal(
+            recorder: recorder,
+            view: controlTextView
+        )
+        defer { window.orderOut(nil) }
+
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{03}",
+            charactersIgnoringModifiers: "c",
+            isARepeat: false,
+            keyCode: 0x08 // kVK_ANSI_C
+        ) else {
+            struct KeyEventUnavailable: Error {}
+            throw KeyEventUnavailable()
+        }
+
+        // NSTextInputClient.insertText requires an active AppKit event. The
+        // test view commits ETX from interpretKeyEvents to reproduce the path
+        // used by AppKit when Ctrl+C is delivered through insertText.
+        let previousEvent = NSApp.currentEvent
+        NSApp.setValue(event, forKey: "currentEvent")
+        defer { NSApp.setValue(previousEvent, forKey: "currentEvent") }
+        view.keyDown(with: event)
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while recorder.allBytes().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(
+            Array(recorder.allBytes()),
+            [0x03],
+            "Ctrl+C must reach the PTY as ETX even when AppKit commits it as text"
+        )
+    }
+
+    @MainActor
     func testArrowDownHonorsApplicationCursorKeysMode() async throws {
         let recorder = LockedInputRecorder()
         let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
@@ -655,6 +702,7 @@ private extension Data {
 @MainActor
 private func makeMountedTerminal(
     recorder: LockedInputRecorder,
+    view suppliedView: AppTerminalView? = nil,
     outputRenderBudgetBytes: Int = 128 * 1024,
     outputRenderYield: Duration = .milliseconds(8),
     suppressFocusLossReporting: Bool = false,
@@ -680,7 +728,8 @@ private func makeMountedTerminal(
         backing: .buffered,
         defer: false
     )
-    let view = AppTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    let view = suppliedView
+        ?? AppTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     view.delegate = surface.state
     view.controller = surface.state.controller
     view.configuration = surface.state.configuration
@@ -692,6 +741,14 @@ private func makeMountedTerminal(
 
     _ = try await waitUntilSurfaceAvailable(on: surface.state)
     return (surface, view, window)
+}
+
+@MainActor
+private final class ControlTextTerminalView: AppTerminalView {
+    override func interpretKeyEvents(_ eventArray: [NSEvent]) {
+        _ = eventArray
+        inputHandler?.inputMethodHandler?.insertText("\u{03}")
+    }
 }
 
 @MainActor
