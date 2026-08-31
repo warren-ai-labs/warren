@@ -271,8 +271,11 @@ func EnsureCodexBindHook(codexHome string) (changed bool, err error) {
 	return ensureAgentHooks(filepath.Join(codexHome, "hooks.json"), "codex")
 }
 
-// EnsureClaudeBindHook installs the same two hooks into Claude's user
-// settings file, preserving every existing entry.
+// EnsureClaudeBindHook installs Warren's binding and attention hooks into
+// Claude's user settings file, preserving every existing entry. Claude emits
+// PermissionRequest/PreToolUse and turn-boundary hooks as stable,
+// machine-readable observations; the managed script projects them to the
+// provider-neutral AgentStatus file without approving or denying anything.
 func EnsureClaudeBindHook(claudeConfigDir string) (changed bool, err error) {
 	return ensureAgentHooks(filepath.Join(claudeConfigDir, "settings.json"), "claude")
 }
@@ -335,7 +338,20 @@ func ensureAgentHooks(hooksPath, provider string) (changed bool, err error) {
 		document["hooks"] = hooks
 	}
 	command := "bash '" + scriptPath + "' " + hookCommandMarker + " " + provider
-	for _, event := range []string{"SessionStart", "SessionEnd"} {
+	events := []string{"SessionStart", "SessionEnd"}
+	if provider == "claude" {
+		// These hook names are Claude-specific. Codex has a separate hooks
+		// schema, so do not add unknown events to its hooks.json.
+		events = append(events,
+			"PermissionRequest",
+			"PreToolUse",
+			"PostToolUse",
+			"PostToolUseFailure",
+			"UserPromptSubmit",
+			"Stop",
+		)
+	}
+	for _, event := range events {
 		if ensureHookEvent(hooks, event, command) {
 			changed = true
 		}
@@ -406,6 +422,14 @@ function atomicWrite(filePath: string, data: string) {
   fs.renameSync(tmp, filePath)
 }
 export const WarrenBindPlugin: Plugin = async () => {
+  const writeStatus = (activity: string, attention?: { kind: string, reason: string, requestId?: string }) => {
+    const stateFile = process.env.WARREN_STATE_FILE
+    if (!stateFile) return
+    const status = attention
+      ? { activity, attention: { ...attention, since: new Date().toISOString() } }
+      : { activity, attention: null }
+    try { atomicWrite(stateFile, JSON.stringify({ status }) + "\n") } catch {}
+  }
   return {
     event: async ({ event }: { event: any }) => {
       const bindFile = process.env.WARREN_BIND_FILE
@@ -415,7 +439,7 @@ export const WarrenBindPlugin: Plugin = async () => {
       const kind = process.env.WARREN_AGENT_KIND || "opencode"
       const props: any = (event as any).properties || {}
       const t = (event as any).type as string
-      if (t === "session.created" || (t === "session.status" && props.status?.type === "busy")) {
+      if (t === "session.created") {
         const sid: string = props.info?.id || props.sessionID || ""
         if (!sid || !bindFile) return
         const cwd: string = props.info?.directory || (props.directory as string) || process.env.WARREN_WORKSPACE_PATH || ""
@@ -423,17 +447,25 @@ export const WarrenBindPlugin: Plugin = async () => {
         // (marker: warren-agent-bind-v1)
         const payload = JSON.stringify({ provider: kind, sessionId: sid, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\n"
         try { atomicWrite(bindFile, payload) } catch {}
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\n") } catch {}
+        writeStatus("ready")
+      } else if (t === "session.status" && props.status?.type === "busy") {
+        writeStatus("working")
       } else if (t === "session.error") {
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "failed", attention: { kind: "warning", reason: "error", since: new Date().toISOString() } } }) + "\n") } catch {}
+        writeStatus("failed")
       } else if (t === "session.idle") {
-        if (stateFile) try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "ready", attention: null } }) + "\n") } catch {}
+        writeStatus("ready")
+      } else if (t === "permission.asked") {
+        writeStatus("blocked", { kind: "approval", reason: "permission", requestId: props.id || "" })
+      } else if (t === "permission.replied") {
+        writeStatus("working")
+      } else if (t === "question.asked") {
+        writeStatus("blocked", { kind: "input", reason: "question", requestId: props.id || "" })
+      } else if (t === "question.replied" || t === "question.rejected") {
+        writeStatus("working")
       }
     },
-    "permission.ask": async (_perm: any, out: any) => {
-      const stateFile = process.env.WARREN_STATE_FILE
-      if (!stateFile) return
-      try { atomicWrite(stateFile, JSON.stringify({ status: { activity: "blocked", attention: { kind: "approval", reason: "permission", since: new Date().toISOString() } } }) + "\n") } catch {}
+    "permission.ask": async (perm: any, out: any) => {
+      writeStatus("blocked", { kind: "approval", reason: "permission", requestId: perm?.id || "" })
       if (out) out.status = "ask"
     },
   }
@@ -446,8 +478,9 @@ export default {
 `
 
 // agentBindHookScript reads the hook event JSON from stdin. SessionStart
-// writes the transcript binding and resets the status file; SessionEnd marks
-// the status file exited so the daemon can update the surrounding shell. The
+// writes the transcript binding and resets the status file; Claude's
+// PermissionRequest/AskUserQuestion hooks publish explicit attention; turn
+// boundaries clear it; SessionEnd marks the surrounding shell exited. The
 // marker string appears in the command so the daemon can find and update its
 // own entry idempotently.
 const agentBindHookScript = `#!/bin/sh
@@ -457,20 +490,90 @@ input=$(cat)
 hook_event=$(printf '%s' "$input" | sed -nE 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 session_id=$(printf '%s' "$input" | sed -nE 's/.*"session_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
-if [ "$hook_event" = "SessionEnd" ]; then
-  [ -n "$WARREN_STATE_FILE" ] || exit 0
+
+# Status files are provider-neutral and contain no prompt text, tool
+# arguments, or secrets. Request IDs are reduced to a conservative character
+# set before they are written into JSON.
+write_status() {
+  [ -n "$WARREN_STATE_FILE" ] || return 0
+  activity=$1
+  attention_kind=$2
+  reason=$3
+  request_id=$4
   dir=$(dirname "$WARREN_STATE_FILE")
-  mkdir -p "$dir" 2>/dev/null || exit 0
+  mkdir -p "$dir" 2>/dev/null || return 0
   temporary="$WARREN_STATE_FILE.tmp.$$"
+  state_prefix=""
   if [ -n "$session_id" ]; then
-    printf '{"sessionId":"%s","status":{"activity":"exited","attention":null}}\n' "$session_id" > "$temporary" 2>/dev/null || exit 0
-  else
-    printf '%s\n' '{"status":{"activity":"exited","attention":null}}' > "$temporary" 2>/dev/null || exit 0
+    state_prefix=$(printf '"sessionId":"%s",' "$session_id")
   fi
-  mv -f "$temporary" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
+  if [ -n "$attention_kind" ]; then
+    safe_request_id=$(printf '%s' "$request_id" | tr -cd '[:alnum:]_.:-')
+    since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    if [ -n "$safe_request_id" ]; then
+      printf '{%s"status":{"activity":"%s","attention":{"kind":"%s","reason":"%s","requestId":"%s","since":"%s"}}}\n' \
+        "$state_prefix" "$activity" "$attention_kind" "$reason" "$safe_request_id" "$since" > "$temporary" 2>/dev/null || return 0
+    else
+      printf '{%s"status":{"activity":"%s","attention":{"kind":"%s","reason":"%s","since":"%s"}}}\n' \
+        "$state_prefix" "$activity" "$attention_kind" "$reason" "$since" > "$temporary" 2>/dev/null || return 0
+    fi
+  else
+    printf '{%s"status":{"activity":"%s","attention":null}}\n' "$state_prefix" "$activity" > "$temporary" 2>/dev/null || return 0
+  fi
+  mv -f "$temporary" "$WARREN_STATE_FILE" 2>/dev/null || return 0
+}
+
+request_id=$(printf '%s' "$input" | sed -nE 's/.*"request_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"requestId"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"tool_use_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+tool_name=$(printf '%s' "$input" | sed -nE 's/.*"tool_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$tool_name" ] || tool_name=$(printf '%s' "$input" | sed -nE 's/.*"toolName"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+
+if [ "$hook_event" = "SessionEnd" ]; then
+  write_status "exited" "" "" ""
   printf '%s\n' '{"continue":true}'
   exit 0
 fi
+
+# Claude emits this event immediately before showing a permission prompt. The
+# hook only records the observation; it deliberately returns no allow/deny
+# decision so the provider's own prompt remains authoritative.
+if [ "$hook_event" = "PermissionRequest" ]; then
+  write_status "blocked" "approval" "permission" "$request_id"
+  printf '%s\n' '{"continue":true}'
+  exit 0
+fi
+
+# AskUserQuestion is a provider tool, not a question-mark heuristic. Its
+# PreToolUse event is the stable signal that the next input is an answer.
+if [ "$hook_event" = "PreToolUse" ]; then
+  case "$tool_name" in
+    AskUserQuestion|ask_user_question)
+      write_status "blocked" "input" "question" "$request_id"
+      ;;
+    *)
+      # A tool reached PreToolUse, which means any earlier permission prompt
+      # was resolved and the active turn is progressing again.
+      write_status "working" "" "" ""
+      ;;
+  esac
+  printf '%s\n' '{"continue":true}'
+  exit 0
+fi
+
+case "$hook_event" in
+  PostToolUse|PostToolUseFailure|UserPromptSubmit)
+    write_status "working" "" "" ""
+    printf '%s\n' '{"continue":true}'
+    exit 0
+    ;;
+  Stop)
+    write_status "ready" "" "" ""
+    printf '%s\n' '{"continue":true}'
+    exit 0
+    ;;
+esac
+
 transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || exit 0
@@ -485,13 +588,7 @@ temporary="$WARREN_BIND_FILE.tmp.$$"
     "$provider" "$session_id" "$transcript_path" "$cwd" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$temporary" 2>/dev/null || exit 0
 mv -f "$temporary" "$WARREN_BIND_FILE" 2>/dev/null || exit 0
-if [ -n "$WARREN_STATE_FILE" ]; then
-  state_dir=$(dirname "$WARREN_STATE_FILE")
-  mkdir -p "$state_dir" 2>/dev/null || exit 0
-  state_tmp="$WARREN_STATE_FILE.tmp.$$"
-  printf '{"sessionId":"%s","status":{"activity":"ready","attention":null}}\n' "$session_id" > "$state_tmp" 2>/dev/null || exit 0
-  mv -f "$state_tmp" "$WARREN_STATE_FILE" 2>/dev/null || exit 0
-fi
+write_status "ready" "" "" ""
 printf '%s\n' '{"continue":true}'
 exit 0
 `

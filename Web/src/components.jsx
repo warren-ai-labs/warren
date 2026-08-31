@@ -31,6 +31,13 @@ const terminalIcon = (
   </svg>
 );
 
+const agentChatIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+    <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4.2A2.5 2.5 0 0 1 4 12.5z" />
+    <path d="M8 8h8M8 11h5" />
+  </svg>
+);
+
 const folderIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
     <path d="M3 7h7l2 2h9v10H3z" />
@@ -121,7 +128,8 @@ function statusActivity(status) {
 
 function statusLabel(status) {
   const activity = statusActivity(status);
-  if (activity === "blocked" || activity === "stalled") return "Needs attention";
+  if (activity === "failed") return activityLabels.failed;
+  if (status?.attention || activity === "blocked" || activity === "stalled") return "Needs attention";
   return activityLabels[activity];
 }
 
@@ -129,8 +137,9 @@ export function ActivityDot({ status }) {
   const activity = statusActivity(status);
   const label = statusLabel(status);
   if (!label) return null;
-  const pulse = activity === "ready" || activity === "exited" ? "" : " pulse";
-  return <span className={`activity ${activity}${pulse}`} title={label} aria-label={label} />;
+  const attention = activity !== "failed" && status?.attention ? " attention" : "";
+  const pulse = activity === "ready" || activity === "exited" ? (attention ? " pulse" : "") : " pulse";
+  return <span className={`activity ${activity}${attention}${pulse}`} title={label} aria-label={label} />;
 }
 
 function mergedBadgeTitle(tabs) {
@@ -667,17 +676,21 @@ export function MobileShell({
               type="button"
               className={agentViewActive ? undefined : "active"}
               aria-pressed={!agentViewActive}
+              aria-label="Terminal"
+              title="Terminal"
               onClick={() => onToggleAgentView("terminal")}
             >
-              Term
+              {terminalIcon}
             </button>
             <button
               type="button"
               className={agentViewActive ? "active" : undefined}
               aria-pressed={agentViewActive}
+              aria-label="Agent chat"
+              title="Agent chat"
               onClick={() => onToggleAgentView("agent")}
             >
-              Chat
+              {agentChatIcon}
             </button>
           </div>
         )}
@@ -1804,12 +1817,21 @@ export function Loading({ message }) {
 
 function highestStatus(sessions) {
   return sessions.reduce((highest, session) => {
-    const activity = statusActivity(session.agentStatus);
-    const highestActivityValue = statusActivity(highest);
-    return (activityPriority[activity] || 0) > (activityPriority[highestActivityValue] || 0)
+    const priority = statusPriority(session.agentStatus);
+    const highestPriority = statusPriority(highest);
+    return priority > highestPriority
       ? session.agentStatus
       : highest;
   }, null);
+}
+
+function statusPriority(status) {
+  if (!status) return 0;
+  const activity = statusActivity(status);
+  if (activity === "failed") return 6;
+  if (status.attention || activity === "blocked") return 5;
+  if (activity === "stalled") return 4;
+  return activityPriority[activity] || 0;
 }
 
 function PlusIcon() {

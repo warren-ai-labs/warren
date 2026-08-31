@@ -515,6 +515,67 @@ func TestDedicatedCodexThreadEndDoesNotGraySession(t *testing.T) {
 	}
 }
 
+func TestAgentHookStateDoesNotOverwriteNewerTranscriptStatus(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := api.Session{
+		ID: "session-agent", Title: "Claude", Kind: "claude",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	service := &Service{Store: state, Runtime: newMemoryOutputRuntime(t)}
+	service.lazyInit()
+
+	statePath := agent.StatePath(session.ID)
+	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{
+		Activity:  api.AgentActivityBlocked,
+		Attention: &api.AgentAttention{Kind: api.AgentAttentionApproval, Reason: "permission"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.applyAgentState(session)
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityBlocked {
+		t.Fatalf("hook status = %q, want blocked", got)
+	}
+
+	// The transcript watcher has observed progress. Reconciliation must not
+	// re-apply the same hook snapshot and resurrect the old approval badge.
+	service.recordAgentStatus(session.ID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.applyAgentState(session)
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityWorking {
+		t.Fatalf("stale hook status = %q, want working", got)
+	}
+
+	// A new Stop/session.idle hook is the provider's explicit turn boundary.
+	// It must clear a working transcript projection even when the final text
+	// was observed on a later watcher tick.
+	time.Sleep(2 * time.Millisecond)
+	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
+		t.Fatal(err)
+	}
+	service.applyAgentState(session)
+	if got := service.agentStatus(session.ID).Activity; got != api.AgentActivityReady {
+		t.Fatalf("new ready hook status = %q, want ready", got)
+	}
+
+	// A new provider observation changes the file token and is applied once.
+	time.Sleep(2 * time.Millisecond)
+	if err := agent.WriteAgentStatus(statePath, api.AgentStatus{
+		Activity:  api.AgentActivityBlocked,
+		Attention: &api.AgentAttention{Kind: api.AgentAttentionInput, Reason: "question"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.applyAgentState(session)
+	status := service.agentStatus(session.ID)
+	if status.Activity != api.AgentActivityBlocked || status.Attention == nil || status.Attention.Kind != api.AgentAttentionInput {
+		t.Fatalf("new hook status = %#v, want blocked/input", status)
+	}
+}
+
 func TestExitedAgentActivityIsNotResurrectedByWatcher(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
@@ -695,6 +756,95 @@ func TestAgentHistoryPagePaginates(t *testing.T) {
 	}
 	if third.Cursor != 1 || third.HasMore {
 		t.Fatalf("third page cursor=%d hasMore=%t, want cursor=1 hasMore=false", third.Cursor, third.HasMore)
+	}
+}
+
+func TestAgentHistoryConversationPrioritySkipsToolBurst(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	service.agentsMu.Lock()
+	service.agents["session-conversation-priority"] = &agentSession{}
+	service.agentsMu.Unlock()
+
+	events := []api.AgentEvent{
+		{Sequence: 1, Type: "user", Content: "first prompt"},
+		{Sequence: 2, Type: "assistant", Content: "first answer"},
+	}
+	for sequence := uint64(3); sequence <= 102; sequence++ {
+		events = append(events, api.AgentEvent{
+			Sequence:  sequence,
+			Type:      "tool_call",
+			ToolName:  "shell",
+			ToolInput: map[string]any{"command": "echo noisy"},
+		})
+	}
+	events = append(events,
+		api.AgentEvent{Sequence: 103, Type: "user", Content: "second prompt"},
+		api.AgentEvent{Sequence: 104, Type: "assistant", Content: "second answer"},
+	)
+	service.recordAgentEvents(
+		"session-conversation-priority",
+		events,
+		api.AgentStatus{Activity: api.AgentActivityReady},
+	)
+
+	first := service.agentHistoryPageWithOptions(
+		"session-conversation-priority", 0, 2, true,
+	)
+	if got := first.Events; len(got) != 2 || got[0].Sequence != 103 || got[1].Sequence != 104 {
+		t.Fatalf("priority page = %#v, want conversation sequences 103,104", got)
+	}
+	if first.Cursor != 103 || !first.HasMore {
+		t.Fatalf("priority metadata = cursor=%d hasMore=%t, want cursor=103 hasMore=true", first.Cursor, first.HasMore)
+	}
+
+	second := service.agentHistoryPageWithOptions(
+		"session-conversation-priority", first.Cursor, 2, true,
+	)
+	if got := second.Events; len(got) != 2 || got[0].Sequence != 1 || got[1].Sequence != 2 {
+		t.Fatalf("older priority page = %#v, want conversation sequences 1,2", got)
+	}
+	if second.Cursor != 1 || second.HasMore {
+		t.Fatalf("older priority metadata = cursor=%d hasMore=%t, want cursor=1 hasMore=false", second.Cursor, second.HasMore)
+	}
+}
+
+func TestAgentHistoryConversationPriorityCoalescesOpenCodeDeltas(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	service.agentsMu.Lock()
+	service.agents["session-conversation-deltas"] = &agentSession{}
+	service.agentsMu.Unlock()
+
+	service.recordAgentEvents(
+		"session-conversation-deltas",
+		[]api.AgentEvent{
+			{Sequence: 1, Provider: "opencode", ID: "part-1", Type: "user", Content: "fix"},
+			{Sequence: 2, Provider: "opencode", ID: "part-2", Type: "assistant", Content: "hel"},
+			{Sequence: 3, Provider: "opencode", ID: "part-2", Type: "assistant", Content: "lo", ContentDelta: true},
+			{Sequence: 4, Type: "tool_call", ToolName: "shell"},
+		},
+		api.AgentStatus{Activity: api.AgentActivityReady},
+	)
+
+	page := service.agentHistoryPageWithOptions(
+		"session-conversation-deltas", 0, 1, true,
+	)
+	if len(page.Events) != 1 || page.Events[0].Content != "hello" {
+		t.Fatalf("priority page = %#v, want one coalesced assistant message", page.Events)
+	}
+	if page.Events[0].Sequence != 2 || page.Cursor != 2 || !page.HasMore {
+		t.Fatalf("priority cursor = event=%d cursor=%d hasMore=%t, want event=2 cursor=2 hasMore=true", page.Events[0].Sequence, page.Cursor, page.HasMore)
+	}
+
+	older := service.agentHistoryPageWithOptions(
+		"session-conversation-deltas", page.Cursor, 1, true,
+	)
+	if len(older.Events) != 1 || older.Events[0].Content != "fix" || older.Events[0].Sequence != 1 {
+		t.Fatalf("older priority page = %#v, want user event sequence 1", older.Events)
+	}
+	if older.HasMore {
+		t.Fatal("older priority page unexpectedly reports more events")
 	}
 }
 

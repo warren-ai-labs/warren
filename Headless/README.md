@@ -353,6 +353,11 @@ that need the full history fetch it page by page with the `agent.history`
 request (`session`, optional `before` sequence cursor and `limit`, returning
 `events`, `cursor` and `hasMore`). This keeps any single WebSocket message far
 below client message-size limits even for transcripts with thousands of events.
+Conversation-first clients may pass `priority: "conversation"` to receive only
+non-empty user and assistant messages for a page. OpenCode content deltas are
+coalesced into one logical message before the page limit is applied. The cursor
+remains the normalized event sequence, while requests without `priority`
+retain the full normalized event page including reasoning and tool activity.
 The PTY byte stream remains the source of truth; the transcript is a
 best-effort, read-only side channel.
 
