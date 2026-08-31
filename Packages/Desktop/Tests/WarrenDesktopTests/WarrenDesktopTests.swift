@@ -86,12 +86,11 @@ private func makeTabBar(
 final class WarrenDesktopTests: XCTestCase {
     func testPublicAccessUsesOwnerReachabilityTerminology() {
         XCTAssertEqual(WarrenPublicAccessCopy.title, "Public Access")
-        XCTAssertEqual(WarrenPublicAccessCopy.defaultTunnel, "Use default tunnel (gnar)")
-        XCTAssertEqual(WarrenPublicAccessCopy.edgeURL, "Edge URL")
-        XCTAssertEqual(WarrenPublicAccessCopy.inviteKey, "Invite Key (one time)")
-        XCTAssertEqual(WarrenPublicAccessCopy.approvalKey, "Approval Key (one time)")
-        XCTAssertEqual(WarrenPublicAccessCopy.enrollmentKey, "Enrollment Key (one time)")
+        XCTAssertEqual(WarrenPublicAccessCopy.relayURL, "Relay URL")
+        XCTAssertEqual(WarrenPublicAccessCopy.publicHostname, "Public hostname")
+        XCTAssertEqual(WarrenPublicAccessCopy.pathPrefix, "Path prefix")
         XCTAssertEqual(WarrenPublicAccessCopy.publicEndpoint, "Public Endpoint")
+        XCTAssertEqual(WarrenPublicAccessCopy.resetLocalSetup, "Reset local route")
         XCTAssertFalse(WarrenPublicAccessCopy.title.localizedCaseInsensitiveContains("sharing"))
     }
 

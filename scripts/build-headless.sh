@@ -13,11 +13,6 @@ if [[ -n "$(git -C "$repository_root" status --porcelain --untracked-files=no 2>
     build_dirty=true
 fi
 headless_ldflags="-X main.version=$build_version -X main.revision=$build_revision -X main.dirty=$build_dirty"
-if [[ -n "${WARREN_GNAR_DEFAULT_EDGE:-}" ]]; then
-    # The value is a public URL, not a credential. It is embedded only in the
-    # release binary; user settings continue to store custom overrides.
-    headless_ldflags+=" -X github.com/abcdlsj/warren/Headless/internal/releaseconfig.DefaultGnarEdge=${WARREN_GNAR_DEFAULT_EDGE}"
-fi
 
 build_non_macos() {
     go build \
@@ -28,6 +23,10 @@ build_non_macos() {
         -ldflags "$headless_ldflags" \
         -o "$output_directory/warren" \
         "$repository_root/Headless/cmd/warren"
+    go build \
+        -ldflags "$headless_ldflags" \
+        -o "$output_directory/warren-ssh-tunnel" \
+        "$repository_root/Headless/cmd/warren-ssh-tunnel"
     cp -f "$output_directory/warren" "$output_directory/warren-cli"
 }
 
@@ -96,6 +95,7 @@ build_v0_compatibility() {
 
 build_macos_product warren-headless "$output_directory/warren-headless"
 build_macos_product warren "$output_directory/warren"
+build_macos_product warren-ssh-tunnel "$output_directory/warren-ssh-tunnel"
 build_v0_compatibility
 cp -f "$output_directory/warren" "$output_directory/warren-cli"
 validate_arm64_artifact "$output_directory/ghostline-v0-compat"

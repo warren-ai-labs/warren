@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -16,11 +17,12 @@ import (
 func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000001"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
-		PairingTTL: time.Minute,
-		AccessTTL:  time.Hour,
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+		PairingTTL:    time.Minute,
+		AccessTTL:     time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,14 +32,7 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
-	hostHeaders := http.Header{"Authorization": []string{"Bearer " + hostCredential}}
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID+"&name=Mac",
-		hostHeaders,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "Mac")
 	defer host.Close()
 	waitForHost(t, httpServer.URL, server, hostID)
 
@@ -79,14 +74,14 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	reused.Body.Close()
 
 	client, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/client/connect?host_id="+hostID,
+		websocketBase+"/v1/client/connect",
 		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if err := client.WriteJSON(map[string]string{"t": "auth", "token": paired.Token}); err != nil {
+	if err := client.WriteJSON(map[string]string{"t": "auth", "version": "2.0", "access_token": paired.Token}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,12 +126,68 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	}
 }
 
+func TestProvisionReturnsRelaySettingsLinkWithoutHostSecret(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000009"
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test/relay/?ignored=deployment-metadata",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	body, _ := json.Marshal(map[string]string{"id": hostID, "name": "Mac"})
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("provision host: response=%v err=%v", response, err)
+	}
+	defer response.Body.Close()
+	var result struct {
+		Credential string `json:"host_credential"`
+		Ticket     string `json:"enrollment_ticket"`
+		KeyID      string `json:"relay_key_id"`
+		PublicKey  string `json:"relay_public_key"`
+		Settings   string `json:"settings_url"`
+		Setup      string `json:"setup_url"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Credential != "" || result.Ticket == "" || result.KeyID == "" || result.PublicKey == "" {
+		t.Fatalf("incomplete provision response: %#v", result)
+	}
+	if result.Settings == "" || result.Setup != "" {
+		t.Fatalf("unexpected setup link fields: settings=%q setup=%q", result.Settings, result.Setup)
+	}
+	parsed, err := url.Parse(result.Settings)
+	if err != nil || parsed.Scheme != "warren" || parsed.Host != "settings" {
+		t.Fatalf("invalid settings link: %q (%v)", result.Settings, err)
+	}
+	query := parsed.Query()
+	if query.Get("section") != "relay" || query.Get("relayUrl") != "https://relay.example.test/relay" ||
+		query.Get("hostId") != hostID || query.Get("enrollmentTicket") != result.Ticket ||
+		query.Get("relayKeyId") != result.KeyID || query.Get("relayPublicKey") != result.PublicKey {
+		t.Fatalf("settings link query mismatch: %v", query)
+	}
+	if parsed.RawQuery == "" || strings.Contains(parsed.RawQuery, "ignored") {
+		t.Fatalf("settings link retained deployment query: %q", parsed.RawQuery)
+	}
+}
+
 func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000007"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,9 +270,10 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000009"
 	const otherHostID = "00000000-0000-4000-8000-00000000000a"
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,13 +283,7 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
 	_ = provisionHost(t, httpServer.URL, otherHostID)
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID,
-		http.Header{"Authorization": []string{"Bearer " + hostCredential}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "")
 	defer host.Close()
 	waitForHost(t, httpServer.URL, server, hostID)
 
@@ -269,9 +315,10 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 
 func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
 	server, err := NewServer(Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -287,6 +334,71 @@ func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
 		t.Fatalf("non-UUID Host ID was accepted: response=%v err=%v", response, err)
 	}
 	response.Body.Close()
+}
+
+func TestRelayRequiresBRLY2HostConnection(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-00000000000b"
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	credential := provisionHost(t, httpServer.URL, hostID)
+	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	_, response, err := websocket.DefaultDialer.Dial(
+		websocketBase+"/v1/host/connect?host_id="+hostID,
+		http.Header{"Authorization": []string{"Bearer " + credential}},
+	)
+	if err == nil || response == nil || response.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("legacy host connection was accepted: response=%v err=%v", response, err)
+	}
+	response.Body.Close()
+}
+
+func TestRelayRejectsLegacyEnrollmentCredentialField(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-00000000000c"
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	ticket := provisionHostTicket(t, httpServer.URL, hostID)
+	body, _ := json.Marshal(map[string]string{
+		"enrollment_ticket": ticket,
+		"token":             "daemon-secret",
+	})
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("legacy enrollment field status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestNewServerRequiresAllowedOrigin(t *testing.T) {
+	if _, err := NewServer(Config{
+		PublicURL:  "https://relay.example.test",
+		AdminToken: "admin-bootstrap",
+		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
+	}); err == nil {
+		t.Fatal("server accepted an empty AllowedOrigin")
+	}
 }
 
 func TestBrowserOriginRestrictionDoesNotBlockHostConnector(t *testing.T) {
@@ -305,17 +417,11 @@ func TestBrowserOriginRestrictionDoesNotBlockHostConnector(t *testing.T) {
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 
 	hostCredential := provisionHost(t, httpServer.URL, hostID)
-	host, _, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/host/connect?host_id="+hostID,
-		http.Header{"Authorization": []string{"Bearer " + hostCredential}},
-	)
-	if err != nil {
-		t.Fatalf("Host connector was incorrectly subject to browser Origin: %v", err)
-	}
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "")
 	defer host.Close()
 
 	client, response, err := websocket.DefaultDialer.Dial(
-		websocketBase+"/v1/client/connect?host_id="+hostID,
+		websocketBase+"/v1/client/connect",
 		http.Header{"Origin": []string{"https://attacker.example"}},
 	)
 	if client != nil {
@@ -332,12 +438,13 @@ func TestRegistryPersistsCredentialsAndRevocationInvalidatesAccess(t *testing.T)
 	const otherHostID = "00000000-0000-4000-8000-000000000003"
 	dataURL := t.TempDir() + "/registry.json"
 	config := Config{
-		PublicURL:  "https://relay.example.test",
-		AdminToken: "admin-bootstrap",
-		SigningKey: []byte("0123456789abcdef0123456789abcdef"),
-		DataURL:    dataURL,
-		PairingTTL: time.Minute,
-		AccessTTL:  time.Hour,
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+		DataURL:       dataURL,
+		PairingTTL:    time.Minute,
+		AccessTTL:     time.Hour,
 	}
 	server, err := NewServer(config)
 	if err != nil {
@@ -390,9 +497,16 @@ func TestPairingCodeExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := registry.provisionHost(hostID, "Mac")
-	if err != nil || !registry.authenticateHost(hostID, credential) {
+	if err := registry.provisionHost(hostID, "Mac"); err != nil {
 		t.Fatal("provision failed")
+	}
+	ticket, _, ok := registry.enrollmentTicket(hostID)
+	if !ok {
+		t.Fatal("provision did not create enrollment ticket")
+	}
+	const credential = "daemon-secret-pairing-expiry"
+	if _, err := registry.enrollment(hostID, ticket, credential); err != nil || !registry.authenticateHost(hostID, credential) {
+		t.Fatal("enrollment failed")
 	}
 	tunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
 	if !registry.connectHost(hostID, "Mac", credential, tunnel) {
@@ -416,12 +530,26 @@ func TestCredentialRotationCannotPublishAStaleHostTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCredential, err := registry.provisionHost(hostID, "Mac")
-	if err != nil || !registry.authenticateHost(hostID, oldCredential) {
+	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+		t.Fatal(err)
+	}
+	ticket, _, ok := registry.enrollmentTicket(hostID)
+	if !ok {
+		t.Fatal("initial enrollment ticket missing")
+	}
+	const oldCredential = "daemon-secret-old"
+	if _, err := registry.enrollment(hostID, ticket, oldCredential); err != nil || !registry.authenticateHost(hostID, oldCredential) {
 		t.Fatal("initial credential was not accepted")
 	}
-	newCredential, err := registry.provisionHost(hostID, "Mac")
-	if err != nil {
+	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+		t.Fatal(err)
+	}
+	ticket, _, ok = registry.enrollmentTicket(hostID)
+	if !ok {
+		t.Fatal("rotation enrollment ticket missing")
+	}
+	const newCredential = "daemon-secret-new"
+	if _, err := registry.enrollment(hostID, ticket, newCredential); err != nil {
 		t.Fatal(err)
 	}
 	staleTunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
@@ -448,8 +576,15 @@ func TestRegistryMutationRollsBackWhenPersistenceFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := registry.provisionHost(hostID, "Mac")
-	if err != nil {
+	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+		t.Fatal(err)
+	}
+	ticket, _, ok := registry.enrollmentTicket(hostID)
+	if !ok {
+		t.Fatal("enrollment ticket missing")
+	}
+	const credential = "daemon-secret-persistence"
+	if _, err := registry.enrollment(hostID, ticket, credential); err != nil {
 		t.Fatal(err)
 	}
 	// Renaming a file over this existing directory fails on every supported
@@ -461,7 +596,7 @@ func TestRegistryMutationRollsBackWhenPersistenceFails(t *testing.T) {
 	if !registry.authenticateHost(hostID, credential) {
 		t.Fatal("failed revoke changed the in-memory credential")
 	}
-	if _, err := registry.provisionHost(hostID, "Rotated Mac"); err == nil {
+	if err := registry.provisionHost(hostID, "Rotated Mac"); err == nil {
 		t.Fatal("rotation unexpectedly succeeded when persistence failed")
 	}
 	if !registry.authenticateHost(hostID, credential) {
@@ -470,6 +605,21 @@ func TestRegistryMutationRollsBackWhenPersistenceFails(t *testing.T) {
 }
 
 func provisionHost(t *testing.T, base, hostID string) string {
+	t.Helper()
+	ticket := provisionHostTicket(t, base, hostID)
+	secret := "daemon-secret-" + hostID
+	body, _ := json.Marshal(map[string]string{"enrollment_ticket": ticket, "host_secret": secret})
+	request, _ := http.NewRequest(http.MethodPost, base+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("enroll host: response=%v err=%v", response, err)
+	}
+	response.Body.Close()
+	return secret
+}
+
+func provisionHostTicket(t *testing.T, base, hostID string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"id": hostID, "name": "Mac"})
 	request, _ := http.NewRequest(http.MethodPost, base+"/v1/hosts", bytes.NewReader(body))
@@ -482,11 +632,57 @@ func provisionHost(t *testing.T, base, hostID string) string {
 	defer response.Body.Close()
 	var result struct {
 		Credential string `json:"host_credential"`
+		Ticket     string `json:"enrollment_ticket"`
 	}
-	if json.NewDecoder(response.Body).Decode(&result) != nil || result.Credential == "" {
-		t.Fatal("missing host credential")
+	if json.NewDecoder(response.Body).Decode(&result) != nil || result.Credential != "" || result.Ticket == "" {
+		t.Fatalf("invalid host provisioning response: %#v", result)
 	}
-	return result.Credential
+	return result.Ticket
+}
+
+func dialV2Host(t *testing.T, websocketBase, hostID, credential, name string) *websocket.Conn {
+	t.Helper()
+	endpoint := websocketBase + "/v1/host/connect?host_id=" + hostID + "&version=2.0"
+	if name != "" {
+		endpoint += "&name=" + url.QueryEscape(name)
+	}
+	host, _, err := websocket.DefaultDialer.Dial(endpoint, http.Header{"Authorization": []string{"Bearer " + credential}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := host.ReadMessage()
+	if err != nil || typ != websocket.TextMessage {
+		host.Close()
+		t.Fatalf("relay challenge: type=%d err=%v", typ, err)
+	}
+	var challenge relayChallenge
+	if err := json.Unmarshal(payload, &challenge); err != nil || challenge.Type != "relay_challenge" || challenge.Version != "2.0" {
+		host.Close()
+		t.Fatalf("invalid relay challenge: %v %s", err, payload)
+	}
+	if err := host.WriteJSON(relayHello{
+		Type: "host_hello", Version: "2.0", HostID: hostID,
+		Capabilities: []string{"control", "http", "upgrade"},
+		Proof:        challengeProof(credential, canonicalChallenge(challenge, hostID)),
+	}); err != nil {
+		host.Close()
+		t.Fatal(err)
+	}
+	typ, payload, err = host.ReadMessage()
+	if err != nil || typ != websocket.TextMessage {
+		host.Close()
+		t.Fatalf("relay welcome: type=%d err=%v", typ, err)
+	}
+	var welcome struct {
+		Type       string `json:"t"`
+		Version    string `json:"version"`
+		Generation uint64 `json:"generation"`
+	}
+	if err := json.Unmarshal(payload, &welcome); err != nil || welcome.Type != "host_welcome" || welcome.Version != "2.0" {
+		host.Close()
+		t.Fatalf("invalid relay welcome: %v %s", err, payload)
+	}
+	return host
 }
 
 func waitForHost(t *testing.T, base string, server *Server, hostID string) {

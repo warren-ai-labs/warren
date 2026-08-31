@@ -10,7 +10,7 @@ Warren is split into three layers: Host, Transport, and Client:
 ```text
 Desktop / CLI
       ↓ versioned WebSocket API
-Endpoint (Local, SSH tunnel, Tailscale, Relay)
+Endpoint (Local, SSH tunnel, Relay)
       ↓
 warren-headless
 ├── Project / Workspace / Session authority
@@ -20,7 +20,11 @@ warren-headless
 └── read-only agent projection (Codex / Claude / OpenCode)
 ```
 
-SSH is not a Warren business protocol. `warren ssh` only starts the remote daemon, reads the token, and establishes loopback port forwarding. Once connected, Desktop and CLI use the same WebSocket API.
+SSH is not a Warren business protocol. `warren ssh` starts the remote daemon,
+reads the token, and establishes loopback port forwarding with the embedded Go
+client. Desktop can also launch the bundled helper directly after the user
+chooses an alias from `~/.ssh/config`; once connected, Desktop and CLI use the
+same WebSocket API.
 
 ## State Ownership
 
@@ -30,7 +34,7 @@ SSH is not a Warren business protocol. `warren ssh` only starts the remote daemo
 | Ghostline Runtime | Headless daemon | Keeps running |
 | Current endpoint | Local Desktop/CLI config | Retained |
 | Desktop selection and renderer | Local Desktop | Rebuildable |
-| SSH tunnel | `warren ssh` process | Closed when the process exits |
+| SSH tunnel | CLI process or bundled Desktop helper | Closed when its owner exits or switches endpoints |
 
 Local and Server are two independent Host resource trees. Switching endpoints only switches the projection and renderer; it does not migrate, copy, or terminate Sessions on the other end.
 
@@ -43,7 +47,7 @@ Local and Server are two independent Host resource trees. Switching endpoints on
   version are rejected during authentication with an explicit upgrade error,
   before the daemon sends a roster or session data.
 - HTTP state endpoints require a Bearer token.
-- Public connections should go through SSH, Tailscale, or a TLS-terminating Relay.
+- Public connections should go through SSH or a TLS-terminating Relay.
 
 ## Extension Points
 
@@ -83,7 +87,9 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - Headless Go's `/v1/ws` exposes one request/response control protocol. `session.attach` creates an output subscription only (and carries the `epoch/sequence` recovery anchor); a client sends `session.focus` with an optional `cols/rows` viewport after it gains UI focus. The Host only lets the focused peer resize the shared PTY; background `session.resize` requests are safe no-ops, and detach releases focus. Control messages and DENB output frames match the daemon protocol used by Desktop and Web clients.
 - Desktop discovers servers from the CLI config file and refreshes the endpoint catalog in the background, so CLI changes appear without restarting.
 - Remote Project paths must be added through the CLI; the Desktop file picker only applies to Local.
-- SSH auto-start requires `warren-headless` and `openssl` to be installed on the remote host.
+- SSH auto-start requires `warren-headless` to be installed on the remote host;
+  the existing remote token file is reused and no private key or token is
+  copied into the endpoint catalog.
 
 ## Agent Projection Boundary
 

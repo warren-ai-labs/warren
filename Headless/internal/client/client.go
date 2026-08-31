@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,9 @@ type Client struct {
 	mu         sync.Mutex
 	pendingMu  sync.Mutex
 	pending    []inboundMessage
+	closeOnce  sync.Once
+	closeErr   error
+	closeHook  func()
 }
 
 type inboundMessage struct {
@@ -30,16 +34,117 @@ type inboundMessage struct {
 	data   []byte
 }
 
+var relayHostIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
 func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
-	endpoint = strings.TrimRight(endpoint, "/")
-	endpoint = strings.Replace(endpoint, "http://", "ws://", 1)
-	endpoint = strings.Replace(endpoint, "https://", "wss://", 1)
-	if !strings.HasSuffix(endpoint, "/v1/ws") {
-		endpoint += "/v1/ws"
-	}
-	if _, err := url.Parse(endpoint); err != nil {
+	endpoint, err := daemonEndpoint(endpoint)
+	if err != nil {
 		return nil, err
 	}
+	return dial(ctx, endpoint, map[string]any{
+		"t":                    "auth",
+		"token":                token,
+		"version":              api.Version,
+		"capabilities":         []string{"roster-delta"},
+		"terminalStateFormats": []string{terminalStateFormatANSI},
+	})
+}
+
+// DialRelay connects a native client to an access capability issued by the
+// Relay. Relay endpoints are not Headless HTTP roots: they use the scoped
+// /h/{hostID}/v1/client/connect alias and authenticate with access_token.
+func DialRelay(ctx context.Context, relayURL, hostID, accessToken string) (*Client, error) {
+	endpoint, err := relayEndpoint(relayURL, hostID)
+	if err != nil {
+		return nil, err
+	}
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return nil, errors.New("Relay access token is required")
+	}
+	return dial(ctx, endpoint, map[string]any{
+		"t":                    "auth",
+		"access_token":         accessToken,
+		"client_id":            store.NewID(),
+		"version":              api.Version,
+		"capabilities":         []string{"roster-delta"},
+		"terminalStateFormats": []string{terminalStateFormatANSI},
+	})
+}
+
+func daemonEndpoint(raw string) (string, error) {
+	value := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if value == "" {
+		return "", errors.New("daemon URL is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid daemon URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+		return "", errors.New("daemon URL must use http, https, ws, or wss")
+	}
+	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\x00") {
+		return "", errors.New("invalid daemon URL")
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(path, "/v1/ws") {
+		path += "/v1/ws"
+	}
+	parsed.Path = path
+	parsed.RawPath = ""
+	if parsed.Scheme == "http" {
+		parsed.Scheme = "ws"
+	} else if parsed.Scheme == "https" {
+		parsed.Scheme = "wss"
+	}
+	return parsed.String(), nil
+}
+
+func relayEndpoint(raw, hostID string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return "", errors.New("Relay URL is required")
+	}
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		return "", errors.New("Relay Host ID is required")
+	}
+	hostID = strings.ToLower(hostID)
+	if !relayHostIDPattern.MatchString(hostID) {
+		return "", errors.New("invalid Relay Host ID")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid Relay URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+		return "", errors.New("Relay URL must use http, https, ws, or wss")
+	}
+	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\x00") || strings.HasPrefix(parsed.Path, "//") {
+		return "", errors.New("invalid Relay URL")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return "", errors.New("Relay URL path traversal is not allowed")
+		}
+	}
+	prefix := strings.TrimRight(parsed.Path, "/")
+	suffix := "/h/" + hostID + "/v1/client/connect"
+	if !strings.HasSuffix(prefix, suffix) {
+		prefix += suffix
+	}
+	parsed.Path = prefix
+	parsed.RawPath = ""
+	if parsed.Scheme == "http" {
+		parsed.Scheme = "ws"
+	} else if parsed.Scheme == "https" {
+		parsed.Scheme = "wss"
+	}
+	return parsed.String(), nil
+}
+
+func dial(ctx context.Context, endpoint string, auth map[string]any) (*Client, error) {
 	connection, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint, http.Header{})
 	if err != nil {
 		if response != nil {
@@ -48,12 +153,7 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 		return nil, fmt.Errorf("connect %s: %w", endpoint, err)
 	}
 	client := &Client{connection: connection}
-	if err := connection.WriteJSON(api.Envelope{
-		Type:                 "auth",
-		Token:                token,
-		Version:              api.Version,
-		TerminalStateFormats: []string{terminalStateFormatANSI},
-	}); err != nil {
+	if err := connection.WriteJSON(auth); err != nil {
 		connection.Close()
 		return nil, err
 	}
@@ -73,7 +173,33 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 
 const terminalStateFormatANSI = "ghostline-vt-replay-v1"
 
-func (c *Client) Close() error { return c.connection.Close() }
+// SetCloseHook registers a cleanup callback owned by the caller.  It is used
+// by the CLI to tie an SSH tunnel's lifetime to the authenticated WebSocket;
+// callers must set it before handing the client to command code.
+func (c *Client) SetCloseHook(hook func()) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeHook = hook
+}
+
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.closeErr = c.connection.Close()
+		c.mu.Lock()
+		hook := c.closeHook
+		c.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+	})
+	return c.closeErr
+}
 
 func (c *Client) Request(ctx context.Context, method string, params map[string]any, result any) error {
 	c.mu.Lock()

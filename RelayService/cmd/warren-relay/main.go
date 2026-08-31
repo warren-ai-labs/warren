@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/abcdlsj/warren/RelayService/internal/controlplane"
@@ -12,15 +13,20 @@ import (
 
 func main() {
 	address := env("WARREN_RELAY_LISTEN", ":8080")
+	allowedOrigin := strings.TrimSpace(os.Getenv("WARREN_RELAY_ALLOWED_ORIGIN"))
+	if allowedOrigin == "" {
+		log.Fatal("WARREN_RELAY_ALLOWED_ORIGIN is required")
+	}
 	server, err := controlplane.NewServer(controlplane.Config{
-		PublicURL:     env("WARREN_RELAY_PUBLIC_URL", "http://127.0.0.1:8080"),
-		AdminToken:    os.Getenv("WARREN_RELAY_ADMIN_TOKEN"),
-		SigningKey:    []byte(os.Getenv("WARREN_RELAY_SIGNING_KEY")),
-		DataURL:       env("WARREN_RELAY_DATA", "./data/registry.json"),
-		AllowedOrigin: os.Getenv("WARREN_RELAY_ALLOWED_ORIGIN"),
-		PairingTTL:    10 * time.Minute,
-		AccessTTL:     30 * 24 * time.Hour,
-		Logger:        slog.Default(),
+		PublicURL:        env("WARREN_RELAY_PUBLIC_URL", "http://127.0.0.1:8080"),
+		AdminToken:       os.Getenv("WARREN_RELAY_ADMIN_TOKEN"),
+		SigningKey:       []byte(os.Getenv("WARREN_RELAY_SIGNING_KEY")),
+		DataURL:          env("WARREN_RELAY_DATA", "./data/registry.json"),
+		AllowedOrigin:    allowedOrigin,
+		TunnelBaseDomain: env("WARREN_RELAY_TUNNEL_BASE_DOMAIN", "tunnel.local"),
+		PairingTTL:       10 * time.Minute,
+		AccessTTL:        15 * time.Minute,
+		Logger:           slog.Default(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -31,6 +37,14 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    32 * 1024,
+	}
+	certFile := strings.TrimSpace(os.Getenv("WARREN_RELAY_TLS_CERT"))
+	keyFile := strings.TrimSpace(os.Getenv("WARREN_RELAY_TLS_KEY"))
+	if (certFile == "") != (keyFile == "") {
+		log.Fatal("WARREN_RELAY_TLS_CERT and WARREN_RELAY_TLS_KEY must be provided together")
+	}
+	if certFile != "" {
+		log.Fatal(httpServer.ListenAndServeTLS(certFile, keyFile))
 	}
 	log.Fatal(httpServer.ListenAndServe())
 }
