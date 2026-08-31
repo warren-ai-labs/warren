@@ -119,3 +119,42 @@ func TestApplyRuntimeEnvOverridesAndUnsets(t *testing.T) {
 		t.Errorf("TERM = %q, want xterm-256color", got)
 	}
 }
+
+func TestValidateRuntimeEnvRejectsManagedBindings(t *testing.T) {
+	for _, key := range []string{
+		"WARREN_SESSION_ID",
+		"WARREN_BIND_FILE",
+		"WARREN_STATE_FILE",
+		"WARREN_AGENT_KIND",
+		"CODEX_SESSION_ID",
+		"CODEX_THREAD_ID",
+	} {
+		if err := ValidateRuntimeEnv(map[string]string{key: "override"}); err == nil {
+			t.Fatalf("ValidateRuntimeEnv accepted managed key %q", key)
+		}
+	}
+}
+
+func TestValidateRuntimeEnvRejectsInvalidNamesAndKeepsUnsetValues(t *testing.T) {
+	for _, key := range []string{"", "1INVALID", "BAD-NAME", "HAS SPACE"} {
+		if err := ValidateRuntimeEnv(map[string]string{key: "value"}); err == nil {
+			t.Fatalf("ValidateRuntimeEnv accepted invalid key %q", key)
+		}
+	}
+	if err := ValidateRuntimeEnv(map[string]string{"PAGER": ""}); err != nil {
+		t.Fatalf("ValidateRuntimeEnv rejected an explicit unset: %v", err)
+	}
+	if err := ValidateRuntimeEnv(map[string]string{"VALUE": "bad\x00value"}); err == nil {
+		t.Fatal("ValidateRuntimeEnv accepted a NUL-containing value")
+	}
+}
+
+func TestLoadRejectsInvalidRuntimeEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"runtimeEnv":{"WARREN_SESSION_ID":"foreign"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load accepted a managed runtime environment key")
+	}
+}
