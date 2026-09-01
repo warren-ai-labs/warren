@@ -44,6 +44,11 @@ warren relay share --qr "$HOME/Desktop/warren-relay-pairing.png"
 Add `--share` (and optionally `--qr`/`--open`) to `relay connect` when the
 operator wants the first setup to end with a shareable iPhone QR.
 
+`relay connect` is the canonical client command. `relay register` is retained
+as a compatibility alias for scripts; it does not register a Host in Relay
+and has no administrator privileges. Both commands consume the setup link
+through the local Host daemon.
+
 The link is a bearer credential: share it only with intended clients. A new
 `relay share` invocation rotates the pairing code and invalidates the previous
 link; Host re-enrollment and revocation invalidate all existing client access.
@@ -77,6 +82,7 @@ docker run --read-only --tmpfs /tmp -p 127.0.0.1:8080:8080 -v warren-relay-data:
   -e WARREN_RELAY_PUBLIC_URL=https://relay.example.com \
   -e WARREN_RELAY_ALLOWED_ORIGIN=https://relay.example.com \
   -e WARREN_RELAY_TUNNEL_BASE_DOMAIN=tunnel.example.com \
+  --name warren-relay \
   warren-relay
 ```
 
@@ -110,12 +116,49 @@ must terminate TLS instead.
 
 The daemon token in `~/.warren/token` is the canonical Host Secret. Create a Host record to obtain a one-time enrollment ticket, then enroll that existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or revocation bumps the Host generation, disconnects the old socket, and invalidates capabilities from the previous generation.
 
+### Generate a Warren setup URL
+
+The setup URL is created by the Relay administrator API. There is no separate
+setup-link file or command inside the Host client: `POST /v1/hosts` provisions
+the Host record and returns the URL in `settings_url`.
+
 ```bash
+export RELAY_ADMIN_API='https://relay.example.com'
+export WARREN_RELAY_ADMIN_TOKEN='replace-admin-token'
 export WARREN_HOST_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-curl -sS -X POST https://relay.example.com/v1/hosts \
+
+setup_url="$(
+  curl -fsS -X POST "$RELAY_ADMIN_API/v1/hosts" \
+    -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}" \
+  | jq -er '.settings_url'
+)"
+printf '%s\n' "$setup_url"
+unset setup_url
+```
+
+Send the printed `warren://settings?...` value to the Host operator. It is a
+one-time credential, expires after ten minutes, and should be removed from
+shell history or chat after the Host connects. The API request address may be
+an internal Docker or reverse-proxy address; the generated URL always uses
+`WARREN_RELAY_PUBLIC_URL`, which must be reachable by the Host.
+
+The production image is distroless and intentionally has no shell, `curl`, or
+admin subcommand, so `docker exec warren-relay ...` is not available. The
+container command above publishes an admin port; run the setup command from
+the Docker host with `RELAY_ADMIN_API=http://127.0.0.1:8080`.
+
+If the admin machine cannot reach a published port, run a one-shot `curl`
+helper on the Relay container's network instead of using `docker exec`:
+
+```bash
+docker run --rm --network container:warren-relay curlimages/curl:8.12.1 \
+  -fsS -X POST http://127.0.0.1:8080/v1/hosts \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}"
+  -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}" \
+  | jq -er '.settings_url'
 ```
 
 The response contains `enrollment_ticket`, the Relay signing public key, and a
