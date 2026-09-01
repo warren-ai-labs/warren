@@ -64,3 +64,23 @@ func TestPairingClientRejectsCrossOriginInvite(t *testing.T) {
 		t.Fatal("cross-origin pairing link was accepted")
 	}
 }
+
+func TestPairingClientRejectsInviteWithFragment(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(request.URL.Path, "/pairing") {
+			_, _ = io.WriteString(writer, `{"pairing_code":"pairing-code"}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"pairing_url":"`+server.URL+`/invite/opaque-ticket/#credential","pairing_expires_in":604800}`)
+	}))
+	defer server.Close()
+	client, err := NewPairingClient(server.URL, "00000000-0000-4000-8000-000000000016", "host-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Share(context.Background()); err == nil {
+		t.Fatal("pairing link with a fragment was accepted")
+	}
+}

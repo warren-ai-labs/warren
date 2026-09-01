@@ -53,7 +53,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
 /// Relay enrollment metadata carried by a Warren settings link. The URL and
 /// key are public metadata; the enrollment ticket is short-lived and one-time
 /// but still acts as a credential until consumed, so callers must not log or
-/// persist the URL.
+/// persist the URL. Desktop consumes a complete link automatically.
 public struct WarrenDesktopRelayPrefill: Equatable, Sendable {
     public let relayURL: String?
     public let hostID: String?

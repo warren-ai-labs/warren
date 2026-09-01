@@ -71,15 +71,14 @@ curl -sS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/hosts" \
   -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Host\"}"
 ```
 
-Use the one-time enrollment ticket from the response. The existing Warren
-daemon token is the Host Secret and is never written into Relay settings:
+The response includes a canonical `settings_url`. Give that one-time link to
+the Host operator and open it in Warren Desktop. Warren sends the daemon token
+through the local Headless endpoint, pins the Relay key, and starts the
+connector; the Relay administrator token never enters the client. The CLI has
+the same client-side shortcut:
 
 ```bash
-warren relay enroll \
-  --url "$WARREN_RELAY_PUBLIC_URL" \
-  --host "$WARREN_HOST_ID" \
-  --ticket '<one-time-enrollment-ticket>' \
-  --secret "$(cat ~/.warren/token)"
+warren relay connect '<settings-url>'
 ```
 
 Enrollment tickets expire quickly and can be consumed only once. Discard the
@@ -87,29 +86,17 @@ ticket and the setup link after enrollment.
 
 ## Pair a client
 
-Generate a shareable pairing code with the Host Secret, then exchange it for a
-short-lived client capability and a reusable opaque Web/iOS pairing link:
+On an enrolled Host, press **Share with iPhone** in Warren Desktop or run the
+client-side shortcut:
 
 ```bash
-pairing_code="$(
-  WARREN_RELAY_HOST_SECRET="$(cat ~/.warren/token)" \
-    warren --json relay pairing \
-      --url "$WARREN_RELAY_PUBLIC_URL" \
-      --host "$WARREN_HOST_ID" \
-  | jq -r '.pairing_code'
-)"
-
-pairing_response="$(warren --json relay pair \
-  --url "$WARREN_RELAY_PUBLIC_URL" \
-  --host "$WARREN_HOST_ID" \
-  --code "$pairing_code")"
-pairing_url="$(printf '%s' "$pairing_response" | jq -r '.pairing_url')"
-printf '%s\n' "$pairing_url"
+warren relay share --qr --open
 ```
 
-The `pairing_url` is the value to open in a browser or encode in a QR code. It
-has the form `/invite/<opaque>/` and does not disclose the Host ID. A QR code
-must contain this Web pairing URL, not a `warren://settings` enrollment link:
+The daemon keeps the Host Secret and pairing code internal. The resulting
+`pairing_url` is the value to open in a browser or encode in a QR code. It has
+the form `/invite/<opaque>/` and does not disclose the Host ID. A QR code must
+contain this Web pairing URL, not a `warren://settings` enrollment link:
 
 ```bash
 printf '%s' "$pairing_url" \

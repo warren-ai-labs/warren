@@ -18,7 +18,6 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/config"
-	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/gorilla/websocket"
 )
 
@@ -44,28 +43,21 @@ func TestDoRelayRequestDoesNotFollowRedirect(t *testing.T) {
 	}
 }
 
-func TestNewHostIDIsUUIDv4(t *testing.T) {
-	value, err := newHostID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		t.Fatalf("Host ID = %q, want UUID layout", value)
-	}
-	if value[14] != '4' || !strings.ContainsRune("89ab", rune(value[19])) {
-		t.Fatalf("Host ID = %q, want UUIDv4 version/variant", value)
-	}
-	for index, character := range value {
-		if strings.ContainsRune("-", character) {
-			continue
+func TestRelayClientCommandsHaveNoControlPlane(t *testing.T) {
+	for _, command := range []string{"enroll", "pair", "pairing", "status", "tunnel", "revoke"} {
+		if err := run([]string{"relay", command}); err == nil {
+			t.Fatalf("relay %s remained available", command)
 		}
-		if !strings.ContainsRune("0123456789abcdef", character) {
-			t.Fatalf("Host ID contains non-hex character at %d: %q", index, value)
-		}
+	}
+	if err := run([]string{"relay", "share", "--host-secret", "secret"}); err == nil {
+		t.Fatal("relay share accepted a Host Secret")
+	}
+	if err := run([]string{"relay", "share", "--url", "https://relay.example.test"}); err == nil {
+		t.Fatal("relay share accepted a Relay URL")
 	}
 }
 
-func TestRelayRegisterCreatesAndEnrollsHost(t *testing.T) {
+func TestRelayRegisterConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000011"
 	var requests []struct {
 		method string
@@ -86,31 +78,36 @@ func TestRelayRegisterCreatesAndEnrollsHost(t *testing.T) {
 		}{request.Method, request.URL.Path, request.Header.Get("Authorization"), body})
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/v1/hosts":
-			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","enrollment_ticket":"ticket-1","relay_key_id":"key-1","relay_public_key":"public-key-1"}`)
-		case "/v1/hosts/" + hostID + "/enroll":
-			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","enrolled":true,"relay_key_id":"key-1","relay_public_key":"public-key-1"}`)
+		case "/v1/relay/enroll":
+			_, _ = io.WriteString(writer, `{"enrolled":true,"relay":{"enabled":true}}`)
 		default:
 			http.NotFound(writer, request)
 		}
 	}))
 	defer server.Close()
 
-	settingsPath := filepath.Join(t.TempDir(), "settings.json")
-	t.Setenv("WARREN_SETTINGS_FILE", settingsPath)
+	configFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configFile, config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"local": {Name: "local", URL: server.URL, Token: "daemon-token"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	previous := struct {
 		json                         bool
 		url, token, name, configPath string
 	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
-	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", filepath.Join(t.TempDir(), "missing-config.json")
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", configFile
 	t.Cleanup(func() {
 		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
 	})
 
 	output, err := captureStdout(t, func() error {
 		return run([]string{
-			"--json", "relay", "register", "--url", server.URL, "--host", hostID,
-			"--name", "Test Host", "--admin-token", "admin-token", "--secret", "host-secret",
+			"--json", "--config", configFile, "relay", "register", "--url", "https://relay.example.test", "--host", hostID,
+			"--ticket", "ticket-1",
 		})
 	})
 	if err != nil {
@@ -120,58 +117,56 @@ func TestRelayRegisterCreatesAndEnrollsHost(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("register output: %v\n%s", err, output)
 	}
-	if result["registered"] != true || result["host_id"] != hostID || result["relay_url"] != server.URL {
+	if result["connected"] != true {
 		t.Fatalf("register result = %#v", result)
 	}
-	if strings.Contains(output, "ticket-1") || strings.Contains(output, "host-secret") || strings.Contains(output, "public-key-1") {
+	if strings.Contains(output, "ticket-1") || strings.Contains(output, "daemon-token") {
 		t.Fatalf("register output leaked enrollment material: %s", output)
 	}
-	if len(requests) != 2 {
-		t.Fatalf("requests = %#v, want registration and enrollment", requests)
+	if len(requests) != 1 {
+		t.Fatalf("requests = %#v, want local enrollment", requests)
 	}
-	if requests[0].method != http.MethodPost || requests[0].path != "/v1/hosts" || requests[0].auth != "Bearer admin-token" {
-		t.Fatalf("registration request = %#v", requests[0])
+	if requests[0].method != http.MethodPost || requests[0].path != "/v1/relay/enroll" || requests[0].auth != "Bearer daemon-token" {
+		t.Fatalf("enrollment request = %#v", requests[0])
 	}
-	if requests[0].body["id"] != hostID || requests[0].body["name"] != "Test Host" {
-		t.Fatalf("registration body = %#v", requests[0].body)
-	}
-	if requests[1].method != http.MethodPost || requests[1].path != "/v1/hosts/"+hostID+"/enroll" || requests[1].auth != "" {
-		t.Fatalf("enrollment request = %#v", requests[1])
-	}
-	if requests[1].body["enrollment_ticket"] != "ticket-1" || requests[1].body["host_secret"] != "host-secret" || len(requests[1].body) != 2 {
-		t.Fatalf("enrollment body = %#v", requests[1].body)
-	}
-	loaded, err := settings.Load(settingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Relay.Enabled || loaded.Relay.URL != server.URL || loaded.Relay.HostID != hostID || loaded.Relay.RelayKeyID != "key-1" || loaded.Relay.RelayKey != "public-key-1" {
-		t.Fatalf("saved Relay settings = %+v", loaded.Relay)
+	if requests[0].body["relayUrl"] != "https://relay.example.test" || requests[0].body["hostId"] != hostID || requests[0].body["enrollmentTicket"] != "ticket-1" {
+		t.Fatalf("enrollment body = %#v", requests[0].body)
 	}
 }
 
-func TestRelayShareCreatesReusableLink(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000012"
+func TestRelayShareUsesLocalDaemon(t *testing.T) {
 	var requests []struct{ path, auth string }
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests = append(requests, struct{ path, auth string }{request.URL.Path, request.Header.Get("Authorization")})
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/v1/hosts/" + hostID + "/pairing":
-			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","pairing_code":"pairing-code","expires_in":604800}`)
-		case "/v1/pair":
-			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"do-not-print","pairing_ticket":"opaque-ticket","invite_id":"opaque-ticket","pairing_url":"https://relay.example/invite/opaque-ticket/","web_url":"https://relay.example/invite/opaque-ticket/","pairing_expires_in":604800}`)
-		default:
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/relay/pairing" {
 			http.NotFound(writer, request)
+			return
 		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"pairing_url":"https://relay.example.test/invite/local-ticket/","expires_in":604800,"reusable":true}`)
 	}))
 	defer server.Close()
 
-	previous := outputJSON
-	outputJSON = true
-	t.Cleanup(func() { outputJSON = previous })
+	configFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configFile, config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"local": {Name: "local", URL: server.URL, Token: "daemon-token"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := struct {
+		json                         bool
+		url, token, name, configPath string
+	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", configFile
+	t.Cleanup(func() {
+		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
+	})
+
 	output, err := captureStdout(t, func() error {
-		return relayShare(server.URL, hostID, "host-secret", map[string]any{})
+		return run([]string{"--json", "--config", configFile, "relay", "share"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -180,155 +175,68 @@ func TestRelayShareCreatesReusableLink(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("share output: %v\n%s", err, output)
 	}
-	if result["pairing_url"] != "https://relay.example/invite/opaque-ticket/" || result["expires_in"] != float64(604800) || result["reusable"] != true {
+	if result["pairing_url"] != "https://relay.example.test/invite/local-ticket/" || result["reusable"] != true {
 		t.Fatalf("share result = %#v", result)
 	}
-	if _, present := result["host_id"]; present {
-		t.Fatalf("share output exposed Host identity: %#v", result)
-	}
-	if strings.Contains(output, "do-not-print") || strings.Contains(output, "pairing-code") {
-		t.Fatalf("share output leaked access or pairing credentials: %s", output)
-	}
-	if len(requests) != 2 || requests[0].path != "/v1/hosts/"+hostID+"/pairing" || requests[0].auth != "Bearer host-secret" || requests[1].path != "/v1/pair" || requests[1].auth != "" {
+	if len(requests) != 1 || requests[0].path != "/v1/relay/pairing" || requests[0].auth != "Bearer daemon-token" {
 		t.Fatalf("share requests = %#v", requests)
 	}
 }
 
-func TestRelayPairPrintsOnlyClientInvite(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000013"
+func TestRelayConnectAcceptsSettingsLink(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000014"
+	var requestBody map[string]any
+	var requestAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/pair" {
-			http.NotFound(writer, request)
-			return
-		}
+		requestAuth = request.Header.Get("Authorization")
+		_ = json.NewDecoder(request.Body).Decode(&requestBody)
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"access-capability","pairing_ticket":"opaque-ticket","pairing_url":"https://relay.example/invite/opaque-ticket/","pairing_expires_in":604800}`)
+		_, _ = io.WriteString(writer, `{"enrolled":true}`)
 	}))
 	defer server.Close()
-
-	previous := outputJSON
-	outputJSON = true
-	t.Cleanup(func() { outputJSON = previous })
-	output, err := captureStdout(t, func() error {
-		return relayPair(server.URL, hostID, "pairing-code", map[string]any{})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("pair output: %v\n%s", err, output)
-	}
-	if result["pairing_url"] != "https://relay.example/invite/opaque-ticket/" || result["reusable"] != true {
-		t.Fatalf("pair result = %#v", result)
-	}
-	if strings.Contains(output, "access-capability") || strings.Contains(output, "pairing_ticket") {
-		t.Fatalf("pair output leaked bearer material: %s", output)
-	}
-}
-
-func TestRelayTunnelEnableSendsRouteOptions(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000001"
-	var received struct {
-		method string
-		auth   string
-		body   map[string]any
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		received.method = request.Method
-		received.auth = request.Header.Get("Authorization")
-		if err := json.NewDecoder(request.Body).Decode(&received.body); err != nil {
-			http.Error(writer, "invalid body", http.StatusBadRequest)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"route_id":"route-1","host_id":"`+hostID+`","public_hostname":"public.example","path_prefix":"/warren","auth_mode":"public","enabled":true}`)
-	}))
-	defer server.Close()
-
-	previousJSON, previousURL, previousToken, previousHost := outputJSON, endpointURL, endpointToken, endpointName
-	outputJSON, endpointURL, endpointToken, endpointName = true, "", "", ""
-	t.Cleanup(func() {
-		outputJSON, endpointURL, endpointToken, endpointName = previousJSON, previousURL, previousToken, previousHost
-	})
-	if err := run([]string{
-		"relay", "tunnel", "enable", "--url", server.URL, "--host", hostID,
-		"--token", "host-secret", "--auth-mode", "public",
-		"--public-hostname", "public.example", "--path-prefix", "/warren",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if received.method != http.MethodPost || received.auth != "Bearer host-secret" {
-		t.Fatalf("request = %s/%q", received.method, received.auth)
-	}
-	if received.body["enabled"] != true || received.body["auth_mode"] != "public" ||
-		received.body["public_hostname"] != "public.example" || received.body["path_prefix"] != "/warren" {
-		t.Fatalf("route body = %#v", received.body)
-	}
-}
-
-func TestRelayManagementDoesNotUseConfiguredAccessToken(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000001"
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
-		writer.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer server.Close()
-
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := config.Save(path, config.Config{
-		Current: "relay",
+	configFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configFile, config.Config{
+		Current: "local",
 		Endpoints: map[string]config.Endpoint{
-			"relay": {Name: "relay", URL: server.URL, Token: "access-only", Type: "relay", HostID: hostID},
+			"local": {Name: "local", URL: server.URL, Token: "daemon-token"},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	previous := struct {
-		json                     bool
-		url, token, name, config string
+		json                         bool
+		url, token, name, configPath string
 	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
-	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "relay", path
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", configFile
 	t.Cleanup(func() {
-		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.config
+		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
 	})
-	err := run([]string{"relay", "tunnel", "enable"})
-	if err == nil || !strings.Contains(err.Error(), "configured Relay access tokens cannot mutate routes") {
-		t.Fatalf("relay tunnel with access token error = %v", err)
+	setup := "warren://settings?section=relay&relayUrl=https%3A%2F%2Frelay.example.test&hostId=" + hostID + "&enrollmentTicket=one-time"
+	if _, err := captureStdout(t, func() error {
+		return run([]string{"--json", "--config", configFile, "relay", "connect", setup})
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if requests.Load() != 0 {
-		t.Fatal("configured access token triggered a route mutation request")
+	if requestAuth != "Bearer daemon-token" {
+		t.Fatalf("connect authorization = %q", requestAuth)
+	}
+	if requestBody["relayUrl"] != "https://relay.example.test" || requestBody["hostId"] != hostID || requestBody["enrollmentTicket"] != "one-time" {
+		t.Fatalf("connect body = %#v", requestBody)
 	}
 }
 
-func TestRelayStatusReadsHostAndRoute(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000001"
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		paths = append(paths, request.URL.Path)
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/v1/hosts/" + hostID:
-			_, _ = io.WriteString(writer, `{"id":"`+hostID+`","online":true}`)
-		case "/v1/hosts/" + hostID + "/route":
-			_, _ = io.WriteString(writer, `{"route_id":"route-1","host_id":"`+hostID+`","enabled":true}`)
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	defer server.Close()
-
-	previousJSON, previousURL, previousToken, previousHost := outputJSON, endpointURL, endpointToken, endpointName
-	outputJSON, endpointURL, endpointToken, endpointName = true, "", "", ""
+func TestRelayConnectRejectsNonRelaySettingsLink(t *testing.T) {
+	previous := struct {
+		json                         bool
+		url, token, name, configPath string
+	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
 	t.Cleanup(func() {
-		outputJSON, endpointURL, endpointToken, endpointName = previousJSON, previousURL, previousToken, previousHost
+		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
 	})
-	if err := run([]string{"relay", "status", "--url", server.URL, "--host", hostID, "--token", "host-secret"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) != 2 || paths[0] != "/v1/hosts/"+hostID || paths[1] != "/v1/hosts/"+hostID+"/route" {
-		t.Fatalf("status paths = %#v", paths)
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", filepath.Join(t.TempDir(), "missing-config.json")
+	setup := "warren://settings?section=public-access&relayUrl=https%3A%2F%2Frelay.example.test&hostId=00000000-0000-4000-8000-000000000014&enrollmentTicket=one-time"
+	if err := run([]string{"relay", "connect", setup}); err == nil || !strings.Contains(err.Error(), "Relay settings link") {
+		t.Fatalf("connect accepted non-Relay settings link: %v", err)
 	}
 }
 

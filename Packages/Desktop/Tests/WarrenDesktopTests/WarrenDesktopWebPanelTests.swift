@@ -231,13 +231,16 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         let snapshot = recorder.snapshot()
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.save"))
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.registration"))
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.reset"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.share"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.details"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.registration"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.save"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.reset"))
 
-        try recorder.perform(.press, on: "settings.relay.registration")
+        try recorder.perform(.press, on: "settings.relay.details")
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reregister"))
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.save"))
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reset"))
 
         try recorder.perform(.press, on: "settings.relay.save")
         wait(for: [save], timeout: 1)
@@ -246,6 +249,99 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         try recorder.perform(.press, on: "settings.relay.reset")
         wait(for: [reset], timeout: 1)
+    }
+
+    @MainActor
+    func testRelaySetupLinkAutomaticallyStartsEnrollment() throws {
+        let enrolled = expectation(description: "relay enrollment")
+        var received: (String, String, String)?
+        let setup = WarrenDesktopRelayPrefill(
+            relayURL: "https://relay.example.test",
+            hostID: "00000000-0000-4000-8000-000000000001",
+            enrollmentTicket: "one-time-ticket"
+        )
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: { relayURL, hostID, ticket, completion in
+                received = (relayURL, hostID, ticket)
+                completion(.success(()))
+                enrolled.fulfill()
+            },
+            relaySettings: WarrenDesktopRelaySettings(),
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .relay,
+            relayPrefill: setup
+        )
+        .environment(\.colorScheme, .dark)
+
+        let hostingView = NSHostingView(rootView: settings)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        wait(for: [enrolled], timeout: 1)
+
+        XCTAssertEqual(received?.0, "https://relay.example.test")
+        XCTAssertEqual(received?.1, "00000000-0000-4000-8000-000000000001")
+        XCTAssertEqual(received?.2, "one-time-ticket")
+    }
+
+    @MainActor
+    func testRelayManualFallbackAcceptsOneSetupLinkInsteadOfRelayFields() throws {
+        let recorder = WarrenSemanticRecorder()
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: { _, _, _, completion in completion(.success(())) },
+            relaySettings: WarrenDesktopRelaySettings(),
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .relay
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        let hostingView = NSHostingView(rootView: settings)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.registration"))
+        try recorder.perform(.press, on: "settings.relay.registration")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let snapshot = recorder.snapshot()
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.setup-link"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.registration-url"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.registration-host-id"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.enrollment-ticket"))
     }
 
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {

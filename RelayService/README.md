@@ -20,32 +20,29 @@ mise run relay:status  # show Relay and Host status
 mise run relay:stop    # stop only the Relay; keep Warren running and terminal sessions alive
 ```
 
-Connecting to a deployed public Relay is also one command; the admin token is only needed for the first registration of this Mac:
+For a deployed public Relay, the Relay Administrator creates a Host record in
+the service-owned admin API and gives the operator the returned setup link.
+The operator opens that link in Warren Desktop (or uses the client shortcut):
 
 ```bash
-WARREN_RELAY_URL=https://relay.example.com \
-WARREN_RELAY_ADMIN_TOKEN='<admin-token>' \
-mise run relay:connect
+warren relay connect '<settings-url>'
 ```
 
-Afterwards, the same address keeps the Host ID and pinned Relay key in `~/Library/Application Support/Warren/relay-cli/<relay-id>` with `0600` permissions. The daemon token remains the canonical Host Secret; later runs can omit the admin token. If the Host is already online, re-running does not rebuild or restart the app; it only generates a new pairing URL. Add `WARREN_RELAY_NO_OPEN=1` to skip opening the browser automatically.
+Afterwards, the daemon keeps the Host ID and pinned Relay key in its protected
+settings, reconnects automatically, and never exposes the Host Secret. A
+managed Warren build may provide the Relay URL by default; enrollment still
+comes from the service-owned setup invitation.
 
-The installed CLI also provides the short path for a new Host and for sharing
-one link with several devices:
+The installed CLI also provides the short path for sharing one link with
+several devices from an already enrolled Host:
 
 ```bash
-# Create a Relay Host record and enroll the local daemon in one step.
-warren relay register --url https://relay.example.com \
-  --admin-token "$WARREN_RELAY_ADMIN_TOKEN"
-
-# Create a reusable seven-day link, optionally writing a protected QR PNG.
-warren relay share --url https://relay.example.com --host HOST_ID \
-  --host-secret "$(cat ~/.warren/token)" --qr "$HOME/Desktop/warren-relay-pairing.png"
+# Create a reusable seven-day link and a protected QR PNG.
+warren relay share --qr "$HOME/Desktop/warren-relay-pairing.png"
 ```
 
-Add `--share` (and optionally `--qr`/`--open`) to `relay register` when the
-local Warren daemon is already running; the command waits briefly for the Host
-to come online before creating the link.
+Add `--share` (and optionally `--qr`/`--open`) to `relay connect` when the
+operator wants the first setup to end with a shareable iPhone QR.
 
 The link is a bearer credential: share it only with intended clients. A new
 `relay share` invocation rotates the pairing code and invalidates the previous
@@ -122,24 +119,17 @@ curl -sS -X POST https://relay.example.com/v1/hosts \
 ```
 
 The response contains `enrollment_ticket`, the Relay signing public key, and a
-canonical `settings_url`. Open that
-`warren://settings` link in the Warren desktop app to prefill the Relay URL,
-Host ID, pinned key, and one-time ticket, or enroll from the CLI. The link
+canonical `settings_url`. Give that `warren://settings` link to the Warren Host
+operator. Opening it in Warren Desktop consumes the one-time ticket through
+the local daemon, pins the Relay key, and starts the connector. The link
 contains no daemon token and should be discarded after enrollment; the ticket
-is valid for ten minutes and cannot be reused.
+is valid for ten minutes and cannot be reused. A managed deployment may use
+`warren relay connect` with the same link, but the Host Secret remains inside
+the daemon.
 
-Enroll the existing daemon token once:
-
-```bash
-warren relay enroll --url https://relay.example.com --host "$WARREN_HOST_ID" \
-  --ticket '<enrollment-ticket>' --secret "$(cat ~/.warren/token)"
-```
-
-The command stores the Relay URL, Host ID, and signing key in the daemon
-settings and enables the supervised connector. It then opens exactly one
-outbound `wss://.../v1/host/connect` socket and reuses the local daemon token as
-its Host Secret; control-plane secrets are stripped from every shell/runtime
-child process.
+The daemon stores the Relay URL, Host ID, and signing key in its settings and
+opens exactly one outbound `wss://.../v1/host/connect` socket. Control-plane
+secrets are stripped from every shell/runtime child process.
 
 Warren only makes outbound WSS connections; with no control plane configured, it still listens on `127.0.0.1` only.
 
@@ -151,16 +141,20 @@ Public Access route settings.
 
 ## Pairing, Discovery, and Revocation
 
-An admin or the Host's own credential can generate a seven-day pairing code:
+The enrolled Host operator normally presses **Share with iPhone** in Warren
+Desktop or runs `warren relay share --qr`. The local daemon authenticates to
+Relay and returns only an opaque, reusable Web/iOS pairing link. A Relay
+administrator can perform the service-owned operation for a Host through the
+admin API:
 
 ```bash
 curl -sS -X POST https://relay.example.com/v1/hosts/<host-uuid>/pairing \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN"
 ```
 
-A client exchanges the code for a seven-day, reusable Web/iOS pairing link and
-a short-lived Ed25519 access capability bound to the Host, scope, route, and
-generation:
+A Host daemon or native client exchanges the code for a seven-day, reusable
+Web/iOS pairing link and a short-lived Ed25519 access capability bound to the
+Host, scope, route, and generation:
 
 ```bash
 curl -sS -X POST https://relay.example.com/v1/pair \

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -77,31 +78,55 @@ func NewPairingClient(baseURL, hostID, token string) (*PairingClient, error) {
 // a single opaque invite URL. The Relay remains the authority for expiry and
 // invalidation when a new pairing code is generated.
 func (client *PairingClient) Share(ctx context.Context) (PairingResult, error) {
-	startRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/v1/hosts/"+url.PathEscape(client.hostID)+"/pairing", nil)
-	if err != nil {
-		return PairingResult{}, err
-	}
-	startRequest.Header.Set("Authorization", "Bearer "+client.token)
-	startResponse, err := client.http.Do(startRequest)
-	if err != nil {
-		return PairingResult{}, err
-	}
-	defer startResponse.Body.Close()
-	if startResponse.StatusCode < 200 || startResponse.StatusCode >= 300 {
-		err = responseError(startResponse)
-		return PairingResult{}, err
-	}
-	var start struct {
-		Code string `json:"pairing_code"`
-	}
-	err = json.NewDecoder(io.LimitReader(startResponse.Body, 64*1024)).Decode(&start)
-	if err != nil || strings.TrimSpace(start.Code) == "" {
-		if err == nil {
-			err = errors.New("Relay pairing did not return a code")
+	const attempts = 20
+	for attempt := 0; attempt < attempts; attempt++ {
+		startRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/v1/hosts/"+url.PathEscape(client.hostID)+"/pairing", nil)
+		if err != nil {
+			return PairingResult{}, err
 		}
-		return PairingResult{}, err
+		startRequest.Header.Set("Authorization", "Bearer "+client.token)
+		startResponse, err := client.http.Do(startRequest)
+		if err != nil {
+			return PairingResult{}, err
+		}
+		if startResponse.StatusCode == http.StatusConflict {
+			data, _ := io.ReadAll(io.LimitReader(startResponse.Body, 8*1024))
+			startResponse.Body.Close()
+			if strings.TrimSpace(strings.ToLower(string(data))) == "host offline" && attempt+1 < attempts {
+				timer := time.NewTimer(250 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return PairingResult{}, ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			}
+			message := strings.TrimSpace(string(data))
+			if message == "" {
+				message = startResponse.Status
+			}
+			return PairingResult{}, fmt.Errorf("Relay returned HTTP %d: %s", startResponse.StatusCode, message)
+		}
+		if startResponse.StatusCode < 200 || startResponse.StatusCode >= 300 {
+			err = responseError(startResponse)
+			startResponse.Body.Close()
+			return PairingResult{}, err
+		}
+		var start struct {
+			Code string `json:"pairing_code"`
+		}
+		err = json.NewDecoder(io.LimitReader(startResponse.Body, 64*1024)).Decode(&start)
+		startResponse.Body.Close()
+		if err != nil || strings.TrimSpace(start.Code) == "" {
+			if err == nil {
+				err = errors.New("Relay pairing did not return a code")
+			}
+			return PairingResult{}, err
+		}
+		return client.exchange(ctx, start.Code)
 	}
-	return client.exchange(ctx, start.Code)
+	return PairingResult{}, errors.New("Relay Host did not come online in time")
 }
 
 func (client *PairingClient) exchange(ctx context.Context, code string) (PairingResult, error) {
@@ -146,7 +171,7 @@ func (client *PairingClient) exchange(ctx context.Context, code string) (Pairing
 func sameRelayPairingOrigin(baseURL, link string) bool {
 	base, baseErr := url.Parse(baseURL)
 	candidate, candidateErr := url.Parse(strings.TrimSpace(link))
-	if baseErr != nil || candidateErr != nil || base.Host == "" || candidate.Host == "" || candidate.User != nil || candidate.RawQuery != "" {
+	if baseErr != nil || candidateErr != nil || base.Host == "" || candidate.Host == "" || candidate.User != nil || candidate.RawQuery != "" || candidate.Fragment != "" {
 		return false
 	}
 	if !strings.EqualFold(base.Scheme, candidate.Scheme) || !strings.EqualFold(base.Host, candidate.Host) {
