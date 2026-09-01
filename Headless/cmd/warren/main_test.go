@@ -160,7 +160,7 @@ func TestRelayShareCreatesReusableLink(t *testing.T) {
 		case "/v1/hosts/" + hostID + "/pairing":
 			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","pairing_code":"pairing-code","expires_in":604800}`)
 		case "/v1/pair":
-			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"do-not-print","pairing_ticket":"ticket","web_url":"https://relay.example/h/`+hostID+`/#t=ticket","pairing_expires_in":604800}`)
+			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"do-not-print","pairing_ticket":"opaque-ticket","invite_id":"opaque-ticket","pairing_url":"https://relay.example/invite/opaque-ticket/","web_url":"https://relay.example/invite/opaque-ticket/","pairing_expires_in":604800}`)
 		default:
 			http.NotFound(writer, request)
 		}
@@ -180,14 +180,50 @@ func TestRelayShareCreatesReusableLink(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("share output: %v\n%s", err, output)
 	}
-	if result["pairing_url"] != "https://relay.example/h/"+hostID+"/#t=ticket" || result["expires_in"] != float64(604800) || result["reusable"] != true {
+	if result["pairing_url"] != "https://relay.example/invite/opaque-ticket/" || result["expires_in"] != float64(604800) || result["reusable"] != true {
 		t.Fatalf("share result = %#v", result)
+	}
+	if _, present := result["host_id"]; present {
+		t.Fatalf("share output exposed Host identity: %#v", result)
 	}
 	if strings.Contains(output, "do-not-print") || strings.Contains(output, "pairing-code") {
 		t.Fatalf("share output leaked access or pairing credentials: %s", output)
 	}
 	if len(requests) != 2 || requests[0].path != "/v1/hosts/"+hostID+"/pairing" || requests[0].auth != "Bearer host-secret" || requests[1].path != "/v1/pair" || requests[1].auth != "" {
 		t.Fatalf("share requests = %#v", requests)
+	}
+}
+
+func TestRelayPairPrintsOnlyClientInvite(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000013"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/pair" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"access-capability","pairing_ticket":"opaque-ticket","pairing_url":"https://relay.example/invite/opaque-ticket/","pairing_expires_in":604800}`)
+	}))
+	defer server.Close()
+
+	previous := outputJSON
+	outputJSON = true
+	t.Cleanup(func() { outputJSON = previous })
+	output, err := captureStdout(t, func() error {
+		return relayPair(server.URL, hostID, "pairing-code", map[string]any{})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("pair output: %v\n%s", err, output)
+	}
+	if result["pairing_url"] != "https://relay.example/invite/opaque-ticket/" || result["reusable"] != true {
+		t.Fatalf("pair result = %#v", result)
+	}
+	if strings.Contains(output, "access-capability") || strings.Contains(output, "pairing_ticket") {
+		t.Fatalf("pair output leaked bearer material: %s", output)
 	}
 }
 

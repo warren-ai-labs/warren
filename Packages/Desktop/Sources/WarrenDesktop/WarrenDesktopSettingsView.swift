@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import UniformTypeIdentifiers
 import WarrenDesignSystem
@@ -67,6 +68,7 @@ struct WarrenDesktopSettingsView: View {
     let onWebStop: (() -> Void)?
     let onWebReset: (() -> Void)?
     let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
     let relaySettings: WarrenDesktopRelaySettings
     let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -124,6 +126,10 @@ struct WarrenDesktopSettingsView: View {
     @State private var relaySettingsError: String?
     @State private var relayEnrollmentBusy = false
     @State private var relayEnrollmentError: String?
+    @State private var relayInvite: WarrenDesktopRelayInvite?
+    @State private var relayInviteBusy = false
+    @State private var relayInviteError: String?
+    @State private var relayInviteQRPresented = false
     @State private var relayRegistrationExpanded = false
     @State private var relayDetailsExpanded = false
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
@@ -165,6 +171,7 @@ struct WarrenDesktopSettingsView: View {
         onWebStop: (() -> Void)?,
         onWebReset: (() -> Void)?,
         onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
+        onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
@@ -190,6 +197,7 @@ struct WarrenDesktopSettingsView: View {
         self.onWebStop = onWebStop
         self.onWebReset = onWebReset
         self.onRelayEnroll = onRelayEnroll
+        self.onRelayPairing = onRelayPairing
         self.relaySettings = relaySettings
         self.onSetRelaySettings = onSetRelaySettings
         self.onResetRelay = onResetRelay
@@ -962,6 +970,74 @@ struct WarrenDesktopSettingsView: View {
                     Spacer(minLength: 0)
                 }
 
+                if relaySettings.isEnrolled {
+                    VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                        Text("Share with iPhone")
+                            .font(WarrenTypography.settingsSectionTitle)
+                            .foregroundStyle(tokens.foreground)
+                        Text("Create one reusable invite for iPhone or any browser. It stays valid for the sharing window and can be used on multiple devices.")
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: WarrenSpacing.compact) {
+                            Button(relayInviteBusy ? "Preparing…" : "Create pairing link") {
+                                createRelayInvite()
+                            }
+                            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                            .disabled(relayInviteBusy || onRelayPairing == nil)
+                            .accessibilityIdentifier("settings.relay.share")
+                            .warrenSemanticElement(
+                                id: "settings.relay.share",
+                                role: .button,
+                                label: "Create Relay pairing link",
+                                isEnabled: !relayInviteBusy && onRelayPairing != nil,
+                                action: createRelayInvite
+                            )
+
+                            if relayInviteBusy {
+                                WarrenStatusIndicator(
+                                    color: tokens.info,
+                                    isActive: true,
+                                    accessibilityLabel: "Creating Relay pairing link"
+                                )
+                            }
+                        }
+
+                        if let relayInvite {
+                            HStack(alignment: .top, spacing: WarrenSpacing.compact) {
+                                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                                    Text(relayInvite.url.absoluteString)
+                                        .font(WarrenTypography.settingsControl)
+                                        .foregroundStyle(tokens.foreground)
+                                        .textSelection(.enabled)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                    Text(relayInviteExpiryText(relayInvite))
+                                        .font(WarrenTypography.settingsSupporting)
+                                        .foregroundStyle(tokens.mutedForeground)
+                                }
+                                Spacer(minLength: 0)
+                                Button("Copy") { copyRelayInvite(relayInvite) }
+                                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                                Button("Show QR") { relayInviteQRPresented = true }
+                                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                            }
+                            .padding(WarrenSpacing.compact)
+                            .background(tokens.fillHover)
+                            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                        }
+
+                        if let relayInviteError, !relayInviteError.isEmpty {
+                            Text(relayInviteError)
+                                .font(WarrenTypography.settingsSupporting)
+                                .foregroundStyle(tokens.warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityLabel("Relay pairing error: \(relayInviteError)")
+                        }
+                    }
+                }
+
                 Text("Relay connection")
                     .font(WarrenTypography.settingsSectionTitle)
                     .foregroundStyle(tokens.foreground)
@@ -1164,6 +1240,92 @@ struct WarrenDesktopSettingsView: View {
         }
         .onAppear(perform: seedRelayFields)
         .onChange(of: relaySettings) { _ in seedRelayFields() }
+        .popover(isPresented: $relayInviteQRPresented) {
+            relayInviteQRPopover()
+        }
+    }
+
+    private func createRelayInvite() {
+        guard !relayInviteBusy, let onRelayPairing else { return }
+        relayInviteBusy = true
+        relayInviteError = nil
+        onRelayPairing { result in
+            Task { @MainActor in
+                relayInviteBusy = false
+                switch result {
+                case let .success(value):
+                    relayInvite = value
+                    relayInviteError = nil
+                case let .failure(error):
+                    relayInviteError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func copyRelayInvite(_ invite: WarrenDesktopRelayInvite) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(invite.url.absoluteString, forType: .string)
+    }
+
+    private func relayInviteExpiryText(_ invite: WarrenDesktopRelayInvite) -> String {
+        if let expiresAt = invite.expiresAt {
+            return "Reusable until " + expiresAt.formatted(date: .abbreviated, time: .shortened)
+        }
+        if invite.expiresIn > 0 {
+            return "Reusable for " + formatRelayInviteTTL(invite.expiresIn)
+        }
+        return "Reusable invite"
+    }
+
+    private func formatRelayInviteTTL(_ seconds: Int) -> String {
+        let duration = TimeInterval(seconds)
+        if duration >= 24 * 60 * 60 && seconds % (24 * 60 * 60) == 0 {
+            return "\(seconds / (24 * 60 * 60)) days"
+        }
+        if duration >= 60 * 60 && seconds % (60 * 60) == 0 {
+            return "\(seconds / (60 * 60)) hours"
+        }
+        return "\(max(1, seconds / 60)) minutes"
+    }
+
+    @ViewBuilder
+    private func relayInviteQRPopover() -> some View {
+        VStack(spacing: WarrenSpacing.compact) {
+            if let relayInvite,
+               let image = qrCodeImage(for: relayInvite.url.absoluteString) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 240, height: 240)
+                    .padding(WarrenSpacing.small)
+                    .background(Color.white)
+                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                Text("Scan with Warren on iPhone")
+                    .font(WarrenTypography.settingsBody)
+                Text(relayInviteExpiryText(relayInvite))
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("QR code unavailable")
+                    .font(WarrenTypography.settingsBody)
+            }
+        }
+        .padding(WarrenSpacing.large)
+        .frame(width: 300)
+    }
+
+    private func qrCodeImage(for value: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(value.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        let representation = NSCIImageRep(ciImage: scaled)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
     }
 
     private func saveRelaySettings() {

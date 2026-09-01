@@ -63,7 +63,6 @@ type Server struct {
 	upgrader        websocket.Upgrader
 	mux             *http.ServeMux
 	sessionMu       sync.Mutex
-	pairingTickets  map[string]pairingTicket
 	refreshTokens   map[string]refreshRecord
 	usedRefresh     map[string]string
 	revokedFamilies map[string]bool
@@ -71,13 +70,6 @@ type Server struct {
 	clientLimiter   *rateLimiter
 	publicLimiter   *rateLimiter
 	upgradeLimiter  *rateLimiter
-}
-
-type pairingTicket struct {
-	HostID         string
-	Generation     uint64
-	PairingVersion uint64
-	Expires        time.Time
 }
 
 type refreshRecord struct {
@@ -203,7 +195,6 @@ func NewServer(config Config) (*Server, error) {
 		web:             web,
 		upgrader:        websocket.Upgrader{Subprotocols: []string{"brly/2"}, CheckOrigin: func(*http.Request) bool { return true }},
 		mux:             http.NewServeMux(),
-		pairingTickets:  make(map[string]pairingTicket),
 		refreshTokens:   make(map[string]refreshRecord),
 		usedRefresh:     make(map[string]string),
 		revokedFamilies: make(map[string]bool),
@@ -232,7 +223,9 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /v1/hosts/{hostID}", server.getHost)
 	server.mux.HandleFunc("POST /v1/pair", server.pair)
 	server.mux.HandleFunc("POST /v1/session/exchange", server.exchangeSession)
+	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /v1/session/refresh", server.refreshSession)
+	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("GET /v1/client/connect", server.connectClient)
@@ -241,9 +234,14 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /v1/hosts/{hostID}/route", server.getRoute)
 	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}/route", server.disableRoute)
 	server.mux.HandleFunc("GET /h/{hostID}/", server.webPage)
+	server.mux.HandleFunc("GET /invite/{inviteID}", server.invitePage)
+	server.mux.HandleFunc("GET /invite/{inviteID}/", server.invitePage)
 	server.mux.HandleFunc("GET /h/{hostID}/manifest.webmanifest", server.hostManifest)
+	server.mux.HandleFunc("GET /invite/{inviteID}/manifest.webmanifest", server.inviteManifest)
 	server.mux.HandleFunc("GET /h/{hostID}/service-worker.js", server.hostServiceWorker)
+	server.mux.HandleFunc("GET /invite/{inviteID}/service-worker.js", server.inviteServiceWorker)
 	server.mux.HandleFunc("GET /h/{hostID}/assets/{name}", server.asset)
+	server.mux.HandleFunc("GET /invite/{inviteID}/assets/{name}", server.asset)
 	server.mux.HandleFunc("GET /manifest.webmanifest", server.webResource("manifest.webmanifest", "application/manifest+json"))
 	server.mux.HandleFunc("GET /service-worker.js", server.webResource("service-worker.js", "text/javascript; charset=utf-8"))
 	server.mux.HandleFunc("GET /assets/{name}", server.asset)
@@ -251,6 +249,7 @@ func (server *Server) routes() {
 		handler := server.webResource(name, contentType)
 		server.mux.HandleFunc("GET /"+name, handler)
 		server.mux.HandleFunc("GET /h/{hostID}/"+name, handler)
+		server.mux.HandleFunc("GET /invite/{inviteID}/"+name, handler)
 	}
 	// Public routes are selected by exact Host/SNI and are deliberately last;
 	// all control-plane patterns above retain their normal authentication
@@ -581,45 +580,43 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
-	generation, pairingVersion, err := server.registry.consumePairing(body.HostID, body.Code)
+	hostID := strings.TrimSpace(body.HostID)
+	generation, pairingVersion, err := server.registry.consumePairing(hostID, strings.TrimSpace(body.Code))
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	token, err := server.signer.issue(body.HostID, "control", generation, server.config.AccessTTL)
+	token, err := server.signer.issue(hostID, "control", generation, server.config.AccessTTL)
 	if err != nil {
 		http.Error(response, "token issue failed", http.StatusInternalServerError)
 		return
 	}
-	ticket, err := randomToken(32)
+	invite, inviteExpires, err := server.registry.createPairingInvite(hostID, generation, pairingVersion, server.config.PairingTicketTTL)
 	if err != nil {
-		http.Error(response, "ticket issue failed", http.StatusInternalServerError)
+		http.Error(response, "invite issue failed", http.StatusInternalServerError)
 		return
 	}
-	server.sessionMu.Lock()
-	server.pairingTickets[ticket] = pairingTicket{
-		HostID: body.HostID, Generation: generation, PairingVersion: pairingVersion,
-		Expires: time.Now().Add(server.config.PairingTicketTTL),
-	}
-	server.sessionMu.Unlock()
 	base := relayPublicOrigin(server.config.PublicURL)
+	inviteURL := base + server.publicPath("/invite/"+url.PathEscape(invite)+"/")
 	result := map[string]any{
-		"host_id":        body.HostID,
-		"access_token":   token,
-		"pairing_ticket": ticket,
-		// The browser receives only a reusable pairing ticket. The access
-		// capability remains available to native callers in the response but is
-		// never copied into browser history or a URL fragment.
-		"web_url": fmt.Sprintf("%s%s/#t=%s", base, server.publicPath("/h/"+url.PathEscape(body.HostID)), url.QueryEscape(ticket)),
+		"host_id":      hostID,
+		"access_token": token,
+		// The browser and native clients receive an opaque invite URL. It does
+		// not disclose the Host ID; Relay resolves the invite server-side during
+		// the exchange and returns the scoped Host identity in the response.
+		"pairing_ticket": invite,
+		"invite_id":      invite,
+		"web_url":        inviteURL,
+		"pairing_url":    inviteURL,
 		// Keep expires_in compatible with older clients that interpreted it as
 		// the access capability lifetime. New clients should use the explicit
 		// pairing_expires_in field for the QR/link lifetime.
 		"expires_in":         int(server.config.AccessTTL.Seconds()),
 		"pairing_expires_in": int(server.config.PairingTicketTTL.Seconds()),
-		"pairing_expires_at": time.Now().Add(server.config.PairingTicketTTL).UTC().Format(time.RFC3339),
+		"pairing_expires_at": inviteExpires.UTC().Format(time.RFC3339),
 	}
-	if route, ok := server.registry.route(body.HostID); ok {
-		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: body.HostID, Scope: []string{"tunnel"}, Generation: generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
+	if route, ok := server.registry.route(hostID); ok {
+		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: hostID, Scope: []string{"tunnel"}, Generation: generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
 			result["tunnel_token"] = tunnelToken
 		}
 	}
@@ -633,6 +630,7 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 	}
 	var body struct {
 		PairingTicket string `json:"pairing_ticket"`
+		InviteID      string `json:"invite_id"`
 		ClientID      string `json:"client_id"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
@@ -642,21 +640,26 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 		return
 	}
 	ticket := strings.TrimSpace(body.PairingTicket)
-	server.sessionMu.Lock()
-	now := time.Now()
-	for value, candidate := range server.pairingTickets {
-		if !now.Before(candidate.Expires) {
-			delete(server.pairingTickets, value)
+	if inviteID := strings.TrimSpace(request.PathValue("inviteID")); inviteID != "" {
+		if ticket != "" && ticket != inviteID {
+			http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+			return
 		}
+		ticket = inviteID
 	}
-	entry, ok := server.pairingTickets[ticket]
-	if ok && strings.TrimSpace(request.PathValue("hostID")) != "" && strings.TrimSpace(request.PathValue("hostID")) != entry.HostID {
-		server.sessionMu.Unlock()
+	if inviteID := strings.TrimSpace(body.InviteID); inviteID != "" {
+		if ticket != "" && ticket != inviteID {
+			http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+			return
+		}
+		ticket = inviteID
+	}
+	entry, ok := server.registry.pairingInvite(ticket)
+	if !ok || ticket == "" {
 		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
 		return
 	}
-	server.sessionMu.Unlock()
-	if !ok || ticket == "" || !now.Before(entry.Expires) {
+	if hostID := strings.TrimSpace(request.PathValue("hostID")); hostID != "" && hostID != entry.HostID {
 		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
 		return
 	}
@@ -1974,6 +1977,29 @@ func (server *Server) webPage(response http.ResponseWriter, request *http.Reques
 	_, _ = response.Write([]byte(page))
 }
 
+// invitePage serves the same Web client from an opaque invite scope. The
+// invite ID is injected into a dedicated meta tag; the client exchanges it
+// over the matching scoped endpoint and learns the Host ID only in memory.
+func (server *Server) invitePage(response http.ResponseWriter, request *http.Request) {
+	inviteID := strings.TrimSpace(request.PathValue("inviteID"))
+	if inviteID == "" {
+		http.NotFound(response, request)
+		return
+	}
+	data, err := fs.ReadFile(server.web, "index.html")
+	if err != nil {
+		http.Error(response, "web unavailable", http.StatusInternalServerError)
+		return
+	}
+	encodedID, _ := json.Marshal(inviteID)
+	prefix := server.publicPath("/invite/" + url.PathEscape(inviteID))
+	page := strings.Replace(string(data), "content=\"__WARREN_RELAY_INVITE_ID__\"", fmt.Sprintf("content=%s", string(encodedID)), 1)
+	page = scopeWebPage(page, prefix)
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = response.Write([]byte(page))
+}
+
 func scopeWebPage(page, prefix string) string {
 	for _, attribute := range []string{"href", "src", "srcset"} {
 		for _, assetPrefix := range []string{"/assets/", "./assets/"} {
@@ -1995,18 +2021,25 @@ func scopeWebPage(page, prefix string) string {
 }
 
 func (server *Server) hostManifest(response http.ResponseWriter, request *http.Request) {
+	server.scopedManifest(response, request, "/h/"+url.PathEscape(request.PathValue("hostID")))
+}
+
+func (server *Server) inviteManifest(response http.ResponseWriter, request *http.Request) {
+	server.scopedManifest(response, request, "/invite/"+url.PathEscape(request.PathValue("inviteID")))
+}
+
+func (server *Server) scopedManifest(response http.ResponseWriter, request *http.Request, scope string) {
 	data, err := fs.ReadFile(server.web, "manifest.webmanifest")
 	if err != nil {
 		http.NotFound(response, request)
 		return
 	}
-	host := url.PathEscape(request.PathValue("hostID"))
 	var manifest map[string]any
 	if json.Unmarshal(data, &manifest) != nil {
 		http.Error(response, "invalid manifest", http.StatusInternalServerError)
 		return
 	}
-	prefix := server.publicPath("/h/" + host)
+	prefix := server.publicPath(scope)
 	manifest["start_url"] = prefix + "/"
 	manifest["scope"] = prefix + "/"
 	manifest["icons"] = []map[string]any{{"src": prefix + "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}}
@@ -2015,7 +2048,16 @@ func (server *Server) hostManifest(response http.ResponseWriter, request *http.R
 
 func (server *Server) hostServiceWorker(response http.ResponseWriter, request *http.Request) {
 	host := url.PathEscape(request.PathValue("hostID"))
-	prefix := server.publicPath("/h/" + host)
+	server.scopedServiceWorker(response, request, "/h/"+host, host)
+}
+
+func (server *Server) inviteServiceWorker(response http.ResponseWriter, request *http.Request) {
+	invite := url.PathEscape(request.PathValue("inviteID"))
+	server.scopedServiceWorker(response, request, "/invite/"+invite, invite)
+}
+
+func (server *Server) scopedServiceWorker(response http.ResponseWriter, request *http.Request, scope, cacheID string) {
+	prefix := server.publicPath(scope)
 	shell := []string{prefix + "/", prefix + "/manifest.webmanifest", prefix + "/assets/app.js", prefix + "/assets/app.css"}
 	for name := range webStaticResources {
 		shell = append(shell, prefix+"/"+name)
@@ -2025,7 +2067,7 @@ func (server *Server) hostServiceWorker(response http.ResponseWriter, request *h
 const SHELL=%s;
 self.addEventListener("install",e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)));self.skipWaiting()});
 self.addEventListener("activate",e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x.startsWith("warren-relay-")&&x!==CACHE).map(x=>caches.delete(x)))));self.clients.claim()});
-self.addEventListener("fetch",e=>{const p=new URL(e.request.url).pathname;if(e.request.method!=="GET"||p.includes("/v1/client/connect"))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`, host, encodedShell)
+self.addEventListener("fetch",e=>{const p=new URL(e.request.url).pathname;if(e.request.method!=="GET"||p.includes("/v1/client/connect"))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`, cacheID, encodedShell)
 	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	response.Header().Set("Service-Worker-Allowed", prefix+"/")
 	response.Header().Set("Cache-Control", "no-cache")

@@ -2281,6 +2281,67 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Asks the selected Host daemon to create a reusable client-facing Relay
+    /// invite. The daemon keeps the Host Secret and pairing code internal; the
+    /// Desktop receives only an opaque URL suitable for copying or QR display.
+    func createRelayInvite(
+        completion: @escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void = { _ in }
+    ) {
+        guard let configuration = endpointConfiguration else {
+            completion(.failure(NSError(domain: "WarrenRemote", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
+            ])))
+            return
+        }
+        guard configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "relay" else {
+            completion(.failure(NSError(domain: "WarrenRemote", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Create a pairing link from the Host daemon, not a Relay endpoint.",
+            ])))
+            return
+        }
+        guard let wire else {
+            completion(.failure(NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request("relay.pairing")
+                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rawURL = value["pairing_url"] as? String,
+                      let url = URL(string: rawURL),
+                      (url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https"),
+                      url.host != nil else {
+                    throw NSError(domain: "WarrenRemote", code: 13, userInfo: [
+                        NSLocalizedDescriptionKey: "Relay returned an invalid pairing link.",
+                    ])
+                }
+                let expiresIn: Int
+                if let number = value["expires_in"] as? NSNumber {
+                    expiresIn = number.intValue
+                } else {
+                    expiresIn = 0
+                }
+                let expiresAt = (value["expires_at"] as? String).flatMap(Self.parseRelayInviteDate)
+                completion(.success(WarrenDesktopRelayInvite(url: url, expiresAt: expiresAt, expiresIn: expiresIn)))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private static let dateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static func parseRelayInviteDate(_ value: String) -> Date? {
+        dateFormatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
     private func clearPublicAccessAfterRelayReset() {
         webStatus.relayURL = nil
         webStatus.relayHostID = nil

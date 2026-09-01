@@ -31,11 +31,23 @@ type hostRecord struct {
 	PairingUntil    time.Time `json:"-"`
 	EnrollmentToken string    `json:"-"`
 	EnrollmentUntil time.Time `json:"-"`
-	// PairingVersion fences tickets issued by an older code when a new code is
-	// generated. It is intentionally process-local, like PairingToken.
-	PairingVersion uint64       `json:"-"`
+	// PairingVersion fences invites issued by an older code when a new code is
+	// generated. The version is persisted so a shareable invite remains valid
+	// across Relay restarts while still being invalidated by rotation.
+	PairingVersion uint64       `json:"pairing_version,omitempty"`
 	Route          *routeRecord `json:"route,omitempty"`
 	Tunnel         *hostTunnel  `json:"-"`
+}
+
+// pairingInviteRecord stores only a digest of the bearer value embedded in a
+// shareable URL. The clear-text invite is returned once to the caller and is
+// never written to disk, logs, or the Host registry projection.
+type pairingInviteRecord struct {
+	IDHash         string    `json:"id_hash"`
+	HostID         string    `json:"host_id"`
+	Generation     uint64    `json:"generation"`
+	PairingVersion uint64    `json:"pairing_version"`
+	Expires        time.Time `json:"expires_at"`
 }
 
 type routeRecord struct {
@@ -52,18 +64,25 @@ type routeRecord struct {
 }
 
 type persistedRegistry struct {
-	Hosts []*hostRecord `json:"hosts"`
+	Hosts   []*hostRecord          `json:"hosts"`
+	Invites []*pairingInviteRecord `json:"invites,omitempty"`
 }
 
 type registry struct {
 	mu      sync.RWMutex
 	hosts   map[string]*hostRecord
+	invites map[string]pairingInviteRecord
 	now     func() time.Time
 	dataURL string
 }
 
 func newRegistry(dataURL string) (*registry, error) {
-	registry := &registry{hosts: make(map[string]*hostRecord), now: time.Now, dataURL: dataURL}
+	registry := &registry{
+		hosts:   make(map[string]*hostRecord),
+		invites: make(map[string]pairingInviteRecord),
+		now:     time.Now,
+		dataURL: dataURL,
+	}
 	if dataURL == "" {
 		return registry, nil
 	}
@@ -79,6 +98,13 @@ func newRegistry(dataURL string) (*registry, error) {
 		return nil, err
 	}
 	for _, record := range stored.Hosts {
+		if record == nil {
+			continue
+		}
+		record.ID = strings.ToLower(strings.TrimSpace(record.ID))
+		if !validHostID(record.ID) {
+			continue
+		}
 		record.Online = false
 		record.Tunnel = nil
 		record.PairingToken = ""
@@ -92,6 +118,17 @@ func newRegistry(dataURL string) (*registry, error) {
 			record.Route = &route
 		}
 		registry.hosts[record.ID] = record
+	}
+	now := registry.now()
+	for _, invite := range stored.Invites {
+		if invite == nil {
+			continue
+		}
+		invite.HostID = strings.ToLower(strings.TrimSpace(invite.HostID))
+		if strings.TrimSpace(invite.IDHash) == "" || !validHostID(invite.HostID) || invite.Generation == 0 || invite.PairingVersion == 0 || invite.Expires.IsZero() || !now.Before(invite.Expires) {
+			continue
+		}
+		registry.invites[invite.IDHash] = *invite
 	}
 	return registry, nil
 }
@@ -399,6 +436,7 @@ func (registry *registry) beginPairing(id string, ttl time.Duration) (string, er
 	if err != nil {
 		return "", err
 	}
+	previous := *record
 	record.PairingVersion++
 	if record.PairingVersion == 0 {
 		// Keep zero reserved for a Host that has never issued a pairing code;
@@ -408,6 +446,10 @@ func (registry *registry) beginPairing(id string, ttl time.Duration) (string, er
 	}
 	record.PairingToken = code
 	record.PairingUntil = registry.now().Add(ttl)
+	if err := registry.persistLocked(); err != nil {
+		*record = previous
+		return "", err
+	}
 	return code, nil
 }
 
@@ -425,6 +467,62 @@ func (registry *registry) consumePairing(id, code string) (uint64, uint64, error
 	// one client. Keep the code valid until PairingUntil; generating a new code
 	// replaces the previous one, and Host re-enrollment/revocation clears it.
 	return record.Generation, record.PairingVersion, nil
+}
+
+// createPairingInvite issues a reusable client-facing bearer value after a
+// pairing code has been consumed. Only its hash is persisted; the clear-text
+// value is returned to the caller for inclusion in the one-time share action.
+func (registry *registry) createPairingInvite(id string, generation, pairingVersion uint64, ttl time.Duration) (string, time.Time, error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	record := registry.hosts[id]
+	if record == nil || !record.Online || record.Tunnel == nil || record.Generation != generation || record.PairingVersion != pairingVersion || pairingVersion == 0 {
+		return "", time.Time{}, errors.New("host offline")
+	}
+	value, err := randomToken(32)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expires := registry.now().Add(ttl)
+	digest := hashCredential(value)
+	previous, existed := registry.invites[digest]
+	registry.invites[digest] = pairingInviteRecord{
+		IDHash:         digest,
+		HostID:         id,
+		Generation:     generation,
+		PairingVersion: pairingVersion,
+		Expires:        expires,
+	}
+	if err := registry.persistLocked(); err != nil {
+		if existed {
+			registry.invites[digest] = previous
+		} else {
+			delete(registry.invites, digest)
+		}
+		return "", time.Time{}, err
+	}
+	return value, expires, nil
+}
+
+// pairingInvite validates an opaque invite and returns its routing metadata.
+// The Host must be online and the generation/version must still match, which
+// makes re-enrollment, revocation, and pairing rotation invalidate old links.
+func (registry *registry) pairingInvite(value string) (pairingInviteRecord, bool) {
+	digest := hashCredential(strings.TrimSpace(value))
+	if strings.TrimSpace(value) == "" {
+		return pairingInviteRecord{}, false
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	invite, ok := registry.invites[digest]
+	if !ok || !registry.now().Before(invite.Expires) {
+		return pairingInviteRecord{}, false
+	}
+	record := registry.hosts[invite.HostID]
+	if record == nil || !record.Online || record.Tunnel == nil || record.Generation != invite.Generation || record.PairingVersion != invite.PairingVersion {
+		return pairingInviteRecord{}, false
+	}
+	return invite, true
 }
 
 func (registry *registry) authorizedTunnel(id string, generation uint64) *hostTunnel {
@@ -484,7 +582,10 @@ func (registry *registry) persistLocked() error {
 	if registry.dataURL == "" {
 		return nil
 	}
-	stored := persistedRegistry{Hosts: make([]*hostRecord, 0, len(registry.hosts))}
+	stored := persistedRegistry{
+		Hosts:   make([]*hostRecord, 0, len(registry.hosts)),
+		Invites: make([]*pairingInviteRecord, 0, len(registry.invites)),
+	}
 	for _, record := range registry.hosts {
 		copy := *record
 		copy.Online = false
@@ -500,6 +601,10 @@ func (registry *registry) persistLocked() error {
 			copy.Route = &route
 		}
 		stored.Hosts = append(stored.Hosts, &copy)
+	}
+	for _, invite := range registry.invites {
+		copy := invite
+		stored.Invites = append(stored.Invites, &copy)
 	}
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {

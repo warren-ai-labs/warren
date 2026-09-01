@@ -162,6 +162,48 @@ func TestRelayEnrollmentDoesNotFollowRedirectsWithDaemonToken(t *testing.T) {
 	}
 }
 
+func TestRelayPairingEndpointReturnsOnlySafeInvite(t *testing.T) {
+	handler := NewHTTPServer(&Service{}, "daemon-token", nil)
+	handler.RelayPairing = func(ctx context.Context) (relay.PairingResult, error) {
+		if ctx == nil {
+			t.Fatal("pairing callback received a nil context")
+		}
+		return relay.PairingResult{
+			PairingURL: "https://relay.example/invite/opaque-ticket/",
+			ExpiresIn:  604800,
+			ExpiresAt:  "2030-01-01T00:00:00Z",
+			Reusable:   true,
+		}, nil
+	}
+	server := httptest.NewServer(handler.Handler())
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/pairing", nil)
+	request.Header.Set("Authorization", "Bearer daemon-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("pairing endpoint: response=%v err=%v", response, err)
+	}
+	var result map[string]any
+	if json.NewDecoder(response.Body).Decode(&result) != nil {
+		t.Fatal("invalid pairing endpoint response")
+	}
+	response.Body.Close()
+	if result["pairing_url"] != "https://relay.example/invite/opaque-ticket/" || result["expires_in"] != float64(604800) || result["reusable"] != true {
+		t.Fatalf("pairing endpoint result = %#v", result)
+	}
+	if _, present := result["access_token"]; present {
+		t.Fatalf("pairing endpoint exposed an access token: %#v", result)
+	}
+
+	unauthorized, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/pairing", nil)
+	unauthorizedResponse, err := http.DefaultClient.Do(unauthorized)
+	if err != nil || unauthorizedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized pairing endpoint: response=%v err=%v", unauthorizedResponse, err)
+	}
+	unauthorizedResponse.Body.Close()
+}
+
 func TestRelayResetDisablesRouteAndClearsLocalEnrollment(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000033"
 	var disabled atomic.Bool

@@ -254,6 +254,7 @@ func main() {
 	httpHandler.RelayStart = relaySupervisor.Start
 	httpHandler.RelayStop = relaySupervisor.Stop
 	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
+	httpHandler.RelayPairing = relaySupervisor.Pairing
 	if service.Settings.Relay.Enabled || service.Settings.PublicTunnel.Enabled || strings.TrimSpace(*relayURL) != "" {
 		if err := relaySupervisor.Start(); err != nil {
 			logger.Warn("relay connector disabled", "error", err)
@@ -439,6 +440,29 @@ func (supervisor *relaySupervisor) RouteClient() (*relay.RouteClient, error) {
 		hostID = supervisor.overrideID
 	}
 	return relay.NewRouteClient(urlValue, hostID, supervisor.token)
+}
+
+// Pairing returns a short-lived helper for creating a client-facing Relay
+// invite. The helper keeps the Host Secret inside the daemon and exposes only
+// the opaque URL and its sharing window to Desktop.
+func (supervisor *relaySupervisor) Pairing(ctx context.Context) (relay.PairingResult, error) {
+	value, _, err := supervisor.desiredSettings()
+	if err != nil {
+		return relay.PairingResult{}, err
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	client, err := relay.NewPairingClient(urlValue, hostID, supervisor.token)
+	if err != nil {
+		return relay.PairingResult{}, err
+	}
+	return client.Share(ctx)
 }
 
 func listenerPort(listener net.Listener) string {

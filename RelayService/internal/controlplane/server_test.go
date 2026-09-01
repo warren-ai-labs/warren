@@ -89,14 +89,16 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	var paired struct {
 		Token         string `json:"access_token"`
 		WebURL        string `json:"web_url"`
+		PairingURL    string `json:"pairing_url"`
+		InviteID      string `json:"invite_id"`
 		PairingTicket string `json:"pairing_ticket"`
 	}
 	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil || paired.Token == "" || paired.PairingTicket == "" {
 		t.Fatal("missing access token")
 	}
 	pairResponse.Body.Close()
-	if !strings.Contains(paired.WebURL, "/h/"+hostID+"/#t=") {
-		t.Fatalf("unexpected web URL: %s", paired.WebURL)
+	if paired.WebURL != paired.PairingURL || paired.InviteID == "" || !strings.Contains(paired.WebURL, "/invite/") || strings.Contains(paired.WebURL, hostID) {
+		t.Fatalf("unexpected opaque pairing URL: %#v", paired)
 	}
 
 	// A pairing code is intentionally reusable during its TTL so one generated
@@ -316,6 +318,37 @@ func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 		t.Fatalf("host service worker unavailable: response=%v err=%v", workerResponse, err)
 	}
 	workerResponse.Body.Close()
+
+	inviteID := "opaque-test"
+	inviteResponse, err := http.Get(httpServer.URL + "/invite/" + inviteID + "/")
+	if err != nil || inviteResponse.StatusCode != http.StatusOK {
+		t.Fatalf("invite web shell unavailable: response=%v err=%v", inviteResponse, err)
+	}
+	var invitePage bytes.Buffer
+	_, _ = invitePage.ReadFrom(inviteResponse.Body)
+	inviteResponse.Body.Close()
+	if !strings.Contains(invitePage.String(), `name="warren-relay-invite-id" content="`+inviteID+`"`) {
+		t.Fatal("opaque invite was not injected into web shell")
+	}
+	if strings.Contains(invitePage.String(), hostID) {
+		t.Fatal("opaque invite page exposed a Host ID")
+	}
+	if !strings.Contains(invitePage.String(), `/invite/`+inviteID+`/assets/app.js`) {
+		t.Fatal("invite web shell did not scope the Vite bundle")
+	}
+	inviteManifestResponse, err := http.Get(httpServer.URL + "/invite/" + inviteID + "/manifest.webmanifest")
+	if err != nil || inviteManifestResponse.StatusCode != http.StatusOK {
+		t.Fatalf("invite manifest unavailable: response=%v err=%v", inviteManifestResponse, err)
+	}
+	var inviteManifest map[string]any
+	if json.NewDecoder(inviteManifestResponse.Body).Decode(&inviteManifest) != nil {
+		t.Fatal("invalid invite manifest")
+	}
+	inviteManifestResponse.Body.Close()
+	expectedInviteScope := "/invite/" + inviteID + "/"
+	if inviteManifest["start_url"] != expectedInviteScope || inviteManifest["scope"] != expectedInviteScope {
+		t.Fatalf("invite PWA lost scope: %#v", inviteManifest)
+	}
 }
 
 func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
@@ -543,6 +576,99 @@ func TestRegistryPersistsCredentialsAndRevocationInvalidatesAccess(t *testing.T)
 	}
 }
 
+func TestPairingInviteSurvivesRelayRestartAndStoresOnlyHash(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000013"
+	dataURL := t.TempDir() + "/registry.json"
+	config := Config{
+		PublicURL:        "https://relay.example.test",
+		AdminToken:       "admin-bootstrap",
+		SigningKey:       []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin:    "https://relay.example.test",
+		DataURL:          dataURL,
+		PairingTTL:       time.Hour,
+		PairingTicketTTL: 24 * time.Hour,
+		AccessTTL:        time.Hour,
+	}
+	server, err := NewServer(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+	hostCredential := provisionHost(t, httpServer.URL, hostID)
+	host := dialV2Host(t, websocketBase, hostID, hostCredential, "Mac")
+	waitForHost(t, httpServer.URL, server, hostID)
+
+	startRequest, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/pairing", nil)
+	startRequest.Header.Set("Authorization", "Bearer admin-bootstrap")
+	startResponse, err := http.DefaultClient.Do(startRequest)
+	if err != nil || startResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("start pairing: response=%v err=%v", startResponse, err)
+	}
+	var started struct {
+		Code string `json:"pairing_code"`
+	}
+	if json.NewDecoder(startResponse.Body).Decode(&started) != nil || started.Code == "" {
+		t.Fatal("missing pairing code")
+	}
+	startResponse.Body.Close()
+	pairBody, _ := json.Marshal(map[string]string{"host_id": hostID, "pairing_code": started.Code})
+	pairResponse, err := http.Post(httpServer.URL+"/v1/pair", "application/json", bytes.NewReader(pairBody))
+	if err != nil || pairResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("pair: response=%v err=%v", pairResponse, err)
+	}
+	var paired struct {
+		InviteID      string `json:"invite_id"`
+		PairingTicket string `json:"pairing_ticket"`
+		WebURL        string `json:"web_url"`
+	}
+	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil {
+		t.Fatal("invalid pairing response")
+	}
+	pairResponse.Body.Close()
+	if paired.InviteID == "" || paired.InviteID != paired.PairingTicket || strings.Contains(paired.WebURL, hostID) {
+		t.Fatalf("pairing response disclosed Host identity: %#v", paired)
+	}
+	data, err := os.ReadFile(dataURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(paired.InviteID)) || bytes.Contains(data, []byte(paired.PairingTicket)) {
+		t.Fatal("registry persisted the clear-text pairing invite")
+	}
+
+	host.Close()
+	waitForHostOffline(t, server, hostID)
+	httpServer.Close()
+	restarted, err := NewServer(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedHTTP := httptest.NewServer(restarted)
+	defer restartedHTTP.Close()
+	restartedBase := "ws" + strings.TrimPrefix(restartedHTTP.URL, "http")
+	reconnectedHost := dialV2Host(t, restartedBase, hostID, hostCredential, "Mac")
+	waitForHost(t, restartedHTTP.URL, restarted, hostID)
+
+	exchangeBody, _ := json.Marshal(map[string]string{"invite_id": paired.InviteID})
+	for attempt := 0; attempt < 2; attempt++ {
+		exchangeURL := restartedHTTP.URL + "/invite/" + url.PathEscape(paired.InviteID) + "/v1/session/exchange"
+		exchange, exchangeErr := http.Post(exchangeURL, "application/json", bytes.NewReader(exchangeBody))
+		if exchangeErr != nil || exchange.StatusCode != http.StatusOK {
+			t.Fatalf("exchange after restart (attempt %d): response=%v err=%v", attempt+1, exchange, exchangeErr)
+		}
+		var result struct {
+			HostID string `json:"host_id"`
+		}
+		if json.NewDecoder(exchange.Body).Decode(&result) != nil || result.HostID != hostID {
+			t.Fatalf("invalid exchange after restart: %#v", result)
+		}
+		exchange.Body.Close()
+	}
+	reconnectedHost.Close()
+	waitForHostOffline(t, restarted, hostID)
+}
+
 func TestPairingCodeExpires(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000004"
 	registry, err := newRegistry("")
@@ -573,6 +699,21 @@ func TestPairingCodeExpires(t *testing.T) {
 	current = current.Add(time.Minute + time.Nanosecond)
 	if _, _, err := registry.consumePairing(hostID, code); err == nil {
 		t.Fatal("expired pairing code was accepted")
+	}
+}
+
+func TestRegistrySkipsMalformedPersistedRecords(t *testing.T) {
+	dataURL := t.TempDir() + "/registry.json"
+	malformed := `{"hosts":[null,{"id":"not-a-uuid"}],"invites":[null,{"id_hash":"","host_id":"not-a-uuid"}]}`
+	if err := os.WriteFile(dataURL, []byte(malformed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := newRegistry(dataURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.hosts) != 0 || len(registry.invites) != 0 {
+		t.Fatalf("malformed registry records were loaded: hosts=%d invites=%d", len(registry.hosts), len(registry.invites))
 	}
 }
 
@@ -747,4 +888,16 @@ func waitForHost(t *testing.T, base string, server *Server, hostID string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("host did not register")
+}
+
+func waitForHostOffline(t *testing.T, server *Server, hostID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if host, ok := server.registry.host(hostID); !ok || !host.Online {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("host did not disconnect")
 }

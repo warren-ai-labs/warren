@@ -449,7 +449,8 @@ public final class IOSApplicationModel: ObservableObject {
                 await MainActor.run {
                     guard let self else { return }
                     let target = self.relayPairingTarget(
-                        pairing,
+                        hostID: exchange.hostID,
+                        relayURL: pairing.relayURL,
                         requestedEndpointName: replacingEndpointName
                     )
                     let saved = self.saveEndpoint(
@@ -457,7 +458,7 @@ public final class IOSApplicationModel: ObservableObject {
                         url: pairing.relayURL,
                         token: exchange.accessToken,
                         type: "relay",
-                        hostID: pairing.hostID,
+                        hostID: exchange.hostID,
                         replacingEndpointName: target.replacingName
                     )
                     if !saved {
@@ -480,7 +481,8 @@ public final class IOSApplicationModel: ObservableObject {
     /// replaced so rescanning rotates their access capability instead of
     /// creating a duplicate row.
     private func relayPairingTarget(
-        _ pairing: WarrenRelayPairing,
+        hostID: String,
+        relayURL: String,
         requestedEndpointName: String?
     ) -> (name: String, replacingName: String?) {
         if let requested = requestedEndpointName?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -490,8 +492,8 @@ public final class IOSApplicationModel: ObservableObject {
 
         if let existing = localStore.endpoints.first(where: { endpoint in
             endpoint.isRelay
-                && endpoint.hostID == pairing.hostID
-                && normalizedRelayURL(endpoint.url) == normalizedRelayURL(pairing.relayURL)
+                && endpoint.hostID == hostID
+                && normalizedRelayURL(endpoint.url) == normalizedRelayURL(relayURL)
         }) {
             return (existing.name, existing.name)
         }

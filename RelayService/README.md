@@ -10,7 +10,7 @@ From the repository root:
 mise run relay:dev
 ```
 
-This command automatically generates a local development secret, starts Relay, registers the current Mac, builds and starts Warren, waits for the Host to come online, creates a seven-day shareable pairing link, and opens the Web/PWA. Generated development state is stored in the git-ignored `.build/relay-dev/8080` directory, and secret files use `0600` permissions. The local Relay listens on all LAN interfaces by default and writes the Mac's LAN address into the pairing URL, so phones on the same network as the Mac can reach it. Use `WARREN_RELAY_DEV_HOST=192.168.1.23` to specify an address reachable from the phone, or `WARREN_RELAY_DEV_BIND_HOST=192.168.1.23` to restrict listening to a single interface. This development mode is only suitable for a trusted LAN; do not expose the port to the public internet.
+This command automatically generates a local development secret, starts Relay, registers the current Mac, builds and starts Warren, waits for the Host to come online, creates a seven-day opaque `/invite/<opaque>/` pairing link, and opens the Web/PWA. Generated development state is stored in the git-ignored `.build/relay-dev/8080` directory, and secret files use `0600` permissions. The local Relay listens on all LAN interfaces by default and writes the Mac's LAN address into the pairing URL, so phones on the same network as the Mac can reach it. Use `WARREN_RELAY_DEV_HOST=192.168.1.23` to specify an address reachable from the phone, or `WARREN_RELAY_DEV_BIND_HOST=192.168.1.23` to restrict listening to a single interface. This development mode is only suitable for a trusted LAN; do not expose the port to the public internet.
 
 Daily commands:
 
@@ -50,6 +50,8 @@ to come online before creating the link.
 The link is a bearer credential: share it only with intended clients. A new
 `relay share` invocation rotates the pairing code and invalidates the previous
 link; Host re-enrollment and revocation invalidate all existing client access.
+Relay persists only a hash of the opaque invite, so a Relay restart does not
+invalidate it once the Host reconnects.
 
 ## Start
 
@@ -163,11 +165,15 @@ generation:
 ```bash
 curl -sS -X POST https://relay.example.com/v1/pair \
   -H 'Content-Type: application/json' \
-  -d '{"host_id":"<host-uuid>","pairing_code":"<pairing-code>"}'
+  -d '{"host_id":"<host-uuid>","pairing_code":"<pairing-code>"}' \
+  | jq '{pairing_url, pairing_expires_in, pairing_expires_at}'
 ```
 
-`web_url` in the response is the responsive Web/PWA entry point. The pairing
-link can be exchanged by multiple devices until it expires. Generating a new
+`pairing_url` (also returned as the compatibility field `web_url`) is the
+responsive Web/PWA entry point. It has the form `/invite/<opaque>/` and does
+not disclose the Host ID. The pairing link can be exchanged by multiple devices
+until it expires; each exchange returns a short-lived capability and the Host ID
+is used only in memory to open the Host-scoped WebSocket. Generating a new
 pairing code replaces the previous code; re-enrolling or revoking the Host
 invalidates existing links and access capabilities.
 

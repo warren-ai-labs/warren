@@ -266,6 +266,16 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(pairing.pairingTicket, "one-time")
     }
 
+    func testRelayPairingParsesOpaqueInviteWithoutExposingHost() throws {
+        let inviteID = "Abc_123-def"
+        let url = try XCTUnwrap(URL(string: "https://relay.example.test/edge/invite/\(inviteID)/"))
+        let pairing = try WarrenRelayPairingClient.parse(url)
+        XCTAssertEqual(pairing.relayURL, "https://relay.example.test/edge")
+        XCTAssertEqual(pairing.hostID, "")
+        XCTAssertEqual(pairing.inviteID, inviteID)
+        XCTAssertEqual(pairing.pairingTicket, "")
+    }
+
     func testRelayPairingRejectsUnsupportedOrAmbiguousLinks() throws {
         XCTAssertThrowsError(try WarrenRelayPairingClient.parse(URL(string: "ftp://relay.example.test/h/host-123/#t=ticket")!)) { error in
             XCTAssertEqual(error as? WarrenRelayPairingError, .unsupportedScheme)
@@ -274,6 +284,9 @@ final class IOSPersistenceTests: XCTestCase {
             XCTAssertEqual(error as? WarrenRelayPairingError, .missingHostID)
         }
         XCTAssertThrowsError(try WarrenRelayPairingClient.parse(URL(string: "https://relay.example.test/h/host%2F123/#t=ticket")!)) { error in
+            XCTAssertEqual(error as? WarrenRelayPairingError, .missingHostID)
+        }
+        XCTAssertThrowsError(try WarrenRelayPairingClient.parse(URL(string: "https://relay.example.test/invite/not.safe/")!)) { error in
             XCTAssertEqual(error as? WarrenRelayPairingError, .missingHostID)
         }
     }
