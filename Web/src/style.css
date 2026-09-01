@@ -1123,26 +1123,6 @@ button:disabled {
   font-size: 10.5px;
 }
 
-.agent-working-dot {
-  position: relative;
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-circle);
-  background: var(--color-status-working);
-}
-
-.agent-working-dot::before {
-  position: absolute;
-  inset: 0;
-  content: "";
-  border-radius: inherit;
-  background: currentColor;
-  color: var(--color-status-working);
-  animation: agent-working-pulse 1.25s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
 .agent-working-shimmer {
   color: var(--color-status-working);
   background: linear-gradient(90deg, currentColor 0%, currentColor 38%, var(--ember-white) 50%, currentColor 62%, currentColor 100%);
@@ -1150,13 +1130,7 @@ button:disabled {
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: agent-working-shimmer 1.35s linear infinite;
-}
-
-@keyframes agent-working-pulse {
-  0% { transform: scale(1); opacity: 0.72; }
-  75% { transform: scale(2.35); opacity: 0; }
-  100% { transform: scale(2.35); opacity: 0; }
+  animation: agent-working-shimmer 3.2s linear infinite;
 }
 
 @keyframes agent-working-shimmer {
@@ -1165,7 +1139,6 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-working-dot::before,
   .agent-working-shimmer {
     animation: none;
   }
@@ -1649,8 +1622,9 @@ button:disabled {
 
 .agent-input-surface {
   display: flex;
-  align-items: flex-end;
-  gap: var(--space-md);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   width: 100%;
   padding: 7px 7px 7px 14px;
   border: 1px solid var(--color-border-default);
@@ -1659,6 +1633,13 @@ button:disabled {
   transition-property: border-color, box-shadow;
   transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
+}
+
+.agent-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-md);
+  width: 100%;
 }
 
 .agent-input-surface:focus-within {

@@ -76,10 +76,20 @@ private struct AgentComposerInput: UIViewRepresentable {
             view.text = text
         }
 
+        // UIKit owns the responder while the text view is editing. Do not
+        // resign from updateUIView: SwiftUI can briefly deliver a stale
+        // binding during a model/layout publication (including a keyboard
+        // key press), which would collapse the keyboard after every tap.
+        context.coordinator.updateFocusIntent(isFocused)
         if isFocused, !view.isFirstResponder {
-            view.becomeFirstResponder()
-        } else if !isFocused, view.isFirstResponder {
-            view.resignFirstResponder()
+            let requestID = context.coordinator.focusRequestID
+            DispatchQueue.main.async { [weak view, weak coordinator = context.coordinator] in
+                guard let view, let coordinator,
+                      coordinator.wantsFocus,
+                      coordinator.focusRequestID == requestID,
+                      !view.isFirstResponder else { return }
+                view.becomeFirstResponder()
+            }
         }
         view.invalidateIntrinsicContentSize()
     }
@@ -87,10 +97,18 @@ private struct AgentComposerInput: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         private var text: Binding<String>
         private var isFocused: Binding<Bool>
+        fileprivate private(set) var wantsFocus = false
+        fileprivate private(set) var focusRequestID: UInt = 0
 
         init(text: Binding<String>, isFocused: Binding<Bool>) {
             self.text = text
             self.isFocused = isFocused
+        }
+
+        func updateFocusIntent(_ focused: Bool) {
+            guard wantsFocus != focused else { return }
+            wantsFocus = focused
+            focusRequestID &+= 1
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -99,12 +117,15 @@ private struct AgentComposerInput: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_: UITextView) {
+            wantsFocus = true
             if !isFocused.wrappedValue {
                 isFocused.wrappedValue = true
             }
         }
 
         func textViewDidEndEditing(_: UITextView) {
+            wantsFocus = false
+            focusRequestID &+= 1
             if isFocused.wrappedValue {
                 isFocused.wrappedValue = false
             }
@@ -152,7 +173,14 @@ public struct AgentChatView: View {
 #if os(iOS)
     @State private var photoItems: [PhotosPickerItem] = []
 #endif
+#if canImport(UIKit)
+    // The UIKit text view reports responder changes through its coordinator;
+    // a plain State binding avoids SwiftUI's FocusState transaction briefly
+    // clearing the responder while the keyboard is publishing input.
+    @State private var composerFocused = false
+#else
     @FocusState private var composerFocused: Bool
+#endif
 
     private let historyPullThreshold: CGFloat = 56
     private let latestVisibilityThreshold: CGFloat = 72
@@ -254,7 +282,6 @@ public struct AgentChatView: View {
                     // like a jump on iPhone. We establish the initial position
                     // explicitly, then use the same short ease for intentional
                     // repositioning only.
-                    .animation(.easeInOut(duration: 0.30), value: composerFocused)
                     .onAppear {
                         guard !didEstablishInitialScroll else { return }
                         didEstablishInitialScroll = true
@@ -286,17 +313,6 @@ public struct AgentChatView: View {
                     #if os(iOS)
                     .scrollDismissesKeyboard(.interactively)
                     #endif
-                    // Tapping transcript chrome is the same intent as dragging
-                    // it: leave the conversation visible and quietly return
-                    // focus to the page. The composer remains the only surface
-                    // that keeps the keyboard alive.
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            guard composerFocused else { return }
-                            composerFocused = false
-                            model.dismissKeyboard()
-                        }
-                    )
                     .onChange(of: composerFocused) { _, focused in
                         if focused {
                             // Agent input is the control affordance. The first
@@ -368,10 +384,9 @@ public struct AgentChatView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // Animate the composer/safe-area inset with the focus transition too;
-        // otherwise the ScrollView offset is smooth while the input surface
-        // itself still appears one frame later.
-        .animation(.easeInOut(duration: 0.30), value: composerFocused)
+        // The system owns keyboard-inset animation. Keeping focus out of the
+        // view-level animation transaction prevents a responder hand-off
+        // while the composer is being laid out.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if model.displayMode == .agent {
                 VStack(alignment: .leading, spacing: 0) {
@@ -398,7 +413,6 @@ public struct AgentChatView: View {
                 }
                 .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
                 .animation(.easeInOut(duration: 0.22), value: model.agentAttention(for: sessionID))
-                .animation(.easeInOut(duration: 0.22), value: composerFocused)
             }
         }
         .onAppear {
@@ -427,17 +441,8 @@ public struct AgentChatView: View {
         .sheet(isPresented: $isQueueSheetPresented) {
             IOSAgentQueueSheet(model: model, sessionID: sessionID)
         }
-        .task(id: "\(sessionID):\(shouldShowWorking)") {
-            guard shouldShowWorking else { return }
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .milliseconds(2200))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
-            }
+        .onChange(of: workingTurnKey) { _, _ in
+            workingPhrase = AgentWorkingPhrases.next(after: workingPhrase)
         }
     }
 
@@ -559,8 +564,22 @@ public struct AgentChatView: View {
                     .layoutPriority(1)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .bottom, spacing: 7) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !localAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            ForEach(localAttachments) { attachment in
+                                attachmentChip(attachment)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                    }
+                    .frame(height: 30)
+                    .padding(.top, 6)
+                }
+
+                HStack(alignment: .bottom, spacing: 5) {
+                    attachmentControls
                     ZStack(alignment: .topLeading) {
                         Text("Message…")
                             .font(IOSTypography.input)
@@ -592,7 +611,7 @@ public struct AgentChatView: View {
                             .accessibilityLabel("Agent message")
 #endif
                     }
-                    attachmentControls
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Button {
                         sendComposerMessage()
                     } label: {
@@ -608,7 +627,31 @@ public struct AgentChatView: View {
                     .opacity(canSend ? 1 : 0.32)
                     .accessibilityLabel("Send Agent message")
                     .padding(.bottom, 2)
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
 
+                HStack(spacing: 8) {
+                    if let metadata = agentComposerMetadata {
+                        Text(metadata)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Agent type and model: \(metadata)")
+                    }
+                    if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
+                        Button {
+                            isQueueSheetPresented = true
+                        } label: {
+                            Text("Queued \(queued)")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.amber)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show \(queued) queued messages")
+                    }
                     if model.canInterruptAgentTurn {
                         Button {
                             model.cancelAgentTurn()
@@ -616,7 +659,7 @@ public struct AgentChatView: View {
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(IOSTheme.red)
-                                .frame(width: 30, height: 30)
+                                .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Cancel Agent turn")
@@ -627,8 +670,7 @@ public struct AgentChatView: View {
                                 Text("Send now")
                                     .font(IOSTypography.metadata)
                                     .foregroundStyle(IOSTheme.amber)
-                                    .padding(.horizontal, 6)
-                                    .frame(minHeight: 30)
+                                    .frame(minHeight: 28)
                             }
                             .buttonStyle(.plain)
                             .disabled(isUploadingAttachments)
@@ -636,36 +678,10 @@ public struct AgentChatView: View {
                         }
                     }
                 }
-
-                if agentComposerMetadata != nil || (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
-                    HStack(spacing: 8) {
-                        if let metadata = agentComposerMetadata {
-                            Text(metadata)
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.tertiaryText)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .accessibilityLabel("Agent type and model: \(metadata)")
-                        }
-                        Spacer(minLength: 0)
-                        if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
-                            Button {
-                                isQueueSheetPresented = true
-                            } label: {
-                                Text("Queued \(queued)")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.amber)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Show \(queued) queued messages")
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 3)
-                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 5)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
+            .padding(.horizontal, 4)
             .padding(.top, 1)
             .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay {
@@ -682,7 +698,7 @@ public struct AgentChatView: View {
     @ViewBuilder
     private var attachmentControls: some View {
         let attachmentsSupported = model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
-        HStack(spacing: 7) {
+        HStack(spacing: 2) {
 #if os(iOS)
             PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
                 Image(systemName: "photo")
@@ -705,20 +721,9 @@ public struct AgentChatView: View {
             .buttonStyle(.plain)
             .disabled(!attachmentsSupported)
             .accessibilityLabel("Choose a file")
-            if !localAttachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 5) {
-                        ForEach(localAttachments) { attachment in
-                            attachmentChip(attachment)
-                        }
-                    }
-                }
-            }
         }
         .opacity(attachmentsSupported ? 1 : 0.42)
         .accessibilityValue(attachmentsSupported ? "Available" : "Unavailable on this Host")
-        .padding(.horizontal, 18)
-        .padding(.bottom, 2)
 #if os(iOS)
         .onChange(of: photoItems) { _, items in
             loadPhotos(items)
@@ -906,6 +911,26 @@ public struct AgentChatView: View {
         // A completed assistant message is the stronger visual signal. A Host
         // may publish a trailing working status while that event settles.
         return !(last.isAssistantEvent && !(last.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
+    }
+
+    private var workingTurnKey: String {
+        let events = agentState.agentEventsBySessionID[sessionID] ?? []
+        if let explicit = model.agentTurnBySessionID[sessionID]?.id, explicit > 0 {
+            return "turn:\(explicit)"
+        }
+        if let latestUser = events.last(where: \.isUserEvent) {
+            if let turn = latestUser.turn, turn > 0 {
+                return "turn:\(turn)"
+            }
+            let identity = latestUser.id.isEmpty
+                ? "seq:\(latestUser.sequence)"
+                : "id:\(latestUser.id)"
+            return "user:\(identity)"
+        }
+        if let eventTurn = events.reversed().compactMap(\.turn).first, eventTurn > 0 {
+            return "turn:\(eventTurn)"
+        }
+        return "unknown"
     }
 
     private var canSend: Bool {
@@ -1146,8 +1171,6 @@ private struct AgentWorkingFooter: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            IOSAgentActivityMark(activity: .working, slotSize: 16)
-                .accessibilityHidden(true)
             IOSShimmerText(phrase, color: IOSTheme.accent, font: IOSTypography.working)
             Spacer(minLength: 0)
         }
@@ -1185,9 +1208,9 @@ private enum AgentWorkingPhrases {
         "Polishing…",
     ]
 
-    static func random(excluding current: String) -> String {
-        let candidates = all.filter { $0 != current }
-        return (candidates.isEmpty ? all : candidates).randomElement() ?? defaultPhrase
+    static func next(after current: String) -> String {
+        guard let index = all.firstIndex(of: current) else { return all.first ?? defaultPhrase }
+        return all[(index + 1) % all.count]
     }
 }
 

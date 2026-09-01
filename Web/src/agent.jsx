@@ -35,10 +35,9 @@ const AGENT_WORKING_PHRASES = [
   "Percolating…",
   "Polishing…",
 ];
-const AGENT_WORKING_ROTATION_MS = 2200;
-
 export function AgentView({
   session,
+  turn = null,
   events = [],
   status = null,
   onSend,
@@ -79,6 +78,7 @@ export function AgentView({
   const [submitError, setSubmitError] = useState("");
   const [draftWarning, setDraftWarning] = useState("");
   const [workingPhraseIndex, setWorkingPhraseIndex] = useState(0);
+  const workingTurnKeyRef = useRef(null);
   const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
@@ -88,6 +88,7 @@ export function AgentView({
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
   const showWorking = shouldShowWorking(agentStatus, events);
+  const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
   const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
@@ -112,15 +113,20 @@ export function AgentView({
     setSubmitError("");
     setDraftWarning("");
     setWorkingPhraseIndex(0);
+    workingTurnKeyRef.current = null;
   }, [endpointIdentity, session?.id]);
 
   useEffect(() => {
-    if (!showWorking) return undefined;
-    const timer = window.setInterval(() => {
-      setWorkingPhraseIndex(index => (index + 1) % AGENT_WORKING_PHRASES.length);
-    }, AGENT_WORKING_ROTATION_MS);
-    return () => window.clearInterval(timer);
-  }, [showWorking, session?.id]);
+    if (workingTurnKeyRef.current === null) {
+      workingTurnKeyRef.current = workingTurnKey;
+      return;
+    }
+    if (workingTurnKeyRef.current === workingTurnKey) return;
+    workingTurnKeyRef.current = workingTurnKey;
+    // Change the copy at a turn boundary only. A continuously changing label
+    // competes with the transcript and makes one turn feel like many.
+    setWorkingPhraseIndex(index => (index + 1) % AGENT_WORKING_PHRASES.length);
+  }, [workingTurnKey]);
 
   useEffect(() => {
     const value = String(draft || "");
@@ -335,7 +341,6 @@ export function AgentView({
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
       {showWorking && (
         <div className="agent-working" role="status" aria-live="polite">
-          <span className="agent-working-dot" aria-hidden="true" />
           <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
         </div>
       )}
@@ -366,51 +371,6 @@ export function AgentView({
           }}
         >
           <div className="agent-input-surface">
-            <label className="agent-attachment-picker" title="Attach files">
-              <span aria-hidden="true">＋</span>
-              <input
-                type="file"
-                multiple
-                onChange={event => {
-                  addAttachments(event.target.files);
-                  event.target.value = "";
-                }}
-                aria-label="Attach files"
-                disabled={!canUpload || uploadingAttachments}
-              />
-            </label>
-            <textarea
-              ref={inputRef}
-              value={draft}
-              onChange={event => {
-                const value = event.target.value;
-                setDraft(value);
-                setDraftWarning(
-                  new TextEncoder().encode(value).length > agentDraftMaximumBytes
-                    ? "Draft is too large to save locally."
-                    : "",
-                );
-              }}
-              onKeyDown={event => {
-                if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                  event.preventDefault();
-                  void submit();
-                }
-              }}
-              onPaste={event => {
-                if (!canUpload || !event.clipboardData?.files?.length) return;
-                addAttachments(event.clipboardData.files);
-              }}
-              placeholder="Message…"
-              aria-label="Message"
-              rows={1}
-              enterKeyHint="send"
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck="false"
-              disabled={!canCompose || uploadingAttachments}
-            />
             {attachments.length > 0 && (
               <div className="agent-attachment-list" aria-label="Selected attachments">
                 {attachments.map((item, index) => (
@@ -423,9 +383,56 @@ export function AgentView({
                 ))}
               </div>
             )}
-            <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments} aria-label="Send">
-              <SendIcon />
-            </button>
+            <div className="agent-input-row">
+              <label className="agent-attachment-picker" title="Attach files">
+                <span aria-hidden="true">＋</span>
+                <input
+                  type="file"
+                  multiple
+                  onChange={event => {
+                    addAttachments(event.target.files);
+                    event.target.value = "";
+                  }}
+                  aria-label="Attach files"
+                  disabled={!canUpload || uploadingAttachments}
+                />
+              </label>
+              <textarea
+                ref={inputRef}
+                value={draft}
+                onChange={event => {
+                  const value = event.target.value;
+                  setDraft(value);
+                  setDraftWarning(
+                    new TextEncoder().encode(value).length > agentDraftMaximumBytes
+                      ? "Draft is too large to save locally."
+                      : "",
+                  );
+                }}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+                    event.preventDefault();
+                    void submit();
+                  }
+                }}
+                onPaste={event => {
+                  if (!canUpload || !event.clipboardData?.files?.length) return;
+                  addAttachments(event.clipboardData.files);
+                }}
+                placeholder="Message…"
+                aria-label="Message"
+                rows={1}
+                enterKeyHint="send"
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck="false"
+                disabled={!canCompose || uploadingAttachments}
+              />
+              <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments} aria-label="Send">
+                <SendIcon />
+              </button>
+            </div>
           </div>
           {showInputMeta && (
             <div className="agent-input-meta" aria-label="Agent controls">
@@ -511,6 +518,36 @@ function shouldShowWorking(status, events) {
   const role = normalizeAgentEventType(last.role);
   const assistant = type === "assistant" || role === "assistant";
   return !(assistant && String(last.content || "").trim());
+}
+
+function agentTurnID(turn, events) {
+  const explicit = typeof turn === "object" ? turn?.id : turn;
+  const explicitID = Number(explicit);
+  if (Number.isSafeInteger(explicitID) && explicitID > 0) return explicitID;
+  for (const event of [...(events || [])].reverse()) {
+    const eventID = Number(event?.turn);
+    if (Number.isSafeInteger(eventID) && eventID > 0) return eventID;
+  }
+  return 0;
+}
+
+// A few older Hosts publish agent events without a turn field. Use the
+// explicit turn when available, then the latest user event as the stable
+// boundary for a new turn. Do not use the latest arbitrary event: reasoning
+// and tool deltas would make the working copy change several times per turn.
+function agentTurnKey(turn, events) {
+  const explicit = agentTurnID(turn, []);
+  if (explicit) return `turn:${explicit}`;
+  const values = Array.isArray(events) ? events : [];
+  const latestUser = [...values].reverse().find(isUserAgentEvent);
+  if (latestUser) {
+    const eventTurn = Number(latestUser.turn);
+    if (Number.isSafeInteger(eventTurn) && eventTurn > 0) return `turn:${eventTurn}`;
+    const identity = String(latestUser.id || latestUser.seq || latestUser.timestamp || "").trim();
+    if (identity) return `user:${identity}`;
+  }
+  const eventTurn = agentTurnID(null, values);
+  return eventTurn ? `turn:${eventTurn}` : "unknown";
 }
 
 function agentInputDisabledReason({ ready, hasControl, status }) {

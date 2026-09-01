@@ -3233,6 +3233,7 @@ export default function App() {
             {agentViewActive && (
               <AgentView
                 session={selectedSession}
+                turn={agentStateBySession[selectedSession.id]?.turn || selectedSession.agentTurn || null}
                 events={selectedAgentEvents}
                 status={agentStateBySession[selectedSession.id]?.status || null}
                 onSend={sendAgentMessageFromView}
