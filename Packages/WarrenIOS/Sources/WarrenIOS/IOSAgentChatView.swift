@@ -1599,6 +1599,7 @@ private struct AgentEventBlock: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     AgentMarkdownText(value: event.content ?? "", font: IOSTypography.userMessage)
                         .foregroundStyle(IOSTheme.text)
+                        .textSelection(.enabled)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
                         .background(IOSTheme.muted.opacity(0.82), in: UnevenRoundedRectangle(
@@ -1659,18 +1660,6 @@ private struct AgentEventBlock: View {
             .padding(.vertical, 7)
         }
         }
-#if canImport(UIKit)
-        .contextMenu {
-            if let text = IOSAgentMessageActions.copyableText(for: event) {
-                Button {
-                    UIPasteboard.general.string = text
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .accessibilityLabel("Copy message")
-            }
-        }
-#endif
     }
 
     private var eventBody: some View {
@@ -1722,23 +1711,11 @@ private struct AgentMessageActions: View {
     let alignment: Alignment
     let onEditResend: (String) -> Void
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 4) {
-#if canImport(UIKit)
-            if let text = IOSAgentMessageActions.copyableText(for: event) {
-                Button {
-                    UIPasteboard.general.string = text
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Copy message")
-                .frame(width: 28, height: 28)
-            }
-#endif
-            if isLastUser,
-               let text = IOSAgentMessageActions.copyableText(for: event) {
+        if isLastUser,
+           let text = IOSAgentMessageActions.copyableText(for: event) {
+            HStack(spacing: 4) {
                 Button {
                     onEditResend(text)
                 } label: {
@@ -1749,10 +1726,10 @@ private struct AgentMessageActions: View {
                 .accessibilityLabel("Edit and resend message")
                 .frame(width: 28, height: 28)
             }
+            .foregroundStyle(IOSTheme.tertiaryText)
+            .frame(maxWidth: .infinity, alignment: alignment)
+            .accessibilityElement(children: .contain)
         }
-        .foregroundStyle(IOSTheme.tertiaryText)
-        .frame(maxWidth: .infinity, alignment: alignment)
-        .accessibilityElement(children: .contain)
     }
 }
 

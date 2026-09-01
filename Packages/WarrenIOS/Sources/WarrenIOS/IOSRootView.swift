@@ -11,6 +11,14 @@ public enum IOSRoute: Hashable {
     case session(String)
 }
 
+private func sessionScopeID(kind: String, id: String) -> String {
+    "\(kind):\(id)"
+}
+
+private func dashboardSectionID(kind: String, id: String) -> String {
+    "\(kind):\(id)"
+}
+
 /// The compact home surface is Warren's mobile project rail. It keeps the
 /// Web hierarchy (projects → workspaces → sessions) visible in one calm list,
 /// and only pushes a detail route when the user actually needs a scope or a
@@ -19,7 +27,9 @@ public struct IOSRootView: View {
     @ObservedObject private var model: IOSApplicationModel
     @State private var navigationPath: [IOSRoute] = []
     @State private var collapsedSectionIDs: Set<String> = []
+    @State private var expandedWorkspaceIDs: Set<String> = []
     @State private var showingWorkspaceManager = false
+    @State private var workspaceManagerProjectID: String?
 
     public init(model: IOSApplicationModel) {
         self.model = model
@@ -30,10 +40,14 @@ public struct IOSRootView: View {
             HostDashboardView(
                 model: model,
                 collapsedSectionIDs: $collapsedSectionIDs,
+                expandedWorkspaceIDs: $expandedWorkspaceIDs,
                 openWorkspace: { navigationPath.append(.workspace($0)) },
                 openTerminalGroup: { navigationPath.append(.terminalGroup($0)) },
                 openSession: { navigationPath.append(.session($0)) },
-                openWorkspaceManager: { showingWorkspaceManager = true }
+                openWorkspaceManager: { projectID in
+                    workspaceManagerProjectID = projectID
+                    showingWorkspaceManager = true
+                }
             )
             .navigationDestination(for: IOSRoute.self) { route in
                 switch route {
@@ -46,10 +60,16 @@ public struct IOSRootView: View {
         .tint(IOSTheme.accent)
         .preferredColorScheme(.dark)
         .background(IOSTheme.background.ignoresSafeArea())
+        .onAppear {
+            revealActiveSession(model.currentSessionID)
+        }
         .sheet(isPresented: $showingWorkspaceManager) {
-            IOSWorkspaceManagementSheet(model: model)
+            IOSWorkspaceManagementSheet(model: model, projectID: workspaceManagerProjectID)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .onChange(of: showingWorkspaceManager) { _, isPresented in
+            if !isPresented { workspaceManagerProjectID = nil }
         }
         .onChange(of: model.currentSessionID) { _, sessionID in
             guard let sessionID else {
@@ -69,6 +89,7 @@ public struct IOSRootView: View {
                 }
                 return
             }
+            revealActiveSession(sessionID)
             guard !navigationPath.contains(where: { route in
                 if case .session = route { return true }
                 return false
@@ -76,15 +97,39 @@ public struct IOSRootView: View {
             navigationPath.append(.session(sessionID))
         }
     }
+
+    private func revealActiveSession(_ sessionID: String?) {
+        guard let sessionID,
+              let session = model.activeSessions.first(where: { $0.id == sessionID }) else {
+            return
+        }
+
+        if let workspaceID = session.workspaceID {
+            expandedWorkspaceIDs.insert(sessionScopeID(kind: "workspace", id: workspaceID))
+            if let workspace = model.roster?.workspaces.first(where: { $0.id == workspaceID }) {
+                if !workspace.projectID.isEmpty {
+                    let projectID = workspace.projectID
+                    collapsedSectionIDs.remove(dashboardSectionID(kind: "project", id: projectID))
+                } else {
+                    collapsedSectionIDs.remove(dashboardSectionID(kind: "unassigned", id: "workspaces"))
+                }
+            }
+        }
+        if let groupID = session.terminalGroupID {
+            expandedWorkspaceIDs.insert(sessionScopeID(kind: "group", id: groupID))
+            collapsedSectionIDs.remove(dashboardSectionID(kind: "groups", id: "terminal-groups"))
+        }
+    }
 }
 
 private struct HostDashboardView: View {
     @ObservedObject var model: IOSApplicationModel
     @Binding var collapsedSectionIDs: Set<String>
+    @Binding var expandedWorkspaceIDs: Set<String>
     let openWorkspace: (String) -> Void
     let openTerminalGroup: (String) -> Void
     let openSession: (String) -> Void
-    let openWorkspaceManager: () -> Void
+    let openWorkspaceManager: (String) -> Void
 
     private var projects: [WarrenRemoteRoster.Project] {
         (model.roster?.projects ?? []).sorted { lhs, rhs in
@@ -141,8 +186,7 @@ private struct HostDashboardView: View {
                                 collapsedSectionIDs.subtract(collapsibleSectionIDs)
                             }
                         }
-                    },
-                    openWorkspaceManager: openWorkspaceManager
+                    }
                 )
 
                 if let message = model.maintenanceMessage {
@@ -223,6 +267,8 @@ private struct HostDashboardView: View {
                 workspaces: scopedWorkspaces,
                 sessionsByWorkspace: sessionsByWorkspace,
                 agentStatusBySessionID: model.agentStatusBySessionID,
+                activeSessionID: model.currentSessionID,
+                expandedWorkspaceIDs: expandedWorkspaceIDs,
                 isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "project", id: project.id)),
                 toggle: {
                     withAnimation(.easeOut(duration: 0.16)) {
@@ -235,7 +281,9 @@ private struct HostDashboardView: View {
                     }
                 },
                 openWorkspace: openWorkspace,
-                openSession: openSession
+                openSession: openSession,
+                toggleWorkspace: toggleWorkspace,
+                openWorkspaceManager: { openWorkspaceManager(project.id) }
             )
         }
     }
@@ -251,6 +299,8 @@ private struct HostDashboardView: View {
                 workspaces: unassigned,
                 sessionsByWorkspace: sessionsByWorkspace,
                 agentStatusBySessionID: model.agentStatusBySessionID,
+                activeSessionID: model.currentSessionID,
+                expandedWorkspaceIDs: expandedWorkspaceIDs,
                 isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "unassigned", id: "workspaces")),
                 toggle: {
                     withAnimation(.easeOut(duration: 0.16)) {
@@ -258,7 +308,8 @@ private struct HostDashboardView: View {
                     }
                 },
                 openWorkspace: openWorkspace,
-                openSession: openSession
+                openSession: openSession,
+                toggleWorkspace: toggleWorkspace
             )
         }
     }
@@ -289,8 +340,11 @@ private struct HostDashboardView: View {
                             group: group,
                             sessions: model.sessions(inTerminalGroup: group.id),
                             agentStatusBySessionID: model.agentStatusBySessionID,
+                            activeSessionID: model.currentSessionID,
+                            isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "group", id: group.id)),
                             openGroup: { openTerminalGroup(group.id) },
-                            openSession: openSession
+                            openSession: openSession,
+                            toggleSessions: { toggleWorkspace(sessionScopeID(kind: "group", id: group.id)) }
                         )
                     }
                 }
@@ -336,6 +390,16 @@ private struct HostDashboardView: View {
             collapsedSectionIDs.remove(key)
         } else {
             collapsedSectionIDs.insert(key)
+        }
+    }
+
+    private func toggleWorkspace(_ workspaceID: String) {
+        withAnimation(.easeOut(duration: 0.16)) {
+            if expandedWorkspaceIDs.contains(workspaceID) {
+                expandedWorkspaceIDs.remove(workspaceID)
+            } else {
+                expandedWorkspaceIDs.insert(workspaceID)
+            }
         }
     }
 }
@@ -442,7 +506,6 @@ private struct HomeHeader: View {
     let hasCollapsibleSections: Bool
     let isAllSectionsCollapsed: Bool
     let toggleAllSections: () -> Void
-    let openWorkspaceManager: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 13) {
@@ -477,22 +540,19 @@ private struct HomeHeader: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(isAllSectionsCollapsed ? "Expand all sections" : "Collapse all sections")
             }
-            Menu {
-                Button("Manage workspaces", systemImage: "folder") {
-                    openWorkspaceManager()
-                }
-                if model.connectionState != .connected {
+            if model.connectionState != .connected {
+                Menu {
                     Button("Reconnect", systemImage: "arrow.clockwise") { model.reconnect() }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 42, height: 44)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 42, height: 44)
-                    .contentShape(Rectangle())
+                .menuStyle(.automatic)
+                .accessibilityLabel("Host actions")
             }
-            .menuStyle(.automatic)
-            .accessibilityLabel("Host actions")
         }
         .frame(minHeight: 76)
         .padding(.top, 12)
@@ -522,38 +582,58 @@ private struct ProjectSection: View {
     let workspaces: [WarrenRemoteRoster.Workspace]
     let sessionsByWorkspace: [String: [WarrenRemoteRoster.Session]]
     let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
+    let activeSessionID: String?
+    let expandedWorkspaceIDs: Set<String>
     let isCollapsed: Bool
     let toggle: () -> Void
     let openWorkspace: (String) -> Void
     let openSession: (String) -> Void
+    let toggleWorkspace: (String) -> Void
+    let openWorkspaceManager: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: toggle) {
-                HStack(spacing: 10) {
-                    IOSProjectIcon(name: project.name.isEmpty ? pathLeaf(project.path) : project.name, size: 25)
-                    Text(project.name.isEmpty ? pathLeaf(project.path) : project.name)
-                        .font(IOSTypography.sectionTitle)
-                        .foregroundStyle(IOSTheme.text)
-                        .lineLimit(2)
-                        .iosNaturalWrap()
-                        .layoutPriority(1)
-                    Spacer(minLength: 8)
-                    if !workspaces.isEmpty {
-                        Text("\(workspaces.count)")
-                            .font(IOSTypography.metric)
+            HStack(spacing: 4) {
+                Button(action: toggle) {
+                    HStack(spacing: 10) {
+                        IOSProjectIcon(name: project.name.isEmpty ? pathLeaf(project.path) : project.name, size: 25)
+                        Text(project.name.isEmpty ? pathLeaf(project.path) : project.name)
+                            .font(IOSTypography.sectionTitle)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(2)
+                            .iosNaturalWrap()
+                            .layoutPriority(1)
+                        Spacer(minLength: 8)
+                        if !workspaces.isEmpty {
+                            Text("\(workspaces.count)")
+                                .font(IOSTypography.metric)
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                        }
+                        Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(width: 24, height: 24)
                     }
-                    Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(IOSTheme.tertiaryText)
-                        .frame(width: 24, height: 24)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(isCollapsed ? "Expand \(project.name)" : "Collapse \(project.name)")
+                Menu {
+                    Button("Manage workspaces", systemImage: "folder") {
+                        openWorkspaceManager()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.automatic)
+                .accessibilityLabel("Manage \(project.name) workspaces")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isCollapsed ? "Expand \(project.name)" : "Collapse \(project.name)")
 
             if !isCollapsed {
                 ForEach(workspaces) { workspace in
@@ -561,8 +641,11 @@ private struct ProjectSection: View {
                         workspace: workspace,
                         sessions: sessionsByWorkspace[workspace.id] ?? [],
                         agentStatusBySessionID: agentStatusBySessionID,
+                        activeSessionID: activeSessionID,
+                        isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "workspace", id: workspace.id)),
                         openWorkspace: { openWorkspace(workspace.id) },
-                        openSession: openSession
+                        openSession: openSession,
+                        toggleSessions: { toggleWorkspace(sessionScopeID(kind: "workspace", id: workspace.id)) }
                     )
                 }
                 if workspaces.isEmpty {
@@ -584,10 +667,13 @@ private struct ScopeRailSection: View {
     let workspaces: [WarrenRemoteRoster.Workspace]
     let sessionsByWorkspace: [String: [WarrenRemoteRoster.Session]]
     let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
+    let activeSessionID: String?
+    let expandedWorkspaceIDs: Set<String>
     let isCollapsed: Bool
     let toggle: () -> Void
     let openWorkspace: (String) -> Void
     let openSession: (String) -> Void
+    let toggleWorkspace: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -604,8 +690,11 @@ private struct ScopeRailSection: View {
                         workspace: workspace,
                         sessions: sessionsByWorkspace[workspace.id] ?? [],
                         agentStatusBySessionID: agentStatusBySessionID,
+                        activeSessionID: activeSessionID,
+                        isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "workspace", id: workspace.id)),
                         openWorkspace: { openWorkspace(workspace.id) },
-                        openSession: openSession
+                        openSession: openSession,
+                        toggleSessions: { toggleWorkspace(sessionScopeID(kind: "workspace", id: workspace.id)) }
                     )
                 }
             }
@@ -658,58 +747,85 @@ private struct WorkspaceRailRow: View {
     let workspace: WarrenRemoteRoster.Workspace
     let sessions: [WarrenRemoteRoster.Session]
     let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
+    let activeSessionID: String?
+    let isExpanded: Bool
     let openWorkspace: () -> Void
     let openSession: (String) -> Void
+    let toggleSessions: () -> Void
 
     var body: some View {
-        HStack(spacing: 9) {
-            Button(action: openWorkspace) {
-                HStack(spacing: 11) {
-                    WorkspaceGlyph(workspace: workspace, agentStatus: agentStatus)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(workspace.branch ?? (workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name))
-                            .font(IOSTypography.body)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(2)
-                            .iosNaturalWrap()
-                            .iosMachineText()
-                            .layoutPriority(1)
-                        Text(workspaceSubtitle)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .lineLimit(2)
-                            .iosNaturalWrap()
-                            .layoutPriority(1)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                Button(action: openWorkspace) {
+                    HStack(spacing: 11) {
+                        WorkspaceGlyph(workspace: workspace, agentStatus: agentStatus)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 5) {
+                                Text(workspaceTitle)
+                                    .font(IOSTypography.body)
+                                    .foregroundStyle(IOSTheme.text)
+                                    .lineLimit(2)
+                                    .iosNaturalWrap()
+                                    .iosMachineText()
+                                    .layoutPriority(1)
+                                if !sessions.isEmpty {
+                                    Text("\(sessions.count)")
+                                        .font(IOSTypography.metric)
+                                        .foregroundStyle(IOSTheme.tertiaryText)
+                                        .accessibilityLabel(sessionSummary)
+                                }
+                            }
+                            if !workspaceSubtitle.isEmpty {
+                                Text(workspaceSubtitle)
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .lineLimit(2)
+                                    .iosNaturalWrap()
+                                    .layoutPriority(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(minHeight: IOSTheme.workspaceRowHeight)
-
-            Menu {
-                Button("Open workspace", systemImage: "rectangle.split.2x1") { openWorkspace() }
-                if sessions.count == 1, let session = sessions.first {
-                    Button("Open session", systemImage: "terminal") { openSession(session.id) }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .frame(width: 32, height: 44)
                     .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: IOSTheme.workspaceRowHeight)
+                .accessibilityLabel("Open \(workspaceTitle)")
+                if !sessions.isEmpty {
+                    Button(action: toggleSessions) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(width: 34, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isExpanded ? "Collapse sessions in \(workspaceTitle)" : "Expand sessions in \(workspaceTitle)")
+                    .accessibilityValue("\(sessions.count) session\(sessions.count == 1 ? "" : "s")")
+                }
             }
-            .menuStyle(.automatic)
-            .accessibilityLabel("Actions for \(workspace.name)")
+            .padding(.leading, 29)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(IOSTheme.separator.opacity(0.42))
+                    .frame(height: 1)
+                    .padding(.leading, 40)
+            }
+            if isExpanded {
+                ForEach(sessions) { session in
+                    WorkspaceSessionRailRow(
+                        session: session,
+                        agentStatus: agentStatusBySessionID[session.id] ?? session.agentStatus,
+                        isActive: activeSessionID == session.id,
+                        openSession: { openSession(session.id) }
+                    )
+                }
+            }
         }
-        .padding(.leading, 29)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.42))
-                .frame(height: 1)
-                .padding(.leading, 40)
-        }
+    }
+
+    private var workspaceTitle: String {
+        workspace.branch ?? (workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
     }
 
     private var sessionSummary: String {
@@ -727,12 +843,74 @@ private struct WorkspaceRailRow: View {
         } else if !workspace.path.isEmpty {
             parts.append(pathLeaf(workspace.path))
         }
-        parts.append(sessions.isEmpty ? "Open workspace" : sessionSummary)
+        if parts.isEmpty, sessions.isEmpty { parts.append("No sessions") }
         return parts.joined(separator: " · ")
     }
 
     private var agentStatus: WarrenRemoteAgentStatus? {
         highestAgentStatus(sessions: sessions, statuses: agentStatusBySessionID)
+    }
+}
+
+private struct WorkspaceSessionRailRow: View {
+    let session: WarrenRemoteRoster.Session
+    let agentStatus: WarrenRemoteAgentStatus?
+    let isActive: Bool
+    let openSession: () -> Void
+
+    var body: some View {
+        Button(action: openSession) {
+            HStack(spacing: 9) {
+                if session.isAgentBacked, let agentStatus {
+                    IOSAgentActivityMark(
+                        activity: agentStatus.activity,
+                        attention: agentStatus.attention,
+                        slotSize: 18
+                    )
+                } else {
+                    IOSStatusDot(color: activityColor, size: 6)
+                        .frame(width: 18)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.displayTitle.isEmpty ? (session.process ?? session.kind.capitalized) : session.displayTitle)
+                        .font(isActive ? IOSTypography.bodyEmphasis : IOSTypography.body)
+                        .foregroundStyle(isActive ? IOSTheme.text : IOSTheme.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(session.process ?? session.kind.capitalized)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(IOSTheme.accent)
+                }
+            }
+            .padding(.leading, 62)
+            .padding(.trailing, 9)
+            .frame(minHeight: 46)
+            .background(isActive ? IOSTheme.muted.opacity(0.55) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(session.displayTitle.isEmpty ? "Session" : session.displayTitle)
+        .accessibilityValue(isActive ? "Active session" : (session.process ?? session.kind.capitalized))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(IOSTheme.separator.opacity(0.3))
+                .frame(height: 1)
+                .padding(.leading, 62)
+        }
+    }
+
+    private var activityColor: Color {
+        if let agentStatus { return IOSTheme.statusColor(agentStatus) }
+        return session.isRunning ? IOSTheme.green : IOSTheme.secondaryText
     }
 }
 
@@ -771,65 +949,88 @@ private struct ScopeGroupRow: View {
     let group: WarrenRemoteRoster.TerminalGroup
     let sessions: [WarrenRemoteRoster.Session]
     let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
+    let activeSessionID: String?
+    let isExpanded: Bool
     let openGroup: () -> Void
     let openSession: (String) -> Void
+    let toggleSessions: () -> Void
 
     var body: some View {
-        HStack(spacing: 9) {
-            Button(action: openGroup) {
-                HStack(spacing: 11) {
-                    Image(systemName: "rectangle.split.3x1")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 23)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(group.name)
-                            .font(IOSTypography.body)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(2)
-                            .iosNaturalWrap()
-                            .layoutPriority(1)
-                        Text(group.home ?? "Standalone sessions")
-                            .font(IOSTypography.metadata)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                Button(action: openGroup) {
+                    HStack(spacing: 11) {
+                        Image(systemName: "rectangle.split.3x1")
+                            .font(.system(size: 17, weight: .regular))
                             .foregroundStyle(IOSTheme.secondaryText)
-                            .lineLimit(2)
-                            .iosNaturalWrap()
-                            .iosMachineText()
-                            .layoutPriority(1)
+                            .frame(width: 23)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 5) {
+                                Text(group.name)
+                                    .font(IOSTypography.body)
+                                    .foregroundStyle(IOSTheme.text)
+                                    .lineLimit(2)
+                                    .iosNaturalWrap()
+                                    .layoutPriority(1)
+                                if !sessions.isEmpty {
+                                    Text("\(sessions.count)")
+                                        .font(IOSTypography.metric)
+                                        .foregroundStyle(IOSTheme.tertiaryText)
+                                        .accessibilityLabel(sessionSummary)
+                                }
+                            }
+                            if let home = group.home, !home.isEmpty {
+                                Text(home)
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .lineLimit(2)
+                                    .iosNaturalWrap()
+                                    .iosMachineText()
+                                    .layoutPriority(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
                     }
-                    if let status = highestAgentStatus(sessions: sessions, statuses: agentStatusBySessionID) {
-                        IOSAgentActivityMark(
-                            activity: status.activity,
-                            attention: status.attention,
-                            slotSize: 22
-                        )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: IOSTheme.workspaceRowHeight)
+                .accessibilityLabel("Open \(group.name)")
+                if !sessions.isEmpty {
+                    Button(action: toggleSessions) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(width: 34, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    Spacer(minLength: 0)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isExpanded ? "Collapse sessions in \(group.name)" : "Expand sessions in \(group.name)")
+                    .accessibilityValue(sessionSummary)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .frame(minHeight: IOSTheme.workspaceRowHeight)
-            Menu {
-                Button("Open group", systemImage: "rectangle.split.3x1") { openGroup() }
-                if sessions.count == 1, let session = sessions.first {
-                    Button("Open session", systemImage: "terminal") { openSession(session.id) }
+            .padding(.leading, 29)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(IOSTheme.separator.opacity(0.42))
+                    .frame(height: 1)
+                    .padding(.leading, 40)
+            }
+            if isExpanded {
+                ForEach(sessions) { session in
+                    WorkspaceSessionRailRow(
+                        session: session,
+                        agentStatus: agentStatusBySessionID[session.id] ?? session.agentStatus,
+                        isActive: activeSessionID == session.id,
+                        openSession: { openSession(session.id) }
+                    )
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .frame(width: 32, height: 44)
             }
-            .menuStyle(.automatic)
         }
-        .padding(.leading, 29)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.42))
-                .frame(height: 1)
-                .padding(.leading, 40)
-        }
+    }
+
+    private var sessionSummary: String {
+        "\(sessions.count) session\(sessions.count == 1 ? "" : "s")"
     }
 }
 
@@ -1564,6 +1765,7 @@ struct IOSSessionCreationSheet: View {
 
 private struct IOSWorkspaceManagementSheet: View {
     @ObservedObject var model: IOSApplicationModel
+    let projectID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var showingCreate = false
     @State private var renameWorkspaceID: String?
@@ -1571,11 +1773,25 @@ private struct IOSWorkspaceManagementSheet: View {
     @State private var deleteWorkspaceID: String?
 
     private var workspaces: [WarrenRemoteRoster.Workspace] {
-        (model.roster?.workspaces ?? []).sorted { lhs, rhs in
+        (model.roster?.workspaces ?? [])
+            .filter { projectID == nil || $0.projectID == projectID }
+            .sorted { lhs, rhs in
             if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
             if lhs.order != rhs.order { return lhs.order < rhs.order }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+    }
+
+    private var projectTitle: String? {
+        guard let projectID else { return nil }
+        return model.roster?.projects.first(where: { $0.id == projectID }).map {
+            $0.name.isEmpty ? pathLeaf($0.path) : $0.name
+        }
+    }
+
+    private var headingTitle: String {
+        if let projectTitle, !projectTitle.isEmpty { return "Workspaces · \(projectTitle)" }
+        return "Workspaces"
     }
 
     var body: some View {
@@ -1583,7 +1799,7 @@ private struct IOSWorkspaceManagementSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     HStack {
-                        IOSScreenHeading(title: "Workspaces", symbol: "folder")
+                        IOSScreenHeading(title: headingTitle, symbol: "folder")
                         Button {
                             showingCreate = true
                         } label: {
@@ -1609,6 +1825,7 @@ private struct IOSWorkspaceManagementSheet: View {
                         .padding(.top, 18)
                     } else {
                         ForEach(workspaces) { workspace in
+                            let sessions = model.sessions(inWorkspace: workspace.id)
                             HStack(spacing: 10) {
                                 WorkspaceGlyph(
                                     workspace: workspace,
@@ -1618,12 +1835,20 @@ private struct IOSWorkspaceManagementSheet: View {
                                     )
                                 )
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
-                                        .font(IOSTypography.rowTitle)
-                                        .foregroundStyle(IOSTheme.text)
-                                        .lineLimit(2)
-                                        .iosNaturalWrap()
-                                        .layoutPriority(1)
+                                    HStack(spacing: 5) {
+                                        Text(workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
+                                            .font(IOSTypography.rowTitle)
+                                            .foregroundStyle(IOSTheme.text)
+                                            .lineLimit(2)
+                                            .iosNaturalWrap()
+                                            .layoutPriority(1)
+                                        if !sessions.isEmpty {
+                                            Text("\(sessions.count)")
+                                                .font(IOSTypography.metric)
+                                                .foregroundStyle(IOSTheme.tertiaryText)
+                                                .accessibilityLabel("\(sessions.count) session\(sessions.count == 1 ? "" : "s")")
+                                        }
+                                    }
                                     Text(workspace.branch ?? workspace.path)
                                         .font(IOSTypography.metadata)
                                         .foregroundStyle(IOSTheme.secondaryText)
@@ -1681,7 +1906,7 @@ private struct IOSWorkspaceManagementSheet: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showingCreate) {
-            IOSWorkspaceCreationSheet(model: model)
+                            IOSWorkspaceCreationSheet(model: model, initialProjectID: projectID)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -1717,11 +1942,18 @@ private struct IOSWorkspaceManagementSheet: View {
 
 private struct IOSWorkspaceCreationSheet: View {
     @ObservedObject var model: IOSApplicationModel
+    private let initialProjectID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var projectID = ""
     @State private var branch = ""
     @State private var name = ""
     @State private var path = ""
+
+    init(model: IOSApplicationModel, initialProjectID: String? = nil) {
+        self.model = model
+        self.initialProjectID = initialProjectID
+        _projectID = State(initialValue: initialProjectID ?? "")
+    }
 
     private var projects: [WarrenRemoteRoster.Project] { model.roster?.projects ?? [] }
 
@@ -1794,7 +2026,7 @@ private struct IOSWorkspaceCreationSheet: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
-            if projectID.isEmpty { projectID = projects.first?.id ?? "" }
+            if projectID.isEmpty { projectID = initialProjectID ?? projects.first?.id ?? "" }
         }
     }
 }
