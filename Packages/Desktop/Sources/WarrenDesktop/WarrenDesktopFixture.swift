@@ -891,6 +891,7 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case renameWorkspace(WorkspaceID, String)
     case attachWorkspaceToTask(TaskID, WorkspaceID)
     case detachWorkspaceFromTask(TaskID, WorkspaceID)
+    case deleteTask(TaskID)
     case deleteProject(ProjectID)
     case deleteWorkspace(WorkspaceID, removeLocalWorktree: Bool)
     case renameSession(TerminalSessionID, String)
