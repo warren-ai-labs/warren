@@ -186,6 +186,17 @@ agent/thread ID and transcript path. JSON rows also include `current: true`
 when the row's Warren Session ID exactly matches `WARREN_SESSION_ID`; no cwd,
 name, timestamp, or transcript inference is performed.
 
+### Project setup scripts
+
+Projects may configure an executable setup script through the Desktop sidebar
+or Settings. Relative script paths resolve from the main repository. When the
+user enables the script while creating a managed worktree, Warren runs it in
+the new worktree with the main repository path and worktree path as the first
+two positional arguments, followed by any custom arguments. The script also
+inherits the daemon environment and receives Warren project/workspace metadata
+through `WARREN_*` variables. A failed setup removes the newly created
+worktree and branch and does not persist the Workspace record.
+
 Tasks are Host-owned work contexts that aggregate Workspaces across Projects.
 `task workspace list TASK_ID` shows attached Workspaces, while `--available`
 shows only Workspaces that do not belong to any Task. Both modes keep the

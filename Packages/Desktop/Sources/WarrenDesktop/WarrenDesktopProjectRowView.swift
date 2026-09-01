@@ -32,6 +32,7 @@ struct WarrenDesktopProjectRow: View {
     let onToggleExpansion: () -> Void
     let onAddWorkspace: () -> Void
     let onImportWorktrees: () -> Void
+    let onConfigureSetupScript: () -> Void
     let onToggleAutoImportWorktrees: () -> Void
     let onRename: () -> Void
     let onTogglePin: () -> Void
@@ -91,6 +92,7 @@ struct WarrenDesktopProjectRow: View {
                     .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
                     .button(title: "Rename Project", action: onRename),
                     .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
+                    .button(title: "Configure Setup Script…", action: onConfigureSetupScript),
                     .button(
                         title: project.autoImportGitWorktrees
                             ? "Disable Automatic Worktree Import"
@@ -233,6 +235,7 @@ struct WarrenDesktopProjectRow: View {
                     .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
                     .button(title: "Rename Project", action: onRename),
                     .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
+                    .button(title: "Configure Setup Script…", action: onConfigureSetupScript),
                     .button(
                         title: project.autoImportGitWorktrees
                             ? "Disable Automatic Worktree Import"

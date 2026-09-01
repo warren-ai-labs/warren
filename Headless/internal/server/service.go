@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,7 @@ const (
 	// defaultWorktreeRoot is also the compatibility fallback used when an
 	// embedded Service does not provide an explicit worktree root.
 	defaultWorktreeRoot = "~/.warren/worktrees"
+	setupScriptTimeout  = 5 * time.Minute
 )
 
 type Service struct {
@@ -1119,6 +1121,42 @@ func (s *Service) SetProjectAutoImportGitWorktrees(projectID string, enabled boo
 	return project, nil
 }
 
+// SetProjectSetupScript changes the executable used for newly created managed
+// worktrees. An empty value disables setup execution for this project.
+func (s *Service) SetProjectSetupScript(projectID, script string) (api.Project, error) {
+	state := s.Store.Snapshot()
+	var project api.Project
+	found := false
+	for _, value := range state.Projects {
+		if value.ID == projectID {
+			project = value
+			found = true
+			break
+		}
+	}
+	if !found {
+		return api.Project{}, fmt.Errorf("project not found: %s", projectID)
+	}
+	project.SetupScript = strings.TrimSpace(script)
+	if project.SetupScript != "" {
+		if _, err := setupScriptPath(project); err != nil {
+			return api.Project{}, err
+		}
+	}
+	if err := s.Store.Update(func(value *api.State) error {
+		for index := range value.Projects {
+			if value.Projects[index].ID == projectID {
+				value.Projects[index].SetupScript = project.SetupScript
+				return nil
+			}
+		}
+		return fmt.Errorf("project not found: %s", projectID)
+	}); err != nil {
+		return api.Project{}, err
+	}
+	return project, nil
+}
+
 func projectWorktreeCandidates(project api.Project, workspaces []api.Workspace) ([]api.WorktreeCandidate, error) {
 	worktrees, err := listGitWorktrees(project.Path)
 	if err != nil {
@@ -1642,21 +1680,34 @@ func (s *Service) SetSessionPinned(id string, pinned bool) error {
 }
 
 func (s *Service) CreateWorkspace(projectID, branch, name, path string) (api.WorkspaceCreateResult, error) {
-	result, err := s.createWorkspace(projectID, "", branch, name, path, "")
+	result, err := s.createWorkspace(projectID, "", branch, name, path, "", false, nil)
 	return withoutWorkspaceCreationMetadata(result), err
 }
 
 func (s *Service) CreateTaskWorkspace(projectID, taskID, branch, name, path string) (api.WorkspaceCreateResult, error) {
-	result, err := s.createWorkspace(projectID, taskID, branch, name, path, "")
+	result, err := s.createWorkspace(projectID, taskID, branch, name, path, "", false, nil)
 	return withoutWorkspaceCreationMetadata(result), err
 }
 
 func (s *Service) CreateTaskWorkspaceWithRequestID(projectID, taskID, branch, name, path, requestID string) (api.WorkspaceCreateResult, error) {
-	result, err := s.createWorkspace(projectID, taskID, branch, name, path, requestID)
+	result, err := s.createWorkspace(projectID, taskID, branch, name, path, requestID, false, nil)
 	return withoutWorkspaceCreationMetadata(result), err
 }
 
-func (s *Service) createWorkspace(projectID, taskID, branch, name, path, requestID string) (api.WorkspaceCreateResult, error) {
+func (s *Service) CreateTaskWorkspaceWithSetup(
+	projectID, taskID, branch, name, path, requestID string,
+	runSetupScript bool, setupArgs []string,
+) (api.WorkspaceCreateResult, error) {
+	result, err := s.createWorkspace(
+		projectID, taskID, branch, name, path, requestID, runSetupScript, setupArgs,
+	)
+	return withoutWorkspaceCreationMetadata(result), err
+}
+
+func (s *Service) createWorkspace(
+	projectID, taskID, branch, name, path, requestID string,
+	runSetupScript bool, setupArgs []string,
+) (api.WorkspaceCreateResult, error) {
 	var err error
 	requestID, err = normalizeCreationRequestID(requestID)
 	if err != nil {
@@ -1675,7 +1726,11 @@ func (s *Service) createWorkspace(projectID, taskID, branch, name, path, request
 	}
 	requestHash := ""
 	if requestID != "" {
-		requestHash = creationRequestHash("workspace.create", projectID, taskID, branch, name, requestPath)
+		setupArgsJSON, _ := json.Marshal(setupArgs)
+		requestHash = creationRequestHash(
+			"workspace.create", projectID, taskID, branch, name, requestPath,
+			strconv.FormatBool(runSetupScript), string(setupArgsJSON),
+		)
 	}
 
 	projectLock := s.projectLifecycleLock(projectID)
@@ -1767,6 +1822,14 @@ func (s *Service) createWorkspace(projectID, taskID, branch, name, path, request
 		return api.WorkspaceCreateResult{}, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	gitCreated = true
+	if runSetupScript {
+		if err := s.runSetupScript(*project, api.Workspace{
+			ID: id, ProjectID: projectID, TaskID: taskID, Name: name, Path: path,
+			Branch: branch, Kind: "worktree",
+		}, setupArgs); err != nil {
+			return api.WorkspaceCreateResult{}, rollbackManagedWorktree(err, project.Path, path, branch, branchCreated)
+		}
+	}
 	if s.beforeWorkspaceInsert != nil {
 		s.beforeWorkspaceInsert()
 	}
@@ -1782,6 +1845,87 @@ func (s *Service) createWorkspace(projectID, taskID, branch, name, path, request
 	}
 	s.invalidateMerge()
 	return api.WorkspaceCreateResult{Workspace: workspace, Created: true, GitWorktree: gitCreated}, nil
+}
+
+func (s *Service) runSetupScript(project api.Project, workspace api.Workspace, setupArgs []string) error {
+	scriptPath, err := setupScriptPath(project)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), setupScriptTimeout)
+	defer cancel()
+	args := append([]string{project.Path, workspace.Path}, setupArgs...)
+	command := exec.CommandContext(ctx, scriptPath, args...)
+	command.Dir = workspace.Path
+	command.Env = setupScriptEnvironment(os.Environ(), project, workspace, scriptPath)
+	if err := command.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("setup script timed out after %s", setupScriptTimeout)
+		}
+		return fmt.Errorf("setup script failed: %w", err)
+	}
+	return nil
+}
+
+func setupScriptPath(project api.Project) (string, error) {
+	configured := strings.TrimSpace(project.SetupScript)
+	if configured == "" {
+		return "", errors.New("setup script is not configured")
+	}
+	path := expandHome(configured)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(project.Path, path)
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve setup script: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("setup script is not readable: %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("setup script is not a regular file: %s", path)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("setup script is not executable: %s", path)
+	}
+	return path, nil
+}
+
+func setupScriptEnvironment(environment []string, project api.Project, workspace api.Workspace, scriptPath string) []string {
+	values := map[string]string{
+		"WARREN_PROJECT_ID":       project.ID,
+		"WARREN_PROJECT_NAME":     project.Name,
+		"WARREN_PROJECT_PATH":     project.Path,
+		"WARREN_MAIN_REPO_PATH":   project.Path,
+		"WARREN_WORKSPACE_ID":     workspace.ID,
+		"WARREN_WORKSPACE_NAME":   workspace.Name,
+		"WARREN_WORKSPACE_PATH":   workspace.Path,
+		"WARREN_WORKTREE_PATH":    workspace.Path,
+		"WARREN_WORKSPACE_BRANCH": workspace.Branch,
+		"WARREN_TASK_ID":          workspace.TaskID,
+		"WARREN_SETUP_SCRIPT":     scriptPath,
+	}
+	result := make([]string, 0, len(environment)+len(values))
+	for _, entry := range environment {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, overridden := values[key]; !overridden {
+			result = append(result, entry)
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		result = append(result, key+"="+values[key])
+	}
+	return result
 }
 
 func rollbackManagedWorktree(cause error, projectPath, path, branch string, branchCreated bool) error {
