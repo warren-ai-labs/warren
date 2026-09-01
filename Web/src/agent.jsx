@@ -15,6 +15,28 @@ import {
   validateAgentAttachment,
 } from "./agent.js";
 
+// Keep the active-work cue light and human. The phrase is deliberately
+// provider-neutral so the composer never grows a second Session/Model rail.
+const AGENT_WORKING_PHRASES = [
+  "Fermenting…",
+  "Fiddle-faddling…",
+  "Booping…",
+  "Pondering…",
+  "Whirring…",
+  "Tinkering…",
+  "Conjuring…",
+  "Mulling…",
+  "Warming up…",
+  "Plotting…",
+  "Wiggling…",
+  "Riffing…",
+  "Hatching…",
+  "Stirring…",
+  "Percolating…",
+  "Polishing…",
+];
+const AGENT_WORKING_ROTATION_MS = 2200;
+
 export function AgentView({
   session,
   events = [],
@@ -56,6 +78,7 @@ export function AgentView({
   const [copyStatus, setCopyStatus] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [draftWarning, setDraftWarning] = useState("");
+  const [workingPhraseIndex, setWorkingPhraseIndex] = useState(0);
   const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
@@ -64,6 +87,7 @@ export function AgentView({
   const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
+  const showWorking = shouldShowWorking(agentStatus, events);
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
   const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
@@ -87,7 +111,16 @@ export function AgentView({
     setUploadingAttachments(false);
     setSubmitError("");
     setDraftWarning("");
+    setWorkingPhraseIndex(0);
   }, [endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    if (!showWorking) return undefined;
+    const timer = window.setInterval(() => {
+      setWorkingPhraseIndex(index => (index + 1) % AGENT_WORKING_PHRASES.length);
+    }, AGENT_WORKING_ROTATION_MS);
+    return () => window.clearInterval(timer);
+  }, [showWorking, session?.id]);
 
   useEffect(() => {
     const value = String(draft || "");
@@ -300,6 +333,12 @@ export function AgentView({
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
+      {showWorking && (
+        <div className="agent-working" role="status" aria-live="polite">
+          <span className="agent-working-dot" aria-hidden="true" />
+          <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
+        </div>
+      )}
       {(actionError || submitError) && (
         <div className="agent-action-error" role="alert">{actionError || submitError}</div>
       )}
@@ -458,6 +497,20 @@ function canSendForStatus(status) {
   // An input/question attention is intentionally answerable in the composer;
   // approval and warning attention must be reviewed in the Terminal.
   return !status.attention || status.attention.kind === "input";
+}
+
+function shouldShowWorking(status, events) {
+  if (status?.activity !== "working") return false;
+  const visible = (events || []).filter(event => !isHiddenAgentEvent(event));
+  const last = visible.at(-1);
+  if (!last) return true;
+  // A completed assistant message is the stronger visual signal. Hosts can
+  // publish a trailing working status while the final transcript event is
+  // still settling, so do not leave a cue under already-finished prose.
+  const type = normalizeAgentEventType(last.type);
+  const role = normalizeAgentEventType(last.role);
+  const assistant = type === "assistant" || role === "assistant";
+  return !(assistant && String(last.content || "").trim());
 }
 
 function agentInputDisabledReason({ ready, hasControl, status }) {

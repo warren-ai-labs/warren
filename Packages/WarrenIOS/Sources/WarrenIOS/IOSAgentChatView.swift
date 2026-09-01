@@ -144,6 +144,7 @@ public struct AgentChatView: View {
     @State private var historyScrollAnchorID: String?
     @State private var isNearLatest = true
     @State private var showReturnToLatest = false
+    @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var localAttachments: [IOSAgentLocalAttachment] = []
     @State private var isUploadingAttachments = false
     @State private var isFileImporterPresented = false
@@ -205,7 +206,12 @@ public struct AgentChatView: View {
                                 ForEach(blocks) { block in
                                     displayBlockView(
                                         block,
-                                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
+                                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
+                                        isLastUser: userEventKey(for: block) == latestUserEventKey,
+                                        onEditResend: { value in
+                                            draft = value
+                                            composerFocused = true
+                                        }
                                     ) { requestID, kind, response in
                                         model.respondToAgentInteraction(
                                             sessionID: sessionID,
@@ -376,6 +382,10 @@ public struct AgentChatView: View {
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+                    if shouldShowWorking {
+                        AgentWorkingFooter(phrase: workingPhrase)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     if let actionError = model.agentActionError, !actionError.isEmpty {
                         Text(actionError)
                             .font(IOSTypography.status)
@@ -386,6 +396,7 @@ public struct AgentChatView: View {
                     }
                     composer
                 }
+                .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
                 .animation(.easeInOut(duration: 0.22), value: model.agentAttention(for: sessionID))
                 .animation(.easeInOut(duration: 0.22), value: composerFocused)
             }
@@ -409,16 +420,34 @@ public struct AgentChatView: View {
             historyScrollAnchorID = nil
             showReturnToLatest = false
             isNearLatest = true
+            workingPhrase = AgentWorkingPhrases.defaultPhrase
             guard !model.agentHistoryLoaded(for: sessionID) else { return }
             model.loadOlderAgentHistory()
         }
         .sheet(isPresented: $isQueueSheetPresented) {
             IOSAgentQueueSheet(model: model, sessionID: sessionID)
         }
+        .task(id: "\(sessionID):\(shouldShowWorking)") {
+            guard shouldShowWorking else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(2200))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
+            }
+        }
     }
 
     private func refreshRenderedBlocks() {
         renderedBlocks = agentDisplayBlocks(from: agentState.agentEventsBySessionID[sessionID] ?? [])
+    }
+
+    private func userEventKey(for block: AgentDisplayBlock) -> String? {
+        guard case .event(let event) = block, event.isUserEvent else { return nil }
+        return "\(event.sequence):\(event.id)"
     }
 
     private func handleTopOffset(
@@ -608,8 +637,17 @@ public struct AgentChatView: View {
                     }
                 }
 
-                if (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
+                if agentComposerMetadata != nil || (model.agentQueuedMessageCountBySessionID[sessionID] ?? 0) > 0 {
                     HStack(spacing: 8) {
+                        if let metadata = agentComposerMetadata {
+                            Text(metadata)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .accessibilityLabel("Agent type and model: \(metadata)")
+                        }
+                        Spacer(minLength: 0)
                         if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
                             Button {
                                 isQueueSheetPresented = true
@@ -621,7 +659,6 @@ public struct AgentChatView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Show \(queued) queued messages")
                         }
-                        Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 8)
                     .padding(.bottom, 3)
@@ -644,52 +681,55 @@ public struct AgentChatView: View {
 
     @ViewBuilder
     private var attachmentControls: some View {
-        if model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) {
-            HStack(spacing: 7) {
+        let attachmentsSupported = model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
+        HStack(spacing: 7) {
 #if os(iOS)
-                PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Choose photos")
+            PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
+                Image(systemName: "photo")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .disabled(!attachmentsSupported)
+            .accessibilityLabel("Choose photos")
 #endif
-                Button {
-                    isFileImporterPresented = true
-                } label: {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Choose a file")
-                if !localAttachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 5) {
-                            ForEach(localAttachments) { attachment in
-                                attachmentChip(attachment)
-                            }
+            Button {
+                isFileImporterPresented = true
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .disabled(!attachmentsSupported)
+            .accessibilityLabel("Choose a file")
+            if !localAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        ForEach(localAttachments) { attachment in
+                            attachmentChip(attachment)
                         }
                     }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 2)
-#if os(iOS)
-            .onChange(of: photoItems) { _, items in
-                loadPhotos(items)
-            }
-#endif
-            .fileImporter(
-                isPresented: $isFileImporterPresented,
-                allowedContentTypes: [.item],
-                allowsMultipleSelection: true,
-                onCompletion: handleFileImporter
-            )
         }
+        .opacity(attachmentsSupported ? 1 : 0.42)
+        .accessibilityValue(attachmentsSupported ? "Available" : "Unavailable on this Host")
+        .padding(.horizontal, 18)
+        .padding(.bottom, 2)
+#if os(iOS)
+        .onChange(of: photoItems) { _, items in
+            loadPhotos(items)
+        }
+#endif
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: handleFileImporter
+        )
     }
 
     private func attachmentChip(_ attachment: IOSAgentLocalAttachment) -> some View {
@@ -825,6 +865,47 @@ public struct AgentChatView: View {
         guard let session = model.roster?.sessions.first(where: { $0.id == sessionID }),
               session.isAgentBacked else { return nil }
         return model.agentStatusBySessionID[sessionID] ?? session.agentStatus
+    }
+
+    /// The composer keeps provider metadata to one quiet line. Session name,
+    /// mode, and control state belong to the surrounding navigation chrome and
+    /// are intentionally not repeated beside the input.
+    private var agentComposerMetadata: String? {
+        let type = agentTypeLabel
+        let modelName = model.agentModel(for: sessionID)
+        let values = [type, modelName].compactMap { value -> String? in
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return values.isEmpty ? nil : values.joined(separator: " · ")
+    }
+
+    private var agentTypeLabel: String? {
+        guard let session = model.roster?.sessions.first(where: { $0.id == sessionID }) else { return nil }
+        let raw = session.kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, raw.lowercased() != "shell" else { return nil }
+        switch raw.lowercased() {
+        case "codex": return "Codex"
+        case "claude", "claude-code": return "Claude"
+        case "opencode", "open-code": return "OpenCode"
+        default: return raw.replacingOccurrences(of: "-", with: " ").capitalized
+        }
+    }
+
+    private var latestUserEventKey: String? {
+        agentState.agentEventsBySessionID[sessionID]?
+            .last(where: \.isUserEvent)
+            .map { "\($0.sequence):\($0.id)" }
+    }
+
+    private var shouldShowWorking: Bool {
+        guard agentStatus?.activity == .working else { return false }
+        guard let last = (agentState.agentEventsBySessionID[sessionID] ?? [])
+            .last(where: { !$0.isHiddenFromMobile }) else { return true }
+        // A completed assistant message is the stronger visual signal. A Host
+        // may publish a trailing working status while that event settles.
+        return !(last.isAssistantEvent && !(last.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
     }
 
     private var canSend: Bool {
@@ -1057,6 +1138,56 @@ private struct AgentAttentionBanner: View {
         case .approval: return IOSTheme.amber
         case .warning, .unknown: return IOSTheme.yellow
         }
+    }
+}
+
+private struct AgentWorkingFooter: View {
+    let phrase: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            IOSAgentActivityMark(activity: .working, slotSize: 16)
+                .accessibilityHidden(true)
+            IOSShimmerText(phrase, color: IOSTheme.accent, font: IOSTypography.working)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 7)
+        .background(IOSTheme.background)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(IOSTheme.separator.opacity(0.45))
+                .frame(height: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent working: \(phrase)")
+    }
+}
+
+private enum AgentWorkingPhrases {
+    static let defaultPhrase = "Fermenting…"
+    static let all: [String] = [
+        "Fermenting…",
+        "Fiddle-faddling…",
+        "Booping…",
+        "Pondering…",
+        "Whirring…",
+        "Tinkering…",
+        "Conjuring…",
+        "Mulling…",
+        "Warming up…",
+        "Plotting…",
+        "Wiggling…",
+        "Riffing…",
+        "Hatching…",
+        "Stirring…",
+        "Percolating…",
+        "Polishing…",
+    ]
+
+    static func random(excluding current: String) -> String {
+        let candidates = all.filter { $0 != current }
+        return (candidates.isEmpty ? all : candidates).randomElement() ?? defaultPhrase
     }
 }
 
@@ -1398,11 +1529,19 @@ private extension WarrenRemoteAgentEvent {
 private func displayBlockView(
     _ block: AgentDisplayBlock,
     canInteract: Bool,
+    isLastUser: Bool = false,
+    onEditResend: @escaping (String) -> Void = { _ in },
     onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 ) -> some View {
     switch block {
     case .event(let event):
-        AgentEventBlock(event: event, canInteract: canInteract, onInteraction: onInteraction)
+        AgentEventBlock(
+            event: event,
+            canInteract: canInteract,
+            isLastUser: isLastUser,
+            onEditResend: onEditResend,
+            onInteraction: onInteraction
+        )
     case .activity(let activity):
         AgentActivityGroupBlock(activity: activity)
     }
@@ -1411,15 +1550,21 @@ private func displayBlockView(
 private struct AgentEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
+    let isLastUser: Bool
+    let onEditResend: (String) -> Void
     let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 
     init(
         event: WarrenRemoteAgentEvent,
         canInteract: Bool = false,
+        isLastUser: Bool = false,
+        onEditResend: @escaping (String) -> Void = { _ in },
         onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never> = { _, _, _ in Task { true } }
     ) {
         self.event = event
         self.canInteract = canInteract
+        self.isLastUser = isLastUser
+        self.onEditResend = onEditResend
         self.onInteraction = onInteraction
     }
 
@@ -1439,6 +1584,12 @@ private struct AgentEventBlock: View {
                             bottomTrailingRadius: 16,
                             topTrailingRadius: 5
                         ))
+                    AgentMessageActions(
+                        event: event,
+                        isLastUser: isLastUser,
+                        alignment: .trailing,
+                        onEditResend: onEditResend
+                    )
                 }
                 .frame(maxWidth: 420, alignment: .trailing)
             }
@@ -1472,8 +1623,17 @@ private struct AgentEventBlock: View {
                 contentFont: IOSTypography.metadata
             )
         } else {
-            eventBody
-                .padding(.vertical, 7)
+            VStack(alignment: .leading, spacing: 3) {
+                eventBody
+                if event.isAssistantEvent {
+                    AgentMessageActions(
+                        event: event,
+                        alignment: .leading,
+                        onEditResend: onEditResend
+                    )
+                }
+            }
+            .padding(.vertical, 7)
         }
         }
 #if canImport(UIKit)
@@ -1531,6 +1691,46 @@ private struct AgentEventBlock: View {
         }
     }
 
+}
+
+private struct AgentMessageActions: View {
+    let event: WarrenRemoteAgentEvent
+    var isLastUser = false
+    let alignment: Alignment
+    let onEditResend: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+#if canImport(UIKit)
+            if let text = IOSAgentMessageActions.copyableText(for: event) {
+                Button {
+                    UIPasteboard.general.string = text
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy message")
+                .frame(width: 28, height: 28)
+            }
+#endif
+            if isLastUser,
+               let text = IOSAgentMessageActions.copyableText(for: event) {
+                Button {
+                    onEditResend(text)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit and resend message")
+                .frame(width: 28, height: 28)
+            }
+        }
+        .foregroundStyle(IOSTheme.tertiaryText)
+        .frame(maxWidth: .infinity, alignment: alignment)
+        .accessibilityElement(children: .contain)
+    }
 }
 
 private struct AgentStructuredEventBlock: View {
