@@ -127,38 +127,33 @@ warren session read SESSION_ID --timeout 8s
 
 ### Owned Relay
 
-The daemon token is the single Host Secret for an owned Relay. Create a Host
-record on Relay, enroll the existing `~/.warren/token` with its one-time ticket,
-then save the non-secret Relay settings (`url`, `hostID`, and the pinned Relay
-signing key) through `PUT /v1/settings` or `settings.put`. The CLI enrollment
-command performs that persistence and enables the supervised connector:
+The daemon token is the Host Secret for an enrolled Relay Host. A Relay
+Administrator creates the Host record and gives the operator the canonical
+one-time setup link. Open that link in Warren Desktop; the local daemon
+consumes the invitation, persists only non-secret Relay metadata, and starts
+the supervised connector. The CLI has the same client-side path and never
+receives a Relay Administrator token or a Host Secret:
 
 ```sh
-warren relay enroll --url https://relay.example.com --host HOST_ID \
-  --ticket ENROLLMENT_TICKET --secret "$(cat ~/.warren/token)"
+warren relay connect 'warren://settings?...'
 ```
 
-Warren Desktop exposes the same non-secret Relay settings under Settings →
-Relay, including the current enrollment, connection toggle, URL edits,
-re-registration with a new one-time ticket, and local enrollment reset.
+When a managed deployment supplies a default Relay endpoint, Warren can start
+the connector automatically after enrollment. A default URL alone cannot
+enroll an unknown Host; the Relay still has to issue an invitation or use a
+managed device identity.
 
 Set `relay.enabled` (and, for an application route, `publicTunnel.enabled`) to
 start the supervised connector. It opens one outbound WSS connection and
 multiplexes private control, HTTP, and WebSocket Upgrade streams using BRLY/2;
 the connector dispatches those streams to the in-process Headless handler and
 never assumes port `8789`. A Relay disconnect or restart does not stop local
-Sessions or PTYs. `warren relay register` combines Host creation and enrollment;
-with `--share`, it waits briefly for the local daemon to come online before
-printing the link. `warren relay share` creates a seven-day-by-default opaque
-`/invite/<opaque>/` link and can write a QR image; the link is reusable by
-multiple devices until it expires. The Desktop Relay settings page exposes the
-same action as **Share with iPhone**; the daemon keeps the Host Secret and
-pairing code internal and returns only the share link and expiry metadata.
-`warren relay pairing`, `pair`, `status`, `tunnel enable|disable`, and `revoke`
-expose the corresponding explicit Relay operations. Use a Host Secret or admin
-token for management operations; a configured Relay endpoint's short-lived
-access token is read-only. Local, SSH, and Relay endpoints remain available as
-independent reachability options.
+Sessions or PTYs. `warren relay share --qr` asks the selected local Host for a
+seven-day-by-default opaque `/invite/<opaque>/` link and writes a QR image;
+the link is reusable by multiple devices until it expires. The Desktop Relay
+settings page exposes the same action as **Share with iPhone** and presents
+the QR automatically. Pairing codes, Host provisioning, revocation, and route
+mutation remain service-owned operations rather than Warren CLI concepts.
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
 and error messages keep the command name you typed instead of rewriting it to
@@ -421,10 +416,11 @@ through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
 
 Owned Relay enrollment is a separate lifecycle from Public Access. A Relay
-admin can open the canonical `settings_url` returned by
-`POST /v1/hosts` in Warren Desktop; the link carries only the Relay URL, Host
-UUID, pinned signing key, and one-time enrollment ticket. A local client may
-also `POST /v1/relay/enroll` with the Relay URL, Host UUID, and ticket while
+administrator creates a Host record and gives its operator the canonical
+`settings_url` returned by `POST /v1/hosts`; the operator opens it in Warren
+Desktop. The link carries only the Relay URL, Host UUID, pinned signing key,
+and one-time enrollment ticket. A local client may also `POST /v1/relay/enroll`
+with the Relay URL, Host UUID, and ticket while
 authenticating with the daemon token. Headless sends that canonical token to
 Relay, validates and pins the returned signing key, and persists only Relay
 metadata. The request body and settings never accept or store a second Relay

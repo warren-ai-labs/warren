@@ -18,8 +18,9 @@ product model.
 
 ## Host enrollment
 
-An administrator creates a Host record and receives a one-time enrollment
-ticket. `warren relay enroll` sends the existing daemon token once over HTTPS:
+An administrator creates a Host record and gives its operator a canonical
+one-time setup link. Warren Desktop (or `warren relay connect`) sends the
+existing daemon token through the local Headless daemon once over HTTPS:
 
 ```text
 POST /v1/hosts/{hostID}/enroll
@@ -78,34 +79,28 @@ restart reconnects the single Relay connector and retries the route. Reset
 disables the route and clears local route metadata without deleting Host
 enrollment.
 
-## CLI contract
+## Client-facing commands
 
-The CLI keeps enrollment, pairing, route lifecycle, and revocation separate:
+Warren exposes only the two operations a Host operator needs:
 
 ```text
-warren relay enroll --url RELAY_URL --host HOST_ID --ticket TICKET --secret HOST_SECRET
-warren relay pairing --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
-warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE [--qr [PATH]] [--open]
-warren relay register --url RELAY_URL --admin-token ADMIN_TOKEN [--share] [--qr [PATH]]
-warren relay share --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET [--qr [PATH]]
-warren relay status --url RELAY_URL --host HOST_ID --token ACCESS_TOKEN
-warren relay tunnel enable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET \
-  [--auth-mode owner|public] [--public-hostname HOSTNAME] [--path-prefix PREFIX]
-warren relay tunnel disable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
-warren relay revoke --url RELAY_URL --host HOST_ID --admin-token ADMIN_TOKEN
+warren relay connect [SETUP_URL] [--share] [--qr [PATH]] [--open]
+warren relay register [SETUP_URL] [--share] [--qr [PATH]] [--open]
+warren relay share [--qr [PATH]] [--open]
 ```
 
-`--token` remains a compatibility alias when supplied explicitly on a
-management command. A configured Relay endpoint stores only its short-lived
-`ACCESS_TOKEN`; that value is never inferred as a Host Secret or admin token.
+The setup URL is issued by the Relay Administrator. Warren consumes it through
+the selected local Headless daemon, which supplies the Host Secret and starts
+the outbound connector. `relay register` is a compatibility alias for
+`relay connect`; neither command creates a Host record or accepts a Relay
+administrator token.
 
-`relay register` creates and enrolls a Host in one step. `relay share` creates
-the opaque client-facing link and can write a QR image. `relay pair` performs
-only the exchange step and prints the same safe link fields; neither command
-prints the short-lived access capability. The link is reusable by multiple
-devices until the sharing window expires; generating a new pairing code rotates
-the old link. Host re-enrollment and revocation invalidate all existing pairing
-invites.
+`relay share` asks the local daemon for an opaque client-facing link and can
+write a QR image. The daemon performs the pairing-code exchange internally and
+returns no access capability or Host Secret. Pairing-code exchange, Host
+provisioning, route mutation, and revocation remain Relay service operations,
+not Warren client commands. The link is reusable by multiple devices until
+the sharing window expires; generating a new pairing window rotates old links.
 
 `warren endpoint add NAME --type relay --url RELAY_URL --token ACCESS_TOKEN
 --host-id HOST_ID` stores a Relay endpoint. Resource commands detect that type

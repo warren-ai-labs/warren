@@ -179,11 +179,15 @@ warren://settings?section=public-access
 
 The Relay provisioning response includes a one-time Warren setup link with the
 Relay URL, Host ID, enrollment ticket, and pinned Relay signing key. Open it in
-Warren Desktop to prefill the Relay enrollment fields, or pass the same values
-to `warren relay enroll`:
+Warren Desktop to connect the local Host automatically, or pass the same link
+to the client-side shortcut:
 
 ```text
 warren://settings?section=relay&relayUrl=<RELAY_URL>&hostId=<HOST_ID>&enrollmentTicket=<TICKET>&relayKeyId=<KEY_ID>&relayPublicKey=<PUBLIC_KEY>
+```
+
+```sh
+warren relay connect '<settings-url>'
 ```
 
 Because this link contains a one-time enrollment ticket, treat it like a
