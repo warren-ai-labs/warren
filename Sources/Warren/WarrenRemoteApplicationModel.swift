@@ -2561,6 +2561,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 "id": taskID.description,
                 "workspace": workspaceID.description,
             ])
+        case .deleteTask(let id):
+            request("task.remove", params: ["id": id.description])
         case .deleteProject(let id):
             deleteProject(id)
         case .deleteWorkspace(let id, let removeLocalWorktree):
@@ -4269,7 +4271,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private static func tabID(_ id: TerminalSessionID) -> String { "remote-\(id.description)" }
 }
 
-private extension WarrenDesktopProjection {
+extension WarrenDesktopProjection {
     func reorderingTabs(tabID: String, accordingTo orderedIDs: [String]) -> Self {
         let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var orderedTabs = orderedIDs.compactMap { tabsByID[$0] }.makeIterator()
@@ -4282,6 +4284,7 @@ private extension WarrenDesktopProjection {
         return Self(
             host: host,
             groups: groups,
+            tasks: taskGroups.map(\.task),
             sessions: sessions,
             tabs: reorderedTabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,

@@ -1246,6 +1246,27 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testTaskDeletionIntentCarriesTaskIdentity() {
+        let taskID = TaskID()
+
+        guard case .deleteTask(let receivedID) = WarrenDesktopAction.deleteTask(taskID) else {
+            return XCTFail("Expected a task deletion action")
+        }
+
+        XCTAssertEqual(receivedID, taskID)
+    }
+
+    func testTaskDeletionRequestCarriesTaskMetadata() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+
+        guard case .task(let receivedTask) = WarrenDesktopDeletionRequest.task(task) else {
+            return XCTFail("Expected a task deletion request")
+        }
+
+        XCTAssertEqual(receivedTask, task)
+    }
+
     @MainActor
     func testProjectWorkspaceRowsIdentifyTheirTaskWithoutDuplicatingTaskRows() throws {
         let host = WarrenDomain.Host(name: "Task Host")
@@ -1283,6 +1304,7 @@ final class WarrenDesktopTests: XCTestCase {
             selection: nil,
             deletingProjectIDs: [],
             deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
             isInteractionDisabled: false,
             onAddProject: {},
             onRequestTaskCreate: {},
