@@ -74,6 +74,73 @@ func TestCreateWorkspaceWithoutTaskKeepsExistingBehavior(t *testing.T) {
 	}
 }
 
+func TestCreateTaskWorkspaceRunsConfiguredSetupScriptWithWorkspaceContext(t *testing.T) {
+	service := newTaskWorkspaceService(t)
+	project := addTaskWorkspaceProject(t, service, filepath.Join(t.TempDir(), "repository"))
+	script := filepath.Join(project.Path, "setup.script")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" \"$3\" \"$WARREN_PROJECT_PATH\" \"$WARREN_WORKSPACE_PATH\" \"$WARREN_WORKSPACE_BRANCH\" \"$PWD\" > setup-output.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := service.SetProjectSetupScript(project.ID, "setup.script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.SetupScript != "setup.script" {
+		t.Fatalf("setup script = %q, want relative path", configured.SetupScript)
+	}
+
+	result, err := service.CreateTaskWorkspaceWithSetup(
+		project.ID, "", "feature/setup", "Setup", "", "", true,
+		[]string{"custom value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.ReadFile(filepath.Join(result.Path, "setup-output.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedWorkspacePath, err := filepath.EvalSymlinks(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) != 7 {
+		t.Fatalf("setup output = %q, want seven lines", output)
+	}
+	if lines[0] != project.Path || lines[1] != result.Path || lines[2] != "custom value" {
+		t.Fatalf("setup positional arguments = %#v", lines[:3])
+	}
+	if lines[3] != project.Path || lines[4] != result.Path || lines[5] != "feature/setup" || lines[6] != resolvedWorkspacePath {
+		t.Fatalf("setup context = %#v", lines[3:])
+	}
+}
+
+func TestCreateTaskWorkspaceRollsBackWhenSetupScriptFails(t *testing.T) {
+	service := newTaskWorkspaceService(t)
+	project := addTaskWorkspaceProject(t, service, filepath.Join(t.TempDir(), "repository"))
+	script := filepath.Join(project.Path, "setup.script")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 17\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetProjectSetupScript(project.ID, script); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.CreateTaskWorkspaceWithSetup(
+		project.ID, "", "feature/setup-failure", "", "", "", true, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "setup script failed") {
+		t.Fatalf("error = %v, want setup script failure", err)
+	}
+	if result.Created || len(service.Store.Snapshot().Workspaces) != 1 {
+		t.Fatalf("workspace result/state after setup failure = %#v / %#v", result, service.Store.Snapshot().Workspaces)
+	}
+	if got := taskWorkspaceBranchExists(project.Path, "feature/setup-failure"); got {
+		t.Fatal("setup failure left the created branch behind")
+	}
+}
+
 func TestCreateWorkspaceWithRequestIDSurvivesRestartWithoutRepeatingCreation(t *testing.T) {
 	directory := t.TempDir()
 	statePath := filepath.Join(directory, "state.json")

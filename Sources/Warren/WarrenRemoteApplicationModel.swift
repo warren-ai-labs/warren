@@ -78,6 +78,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let id: String
         let name: String
         let path: String
+        let setupScript: String?
         let autoImportGitWorktrees: Bool?
         let pinned: Bool?
     }
@@ -570,9 +571,15 @@ enum WarrenRemoteWorkspaceProtocol {
             "name": creation.displayName,
             "path": creation.path,
             "requestId": creation.requestID.uuidString.lowercased(),
+            "runSetupScript": creation.runSetupScript ? "true" : "false",
         ]
         if let taskID {
             params["task"] = taskID.description
+        }
+        if !creation.setupArguments.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: creation.setupArguments),
+           let value = String(data: data, encoding: .utf8) {
+            params["setupArgs"] = value
         }
         return params
     }
@@ -1513,6 +1520,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         request("project.autoImportGitWorktrees", params: [
             "project": projectID.description,
             "enabled": enabled ? "true" : "false",
+        ])
+    }
+
+    func setProjectSetupScript(_ projectID: ProjectID, script: String) {
+        request("project.setupScript", params: [
+            "project": projectID.description,
+            "script": script.trimmingCharacters(in: .whitespacesAndNewlines),
         ])
     }
 
@@ -2626,6 +2640,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .moveSession(let id, let destination):
             moveSession(id, to: destination)
         case .importSuperset, .requestNewWorkspace, .requestProjectWorktreeImport,
+             .requestProjectSetupScript,
              .setProjectAutoImportGitWorktrees, .requestNewSession,
              .toggleSidebar:
             break
@@ -3533,6 +3548,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 hostID: hostID,
                 name: value.name,
                 rootPath: value.path,
+                setupScript: value.setupScript,
                 autoImportGitWorktrees: value.autoImportGitWorktrees ?? false,
                 pinned: value.pinned ?? false
             )

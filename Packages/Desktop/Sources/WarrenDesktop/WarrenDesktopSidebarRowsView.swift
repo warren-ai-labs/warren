@@ -549,6 +549,9 @@ struct WarrenDesktopSidebarRows: View {
                 onImportWorktrees: {
                     onAction(.requestProjectWorktreeImport(group.project.id))
                 },
+                onConfigureSetupScript: {
+                    onAction(.requestProjectSetupScript(group.project.id))
+                },
                 onToggleAutoImportWorktrees: {
                     onAction(.setProjectAutoImportGitWorktrees(
                         group.project.id,

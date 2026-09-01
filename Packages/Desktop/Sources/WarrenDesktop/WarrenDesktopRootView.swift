@@ -50,6 +50,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetAutoOpenShell: (Bool) -> Void
     private let autoStartAI: Bool
     private let onSetAutoStartAI: (Bool) -> Void
+    private let onSetProjectSetupScript: (ProjectID, String) -> Void
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -134,6 +135,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSetAutoOpenShell: @escaping (Bool) -> Void = { _ in },
         autoStartAI: Bool = false,
         onSetAutoStartAI: @escaping (Bool) -> Void = { _ in },
+        onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
@@ -179,6 +181,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onSetAutoOpenShell = onSetAutoOpenShell
         self.autoStartAI = autoStartAI
         self.onSetAutoStartAI = onSetAutoStartAI
+        self.onSetProjectSetupScript = onSetProjectSetupScript
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
@@ -738,6 +741,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onSetAutoOpenShell: onSetAutoOpenShell,
                 autoStartAI: autoStartAI,
                 onSetAutoStartAI: onSetAutoStartAI,
+                projects: projection.groups.map(\.project),
+                onSetProjectSetupScript: onSetProjectSetupScript,
                 initialSettingsSection: settingsDeepLinkSection,
                 publicAccessPrefill: settingsPublicAccessPrefill
             )

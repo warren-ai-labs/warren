@@ -185,6 +185,7 @@ public enum WarrenDesktopNavigationReducer {
             return reconcile(restoredState, with: projection)
         case .addProject, .importSuperset, .requestNewWorkspace,
              .requestProjectWorktreeImport, .setProjectAutoImportGitWorktrees,
+             .requestProjectSetupScript,
              .renameProject, .renameWorkspace, .deleteProject, .deleteWorkspace,
              .attachWorkspaceToTask, .detachWorkspaceFromTask, .deleteTask,
              .renameSession,

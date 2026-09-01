@@ -5,12 +5,16 @@ struct WorkspaceCreationRequest: Hashable, Sendable {
     let displayName: String
     let branch: String
     let path: String
+    let runSetupScript: Bool
+    let setupArguments: [String]
 
     init(
         requestID: UUID = UUID(),
         displayName: String? = nil,
         branch: String,
-        path: String = ""
+        path: String = "",
+        runSetupScript: Bool = false,
+        setupArguments: [String] = []
     ) {
         self.requestID = requestID
         let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -18,5 +22,7 @@ struct WorkspaceCreationRequest: Hashable, Sendable {
         self.displayName = normalizedName?.isEmpty == false ? normalizedName! : normalizedBranch
         self.branch = normalizedBranch
         self.path = path
+        self.runSetupScript = runSetupScript
+        self.setupArguments = setupArguments
     }
 }

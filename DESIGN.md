@@ -253,6 +253,17 @@ Constraints:
   migrates Sessions between engines.
 - Sidebar order is normalized within each Host.
 - Output positions are monotonic per Session and drive recovery anchors.
+- A Project may configure one executable setup script for newly created managed
+  Git worktrees. The user explicitly chooses whether to run it for each
+  workspace creation; imported and root Workspaces never run it.
+- Setup scripts run with the new worktree as their working directory. The
+  first two argv values are the main repository path and worktree path;
+  user-provided values follow unchanged. Warren also passes the inherited
+  environment plus `WARREN_PROJECT_*`, `WARREN_WORKSPACE_*`,
+  `WARREN_MAIN_REPO_PATH`, and `WARREN_WORKTREE_PATH` metadata.
+- A setup failure rolls back the newly created managed worktree and branch and
+  leaves no Warren Workspace record. Side effects outside that worktree are
+  owned by the script and cannot be rolled back by Warren.
 
 State schema 2 introduces Tasks and optional Workspace membership. The Host
 automatically migrates schema 1 and immediately persists schema 2. Future or
@@ -400,6 +411,9 @@ Behavior requirements:
 - Attaching and detaching a Workspace is explicit. Deleting a Task leaves its Workspaces and Sessions reachable under Projects.
 - Projects are collapsed by default; Workspaces appear only after explicit expansion, and newly added Projects are collapsed by default.
 - Besides a dedicated add button, the whole Project row is the expand/collapse hot zone; expanding does not implicitly create a Session.
+- A Project context menu and the Settings Workspaces page configure its setup
+  script. The new-workspace dialog shows the configured script, lets the user
+  opt in or out for that creation, and accepts one custom argv value per line.
 - The whole Workspace row is the hot zone for selecting and entering a Session; no small, easy-to-misclick add buttons remain.
 - The Terminal Groups section appears above Projects, has a fixed height of at most three rows, and scrolls internally when more Groups exist.
 - Each Terminal Group row shows the Group identity and aggregate Session state; individual Group Sessions appear in the context-scoped Tab Bar.

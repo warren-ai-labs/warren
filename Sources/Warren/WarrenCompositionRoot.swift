@@ -32,6 +32,8 @@ struct WarrenCompositionRoot: View {
     @State private var supersetImportPreview: SupersetImportPreview?
     @State private var isSupersetImporting = false
     @State private var workspaceCreatorContext: WarrenWorkspaceCreatorContext?
+    @State private var setupScriptProjectID: ProjectID?
+    @State private var setupScriptValue = ""
     @State private var worktreeImportProjectID: ProjectID?
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
@@ -128,6 +130,9 @@ struct WarrenCompositionRoot: View {
             onSetAutoOpenShell: { remoteModel.setAutoOpenShell($0) },
             autoStartAI: remoteModel.autoStartAI,
             onSetAutoStartAI: { remoteModel.setAutoStartAI($0) },
+            onSetProjectSetupScript: { projectID, script in
+                remoteModel.setProjectSetupScript(projectID, script: script)
+            },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
@@ -330,6 +335,20 @@ struct WarrenCompositionRoot: View {
             .zIndex(WarrenPresentationLayer.modal)
             .onAppear { presentation.present(.modal) }
             .onDisappear { presentation.dismissTop() }
+        } else if let projectID = setupScriptProjectID,
+                  let project = activeProjection.projectGroup(id: projectID)?.project {
+            WarrenSetupScriptEditorView(
+                project: project,
+                value: $setupScriptValue,
+                onCancel: { setupScriptProjectID = nil },
+                onSave: {
+                    remoteModel.setProjectSetupScript(projectID, script: setupScriptValue)
+                    setupScriptProjectID = nil
+                }
+            )
+            .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.modal) }
+            .onDisappear { presentation.dismissTop() }
         } else if let projectID = worktreeImportProjectID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenSheetSurface {
@@ -377,6 +396,10 @@ struct WarrenCompositionRoot: View {
                 projectID: projectID,
                 taskID: taskID
             )
+        } else if case .requestProjectSetupScript(let projectID) = action {
+            guard let project = activeProjection.projectGroup(id: projectID)?.project else { return }
+            setupScriptValue = project.setupScript ?? ""
+            setupScriptProjectID = projectID
         } else if case .requestProjectWorktreeImport(let projectID) = action {
             presentWorktreeImport(for: projectID)
         } else if case .setProjectAutoImportGitWorktrees(let projectID, let enabled) = action {
