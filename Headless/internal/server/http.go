@@ -53,9 +53,12 @@ type HTTPServer struct {
 	// RelayRouteClient creates an authenticated client for the Relay route API.
 	// Route lifecycle uses the same Host Secret as the BRLY/2 connector.
 	RelayRouteClient func() (*relay.RouteClient, error)
-	BuildVersion     string
-	BuildRevision    string
-	BuildDirty       bool
+	// RelayPairing creates a safe client-facing invite. The callback owns the
+	// Host Secret and returns only an opaque URL plus its expiry metadata.
+	RelayPairing  func(context.Context) (relay.PairingResult, error)
+	BuildVersion  string
+	BuildRevision string
+	BuildDirty    bool
 	// GhostlineVersion is the legacy health field and aliases the RPC version.
 	GhostlineVersion string
 	// GhostlineRPCVersion is the protocol version reported by the running
@@ -199,6 +202,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
 	mux.HandleFunc("POST /v1/relay/enroll", s.handleRelayEnroll)
+	mux.HandleFunc("POST /v1/relay/pairing", s.handleRelayPairing)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /v1/runtime/refresh", s.handleRuntimeRefresh)
 	mux.HandleFunc("GET /v1/public-access", s.handlePublicAccess)
@@ -318,6 +322,29 @@ func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http
 		"relay":        value,
 		"relay_key_id": value.RelayKeyID,
 	})
+}
+
+// handleRelayPairing is the local, token-protected entry point used by
+// automation and older clients. Desktop normally reaches the same operation
+// through the authenticated WebSocket RPC below.
+func (s *HTTPServer) handleRelayPairing(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.RelayPairing == nil {
+		http.Error(writer, "Relay pairing is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	value, err := s.RelayPairing(request.Context())
+	if err != nil {
+		http.Error(writer, "Relay pairing failed", http.StatusBadGateway)
+		return
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(value)
 }
 
 func normalizeRelayEnrollmentURL(raw string) (string, error) {
@@ -1880,6 +1907,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: publicSession(session), Snapshot: snapshot})
+	case "relay.pairing":
+		if p.server.RelayPairing == nil {
+			return errors.New("Relay pairing is unavailable")
+		}
+		value, err := p.server.RelayPairing(ctx)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "settings.get":
 		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{

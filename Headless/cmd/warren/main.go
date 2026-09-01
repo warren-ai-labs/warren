@@ -194,7 +194,7 @@ func relayCommand(args []string) error {
 		if hostID == "" || code == "" {
 			return newUsageError("--host and --code are required", relayUsageText())
 		}
-		return relayRequest(http.MethodPost, base+"/v1/pair", "", map[string]any{"host_id": hostID, "pairing_code": code})
+		return relayPair(base, hostID, code, flags)
 	case "pairing", "begin-pairing":
 		credential, credentialErr := relayManagementCredential(flags, true)
 		if credentialErr != nil {
@@ -289,7 +289,7 @@ func validateRelayFlags(command string, flags map[string]any) error {
 	case "enroll":
 		allowed["ticket"], allowed["secret"] = true, true
 	case "pair":
-		allowed["code"] = true
+		allowed["code"], allowed["qr"], allowed["open"] = true, true, true
 	case "pairing", "begin-pairing", "status", "revoke":
 		allowed["token"] = true
 		allowed["host-secret"], allowed["admin-token"] = true, true
@@ -502,7 +502,10 @@ func relayShare(base, hostID, credential string, flags map[string]any) error {
 	if !ok {
 		return errors.New("Relay pairing exchange returned an invalid response")
 	}
-	link := strings.TrimSpace(stringValueAny(paired, "web_url"))
+	link := strings.TrimSpace(stringValueAny(paired, "pairing_url"))
+	if link == "" {
+		link = strings.TrimSpace(stringValueAny(paired, "web_url"))
+	}
 	if link == "" {
 		return errors.New("Relay pairing exchange did not return a link")
 	}
@@ -510,11 +513,49 @@ func relayShare(base, hostID, credential string, flags map[string]any) error {
 	if expiresIn <= 0 {
 		expiresIn = intValueAny(pairing, "expires_in")
 	}
+	return printRelayPairingResult(link, expiresIn, strings.TrimSpace(stringValueAny(paired, "pairing_expires_at")), flags)
+}
+
+// relayPair exchanges an already-created pairing code while keeping the
+// short-lived access capability and bearer ticket out of normal CLI output.
+// Users who only need a link should prefer `relay share`, but this command is
+// useful when the two Relay API calls are scripted separately.
+func relayPair(base, hostID, code string, flags map[string]any) error {
+	value, err := doRelayRequest(
+		http.MethodPost,
+		base+"/v1/pair",
+		"",
+		map[string]any{"host_id": hostID, "pairing_code": code},
+	)
+	if err != nil {
+		return err
+	}
+	paired, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("Relay pairing exchange returned an invalid response")
+	}
+	link := strings.TrimSpace(stringValueAny(paired, "pairing_url"))
+	if link == "" {
+		link = strings.TrimSpace(stringValueAny(paired, "web_url"))
+	}
+	if link == "" {
+		return errors.New("Relay pairing exchange did not return a link")
+	}
+	expiresIn := intValueAny(paired, "pairing_expires_in")
+	if expiresIn <= 0 {
+		expiresIn = intValueAny(paired, "expires_in")
+	}
+	return printRelayPairingResult(link, expiresIn, strings.TrimSpace(stringValueAny(paired, "pairing_expires_at")), flags)
+}
+
+func printRelayPairingResult(link string, expiresIn int, expiresAt string, flags map[string]any) error {
 	result := map[string]any{
-		"host_id":     hostID,
 		"pairing_url": link,
 		"expires_in":  expiresIn,
 		"reusable":    true,
+	}
+	if expiresAt != "" {
+		result["expires_at"] = expiresAt
 	}
 	if qr, requested := relayQRPath(flags); requested {
 		if err := writeRelayQRCode(qr, link); err != nil {

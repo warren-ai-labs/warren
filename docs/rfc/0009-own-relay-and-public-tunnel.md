@@ -37,8 +37,11 @@ An administrator or the enrolled Host starts pairing with
 `POST /v1/hosts/{hostID}/pairing`. The pairing code remains valid for the
 configured sharing window (seven days by default) and can be exchanged more
 than once by `POST /v1/pair`. Each exchange returns a short-lived
-`access_token` and a reusable browser `pairing_ticket`. Native CLI clients use the capability at
-`/h/{hostID}/v1/client/connect` (or the unscoped equivalent) and send:
+`access_token` and an opaque reusable invite URL at `/invite/<opaque>/`. The
+invite hash is persisted, so a Relay restart does not invalidate the link after
+the Host reconnects. Browser and iOS clients exchange the invite and receive
+the Host ID in the response; they keep that identity in memory and then use the
+Host-scoped WebSocket path `/h/{hostID}/v1/client/connect`:
 
 ```json
 {
@@ -82,7 +85,7 @@ The CLI keeps enrollment, pairing, route lifecycle, and revocation separate:
 ```text
 warren relay enroll --url RELAY_URL --host HOST_ID --ticket TICKET --secret HOST_SECRET
 warren relay pairing --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
-warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE
+warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE [--qr [PATH]] [--open]
 warren relay register --url RELAY_URL --admin-token ADMIN_TOKEN [--share] [--qr [PATH]]
 warren relay share --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET [--qr [PATH]]
 warren relay status --url RELAY_URL --host HOST_ID --token ACCESS_TOKEN
@@ -97,10 +100,12 @@ management command. A configured Relay endpoint stores only its short-lived
 `ACCESS_TOKEN`; that value is never inferred as a Host Secret or admin token.
 
 `relay register` creates and enrolls a Host in one step. `relay share` creates
-the client-facing link and can write a QR image. The link is reusable by
-multiple devices until the sharing window expires; generating a new pairing
-code rotates the old link. Host re-enrollment and revocation invalidate all
-existing pairing tickets.
+the opaque client-facing link and can write a QR image. `relay pair` performs
+only the exchange step and prints the same safe link fields; neither command
+prints the short-lived access capability. The link is reusable by multiple
+devices until the sharing window expires; generating a new pairing code rotates
+the old link. Host re-enrollment and revocation invalidate all existing pairing
+invites.
 
 `warren endpoint add NAME --type relay --url RELAY_URL --token ACCESS_TOKEN
 --host-id HOST_ID` stores a Relay endpoint. Resource commands detect that type

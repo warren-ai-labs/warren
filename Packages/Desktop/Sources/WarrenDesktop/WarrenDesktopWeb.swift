@@ -51,6 +51,21 @@ public struct WarrenDesktopRelaySettings: Hashable, Sendable {
     }
 }
 
+/// A safe client-facing Relay invite produced by the local Host daemon. The
+/// URL contains no Host ID or access capability; those are resolved by Relay
+/// only after the recipient opens the invite.
+public struct WarrenDesktopRelayInvite: Hashable, Sendable {
+    public let url: URL
+    public let expiresAt: Date?
+    public let expiresIn: Int
+
+    public init(url: URL, expiresAt: Date? = nil, expiresIn: Int = 0) {
+        self.url = url
+        self.expiresAt = expiresAt
+        self.expiresIn = expiresIn
+    }
+}
+
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var isRunning: Bool
     public var localURL: URL?

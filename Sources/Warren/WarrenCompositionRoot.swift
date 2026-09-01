@@ -143,6 +143,9 @@ struct WarrenCompositionRoot: View {
                     completion: completion
                 )
             },
+            onRelayPairing: { completion in
+                remoteModel.createRelayInvite(completion: completion)
+            },
             relaySettings: remoteModel.relaySettings,
             onSetRelaySettings: { value, completion in
                 remoteModel.setRelaySettings(value, completion: completion)

@@ -149,13 +149,16 @@ the connector dispatches those streams to the in-process Headless handler and
 never assumes port `8789`. A Relay disconnect or restart does not stop local
 Sessions or PTYs. `warren relay register` combines Host creation and enrollment;
 with `--share`, it waits briefly for the local daemon to come online before
-printing the link. `warren relay share` creates a seven-day-by-default pairing
-link and can write a QR image; the link is reusable by multiple devices until it
-expires. `warren relay pairing`, `pair`, `status`, `tunnel enable|disable`, and `revoke` expose
-the corresponding explicit Relay operations. Use a Host
-Secret or admin token for management operations; a configured Relay endpoint's
-short-lived access token is read-only. Local, SSH, and Relay endpoints remain
-available as independent reachability options.
+printing the link. `warren relay share` creates a seven-day-by-default opaque
+`/invite/<opaque>/` link and can write a QR image; the link is reusable by
+multiple devices until it expires. The Desktop Relay settings page exposes the
+same action as **Share with iPhone**; the daemon keeps the Host Secret and
+pairing code internal and returns only the share link and expiry metadata.
+`warren relay pairing`, `pair`, `status`, `tunnel enable|disable`, and `revoke`
+expose the corresponding explicit Relay operations. Use a Host Secret or admin
+token for management operations; a configured Relay endpoint's short-lived
+access token is read-only. Local, SSH, and Relay endpoints remain available as
+independent reachability options.
 
 All commands support `--json`. `worktree` is an alias for `workspace`; help
 and error messages keep the command name you typed instead of rewriting it to

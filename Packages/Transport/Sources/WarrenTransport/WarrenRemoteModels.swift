@@ -172,11 +172,15 @@ public struct WarrenRelayPairing: Codable, Equatable, Hashable, Sendable {
     public let relayURL: String
     public let hostID: String
     public let pairingTicket: String
+    /// Opaque client-facing invite ID. New links carry this value instead of
+    /// exposing the Host ID; the Relay resolves it during exchange.
+    public let inviteID: String?
 
-    public init(relayURL: String, hostID: String, pairingTicket: String) {
+    public init(relayURL: String, hostID: String, pairingTicket: String, inviteID: String? = nil) {
         self.relayURL = relayURL
         self.hostID = hostID
         self.pairingTicket = pairingTicket
+        self.inviteID = inviteID
     }
 
     /// Converts the pairing into an endpoint after a successful ticket
@@ -187,7 +191,7 @@ public struct WarrenRelayPairing: Codable, Equatable, Hashable, Sendable {
         routeID: String? = nil
     ) -> WarrenRemoteEndpointConfiguration {
         WarrenRemoteEndpointConfiguration(
-            name: name ?? "Relay \(hostID.prefix(8))",
+            name: name ?? (hostID.isEmpty ? "Relay Host" : "Relay \(hostID.prefix(8))"),
             url: relayURL,
             token: accessToken,
             type: "relay",
@@ -230,66 +234,113 @@ public enum WarrenRelayPairingClient {
             throw WarrenRelayPairingError.unsupportedScheme
         }
 
-        // Relay links are host-scoped: /<optional-prefix>/h/<host-id>/.
-        // Parse the suffix as exactly one path segment so a malformed link
-        // such as /h/id/extra cannot silently connect to the wrong Host.
+        // New Relay links are opaque: /<optional-prefix>/invite/<invite-id>/.
+        // Keep accepting the historical host-scoped /h/<host-id>/#t= form so
+        // existing links continue to work while users move to opaque invites.
         let path = components.path
-        guard let markerRange = path.range(of: "/h/") else {
+        let pathParts = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard let markerIndex = pathParts.lastIndex(where: { $0 == "invite" || $0 == "h" }),
+              markerIndex + 1 < pathParts.count,
+              markerIndex + 2 == pathParts.count else {
             throw WarrenRelayPairingError.missingHostID
         }
-        let suffix = path[markerRange.upperBound...]
-        let suffixParts = suffix.split(separator: "/", omittingEmptySubsequences: true)
-        guard suffixParts.count == 1 else { throw WarrenRelayPairingError.missingHostID }
-        let hostID = String(suffixParts[0])
-        guard !hostID.isEmpty,
-              !hostID.contains("\\"),
-              !hostID.contains("?")
+        let isInvite = pathParts[markerIndex] == "invite"
+        let identity = String(pathParts[markerIndex + 1])
+        guard !identity.isEmpty,
+              !identity.contains("\\"),
+              !identity.contains("?"),
+              (!isInvite || Self.validInviteID(identity))
         else { throw WarrenRelayPairingError.missingHostID }
 
+        let hostID = isInvite ? "" : identity
+        let inviteID = isInvite ? identity : nil
+
         let ticket: String?
-        if let fragment = components.fragment {
+        if isInvite {
+            ticket = nil
+        } else if let fragment = components.fragment {
             let fragmentItems = URLComponents(string: "https://pairing.invalid/?\(fragment)")?.queryItems
             ticket = fragmentItems?.first(where: { $0.name == "t" || $0.name == "pairing_ticket" })?.value
                 ?? (fragment.hasPrefix("t=") ? String(fragment.dropFirst(2)) : nil)
         } else {
             ticket = components.queryItems?.first(where: { $0.name == "t" || $0.name == "pairing_ticket" })?.value
         }
-        guard let ticket, !ticket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        if !isInvite && (ticket?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false) {
             throw WarrenRelayPairingError.missingPairingTicket
         }
 
         var relay = components
         relay.scheme = scheme == "ws" ? "http" : (scheme == "wss" ? "https" : scheme)
-        let prefix = String(path[..<markerRange.lowerBound])
-        relay.path = prefix.isEmpty ? "" : prefix
+        let prefixParts = pathParts[..<markerIndex]
+        relay.path = prefixParts.isEmpty ? "" : "/" + prefixParts.joined(separator: "/")
         relay.query = nil
         relay.fragment = nil
         guard let relayURL = relay.url, relayURL.host != nil else {
             throw WarrenRelayPairingError.invalidURL
         }
-        return WarrenRelayPairing(relayURL: relayURL.absoluteString, hostID: hostID, pairingTicket: ticket)
+        return WarrenRelayPairing(
+            relayURL: relayURL.absoluteString,
+            hostID: hostID,
+            pairingTicket: ticket ?? "",
+            inviteID: inviteID
+        )
+    }
+
+    private static func validInviteID(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard !bytes.isEmpty, bytes.count <= 128 else { return false }
+        return bytes.allSatisfy { byte in
+            (byte >= 48 && byte <= 57)
+                || (byte >= 65 && byte <= 90)
+                || (byte >= 97 && byte <= 122)
+                || byte == 45
+                || byte == 95
+        }
     }
 
     public static func exchange(
         _ pairing: WarrenRelayPairing,
         urlSession: URLSession = WarrenRemoteNetworking.session
     ) async throws -> WarrenRelaySessionExchange {
-        let endpoint = WarrenRemoteEndpointConfiguration(
-            name: "Relay",
-            url: pairing.relayURL,
-            type: "relay",
-            hostID: pairing.hostID
-        )
-        guard let url = endpoint.relaySessionExchangeURL else {
+        guard var components = URLComponents(string: pairing.relayURL),
+              let scheme = components.scheme?.lowercased(),
+              components.host != nil else {
             throw WarrenRelayPairingError.invalidURL
         }
+        switch scheme {
+        case "ws": components.scheme = "http"
+        case "wss": components.scheme = "https"
+        case "http", "https": break
+        default: throw WarrenRelayPairingError.unsupportedScheme
+        }
+        let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if let inviteID = pairing.inviteID {
+            guard Self.validInviteID(inviteID) else {
+                throw WarrenRelayPairingError.invalidURL
+            }
+            let path = "/invite/\(inviteID)/v1/session/exchange"
+            components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
+        } else {
+            guard !pairing.hostID.isEmpty, !pairing.pairingTicket.isEmpty else {
+                throw WarrenRelayPairingError.missingPairingTicket
+            }
+            let path = "/h/\(pairing.hostID)/v1/session/exchange"
+            components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
+        }
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url else { throw WarrenRelayPairingError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "pairing_ticket": pairing.pairingTicket,
-        ])
+        let body: [String: String]
+        if let inviteID = pairing.inviteID {
+            body = ["invite_id": inviteID]
+        } else {
+            body = ["pairing_ticket": pairing.pairingTicket]
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WarrenRelayPairingError.exchangeFailed("invalid server response")
@@ -303,7 +354,7 @@ public enum WarrenRelayPairingClient {
               !value.accessToken.isEmpty else {
             throw WarrenRelayPairingError.invalidExchangeResponse
         }
-        guard value.hostID == pairing.hostID else {
+        guard pairing.hostID.isEmpty || value.hostID == pairing.hostID else {
             throw WarrenRelayPairingError.invalidExchangeResponse
         }
         return value

@@ -88,7 +88,7 @@ ticket and the setup link after enrollment.
 ## Pair a client
 
 Generate a shareable pairing code with the Host Secret, then exchange it for a
-short-lived client capability and a reusable Web/iOS pairing link:
+short-lived client capability and a reusable opaque Web/iOS pairing link:
 
 ```bash
 pairing_code="$(
@@ -103,16 +103,16 @@ pairing_response="$(warren --json relay pair \
   --url "$WARREN_RELAY_PUBLIC_URL" \
   --host "$WARREN_HOST_ID" \
   --code "$pairing_code")"
-printf '%s\n' "$pairing_response"
+pairing_url="$(printf '%s' "$pairing_response" | jq -r '.pairing_url')"
+printf '%s\n' "$pairing_url"
 ```
 
-The `web_url` in the response is the value to open in a browser or encode in
-a QR code. A QR code must contain the Web pairing URL, not a `warren://settings`
-enrollment link:
+The `pairing_url` is the value to open in a browser or encode in a QR code. It
+has the form `/invite/<opaque>/` and does not disclose the Host ID. A QR code
+must contain this Web pairing URL, not a `warren://settings` enrollment link:
 
 ```bash
-printf '%s' "$pairing_response" \
-  | jq -r '.web_url' \
+printf '%s' "$pairing_url" \
   | qrencode -o warren-relay-pairing.png -
 ```
 
