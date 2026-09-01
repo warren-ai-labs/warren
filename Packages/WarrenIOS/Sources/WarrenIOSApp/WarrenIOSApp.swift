@@ -10,6 +10,7 @@ struct WarrenIOSApp: App {
     init() {
         let store = IOSLocalStore()
         let developmentEndpoint = IOSDevelopmentEndpoint.configuration
+        _ = store.ensureDevelopmentEndpoint(developmentEndpoint)
         let storedEndpoint = store.endpoint
         let endpoint: WarrenRemoteEndpointConfiguration
 
@@ -35,6 +36,9 @@ struct WarrenIOSApp: App {
         development: WarrenRemoteEndpointConfiguration
     ) -> Bool {
         guard let stored else { return true }
+        // A paired Relay is an explicit user choice. Adding the local
+        // development Host must never replace or activate that Relay.
+        guard !stored.isRelay else { return false }
         guard !development.url.isEmpty else { return false }
         guard let storedURL = URL(string: stored.url),
               let developmentURL = URL(string: development.url) else {
