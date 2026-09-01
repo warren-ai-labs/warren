@@ -3890,10 +3890,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         }
                         continue
                     }
+                    guard restoreResult == .rejected else {
+                        // The snapshot is valid; only the runtime config could
+                        // not be reapplied. Retry config until it lands or the
+                        // generation changes. A successful later install must
+                        // still be recorded, but never treat this as a bad
+                        // snapshot.
+                        if self.recoveryRetryGenerations[sessionID] == generation {
+                            try? await Task.sleep(for: .milliseconds(50))
+                            continue
+                        }
+                        return
+                    }
                     // At this point all lifecycle prerequisites are true, so
-                    // a second failure means the Ghostline payload itself is
-                    // invalid rather than a cold-mount race. Reconnect the
-                    // transport and let the daemon produce a fresh boundary.
+                    // a failure means the Ghostline payload itself is invalid
+                    // rather than a cold-mount race. Reconnect the transport
+                    // and let the daemon produce a fresh boundary.
                     self.failAtomicRecovery(
                         sessionID: sessionID,
                         reason: "native snapshot rejected after surface became ready"
