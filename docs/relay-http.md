@@ -61,14 +61,15 @@ WebSocket upgrades without rewriting the host-scoped paths.
 
 ## Enroll a Host
 
-Create a Host record with the Relay administrator credential:
+The Relay creates the first Host automatically at startup and prints its
+`setup_link` in the service log. For another Host, create a record with the
+Relay administrator credential; the Relay generates the UUID:
 
 ```bash
-export WARREN_HOST_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 curl -sS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/hosts" \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Host\"}"
+  -d '{"name":"My Host"}' | jq -er '.settings_url'
 ```
 
 The response includes a canonical `settings_url`. Give that one-time link to

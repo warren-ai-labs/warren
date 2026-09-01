@@ -18,9 +18,9 @@ product model.
 
 ## Host enrollment
 
-An administrator creates a Host record and gives its operator a canonical
-one-time setup link. Warren Desktop (or `warren relay connect`) sends the
-existing daemon token through the local Headless daemon once over HTTPS:
+The Relay generates a Host UUID and gives its operator a canonical one-time
+setup link. Warren Desktop (or `warren relay connect`) sends the existing
+daemon token through the local Headless daemon once over HTTPS:
 
 ```text
 POST /v1/hosts/{hostID}/enroll
@@ -81,19 +81,17 @@ enrollment.
 
 ## Client-facing commands
 
-Warren exposes only the two operations a Host operator needs:
+Warren exposes only the operations a Host operator needs:
 
 ```text
 warren relay connect [SETUP_URL] [--share] [--qr [PATH]] [--open]
-warren relay register [SETUP_URL] [--share] [--qr [PATH]] [--open]
 warren relay share [--qr [PATH]] [--open]
 ```
 
 The setup URL is issued by the Relay Administrator. Warren consumes it through
 the selected local Headless daemon, which supplies the Host Secret and starts
-the outbound connector. `relay register` is a compatibility alias for
-`relay connect`; neither command creates a Host record or accepts a Relay
-administrator token.
+the outbound connector. `relay connect` is the only enrollment command; it
+does not create a Host record or accept a Relay administrator token.
 
 `relay share` asks the local daemon for an opaque client-facing link and can
 write a QR image. The daemon performs the pairing-code exchange internally and

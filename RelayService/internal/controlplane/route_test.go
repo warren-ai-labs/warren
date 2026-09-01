@@ -166,7 +166,6 @@ func TestPathFallbackStripsOnlyGeneratedRoutePrefix(t *testing.T) {
 }
 
 func TestIPRelayPathRouteForwardsApplicationPath(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000023"
 	server, err := NewServer(Config{
 		// The listener's actual port is intentionally absent here. The route
 		// matches the request Host after its port is normalized.
@@ -180,7 +179,7 @@ func TestIPRelayPathRouteForwardsApplicationPath(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	credential := provisionHost(t, httpServer.URL, hostID)
+	hostID, credential := provisionHost(t, httpServer.URL)
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	host, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/host/connect?host_id="+hostID+"&version=2.0", http.Header{"Authorization": []string{"Bearer " + credential}})
 	if err != nil {

@@ -20,9 +20,11 @@ mise run relay:status  # show Relay and Host status
 mise run relay:stop    # stop only the Relay; keep Warren running and terminal sessions alive
 ```
 
-For a deployed public Relay, the Relay Administrator creates a Host record in
-the service-owned admin API and gives the operator the returned setup link.
-The operator opens that link in Warren Desktop (or uses the client shortcut):
+For a deployed public Relay, the service startup log gives the first operator
+the setup link. For every later Host, the Relay Administrator creates a Host
+record in the service-owned API and gives the operator the returned setup
+link. The operator opens that link in Warren Desktop (or uses the client
+shortcut):
 
 ```bash
 warren relay connect '<settings-url>'
@@ -43,11 +45,6 @@ warren relay share --qr "$HOME/Desktop/warren-relay-pairing.png"
 
 Add `--share` (and optionally `--qr`/`--open`) to `relay connect` when the
 operator wants the first setup to end with a shareable iPhone QR.
-
-`relay connect` is the canonical client command. `relay register` is retained
-as a compatibility alias for scripts; it does not register a Host in Relay
-and has no administrator privileges. Both commands consume the setup link
-through the local Host daemon.
 
 The link is a bearer credential: share it only with intended clients. A new
 `relay share` invocation rotates the pairing code and invalidates the previous
@@ -114,40 +111,50 @@ must terminate TLS instead.
 
 ## Host Registration and Connection
 
-The daemon token in `~/.warren/token` is the canonical Host Secret. Create a Host record to obtain a one-time enrollment ticket, then enroll that existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or revocation bumps the Host generation, disconnects the old socket, and invalidates capabilities from the previous generation.
+The daemon token in `~/.warren/token` is the canonical Host Secret. The Relay
+creates a Host record and one-time enrollment ticket, then enrolls that
+existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or
+revocation bumps the Host generation, disconnects the old socket, and
+invalidates capabilities from the previous generation.
 
 ### Generate a Warren setup URL
 
-The setup URL is created by the Relay administrator API. There is no separate
-setup-link file or command inside the Host client: `POST /v1/hosts` provisions
-the Host record and returns the URL in `settings_url`.
+On a fresh Relay (or while its first Host is still pending), the Relay prints
+an initial setup link at startup. Copy the value after `setup_link=` from
+`docker logs` (or the service log) and open it in Warren Desktop on the Host
+that should connect. The link provisions the first Host; the Relay generates
+its UUID automatically. Once a Host has enrolled, restarts do not create a new
+implicit Host; use the service-owned API below for additional Hosts.
+
+The setup link is a bearer credential. Restrict access to the container/service
+logs and remove the link from copied logs or chat after enrollment.
 
 ```bash
-export RELAY_ADMIN_API='https://relay.example.com'
-export WARREN_RELAY_ADMIN_TOKEN='replace-admin-token'
-export WARREN_HOST_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-
-setup_url="$(
-  curl -fsS -X POST "$RELAY_ADMIN_API/v1/hosts" \
-    -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
-    -H 'Content-Type: application/json' \
-    -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}" \
-  | jq -er '.settings_url'
-)"
-printf '%s\n' "$setup_url"
-unset setup_url
+docker logs warren-relay 2>&1 | sed -n 's/.*setup_link=\([^ ]*\).*/\1/p' | tail -n 1
 ```
 
 Send the printed `warren://settings?...` value to the Host operator. It is a
 one-time credential, expires after ten minutes, and should be removed from
-shell history or chat after the Host connects. The API request address may be
-an internal Docker or reverse-proxy address; the generated URL always uses
+shell history or chat after the Host connects. The generated URL always uses
 `WARREN_RELAY_PUBLIC_URL`, which must be reachable by the Host.
+
+For additional Hosts, the Relay administrator can call the service-owned API.
+The request contains only an optional display name; the Relay still generates
+the Host UUID and returns it in `host_id` and `settings_url`:
+
+```bash
+curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/hosts" \
+  -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"My Mac"}' | jq -er '.settings_url'
+```
 
 The production image is distroless and intentionally has no shell, `curl`, or
 admin subcommand, so `docker exec warren-relay ...` is not available. The
-container command above publishes an admin port; run the setup command from
-the Docker host with `RELAY_ADMIN_API=http://127.0.0.1:8080`.
+container command above publishes the Relay port; run the request from the
+Docker host with `WARREN_RELAY_PUBLIC_URL=http://127.0.0.1:8080` when that is
+the address reachable from the admin shell. The setup link itself continues to
+use the public URL configured in the Relay container.
 
 If the admin machine cannot reach a published port, run a one-shot `curl`
 helper on the Relay container's network instead of using `docker exec`:
@@ -157,18 +164,18 @@ docker run --rm --network container:warren-relay curlimages/curl:8.12.1 \
   -fsS -X POST http://127.0.0.1:8080/v1/hosts \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$WARREN_HOST_ID\",\"name\":\"My Mac\"}" \
+  -d '{"name":"My Mac"}' \
   | jq -er '.settings_url'
 ```
 
-The response contains `enrollment_ticket`, the Relay signing public key, and a
-canonical `settings_url`. Give that `warren://settings` link to the Warren Host
-operator. Opening it in Warren Desktop consumes the one-time ticket through
-the local daemon, pins the Relay key, and starts the connector. The link
-contains no daemon token and should be discarded after enrollment; the ticket
-is valid for ten minutes and cannot be reused. A managed deployment may use
-`warren relay connect` with the same link, but the Host Secret remains inside
-the daemon.
+The response contains the generated `host_id`, `enrollment_ticket`, the Relay
+signing public key, and a canonical `settings_url`. Give that
+`warren://settings` link to the Warren Host operator. Opening it in Warren
+Desktop consumes the one-time ticket through the local daemon, pins the Relay
+key, and starts the connector. The link contains no daemon token and should be
+discarded after enrollment; the ticket is valid for ten minutes and cannot be
+reused. A managed deployment may use `warren relay connect` with the same link,
+but the Host Secret remains inside the daemon.
 
 The daemon stores the Relay URL, Host ID, and signing key in its settings and
 opens exactly one outbound `wss://.../v1/host/connect` socket. Control-plane

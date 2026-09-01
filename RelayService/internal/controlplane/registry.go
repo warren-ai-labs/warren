@@ -1,11 +1,14 @@
 package controlplane
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -139,6 +142,65 @@ func (registry *registry) provisionHost(id, name string) error {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
+	return registry.provisionHostLocked(id, name)
+}
+
+// provisionGeneratedHost creates a new Host identity inside the Relay. Host
+// UUIDs are Relay-owned identifiers; callers never choose or submit them.
+func (registry *registry) provisionGeneratedHost(name string) (string, error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for attempts := 0; attempts < 3; attempts++ {
+		id, err := newHostID()
+		if err != nil {
+			return "", err
+		}
+		if _, exists := registry.hosts[id]; exists {
+			continue
+		}
+		err = registry.provisionHostLocked(id, name)
+		if err != nil {
+			return "", err
+		}
+		return id, nil
+	}
+	return "", errors.New("could not allocate a unique host ID")
+}
+
+// bootstrapHost provisions the first Host used by the operator-facing setup
+// link. A pending, not-yet-enrolled Host is reused after a Relay restart so
+// startup does not accumulate orphaned Host records. Once at least one Host
+// has enrolled, startup does not create another implicit Host.
+func (registry *registry) bootstrapHost(name string) (string, string, time.Time, bool, error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for id, record := range registry.hosts {
+		if record == nil || record.CredentialHash != "" {
+			continue
+		}
+		if err := registry.provisionHostLocked(id, name); err != nil {
+			return "", "", time.Time{}, false, err
+		}
+		fresh := registry.hosts[id]
+		return id, fresh.EnrollmentToken, fresh.EnrollmentUntil, true, nil
+	}
+	if len(registry.hosts) > 0 {
+		return "", "", time.Time{}, false, nil
+	}
+	id, err := newHostID()
+	if err != nil {
+		return "", "", time.Time{}, false, err
+	}
+	if err := registry.provisionHostLocked(id, name); err != nil {
+		return "", "", time.Time{}, false, err
+	}
+	fresh := registry.hosts[id]
+	return id, fresh.EnrollmentToken, fresh.EnrollmentUntil, true, nil
+}
+
+// provisionHostLocked replaces or creates a Host record. The caller must hold
+// registry.mu for writing.
+func (registry *registry) provisionHostLocked(id, name string) error {
 	previous := registry.hosts[id]
 	record := &hostRecord{ID: id}
 	if previous != nil {
@@ -173,6 +235,20 @@ func (registry *registry) provisionHost(id, name string) error {
 		previousTunnel.close()
 	}
 	return nil
+}
+
+// newHostID returns a lower-case RFC 4122 version-4 UUID. The Relay is the
+// sole authority for this identifier; no user-provided value is accepted by
+// the provisioning API.
+func newHostID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(value[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[0:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:32]), nil
 }
 
 func (registry *registry) enrollment(id, ticket, secret string) (uint64, error) {

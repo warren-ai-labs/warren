@@ -440,24 +440,24 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 		return
 	}
 	var body struct {
-		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&body) != nil || !validHostID(strings.TrimSpace(body.ID)) {
+	if decoder.Decode(&body) != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := server.registry.provisionHost(strings.TrimSpace(body.ID), strings.TrimSpace(body.Name)); err != nil {
+	hostID, err := server.registry.provisionGeneratedHost(strings.TrimSpace(body.Name))
+	if err != nil {
 		http.Error(response, "provision failed", http.StatusInternalServerError)
 		return
 	}
-	ticket, expires, _ := server.registry.enrollmentTicket(strings.TrimSpace(body.ID))
+	ticket, expires, _ := server.registry.enrollmentTicket(hostID)
 	keyID, publicKey := server.signer.currentPublicKey()
-	settingsURL := server.relaySettingsURL(strings.TrimSpace(body.ID), ticket, keyID, publicKey)
+	settingsURL := server.relaySettingsURL(hostID, ticket, keyID, publicKey)
 	writeJSON(response, http.StatusCreated, map[string]any{
-		"host_id":           body.ID,
+		"host_id":           hostID,
 		"enrollment_ticket": ticket,
 		"expires_at":        expires.UTC().Format(time.RFC3339),
 		"relay_key_id":      keyID,
@@ -466,6 +466,19 @@ func (server *Server) provisionHost(response http.ResponseWriter, request *http.
 		// public Relay metadata. It never carries the Host Secret.
 		"settings_url": settingsURL,
 	})
+}
+
+// NewSetupLink creates the initial operator setup link for a Relay. The first
+// pending Host is reused across restarts; once a Host has enrolled, no second
+// implicit Host is created and the empty string is returned. Additional Hosts
+// are provisioned through the Relay service's administrative API.
+func (server *Server) NewSetupLink(name string) (string, error) {
+	hostID, ticket, _, created, err := server.registry.bootstrapHost(strings.TrimSpace(name))
+	if err != nil || !created {
+		return "", err
+	}
+	keyID, publicKey := server.signer.currentPublicKey()
+	return server.relaySettingsURL(hostID, ticket, keyID, publicKey), nil
 }
 
 // relaySettingsURL builds the canonical Warren desktop setup link. The

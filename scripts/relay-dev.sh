@@ -228,12 +228,15 @@ start_relay() {
     env -u GOROOT -u GOBIN go build -o "$relay_binary" ./RelayService/cmd/warren-relay
     # Detach from the mise/terminal process group so the Relay remains alive
     # after `relay:dev` finishes and can serve a phone browser.
+    # This helper provisions its own Host below, so avoid creating a separate
+    # bootstrap Host just to print a setup link.
     WARREN_RELAY_LISTEN="$relay_bind_host:$relay_port" \
         WARREN_RELAY_PUBLIC_URL="$relay_url" \
         WARREN_RELAY_ALLOWED_ORIGIN="$relay_url" \
         WARREN_RELAY_ADMIN_TOKEN="$admin_token" \
         WARREN_RELAY_SIGNING_KEY="$signing_key" \
         WARREN_RELAY_DATA="$registry_file" \
+        WARREN_RELAY_PRINT_SETUP_LINK=0 \
         nohup "$relay_binary" </dev/null >>"$log_file" 2>&1 &
     local pid=$!
     write_secret "$pid_file" "$pid"
@@ -261,9 +264,6 @@ ensure_host() {
 			return
 		fi
 	fi
-	if [[ -z "$host_id" ]]; then
-		host_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-	fi
 	if [[ "$manages_local_relay" == "1" ]]; then
 		admin_token="$(read_secret "$admin_token_file")"
     else
@@ -279,7 +279,8 @@ ensure_host() {
 		    -X POST "$relay_local_url/v1/hosts" \
 		    -H "Authorization: Bearer $admin_token" \
 		    -H 'Content-Type: application/json' \
-		    -d "{\"id\":\"$host_id\",\"name\":\"Local Mac\"}")"
+		    -d '{"name":"Local Mac"}')"
+		host_id="$(printf '%s' "$response" | json_field host_id)"
 		enrollment_ticket="$(printf '%s' "$response" | json_field enrollment_ticket)"
 		relay_key_id="$(printf '%s' "$response" | json_field relay_key_id)"
 		relay_key="$(printf '%s' "$response" | json_field relay_public_key)"
@@ -288,6 +289,7 @@ ensure_host() {
 		write_secret "$relay_key_id_file" "$relay_key_id"
 		write_secret "$relay_key_file" "$relay_key"
 	fi
+	write_secret "$host_id_file" "$host_id"
 	host_token="$(read_host_token "$host_id")"
 	if [[ -n "$enrollment_ticket" ]]; then
 		curl --fail --silent --show-error \
@@ -448,7 +450,6 @@ require_command ps
 
 case "$command_name" in
     up)
-        require_command uuidgen
         if [[ "$manages_local_relay" == "1" ]]; then
             require_command go
         fi

@@ -132,7 +132,7 @@ func relayCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "connect", "register", "share":
+	case "connect", "share":
 	default:
 		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
 	}
@@ -147,7 +147,7 @@ func relayCommand(args []string) error {
 	// speaks the Relay control-plane protocol. Relay administrator credentials
 	// never need to enter this CLI.
 	switch args[0] {
-	case "connect", "register":
+	case "connect":
 		return relayConnectCommand(flags)
 	case "share":
 		return relayLocalShareCommand(flags)
@@ -158,7 +158,7 @@ func relayCommand(args []string) error {
 func missingRelayPositionals(command string, flags map[string]any) string {
 	items := positionals(flags)
 	switch command {
-	case "connect", "register":
+	case "connect":
 		if len(items) > 1 {
 			return "a single setup URL"
 		}
@@ -174,7 +174,7 @@ func missingRelayPositionals(command string, flags map[string]any) string {
 func validateRelayFlags(command string, flags map[string]any) error {
 	allowed := map[string]bool{"help": true, "h": true}
 	switch command {
-	case "connect", "register":
+	case "connect":
 		allowed["url"], allowed["relay-url"] = true, true
 		allowed["host"], allowed["host-id"] = true, true
 		allowed["ticket"], allowed["setup-url"] = true, true
@@ -188,7 +188,7 @@ func validateRelayFlags(command string, flags map[string]any) error {
 		}
 		return newUsageError("unknown relay option --"+key, relayUsageText())
 	}
-	if command != "connect" && command != "register" && len(positionals(flags)) != 0 {
+	if command != "connect" && len(positionals(flags)) != 0 {
 		return newUsageError("relay "+command+" does not accept positional arguments", relayUsageText())
 	}
 	return nil
@@ -3774,13 +3774,12 @@ func usage() { fmt.Print(usageText()) }
 func relayUsageText() string {
 	return `Usage:
   warren relay connect [SETUP_URL] [--share] [--qr [PATH]] [--open]
-  warren relay register [SETUP_URL] [--share] [--qr [PATH]] [--open]
   warren relay share [--qr [PATH]] [--open]
 
 The setup URL is issued by the Relay administrator. Warren consumes it through
 the selected local Host daemon; the Relay administrator token and Host Secret
-never enter this CLI. 'relay connect' and 'relay register' are aliases kept for
-scripts and both accept a canonical warren://settings link.
+never enter this CLI. 'relay connect' accepts a canonical warren://settings
+link.
 
 Automation may pass --url, --host, and --ticket instead of SETUP_URL.
 
@@ -3800,7 +3799,7 @@ Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
 
 	Commands:
-	  relay connect|register|share
+	  relay connect|share
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   task list|create|remove|rename|pin|move|attach|detach|workspace

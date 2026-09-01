@@ -14,7 +14,8 @@ Include the affected version, deployment mode, reproduction steps, impact, and a
 
 ## Deployment notes
 
-- Keep `~/.warren/token`, relay credentials, enrollment keys, and pairing URLs private.
+- Keep `~/.warren/token`, relay credentials, enrollment keys, setup links from
+  service logs, and pairing URLs private.
 - Do not expose the daemon's unauthenticated HTTP listener directly to the public internet.
 - Public Access is an explicit owner-reachability feature, not a multi-user sharing boundary. Use TLS, a strict origin, strong secrets, and a persistent protected data volume for public relay deployments.
 - Review the residual browser-history risk described in the Public Access documentation before sharing setup links.

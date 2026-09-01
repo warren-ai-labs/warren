@@ -177,10 +177,11 @@ stable `section` value, for example:
 warren://settings?section=public-access
 ```
 
-The Relay provisioning response includes a one-time Warren setup link with the
-Relay URL, Host ID, enrollment ticket, and pinned Relay signing key. Open it in
-Warren Desktop to connect the local Host automatically, or pass the same link
-to the client-side shortcut:
+The Relay startup log (or provisioning response for an additional Host)
+includes a one-time Warren setup link with the Relay URL, generated Host UUID,
+enrollment ticket, and pinned Relay signing key. Open it in Warren Desktop to
+connect the local Host automatically, or pass the same link to the client-side
+shortcut:
 
 ```text
 warren://settings?section=relay&relayUrl=<RELAY_URL>&hostId=<HOST_ID>&enrollmentTicket=<TICKET>&relayKeyId=<KEY_ID>&relayPublicKey=<PUBLIC_KEY>

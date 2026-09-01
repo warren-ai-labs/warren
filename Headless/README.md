@@ -127,9 +127,10 @@ warren session read SESSION_ID --timeout 8s
 
 ### Owned Relay
 
-The daemon token is the Host Secret for an enrolled Relay Host. A Relay
-Administrator creates the Host record and gives the operator the canonical
-one-time setup link. Open that link in Warren Desktop; the local daemon
+The daemon token is the Host Secret for an enrolled Relay Host. The Relay
+Administrator (or the Relay's first-start bootstrap) creates the Host record,
+generates its UUID, and gives the operator the canonical one-time setup link.
+Open that link in Warren Desktop; the local daemon
 consumes the invitation, persists only non-secret Relay metadata, and starts
 the supervised connector. The CLI has the same client-side path and never
 receives a Relay Administrator token or a Host Secret:
@@ -415,9 +416,9 @@ The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
 
-Owned Relay enrollment is a separate lifecycle from Public Access. A Relay
-administrator creates a Host record and gives its operator the canonical
-`settings_url` returned by `POST /v1/hosts`; the operator opens it in Warren
+Owned Relay enrollment is a separate lifecycle from Public Access. The Relay
+generates a Host UUID and gives its operator the canonical `settings_url`
+returned by startup or `POST /v1/hosts`; the operator opens it in Warren
 Desktop. The link carries only the Relay URL, Host UUID, pinned signing key,
 and one-time enrollment ticket. A local client may also `POST /v1/relay/enroll`
 with the Relay URL, Host UUID, and ticket while
