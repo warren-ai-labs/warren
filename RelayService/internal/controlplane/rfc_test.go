@@ -66,6 +66,15 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 	if _, err := server.signer.verify(exchanged.Access, hostID, "control"); err != nil {
 		t.Fatalf("access token: %v", err)
 	}
+
+	// The client-facing ticket is a shareable link, not a one-shot browser
+	// nonce. A second device can exchange the same QR/link and receive its own
+	// refresh-capability family.
+	secondExchange, err := http.Post(httpServer.URL+"/v1/session/exchange", "application/json", bytes.NewReader(exchangeBody))
+	if err != nil || secondExchange.StatusCode != http.StatusOK {
+		t.Fatalf("second exchange: %v %v", secondExchange, err)
+	}
+	secondExchange.Body.Close()
 }
 
 func TestOwnedRelayV2HostHandshake(t *testing.T) {

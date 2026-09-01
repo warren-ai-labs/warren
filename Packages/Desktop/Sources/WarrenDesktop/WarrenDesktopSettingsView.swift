@@ -31,8 +31,8 @@ private extension WarrenDesktopSettingsSection {
         case .workspaces: "Configure workspace behavior and task visibility."
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
-        case .relay: "Connect this Host to an independently deployed Warren Relay."
-        case .publicAccess: "Reach this host's Web UI through the Warren Relay."
+        case .relay: "Connect this Host and share remote access links."
+        case .publicAccess: "Publish this Host's Web UI through the enrolled Relay."
         }
     }
 
@@ -314,7 +314,7 @@ struct WarrenDesktopSettingsView: View {
                     }
 
                     if !webSections.isEmpty {
-                        groupLabel("Web", tokens: tokens)
+                        groupLabel("Remote access", tokens: tokens)
                     }
                     ForEach(webSections) { section in
                         navigationItem(section, tokens: tokens)
@@ -936,13 +936,33 @@ struct WarrenDesktopSettingsView: View {
 
     private func relaySection(tokens: WarrenColorTokens) -> some View {
         settingsSection("Relay", section: .relay, tokens: tokens) {
-            Text("Relay is Warren's owner-controlled transport. Public Access uses the same enrolled Host and route service.")
+            Text("Relay is the private connection between this Host and your remote clients. Public Access uses the same enrollment when enabled.")
                 .font(WarrenTypography.settingsBody)
                 .foregroundStyle(tokens.foreground)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                Text("Connection")
+                HStack(spacing: WarrenSpacing.small) {
+                    WarrenStatusIndicator(
+                        color: relayStatusColor(tokens: tokens),
+                        isActive: relaySettingsBusy,
+                        accessibilityLabel: relayStatusLabel
+                    )
+                    VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                        Text(relayStatusLabel)
+                            .font(WarrenTypography.settingsSectionTitle)
+                            .foregroundStyle(tokens.foreground)
+                        Text(relaySettings.isEnrolled
+                            ? "This Host is enrolled. Changes apply to the local connector."
+                            : "Enroll this Host once, then share a client link from the CLI.")
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                Text("Relay connection")
                     .font(WarrenTypography.settingsSectionTitle)
                     .foregroundStyle(tokens.foreground)
 
@@ -961,7 +981,7 @@ struct WarrenDesktopSettingsView: View {
                     .accessibilityIdentifier("settings.relay.enabled")
 
                 HStack(spacing: WarrenSpacing.compact) {
-                    Button(relaySettingsBusy ? "Saving…" : "Save Relay settings") {
+                    Button(relaySettingsBusy ? "Saving…" : "Save connection") {
                         saveRelaySettings()
                     }
                     .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
@@ -1001,27 +1021,13 @@ struct WarrenDesktopSettingsView: View {
 
                 if hasRelayDetails {
                     DisclosureGroup(isExpanded: $relayDetailsExpanded) {
-                        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                            if !relaySettings.hostID.isEmpty {
-                                settingsValueRow("Host ID", value: relaySettings.hostID, tokens: tokens)
-                            }
-                            if !relaySettings.routeID.isEmpty {
-                                settingsValueRow("Route ID", value: relaySettings.routeID, tokens: tokens)
-                            }
-                            if !relaySettings.relayKeyID.isEmpty {
-                                settingsValueRow("Signing key", value: relaySettings.relayKeyID, tokens: tokens)
-                            }
-                            if !relaySettings.relayPublicKey.isEmpty {
-                                settingsValueRow(
-                                    "Pinned public key",
-                                    value: Self.relayKeySummary(relaySettings.relayPublicKey),
-                                    tokens: tokens
-                                )
-                            }
-                        }
-                        .padding(.top, WarrenSpacing.small)
+                        Text("Host identity and signing keys are managed automatically and are hidden here to keep this page focused. Use the CLI for diagnostics.")
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, WarrenSpacing.small)
                     } label: {
-                        Text("Connection details")
+                        Text("Advanced connection details")
                             .font(WarrenTypography.settingsBody)
                             .foregroundStyle(tokens.foreground)
                     }
@@ -1043,7 +1049,7 @@ struct WarrenDesktopSettingsView: View {
                         action: resetRelay
                     )
 
-                    Text("Stops the local connector and clears this Host's Relay enrollment metadata. The Relay Host record is not revoked.")
+                    Text("Stops the local connector and clears this Host's enrollment metadata. The Relay Host record is not revoked.")
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1060,7 +1066,7 @@ struct WarrenDesktopSettingsView: View {
 
             DisclosureGroup(isExpanded: $relayRegistrationExpanded) {
                 VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                    Text("Use the one-time ticket from the Relay setup link. The Host Secret stays in the daemon and is never entered here.")
+                    Text("Use the one-time enrollment ticket from the Relay setup link. The Host Secret stays in the daemon and is never entered here.")
                         .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1250,11 +1256,14 @@ struct WarrenDesktopSettingsView: View {
             || !relaySettings.relayPublicKey.isEmpty
     }
 
-    private static func relayKeySummary(_ value: String) -> String {
-        guard value.count > 28 else { return value }
-        let prefix = value.prefix(14)
-        let suffix = value.suffix(10)
-        return "\(prefix)…\(suffix)"
+    private var relayStatusLabel: String {
+        guard relaySettings.isEnrolled else { return "Not configured" }
+        return relaySettings.enabled ? "Relay enabled" : "Relay paused"
+    }
+
+    private func relayStatusColor(tokens: WarrenColorTokens) -> Color {
+        guard relaySettings.isEnrolled else { return tokens.mutedForeground }
+        return relaySettings.enabled ? tokens.success : tokens.warning
     }
 
     private func settingsValueRow(_ label: String, value: String, tokens: WarrenColorTokens) -> some View {
@@ -1298,16 +1307,6 @@ struct WarrenDesktopSettingsView: View {
             if let relayURL = webStatus.relayURL {
                 settingsValueRow(WarrenPublicAccessCopy.relayURL, value: relayURL.absoluteString, tokens: tokens)
             }
-            if let hostID = webStatus.relayHostID, !hostID.isEmpty {
-                settingsValueRow("Host ID", value: hostID, tokens: tokens)
-            }
-            if let routeID = webStatus.routeID, !routeID.isEmpty {
-                settingsValueRow("Route ID", value: routeID, tokens: tokens)
-            }
-            if let authMode = webStatus.authMode, !authMode.isEmpty {
-                settingsValueRow("Auth mode", value: authMode, tokens: tokens)
-            }
-
             HStack(spacing: WarrenSpacing.compact) {
                 WarrenStatusIndicator(
                     color: publicAccessStatusColor(tokens: tokens),

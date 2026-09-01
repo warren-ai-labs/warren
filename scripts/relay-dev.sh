@@ -67,7 +67,7 @@ Usage: scripts/relay-dev.sh [up|start|pair|status|stop|logs]
 
   up      Start a local Relay, register this Mac, launch Warren, and pair.
   start   Start the Relay without launching or restarting Warren.
-  pair    Generate and open another one-time Web/PWA URL.
+  pair    Generate and open another shareable Web/PWA URL.
   status  Show Relay health and Host presence.
   stop    Stop the local Relay. Warren and its Ghostline sessions keep running.
   logs    Follow the local Relay log.

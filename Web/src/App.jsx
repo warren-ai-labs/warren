@@ -1639,8 +1639,8 @@ export default function App() {
         if (detail === "unauthorized") {
           // Relay access capabilities are intentionally short lived. Rotate
           // through the HttpOnly refresh cookie once before treating an
-          // unauthorized socket as terminal; local daemon tokens retain the
-          // historical stop-on-auth-failure behavior.
+          // unauthorized socket as terminal; the shareable pairing link is
+          // not needed again while this refresh family remains valid.
           if (runtime.usesControlPlane && !relayRefreshInFlightRef.current) {
             relayRefreshInFlightRef.current = true;
             runtime.refresh().then(token => {

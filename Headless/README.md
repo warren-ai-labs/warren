@@ -147,8 +147,12 @@ start the supervised connector. It opens one outbound WSS connection and
 multiplexes private control, HTTP, and WebSocket Upgrade streams using BRLY/2;
 the connector dispatches those streams to the in-process Headless handler and
 never assumes port `8789`. A Relay disconnect or restart does not stop local
-Sessions or PTYs. `warren relay pairing`, `pair`, `status`, `tunnel enable|disable`,
-and `revoke` expose the corresponding explicit Relay operations. Use a Host
+Sessions or PTYs. `warren relay register` combines Host creation and enrollment;
+with `--share`, it waits briefly for the local daemon to come online before
+printing the link. `warren relay share` creates a seven-day-by-default pairing
+link and can write a QR image; the link is reusable by multiple devices until it
+expires. `warren relay pairing`, `pair`, `status`, `tunnel enable|disable`, and `revoke` expose
+the corresponding explicit Relay operations. Use a Host
 Secret or admin token for management operations; a configured Relay endpoint's
 short-lived access token is read-only. Local, SSH, and Relay endpoints remain
 available as independent reachability options.

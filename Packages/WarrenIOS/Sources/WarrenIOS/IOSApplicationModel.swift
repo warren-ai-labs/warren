@@ -429,10 +429,12 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
-    /// Exchanges a one-time Relay URL (normally obtained from a QR code) and
-    /// replaces the current endpoint with the resulting host-scoped Relay
-    /// configuration. The URLSession is shared with WarrenRemoteClient so the
-    /// Relay refresh cookie survives the subsequent WebSocket connection.
+    /// Exchanges a shareable Relay URL (normally obtained from a QR code) and
+    /// adds the resulting host-scoped Relay configuration. The URLSession is
+    /// shared with WarrenRemoteClient so the Relay refresh cookie survives the
+    /// subsequent WebSocket connection. Re-pairing the same Relay Host updates
+    /// its saved credential; a different Host receives a local, non-sensitive
+    /// display name.
     public func pairRelay(from url: URL, replacingEndpointName: String? = nil) {
         guard !isPairingRelay else { return }
         isPairingRelay = true
@@ -446,14 +448,17 @@ public final class IOSApplicationModel: ObservableObject {
                 )
                 await MainActor.run {
                     guard let self else { return }
-                    let relayHost = URL(string: pairing.relayURL)?.host
+                    let target = self.relayPairingTarget(
+                        pairing,
+                        requestedEndpointName: replacingEndpointName
+                    )
                     let saved = self.saveEndpoint(
-                        name: relayHost.map { "Relay · \($0)" } ?? "Relay Host",
+                        name: target.name,
                         url: pairing.relayURL,
                         token: exchange.accessToken,
                         type: "relay",
                         hostID: pairing.hostID,
-                        replacingEndpointName: replacingEndpointName
+                        replacingEndpointName: target.replacingName
                     )
                     if !saved {
                         self.endpointError = "Relay pairing returned an invalid Host endpoint."
@@ -468,6 +473,56 @@ public final class IOSApplicationModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Resolves a stable local label for a scanned Relay Host without copying
+    /// the Relay address or Host ID into the UI. Existing matching entries are
+    /// replaced so rescanning rotates their access capability instead of
+    /// creating a duplicate row.
+    private func relayPairingTarget(
+        _ pairing: WarrenRelayPairing,
+        requestedEndpointName: String?
+    ) -> (name: String, replacingName: String?) {
+        if let requested = requestedEndpointName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let existing = localStore.endpoint(named: requested) {
+            return (existing.name, existing.name)
+        }
+
+        if let existing = localStore.endpoints.first(where: { endpoint in
+            endpoint.isRelay
+                && endpoint.hostID == pairing.hostID
+                && normalizedRelayURL(endpoint.url) == normalizedRelayURL(pairing.relayURL)
+        }) {
+            return (existing.name, existing.name)
+        }
+
+        let baseName = "Relay Host"
+        let existingNames = Set(localStore.endpoints.map(\.name))
+        if !existingNames.contains(baseName) {
+            return (baseName, nil)
+        }
+        var suffix = 2
+        while existingNames.contains("\(baseName) \(suffix)") {
+            suffix += 1
+        }
+        return ("\(baseName) \(suffix)", nil)
+    }
+
+    private func normalizedRelayURL(_ value: String) -> String {
+        let fallback = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: fallback) else { return fallback }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        components.query = nil
+        components.fragment = nil
+        if components.path == "/" {
+            components.path = ""
+        } else {
+            while components.path.hasSuffix("/") {
+                components.path.removeLast()
+            }
+        }
+        return components.string ?? fallback
     }
 
     /// Convenience entry point for the paste fallback shown beside the

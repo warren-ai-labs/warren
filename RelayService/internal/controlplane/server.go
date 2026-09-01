@@ -26,11 +26,18 @@ import (
 )
 
 type Config struct {
-	PublicURL        string
-	AdminToken       string
-	SigningKey       []byte
-	DataURL          string
-	PairingTTL       time.Duration
+	PublicURL  string
+	AdminToken string
+	SigningKey []byte
+	DataURL    string
+	// PairingTTL controls how long a Host pairing code remains valid. The
+	// code is deliberately reusable during this window so one generated link
+	// can provision more than one client.
+	PairingTTL time.Duration
+	// PairingTicketTTL controls how long the client-facing pairing link remains
+	// valid after the code is exchanged. A ticket can be exchanged repeatedly
+	// during this window; each exchange gets its own refresh-capability family.
+	PairingTicketTTL time.Duration
 	AccessTTL        time.Duration
 	AllowedOrigin    string
 	TunnelBaseDomain string
@@ -67,9 +74,10 @@ type Server struct {
 }
 
 type pairingTicket struct {
-	HostID     string
-	Generation uint64
-	Expires    time.Time
+	HostID         string
+	Generation     uint64
+	PairingVersion uint64
+	Expires        time.Time
 }
 
 type refreshRecord struct {
@@ -116,10 +124,16 @@ func NewServer(config Config) (*Server, error) {
 	}
 	config.AllowedOrigin = strings.TrimSpace(config.AllowedOrigin)
 	if config.PairingTTL == 0 {
-		config.PairingTTL = 10 * time.Minute
+		config.PairingTTL = 7 * 24 * time.Hour
 	}
 	if config.PairingTTL < 0 {
 		return nil, errors.New("pairing TTL must be positive")
+	}
+	if config.PairingTicketTTL == 0 {
+		config.PairingTicketTTL = config.PairingTTL
+	}
+	if config.PairingTicketTTL < 0 {
+		return nil, errors.New("pairing ticket TTL must be positive")
 	}
 	if config.AccessTTL == 0 {
 		config.AccessTTL = 15 * time.Minute
@@ -567,7 +581,7 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		writeRateLimit(response, server.config.RateLimitWindow)
 		return
 	}
-	generation, err := server.registry.consumePairing(body.HostID, body.Code)
+	generation, pairingVersion, err := server.registry.consumePairing(body.HostID, body.Code)
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusUnauthorized)
 		return
@@ -583,18 +597,26 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	server.sessionMu.Lock()
-	server.pairingTickets[ticket] = pairingTicket{HostID: body.HostID, Generation: generation, Expires: time.Now().Add(5 * time.Minute)}
+	server.pairingTickets[ticket] = pairingTicket{
+		HostID: body.HostID, Generation: generation, PairingVersion: pairingVersion,
+		Expires: time.Now().Add(server.config.PairingTicketTTL),
+	}
 	server.sessionMu.Unlock()
 	base := relayPublicOrigin(server.config.PublicURL)
 	result := map[string]any{
 		"host_id":        body.HostID,
 		"access_token":   token,
 		"pairing_ticket": ticket,
-		// The browser receives only a one-time pairing ticket. The access
+		// The browser receives only a reusable pairing ticket. The access
 		// capability remains available to native callers in the response but is
 		// never copied into browser history or a URL fragment.
-		"web_url":    fmt.Sprintf("%s%s/#t=%s", base, server.publicPath("/h/"+url.PathEscape(body.HostID)), url.QueryEscape(ticket)),
-		"expires_in": int(server.config.AccessTTL.Seconds()),
+		"web_url": fmt.Sprintf("%s%s/#t=%s", base, server.publicPath("/h/"+url.PathEscape(body.HostID)), url.QueryEscape(ticket)),
+		// Keep expires_in compatible with older clients that interpreted it as
+		// the access capability lifetime. New clients should use the explicit
+		// pairing_expires_in field for the QR/link lifetime.
+		"expires_in":         int(server.config.AccessTTL.Seconds()),
+		"pairing_expires_in": int(server.config.PairingTicketTTL.Seconds()),
+		"pairing_expires_at": time.Now().Add(server.config.PairingTicketTTL).UTC().Format(time.RFC3339),
 	}
 	if route, ok := server.registry.route(body.HostID); ok {
 		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: body.HostID, Scope: []string{"tunnel"}, Generation: generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
@@ -621,20 +643,28 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 	}
 	ticket := strings.TrimSpace(body.PairingTicket)
 	server.sessionMu.Lock()
+	now := time.Now()
+	for value, candidate := range server.pairingTickets {
+		if !now.Before(candidate.Expires) {
+			delete(server.pairingTickets, value)
+		}
+	}
 	entry, ok := server.pairingTickets[ticket]
 	if ok && strings.TrimSpace(request.PathValue("hostID")) != "" && strings.TrimSpace(request.PathValue("hostID")) != entry.HostID {
 		server.sessionMu.Unlock()
 		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
 		return
 	}
-	if ok && time.Now().After(entry.Expires) {
-		delete(server.pairingTickets, ticket)
-		ok = false
-	} else if ok {
-		delete(server.pairingTickets, ticket)
-	}
 	server.sessionMu.Unlock()
-	if !ok || ticket == "" || time.Now().After(entry.Expires) {
+	if !ok || ticket == "" || !now.Before(entry.Expires) {
+		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+		return
+	}
+	if generation, exists := server.registry.generation(entry.HostID); !exists || generation != entry.Generation {
+		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
+		return
+	}
+	if pairingVersion, exists := server.registry.pairingVersion(entry.HostID); !exists || pairingVersion != entry.PairingVersion {
 		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
 		return
 	}

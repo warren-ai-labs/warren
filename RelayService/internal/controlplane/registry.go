@@ -20,19 +20,22 @@ var errHostNotFound = errors.New("host not found")
 var errRouteConflict = errors.New("route hostname already owned")
 
 type hostRecord struct {
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	Online          bool         `json:"online"`
-	ConnectedAt     time.Time    `json:"connected_at,omitempty"`
-	LastSeenAt      time.Time    `json:"last_seen_at,omitempty"`
-	CredentialHash  string       `json:"credential_hash,omitempty"`
-	Generation      uint64       `json:"generation"`
-	PairingToken    string       `json:"-"`
-	PairingUntil    time.Time    `json:"-"`
-	EnrollmentToken string       `json:"-"`
-	EnrollmentUntil time.Time    `json:"-"`
-	Route           *routeRecord `json:"route,omitempty"`
-	Tunnel          *hostTunnel  `json:"-"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Online          bool      `json:"online"`
+	ConnectedAt     time.Time `json:"connected_at,omitempty"`
+	LastSeenAt      time.Time `json:"last_seen_at,omitempty"`
+	CredentialHash  string    `json:"credential_hash,omitempty"`
+	Generation      uint64    `json:"generation"`
+	PairingToken    string    `json:"-"`
+	PairingUntil    time.Time `json:"-"`
+	EnrollmentToken string    `json:"-"`
+	EnrollmentUntil time.Time `json:"-"`
+	// PairingVersion fences tickets issued by an older code when a new code is
+	// generated. It is intentionally process-local, like PairingToken.
+	PairingVersion uint64       `json:"-"`
+	Route          *routeRecord `json:"route,omitempty"`
+	Tunnel         *hostTunnel  `json:"-"`
 }
 
 type routeRecord struct {
@@ -119,6 +122,7 @@ func (registry *registry) provisionHost(id, name string) error {
 	record.EnrollmentUntil = registry.now().Add(10 * time.Minute)
 	record.PairingToken = ""
 	record.PairingUntil = time.Time{}
+	record.PairingVersion = 0
 	registry.hosts[id] = record
 	if err := registry.persistLocked(); err != nil {
 		if previous == nil {
@@ -153,6 +157,7 @@ func (registry *registry) enrollment(id, ticket, secret string) (uint64, error) 
 	record.Generation++
 	record.Online = false
 	record.Tunnel = nil
+	record.PairingVersion = 0
 	if err := registry.persistLocked(); err != nil {
 		registry.hosts[id] = &previous
 		registry.mu.Unlock()
@@ -213,6 +218,7 @@ func (registry *registry) revokeHost(id string) error {
 	record.CredentialHash = ""
 	record.PairingToken = ""
 	record.PairingUntil = time.Time{}
+	record.PairingVersion = 0
 	record.EnrollmentToken = ""
 	record.EnrollmentUntil = time.Time{}
 	record.Route = nil
@@ -393,24 +399,32 @@ func (registry *registry) beginPairing(id string, ttl time.Duration) (string, er
 	if err != nil {
 		return "", err
 	}
+	record.PairingVersion++
+	if record.PairingVersion == 0 {
+		// Keep zero reserved for a Host that has never issued a pairing code;
+		// wrapping is practically unreachable but should not revive an older
+		// ticket if a process is kept alive for an extreme number of rotations.
+		record.PairingVersion = 1
+	}
 	record.PairingToken = code
 	record.PairingUntil = registry.now().Add(ttl)
 	return code, nil
 }
 
-func (registry *registry) consumePairing(id, code string) (uint64, error) {
+func (registry *registry) consumePairing(id, code string) (uint64, uint64, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	record := registry.hosts[id]
 	if record == nil || !record.Online || record.Tunnel == nil {
-		return 0, errors.New("host offline")
+		return 0, 0, errors.New("host offline")
 	}
 	if registry.now().After(record.PairingUntil) || record.PairingToken == "" || !secureEqual(record.PairingToken, code) {
-		return 0, errors.New("invalid pairing code")
+		return 0, 0, errors.New("invalid pairing code")
 	}
-	record.PairingToken = ""
-	record.PairingUntil = time.Time{}
-	return record.Generation, nil
+	// Pairing codes are bearer credentials intended for sharing with more than
+	// one client. Keep the code valid until PairingUntil; generating a new code
+	// replaces the previous one, and Host re-enrollment/revocation clears it.
+	return record.Generation, record.PairingVersion, nil
 }
 
 func (registry *registry) authorizedTunnel(id string, generation uint64) *hostTunnel {
@@ -431,6 +445,16 @@ func (registry *registry) generation(id string) (uint64, bool) {
 		return 0, false
 	}
 	return record.Generation, true
+}
+
+func (registry *registry) pairingVersion(id string) (uint64, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	record := registry.hosts[id]
+	if record == nil {
+		return 0, false
+	}
+	return record.PairingVersion, true
 }
 
 func (registry *registry) host(id string) (hostRecord, bool) {

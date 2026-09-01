@@ -10,7 +10,8 @@ With an HTTP Relay, the client-to-Relay control requests and WebSocket frames
 are plaintext. The enrolled Host also connects to the Relay with `ws://`
 instead of `wss://`. A network observer can read pairing exchanges, access
 capabilities, terminal input, and terminal output. HTTP does not become safe
-because a pairing link or access token is short-lived.
+because a pairing link expires; the default link is a seven-day bearer
+credential and can be reused by multiple devices.
 
 Use HTTP only when all of the following are true:
 
@@ -86,8 +87,8 @@ ticket and the setup link after enrollment.
 
 ## Pair a client
 
-Generate a one-time pairing code with the Host Secret, then exchange it for a
-short-lived client capability:
+Generate a shareable pairing code with the Host Secret, then exchange it for a
+short-lived client capability and a reusable Web/iOS pairing link:
 
 ```bash
 pairing_code="$(
@@ -115,8 +116,11 @@ printf '%s' "$pairing_response" \
   | qrencode -o warren-relay-pairing.png -
 ```
 
-Pairing codes and Web tickets are short-lived. Generate a new pair whenever a
-ticket has expired; never reuse an old QR image.
+Pairing codes and Web tickets are reusable for the configured sharing window
+(seven days by default), so the same link or QR image can provision multiple
+devices. Generating a new pairing code replaces the old one. Re-enrolling or
+revoking the Host invalidates existing links. Treat the link as a bearer
+credential and protect it accordingly.
 
 ## iOS
 
@@ -148,9 +152,11 @@ not have to change when the address changes. Keep this exception in a private
 development build; do not add a real deployment hostname, ticket, or Host
 Secret to a public source tree.
 
-The Warren iOS pairing screen accepts the `web_url` by QR scan or paste. After
-the one-time exchange, the app stores only the scoped capability and Relay
-metadata; it does not need the Host Secret.
+The Warren iOS pairing screen accepts the `web_url` by QR scan or paste. The
+same shareable link can be exchanged by multiple devices until it expires. Each
+exchange stores only a scoped capability and Relay metadata; the app does not
+need the Host Secret. Access capabilities remain short-lived and refresh
+through an HttpOnly cookie.
 
 ## Troubleshooting
 
@@ -161,7 +167,9 @@ metadata; it does not need the Host Secret.
   URL and `WARREN_RELAY_ALLOWED_ORIGIN` use the same scheme, hostname, and
   port, and that the proxy forwards WebSocket upgrades.
 - **A ticket is rejected as expired.** Pairing codes and Web tickets are
-  single-use and short-lived. Generate a fresh pairing code and QR image.
+  reusable only within their configured sharing window. Generate a fresh
+  pairing code and QR image after that window, or when you intentionally want
+  to rotate the old link.
 - **A direct HTTP deployment leaks its address.** Move the Relay behind a
   private DNS name and an HTTPS reverse proxy, or keep it reachable only on a
   trusted network. Do not publish the numeric address in documentation,

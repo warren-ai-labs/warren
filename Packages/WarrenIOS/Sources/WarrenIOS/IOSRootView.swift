@@ -1719,6 +1719,7 @@ private struct IOSWorkspaceCreationSheet: View {
 public struct IOSEndpointConfigurationView: View {
     @ObservedObject private var model: IOSApplicationModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showingRelayScanner = false
 
     public init(model: IOSApplicationModel) {
         self.model = model
@@ -1731,23 +1732,78 @@ public struct IOSEndpointConfigurationView: View {
                 subtitle: "Connections",
                 symbol: "server.rack",
                 actions: AnyView(
-                    NavigationLink {
-                        IOSEndpointEditorView(model: model, endpoint: nil)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .frame(width: 42, height: 44)
-                            .contentShape(Rectangle())
+                    HStack(spacing: 2) {
+                        Button {
+                            showingRelayScanner = true
+                        } label: {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(IOSTheme.accent)
+                                .frame(width: 42, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Scan Relay QR")
+
+                        NavigationLink {
+                            IOSEndpointEditorView(model: model, endpoint: nil)
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .frame(width: 42, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add Host")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Add Host")
                 )
             ) {
                 dismiss()
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Connect a Host")
+                            .font(IOSTypography.sectionTitle)
+                            .foregroundStyle(IOSTheme.text)
+                        Text("Scan a Relay QR once to add a long-lived connection. You can keep multiple Hosts on this device.")
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 25)
+                    .padding(.bottom, 14)
+
+                    Button {
+                        showingRelayScanner = true
+                    } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(.system(size: 19, weight: .medium))
+                                .foregroundStyle(IOSTheme.background)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Scan Relay QR")
+                                    .font(IOSTypography.bodyEmphasis)
+                                    .foregroundStyle(IOSTheme.background)
+                                Text("Add a Host from a shareable pairing link")
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.background.opacity(0.78))
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.forward")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(IOSTheme.background.opacity(0.8))
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 62)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                    .accessibilityLabel("Scan Relay QR to add a Host")
+                    .disabled(model.isPairingRelay)
+
                     Text("Saved Hosts")
                         .font(IOSTypography.sectionTitle)
                         .foregroundStyle(IOSTheme.secondaryText)
@@ -1781,7 +1837,7 @@ public struct IOSEndpointConfigurationView: View {
                                                 .lineLimit(2)
                                                 .iosNaturalWrap()
                                                 .layoutPriority(1)
-                                            Text(host.url)
+                                            Text(host.isRelay ? "Relay connection" : host.url)
                                                 .font(IOSTypography.metadata)
                                                 .foregroundStyle(IOSTheme.secondaryText)
                                                 .lineLimit(1)
@@ -1839,6 +1895,24 @@ public struct IOSEndpointConfigurationView: View {
         #if os(iOS) || os(visionOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
+        .sheet(isPresented: $showingRelayScanner) {
+            IOSRelayPairingScannerView(
+                onCode: { code in
+                    showingRelayScanner = false
+                    model.pairRelay(from: code)
+                },
+                onPaste: {
+                    showingRelayScanner = false
+                    #if canImport(UIKit)
+                    model.pairRelayLink(UIPasteboard.general.string ?? "")
+                    #else
+                    model.pairRelayLink("")
+                    #endif
+                },
+                onCancel: { showingRelayScanner = false }
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private var hosts: [IOSEndpointMetadata] {
@@ -1882,21 +1956,22 @@ private struct IOSEndpointDetailView: View {
                         .padding(.top, 25)
                         .padding(.bottom, 9)
                     VStack(spacing: 1) {
-                        endpointDetailRow("Address", value: endpoint.url, machineText: true)
-                        endpointDetailRow(
-                            "Type",
-                            value: endpoint.isRelay ? "Relay" : "Direct Host"
-                        )
-                        endpointDetailRow(
-                            "Token",
-                            value: endpoint.hasToken ? "Saved in Keychain" : "Not saved"
-                        )
+                        if endpoint.isRelay {
+                            endpointDetailRow("Type", value: "Relay")
+                            endpointDetailRow(
+                                "Access",
+                                value: endpoint.hasToken ? "Saved in Keychain" : "Needs pairing"
+                            )
+                        } else {
+                            endpointDetailRow("Address", value: endpoint.url, machineText: true)
+                            endpointDetailRow("Type", value: "Direct Host")
+                            endpointDetailRow(
+                                "Token",
+                                value: endpoint.hasToken ? "Saved in Keychain" : "Not saved"
+                            )
+                        }
                     }
                     .iosSurface(color: IOSTheme.chrome)
-
-                    if endpoint.isRelay {
-                        relayDetails
-                    }
 
                     Button {
                         model.selectEndpoint(named: endpoint.name)
@@ -1925,7 +2000,7 @@ private struct IOSEndpointDetailView: View {
                     }
 
                     Text(endpoint.isRelay
-                        ? "Relay routes this Host through an encrypted control-plane tunnel."
+                        ? "Relay routes this Host through the configured control-plane connection."
                         : "Warren connects to /v1/ws. Use HTTPS/WSS outside your local network.")
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.84))
@@ -1945,23 +2020,6 @@ private struct IOSEndpointDetailView: View {
 
     private var isActive: Bool {
         endpoint.name == model.endpointMetadata.name
-    }
-
-    @ViewBuilder
-    private var relayDetails: some View {
-        IOSSectionLabel("Relay")
-            .padding(.top, 25)
-            .padding(.bottom, 9)
-        VStack(spacing: 1) {
-            endpointDetailRow("Status", value: "Connected")
-            if let hostID = endpoint.hostID, !hostID.isEmpty {
-                endpointDetailRow("Host ID", value: hostID, machineText: true)
-            }
-            if let routeID = endpoint.routeID, !routeID.isEmpty {
-                endpointDetailRow("Route ID", value: routeID, machineText: true)
-            }
-        }
-        .iosSurface(color: IOSTheme.chrome)
     }
 
     private func endpointDetailRow(
@@ -2000,7 +2058,6 @@ private struct IOSEndpointEditorView: View {
     @State private var url = ""
     @State private var token = ""
     @State private var didLoad = false
-    @State private var showingRelayScanner = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case name, url, token }
@@ -2034,8 +2091,6 @@ private struct IOSEndpointEditorView: View {
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText)
                         .padding(.top, 10)
-
-                    relayPairingSection
 
                     if let error = model.endpointError {
                         IOSInlineNotice(
@@ -2096,7 +2151,7 @@ private struct IOSEndpointEditorView: View {
                     }
 
                     Text(isRelay
-                        ? "Relay routes this Host through an encrypted control-plane tunnel."
+                        ? "Relay routes this Host through the configured control-plane connection."
                         : "Warren connects to /v1/ws. Use HTTPS/WSS outside your local network.")
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.84))
@@ -2117,27 +2172,6 @@ private struct IOSEndpointEditorView: View {
             name = endpoint?.name ?? ""
             url = endpoint?.url ?? ""
             didLoad = true
-        }
-        .sheet(isPresented: $showingRelayScanner) {
-            IOSRelayPairingScannerView(
-                onCode: { code in
-                    showingRelayScanner = false
-                    model.pairRelay(from: code, replacingEndpointName: endpoint?.name)
-                },
-                onPaste: {
-                    showingRelayScanner = false
-                    #if canImport(UIKit)
-                    model.pairRelayLink(
-                        UIPasteboard.general.string ?? "",
-                        replacingEndpointName: endpoint?.name
-                    )
-                    #else
-                    model.pairRelayLink("", replacingEndpointName: endpoint?.name)
-                    #endif
-                },
-                onCancel: { showingRelayScanner = false }
-            )
-            .ignoresSafeArea()
         }
         .onChange(of: model.endpointMetadata) { _, metadata in
             guard model.isPairingRelay || metadata.isRelay else { return }
@@ -2160,86 +2194,6 @@ private struct IOSEndpointEditorView: View {
 
     private var isRelay: Bool {
         savedMetadata?.isRelay ?? false
-    }
-
-    @ViewBuilder
-    private var relayPairingSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Relay")
-                    .font(IOSTypography.sectionTitle)
-                    .foregroundStyle(IOSTheme.text)
-                if isRelay {
-                    Text("CONNECTED")
-                        .font(IOSTypography.metadata)
-                        .foregroundStyle(IOSTheme.green)
-                }
-            }
-
-            Button {
-                showingRelayScanner = true
-            } label: {
-                HStack(spacing: 11) {
-                    Image(systemName: "qrcode.viewfinder")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(IOSTheme.accent)
-                        .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.isPairingRelay ? "Pairing Relay…" : "Scan Relay QR")
-                            .font(IOSTypography.bodyEmphasis)
-                            .foregroundStyle(IOSTheme.text)
-                        Text("Use the one-time link shown by Warren Relay.")
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .lineLimit(2)
-                    }
-                    Spacer(minLength: 8)
-                    if model.isPairingRelay {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(IOSTheme.accent)
-                    } else {
-                        Image(systemName: "chevron.forward")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                    }
-                }
-                .padding(.horizontal, 13)
-                .frame(minHeight: 58)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isPairingRelay)
-            .iosSurface(color: IOSTheme.chrome, radius: IOSTheme.smallRadius)
-
-            #if canImport(UIKit)
-            Button {
-                guard let link = UIPasteboard.general.string else {
-                    model.pairRelayLink("", replacingEndpointName: endpoint?.name)
-                    return
-                }
-                model.pairRelayLink(link, replacingEndpointName: endpoint?.name)
-            } label: {
-                Label("Paste Relay link", systemImage: "doc.on.clipboard")
-                    .font(IOSTypography.label)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isPairingRelay)
-            #endif
-
-            if isRelay, let hostID = savedMetadata?.hostID {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.shield")
-                    Text("Host \(hostID.prefix(8))")
-                }
-                .font(IOSTypography.metadata)
-                .foregroundStyle(IOSTheme.secondaryText)
-            }
-        }
-        .padding(.top, 25)
     }
 
     private func endpointField(
