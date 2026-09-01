@@ -13,14 +13,13 @@ import (
 )
 
 func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000010"
 	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	ticket := provisionHostTicket(t, httpServer.URL, hostID)
+	hostID, ticket := provisionHostTicket(t, httpServer.URL)
 	body, _ := json.Marshal(map[string]string{"enrollment_ticket": ticket, "host_secret": "daemon-secret"})
 	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
 	response, err := http.DefaultClient.Do(request)
@@ -78,14 +77,13 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 }
 
 func TestOwnedRelayV2HostHandshake(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000011"
 	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	credential := provisionHost(t, httpServer.URL, hostID)
+	hostID, credential := provisionHost(t, httpServer.URL)
 	base := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	host, _, err := websocket.DefaultDialer.Dial(base+"/v1/host/connect?host_id="+hostID+"&version=2.0", http.Header{"Authorization": []string{"Bearer " + credential}})
 	if err != nil {
@@ -117,14 +115,13 @@ func TestOwnedRelayV2HostHandshake(t *testing.T) {
 }
 
 func TestOwnedRelayPublicHTTPRouteForwardsBRLY2Stream(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000012"
 	server, err := NewServer(Config{PublicURL: "https://relay.example.test", AdminToken: "admin-bootstrap", SigningKey: []byte("0123456789abcdef0123456789abcdef"), AllowedOrigin: "https://relay.example.test", TunnelBaseDomain: "tunnel.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	credential := provisionHost(t, httpServer.URL, hostID)
+	hostID, credential := provisionHost(t, httpServer.URL)
 	base := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	host, _, err := websocket.DefaultDialer.Dial(base+"/v1/host/connect?host_id="+hostID+"&version=2.0", http.Header{"Authorization": []string{"Bearer " + credential}})
 	if err != nil {

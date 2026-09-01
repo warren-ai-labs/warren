@@ -47,7 +47,6 @@ func TestRequestClientIPNormalizesRemoteAddress(t *testing.T) {
 }
 
 func TestPairingStartRateLimitReturnsRetryAfter(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000030"
 	server, err := NewServer(Config{
 		PublicURL:        "https://relay.example.test",
 		AdminToken:       "admin-bootstrap",
@@ -61,7 +60,7 @@ func TestPairingStartRateLimitReturnsRetryAfter(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	credential := provisionHost(t, httpServer.URL, hostID)
+	hostID, credential := provisionHost(t, httpServer.URL)
 	websocketBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	host := dialV2Host(t, websocketBase, hostID, credential, "")
 	defer host.Close()

@@ -32,6 +32,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if env("WARREN_RELAY_PRINT_SETUP_LINK", "1") != "0" {
+		setupLink, setupErr := server.NewSetupLink(env("WARREN_RELAY_SETUP_NAME", "Warren Host"))
+		if setupErr != nil {
+			log.Fatal("create Relay setup link: ", setupErr)
+		}
+		if setupLink != "" {
+			slog.Info("Warren Relay setup link", "setup_link", setupLink)
+		}
+	}
 	slog.Info("Warren Relay listening", "address", address)
 	httpServer := &http.Server{
 		Addr: address, Handler: server,

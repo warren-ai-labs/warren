@@ -44,7 +44,7 @@ func TestDoRelayRequestDoesNotFollowRedirect(t *testing.T) {
 }
 
 func TestRelayClientCommandsHaveNoControlPlane(t *testing.T) {
-	for _, command := range []string{"enroll", "pair", "pairing", "status", "tunnel", "revoke"} {
+	for _, command := range []string{"register", "enroll", "pair", "pairing", "status", "tunnel", "revoke"} {
 		if err := run([]string{"relay", command}); err == nil {
 			t.Fatalf("relay %s remained available", command)
 		}
@@ -57,7 +57,7 @@ func TestRelayClientCommandsHaveNoControlPlane(t *testing.T) {
 	}
 }
 
-func TestRelayRegisterConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
+func TestRelayConnectConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000011"
 	var requests []struct {
 		method string
@@ -106,7 +106,7 @@ func TestRelayRegisterConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 
 	output, err := captureStdout(t, func() error {
 		return run([]string{
-			"--json", "--config", configFile, "relay", "register", "--url", "https://relay.example.test", "--host", hostID,
+			"--json", "--config", configFile, "relay", "connect", "--url", "https://relay.example.test", "--host", hostID,
 			"--ticket", "ticket-1",
 		})
 	})
@@ -115,13 +115,13 @@ func TestRelayRegisterConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 	}
 	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("register output: %v\n%s", err, output)
+		t.Fatalf("connect output: %v\n%s", err, output)
 	}
 	if result["connected"] != true {
-		t.Fatalf("register result = %#v", result)
+		t.Fatalf("connect result = %#v", result)
 	}
 	if strings.Contains(output, "ticket-1") || strings.Contains(output, "daemon-token") {
-		t.Fatalf("register output leaked enrollment material: %s", output)
+		t.Fatalf("connect output leaked enrollment material: %s", output)
 	}
 	if len(requests) != 1 {
 		t.Fatalf("requests = %#v, want local enrollment", requests)
