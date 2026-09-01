@@ -1054,7 +1054,11 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	}
 	_ = connection.SetReadDeadline(time.Time{})
 	state, revision := s.Service.RosterVersion(request.Context())
-	if err := peer.writeJSON(map[string]any{"t": "welcome", "version": api.Version, "host": state.Host}); err != nil {
+	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
+	if err := peer.writeJSON(map[string]any{
+		"t": "welcome", "version": api.Version, "host": state.Host,
+		"capabilities": peer.capabilitiesList(),
+	}); err != nil {
 		return
 	}
 	_ = peer.writeJSON(makeRoster(state))
@@ -1195,7 +1199,11 @@ func (s *HTTPServer) HandleRelayControl(
 		entry.stateMu.Unlock()
 		s.registerPeer(peer)
 		state, revision := s.Service.RosterVersion(ctx)
-		if err := peer.writeJSON(map[string]any{"t": "welcome", "version": api.Version, "host": state.Host}); err != nil {
+		peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), auth.Capabilities))
+		if err := peer.writeJSON(map[string]any{
+			"t": "welcome", "version": api.Version, "host": state.Host,
+			"capabilities": peer.capabilitiesList(),
+		}); err != nil {
 			s.removeRelayControl(value.ID, entry)
 			return err
 		}
@@ -1399,7 +1407,11 @@ type wsPeer struct {
 	// terminalStateFormat is negotiated once during protocol-2 authentication.
 	// Every client must install its selected format behind a presentation gate.
 	terminalStateFormat string
-	rosterCancel        context.CancelFunc
+	// capabilities contains the Host/client intersection established during
+	// authentication. It is immutable after the welcome message and guarded by
+	// enqueueMu so request handlers and broadcasts can inspect it safely.
+	capabilities []string
+	rosterCancel context.CancelFunc
 	// session.subscribe is intentionally handled in a background goroutine so
 	// a slow Ghostline checkpoint cannot block unrelated control requests. Keep
 	// one cancellable operation per session so an unsubscribe (or replacement
@@ -1419,6 +1431,24 @@ func (p *wsPeer) logInfo(message string, args ...any) {
 	if p.server.Logger != nil {
 		p.server.Logger.Info(message, args...)
 	}
+}
+
+func (p *wsPeer) setCapabilities(values []string) {
+	p.enqueueMu.Lock()
+	p.capabilities = append([]string(nil), values...)
+	p.enqueueMu.Unlock()
+}
+
+func (p *wsPeer) capabilitiesList() []string {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	return append([]string(nil), p.capabilities...)
+}
+
+func (p *wsPeer) supportsCapability(capability string) bool {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	return api.SupportsCapability(p.capabilities, capability)
 }
 
 func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
@@ -1871,6 +1901,144 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return fmt.Errorf("turn parameter required")
 		}
 		return p.writeResult(command.ID, p.server.Service.agentTurnEvents(sessionID, turn))
+	case "agent.interaction.respond":
+		if !p.supportsCapability(api.CapabilityAgentInteractions) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentInteractions)
+		}
+		request, err := decodeAgentInteractionParams(params)
+		if err != nil {
+			return err
+		}
+		if request.Session == "" {
+			request.Session = stringParam(params, "session")
+		}
+		if request.RequestID == "" {
+			request.RequestID = stringParam(params, "requestId")
+		}
+		if request.RequestID == "" {
+			request.RequestID = command.ID
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.respondAgentInteraction(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.turn.interrupt":
+		if !p.supportsCapability(api.CapabilityAgentInterrupt) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentInterrupt)
+		}
+		request, err := decodeAgentTurnInterruptParams(params)
+		if err != nil {
+			return err
+		}
+		if request.Replacement != nil && len(request.Replacement.Attachments) > 0 &&
+			!p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		if request.Session == "" {
+			request.Session = stringParam(params, "session")
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.interruptAgentTurn(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.message.send":
+		request, err := decodeAgentMessageParams(params)
+		if err != nil {
+			return err
+		}
+		if len(request.Attachments) > 0 && !p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		if request.Session == "" {
+			request.Session = stringParam(params, "session")
+		}
+		if request.ClientMessageID == "" {
+			request.ClientMessageID = stringParam(params, "clientMessageId")
+		}
+		if request.ClientMessageID == "" {
+			request.ClientMessageID = command.ID
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.sendAgentMessage(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.attachment.prepare":
+		if !p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		request, err := decodeAgentAttachmentPrepareParams(params)
+		if err != nil {
+			return err
+		}
+		request.Session = stringParam(params, "session")
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.prepareAgentAttachment(ctx, request.Session, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.attachment.chunk":
+		if !p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		request, err := decodeAgentAttachmentChunkParams(params)
+		if err != nil {
+			return err
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.putAgentAttachmentChunk(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.attachment.complete":
+		if !p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		request, err := decodeAgentAttachmentCompleteParams(params)
+		if err != nil {
+			return err
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.completeAgentAttachment(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
+	case "agent.attachment.abort":
+		if !p.supportsCapability(api.CapabilityAgentAttachments) {
+			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		}
+		request, err := decodeAgentAttachmentAbortParams(params)
+		if err != nil {
+			return err
+		}
+		if err := p.requireAgentControl(request.Session); err != nil {
+			return err
+		}
+		result, err := p.server.Service.abortAgentAttachment(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, result)
 	case "agent.subscribe":
 		sessionID := stringParam(params, "session")
 		session, ok := p.server.Service.Session(sessionID)
@@ -2743,6 +2911,34 @@ func (p *wsPeer) controlledSession() (api.Session, error) {
 	return *p.attached, nil
 }
 
+// requireAgentControl keeps all mutating Agent View requests behind the same
+// per-session control lease as terminal input and resize. Agent subscriptions
+// are intentionally passive, so merely seeing a transcript must never grant a
+// client the ability to answer an interaction or submit a message.
+func (p *wsPeer) requireAgentControl(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		// Let the Service return its canonical validation error for malformed
+		// requests; no provider call can be made without a session identity.
+		return nil
+	}
+	attached, err := p.controlledSession()
+	if err != nil {
+		return err
+	}
+	if attached.ID != sessionID {
+		return fmt.Errorf("control lease required for session: %s", sessionID)
+	}
+	// A focus handoff can replace the service-level owner while the previous
+	// peer still has its local attached pointer. Consult the authoritative
+	// owner map as well so a stale socket cannot mutate Agent state after the
+	// lease moved to another client.
+	if p.server != nil && p.server.Service != nil && !p.server.Service.isFocused(p, attached.ID) {
+		return fmt.Errorf("control lease required for session: %s", sessionID)
+	}
+	return nil
+}
+
 func (p *wsPeer) addOutput(sessionID string) {
 	p.enqueueMu.Lock()
 	if p.outputs == nil {
@@ -2779,6 +2975,49 @@ func (p *wsPeer) releaseControl(sessionID string) {
 func stringParam(values map[string]any, key string) string {
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+// decodeAgentParams deliberately goes through JSON so requests received from
+// WebSocket clients and requests assembled by the Go client share one wire
+// shape. It also keeps the legacy string-valued parameter helpers untouched.
+func decodeAgentParams[T any](values map[string]any) (T, error) {
+	var result T
+	data, err := json.Marshal(values)
+	if err != nil {
+		return result, fmt.Errorf("invalid request parameters: %w", err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, fmt.Errorf("invalid request parameters: %w", err)
+	}
+	return result, nil
+}
+
+func decodeAgentInteractionParams(values map[string]any) (api.AgentInteractionResponse, error) {
+	return decodeAgentParams[api.AgentInteractionResponse](values)
+}
+
+func decodeAgentTurnInterruptParams(values map[string]any) (api.AgentTurnInterruptRequest, error) {
+	return decodeAgentParams[api.AgentTurnInterruptRequest](values)
+}
+
+func decodeAgentMessageParams(values map[string]any) (api.AgentMessageSendRequest, error) {
+	return decodeAgentParams[api.AgentMessageSendRequest](values)
+}
+
+func decodeAgentAttachmentPrepareParams(values map[string]any) (api.AgentAttachmentPrepareRequest, error) {
+	return decodeAgentParams[api.AgentAttachmentPrepareRequest](values)
+}
+
+func decodeAgentAttachmentChunkParams(values map[string]any) (api.AgentAttachmentChunkRequest, error) {
+	return decodeAgentParams[api.AgentAttachmentChunkRequest](values)
+}
+
+func decodeAgentAttachmentCompleteParams(values map[string]any) (api.AgentAttachmentCompleteRequest, error) {
+	return decodeAgentParams[api.AgentAttachmentCompleteRequest](values)
+}
+
+func decodeAgentAttachmentAbortParams(values map[string]any) (api.AgentAttachmentAbortRequest, error) {
+	return decodeAgentParams[api.AgentAttachmentAbortRequest](values)
 }
 
 func sessionMoveExpectations(values map[string]any) SessionMoveExpectations {

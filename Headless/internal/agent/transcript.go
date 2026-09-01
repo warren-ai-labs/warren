@@ -640,6 +640,119 @@ type codexPayload struct {
 	} `json:"info"`
 }
 
+var structuredAgentEventTypes = map[string]struct{}{
+	"question": {}, "permission": {}, "plan": {}, "todo": {},
+	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {},
+}
+
+// projectStructuredAgentEvent turns provider-native structured records into
+// the small, provider-neutral payload understood by Agent View. Provider
+// transcripts contain many internal fields (including tool arguments), so
+// only the RFC display fields cross the Host boundary.
+func projectStructuredAgentEvent(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time) *api.AgentEvent {
+	var object map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
+		return nil
+	}
+	outerType := firstStringValue(object["type"], object["eventType"], fallbackType)
+	source := object
+	if nested, ok := object["payload"].(map[string]any); ok {
+		source = nested
+	}
+	rawType := firstStringValue(source["type"], source["eventType"], outerType)
+	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
+	kind := normalized
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment"} {
+		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
+			kind = candidate
+			break
+		}
+	}
+	if _, ok := structuredAgentEventTypes[kind]; !ok {
+		return nil
+	}
+	payload := make(map[string]any)
+	copyStructuredField(payload, source, "requestId", "requestId", "request_id")
+	copyStructuredField(payload, source, "title", "title")
+	copyStructuredField(payload, source, "description", "description")
+	copyStructuredField(payload, source, "questions", "questions")
+	copyStructuredField(payload, source, "action", "action")
+	copyStructuredField(payload, source, "options", "options")
+	copyStructuredField(payload, source, "planId", "planId", "plan_id")
+	copyStructuredField(payload, source, "todoId", "todoId", "todo_id")
+	copyStructuredField(payload, source, "activityId", "activityId", "activity_id")
+	copyStructuredField(payload, source, "pluginId", "pluginId", "plugin_id")
+	copyStructuredField(payload, source, "subagentId", "subagentId", "subagent_id")
+	copyStructuredField(payload, source, "attachmentId", "attachmentId", "attachment_id")
+	copyStructuredField(payload, source, "items", "items")
+	copyStructuredField(payload, source, "label", "label")
+	copyStructuredField(payload, source, "name", "name")
+	copyStructuredField(payload, source, "summary", "summary")
+	copyStructuredField(payload, source, "detail", "detail")
+	copyStructuredField(payload, source, "mime", "mime", "MIME")
+	copyStructuredField(payload, source, "size", "size")
+	copyStructuredField(payload, source, "state", "state", "status")
+	// Provider records also use generic names such as `plan` and
+	// `attachment` for internal transcript bookkeeping. Only project a
+	// record when it carries at least one RFC display field; otherwise let the
+	// provider-specific parser retain its established fallback behaviour.
+	if len(payload) == 0 {
+		return nil
+	}
+	if _, ok := payload["state"]; !ok {
+		switch {
+		case strings.HasSuffix(normalized, "_asked") || strings.HasSuffix(normalized, "_requested"):
+			payload["state"] = "pending"
+		case strings.HasSuffix(normalized, "_resolved") || strings.HasSuffix(normalized, "_replied") || strings.HasSuffix(normalized, "_rejected"):
+			payload["state"] = "resolved"
+		}
+	}
+	requestID := stringValue(payload["requestId"])
+	id := firstStringValue(source["id"], source["eventId"], source["event_id"])
+	if id == "" {
+		switch kind {
+		case "question", "permission":
+			id = requestID
+		case "plan":
+			id = stringValue(payload["planId"])
+		case "todo":
+			id = stringValue(payload["todoId"])
+		case "activity":
+			id = stringValue(payload["activityId"])
+		case "plugin":
+			id = stringValue(payload["pluginId"])
+		case "subagent":
+			id = stringValue(payload["subagentId"])
+		case "attachment":
+			id = stringValue(payload["attachmentId"])
+		}
+	}
+	return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Payload: payload, Timestamp: timestamp}
+}
+
+func copyStructuredField(destination, source map[string]any, name string, aliases ...string) {
+	for _, alias := range aliases {
+		if value, ok := source[alias]; ok && value != nil {
+			destination[name] = value
+			return
+		}
+	}
+}
+
+func firstStringValue(values ...any) string {
+	for _, value := range values {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
+}
+
 func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 	var record codexRecord
 	if json.Unmarshal(line, &record) != nil {
@@ -671,6 +784,9 @@ func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 			event.Type = "unknown"
 			event.Content = p.clip(string(record.Payload))
 			return []api.AgentEvent{event}
+		}
+		if structured := projectStructuredAgentEvent("codex", payload.Type, record.Payload, event.Timestamp); structured != nil {
+			return []api.AgentEvent{*structured}
 		}
 		switch payload.Type {
 		case "message":
@@ -791,6 +907,9 @@ func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 		var payload codexPayload
 		if json.Unmarshal(record.Payload, &payload) != nil {
 			return nil
+		}
+		if structured := projectStructuredAgentEvent("codex", payload.Type, record.Payload, event.Timestamp); structured != nil {
+			return []api.AgentEvent{*structured}
 		}
 		switch payload.Type {
 		case "token_count":
@@ -1164,6 +1283,12 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
+	if structured := projectStructuredAgentEvent("claude", record.Type, line, timestamp); structured != nil {
+		if structured.ID == "" {
+			structured.ID = record.UUID
+		}
+		return []api.AgentEvent{*structured}
+	}
 	switch record.Type {
 	case "summary", "last-prompt", "ai-title", "pr-link", "queue-operation",
 		"permission-mode", "mode", "file-history-snapshot":

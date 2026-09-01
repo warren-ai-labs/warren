@@ -115,9 +115,13 @@ type Service struct {
 	// AgentHooks installs the Warren-managed Codex hook that reports the
 	// CLI session ID and transcript path. Nil disables installation; the
 	// finder then remains the best-effort fallback.
-	AgentHooks   func() error
-	RingCapacity int
-	RingMaxBytes int
+	AgentHooks func() error
+	// AgentController is an optional provider-native bridge for structured
+	// Agent View actions. When absent, ordinary text keeps its legacy PTY path,
+	// while interaction and interrupt requests fail explicitly.
+	AgentController AgentViewController
+	RingCapacity    int
+	RingMaxBytes    int
 	// CommandTimeout bounds runtime operations during attach and adoption. A
 	// stuck runtime must fail the attach and release the session broadcast
 	// lock instead of wedging the session until the
@@ -171,6 +175,16 @@ type Service struct {
 	openCodeBindingMu sync.Mutex
 	agents            map[string]*agentSession
 	agentEpoch        uint64
+	// Agent View upload and idempotency state is device-local to this Host. It
+	// contains no authentication material and is discarded on daemon restart.
+	agentViewMu             sync.Mutex
+	agentUploads            map[string]*agentUpload
+	agentInteractionResults map[string]api.AgentInteractionResult
+	agentMessageResults     map[string]api.AgentMessageSendResult
+	agentInterruptResults   map[string]api.AgentTurnInterruptResult
+	agentActionFingerprints map[string]string
+	agentActionCalls        map[string]*agentActionCall
+	agentSessionActionLocks map[string]*sync.Mutex
 
 	lifecycleOnce   sync.Once
 	lifecycleCancel context.CancelFunc
@@ -4090,9 +4104,9 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 }
 
 // agentHistoryPageWithOptions serves the regular event page and the mobile
-// conversation-priority view. The latter intentionally returns only user and
-// assistant messages: a long run of tool calls can otherwise fill a bounded
-// page and hide the conversation the reader is trying to recover. The cursor
+// conversation-priority view. The latter omits noisy tool/reasoning rows, but
+// keeps the user/assistant messages and RFC 0010 structured events so a
+// paged Agent View cannot lose a pending interaction or plan. The cursor
 // remains an event sequence, so clients can page backwards without changing
 // the wire contract or the ordering of the default view.
 func (s *Service) agentHistoryPageWithOptions(
@@ -4182,10 +4196,11 @@ func conversationHistoryPage(
 	return result
 }
 
-// conversationHistoryEvents keeps only readable conversation messages and
-// folds OpenCode's mutable-part deltas. The regular history endpoint remains
-// a lossless event view; this projection is opt-in for mobile conversation
-// surfaces that need message pagination without tool/reasoning noise.
+// conversationHistoryEvents keeps readable conversation messages and RFC 0010
+// structured rows, then folds OpenCode's mutable-part deltas. The regular
+// history endpoint remains a lossless event view; this projection is opt-in
+// for mobile conversation surfaces that need message pagination without
+// tool/reasoning noise.
 func conversationHistoryEvents(events []api.AgentEvent) []api.AgentEvent {
 	result := make([]api.AgentEvent, 0, len(events))
 	positions := make(map[string]int)
@@ -4250,10 +4265,19 @@ func normalizedAgentEventType(event api.AgentEvent) string {
 func isConversationAgentEvent(event api.AgentEvent) bool {
 	typeName := normalizedAgentEventType(event)
 	role := strings.ToLower(strings.TrimSpace(event.Role))
-	if typeName != "user" && typeName != "assistant" && role != "user" && role != "assistant" {
+	if typeName == "user" || typeName == "assistant" || role == "user" || role == "assistant" {
+		return strings.TrimSpace(event.Content) != ""
+	}
+	// Structured events are facts rather than prose. Keep them even when their
+	// payload has no display text (for example a pending interaction or an
+	// empty plan update); clients use the event identity and state to render
+	// and reconcile the card.
+	switch typeName {
+	case "question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment":
+		return event.Payload != nil || strings.TrimSpace(event.Content) != ""
+	default:
 		return false
 	}
-	return strings.TrimSpace(event.Content) != ""
 }
 
 // agentTranscriptChunk returns raw JSONL only from the transcript already

@@ -16,6 +16,7 @@ import {
 } from "./catalog.js";
 import {
   WarrenConnection,
+  agentCapabilities,
   connectionErrorDetail,
   rejectPendingRequests,
 } from "./connection.js";
@@ -59,7 +60,15 @@ import {
   terminalSize,
   waitForTerminalFont,
 } from "./terminal.js";
-import { formatAgentModel, mergeAgentEvents } from "./agent.js";
+import {
+  AgentMessageQueue,
+  agentAttachmentReference,
+  agentQueueKey,
+  encodeAgentAttachmentChunk,
+  mergeAgentEvents,
+  removeAgentDraft,
+  validateAgentAttachment,
+} from "./agent.js";
 import { AgentView } from "./agent.jsx";
 import {
   AgentCompletionEventChannel,
@@ -224,6 +233,12 @@ export default function App() {
   const [terminalSearchFocusNonce, setTerminalSearchFocusNonce] = useState(0);
   const [contextMenu, setContextMenu] = useState(null);
   const [agentStateBySession, setAgentStateBySession] = useState({});
+  const [agentQueueBySession, setAgentQueueBySession] = useState({});
+  const [agentCapabilitiesState, setAgentCapabilitiesState] = useState([]);
+  const [agentActionError, setAgentActionError] = useState("");
+  const agentCapabilitiesRef = useRef(new Set());
+  const agentQueueRef = useRef({});
+  const agentInterruptInFlightRef = useRef(new Set());
   const [agentViewOverride, setAgentViewOverride] = useState(null);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [worktreeImportDialog, setWorktreeImportDialog] = useState(null);
@@ -391,6 +406,89 @@ export default function App() {
     }
     return true;
   }, []);
+
+  const requestAgent = useCallback((method, params = {}) => new Promise((resolve, reject) => {
+    const sent = request(method, params, resolve, reject);
+    if (!sent) reject(new Error("Connection unavailable"));
+  }), [request]);
+
+  const uploadAgentAttachments = useCallback(async (files, onProgress = () => {}) => {
+    const sessionID = appStateRef.current.activeSession;
+    if (!sessionID || !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+      throw new Error("This Host does not support attachments");
+    }
+    const references = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const validation = validateAgentAttachment(file);
+      if (!validation.ok) throw new Error(validation.error);
+      let uploadID = "";
+      try {
+        const data = await file.arrayBuffer();
+        const digest = globalThis.crypto?.subtle
+          ? await globalThis.crypto.subtle.digest("SHA-256", data)
+          : null;
+        const sha256 = digest
+          ? [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("")
+          : "";
+        const prepared = await requestAgent("agent.attachment.prepare", {
+          session: sessionID,
+          name: file.name,
+          mime: file.type,
+          size: file.size,
+          ...(sha256 ? { sha256 } : {}),
+        });
+        const attachmentID = String(prepared?.attachmentId || "").trim();
+        uploadID = String(prepared?.uploadId || "").trim();
+        const chunkSize = Number(prepared?.chunkSize) > 0 ? Number(prepared.chunkSize) : 256 * 1024;
+        if (!attachmentID || !uploadID) throw new Error("Host returned an invalid attachment upload");
+        let sentBytes = 0;
+        for (let sequence = 0; sentBytes < data.byteLength || (data.byteLength === 0 && sequence === 0); sequence += 1) {
+          const chunk = new Uint8Array(data, sentBytes, Math.min(chunkSize, data.byteLength - sentBytes));
+          const chunkDigest = globalThis.crypto?.subtle
+            ? await globalThis.crypto.subtle.digest("SHA-256", chunk)
+            : null;
+          const chunkSHA = chunkDigest
+            ? [...new Uint8Array(chunkDigest)].map(value => value.toString(16).padStart(2, "0")).join("")
+            : "";
+          const chunkResult = await requestAgent("agent.attachment.chunk", {
+            session: sessionID,
+            uploadId: uploadID,
+            sequence,
+            length: chunk.byteLength,
+            ...(chunkSHA ? { sha256: chunkSHA } : {}),
+            data: encodeAgentAttachmentChunk(chunk),
+          });
+          if (!chunkResult?.accepted) {
+            throw new Error(chunkResult?.error || "Host rejected an attachment chunk");
+          }
+          sentBytes += chunk.byteLength;
+          onProgress(index, data.byteLength === 0 ? 1 : sentBytes / data.byteLength);
+          if (data.byteLength === 0) break;
+        }
+        const completed = await requestAgent("agent.attachment.complete", {
+          session: sessionID,
+          uploadId: uploadID,
+          length: data.byteLength,
+          ...(sha256 ? { sha256 } : {}),
+        });
+        if (!completed?.accepted || String(completed.attachmentId || attachmentID).trim() !== attachmentID) {
+          throw new Error(completed?.error || "Host rejected attachment completion");
+        }
+        const reference = agentAttachmentReference({ attachmentId: attachmentID }, file);
+        if (!reference) throw new Error("Host returned an invalid attachment reference");
+        references.push(reference);
+        onProgress(index, 1);
+      } catch (error) {
+        if (uploadID) {
+          try { await requestAgent("agent.attachment.abort", { session: sessionID, uploadId: uploadID }); } catch { /* best effort */ }
+        }
+        onProgress(index, 0, String(error?.message || error || "Upload failed"));
+        throw error;
+      }
+    }
+    return references;
+  }, [requestAgent]);
 
   const applyRemoteSettings = useCallback(result => {
     if (!result || typeof result !== "object") return;
@@ -611,7 +709,7 @@ export default function App() {
   }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
-    const params = { session: sessionID, limit: "200" };
+    const params = { session: sessionID, limit: "200", priority: "conversation" };
     if (before > 0) params.before = String(before);
     setAgentStateBySession(previous => {
       const current = previous[sessionID] || {};
@@ -822,15 +920,17 @@ export default function App() {
 
   const sendInput = useCallback(data => {
     const state = appStateRef.current;
-    if (!data || !state.activeSession) return;
+    if (!data || !state.activeSession) return false;
     if (state.attachedSession !== state.activeSession) {
       inputQueueRef.current.enqueue(state.activeSession, data);
-      return;
+      return false;
     }
     if (!connectionRef.current?.sendBinary(data)) {
       inputQueueRef.current.enqueue(state.activeSession, data);
       connectionRef.current?.reconnectNow();
+      return false;
     }
+    return true;
   }, []);
 
   const sendAgentInput = useCallback(text => {
@@ -843,21 +943,250 @@ export default function App() {
     const state = appStateRef.current;
     const sessionID = state.activeSession;
     if (!sessionID) return;
-    sendInput(text.replace(/\n/g, "\r"));
+    const sent = sendInput(text.replace(/\n/g, "\r"));
+    if (!sent) return false;
     setTimeout(() => {
       if (appStateRef.current.activeSession === sessionID) {
         sendInput("\x1b[13u");
       }
     }, 80);
+    return true;
   }, [sendInput]);
 
-  const interruptAgent = useCallback(() => {
-    const state = appStateRef.current;
-    if (!state.activeSession || state.attachedSession !== state.activeSession) return;
-    // Interrupt uses the same authoritative PTY control lease as Terminal's
-    // Ctrl-C shortcut. The Host publishes the resulting Agent status.
-    sendInput(new Uint8Array([0x03]));
-  }, [sendInput]);
+  const publishAgentQueue = useCallback((sessionID, queue) => {
+    const items = queue.items.map(item => ({ ...item, attachments: [...(item.attachments || [])] }));
+    setAgentQueueBySession(previous => ({ ...previous, [sessionID]: items }));
+  }, []);
+
+  const drainAgentQueue = useCallback(sessionID => {
+    // A queue belongs to both its endpoint and Session. Only the focused
+    // Session owns the PTY/control lease, so a ready event from an old tab
+    // must never drain another Session's local messages.
+    if (appStateRef.current.activeSession !== sessionID
+      || focusedSessionRef.current !== sessionID) return;
+    const state = agentStateBySession[sessionID];
+    const activity = String(state?.status?.activity || "").toLowerCase();
+    const inputAttention = state?.status?.attention?.kind === "input";
+    if (activity !== "ready" && !(activity === "blocked" && inputAttention)) return;
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || queue.items.some(item => item.status === "sending")) return;
+    const item = queue.items.find(value => value.status === "queued");
+    if (!item) return;
+    queue.markSending(item.id);
+    publishAgentQueue(sessionID, queue);
+    const delivered = () => {
+      queue.deliver(item.id);
+      publishAgentQueue(sessionID, queue);
+      drainAgentQueue(sessionID);
+    };
+    const failed = detail => {
+      const stillFocused = appStateRef.current.activeSession === sessionID
+        && focusedSessionRef.current === sessionID;
+      if (stillFocused) queue.markFailed(item.id, detail);
+      else queue.markQueued(item.id);
+      publishAgentQueue(sessionID, queue);
+    };
+    if (item.attachments?.length > 0 && !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+      failed("This Host does not support attachments");
+    } else if (agentCapabilitiesRef.current.has("agent-timeline-v1") || item.attachments?.length > 0) {
+      const sent = request(
+        "agent.message.send",
+        {
+          session: sessionID,
+          clientMessageId: item.id,
+          text: item.text,
+          ...(item.attachments?.length ? { attachments: item.attachments } : {}),
+        },
+        result => result?.accepted ? delivered() : failed("Host did not accept the message"),
+        failed,
+      );
+      if (!sent) failed("Connection unavailable");
+    } else {
+      if (sendAgentInput(item.text)) delivered();
+      else failed("Connection unavailable");
+    }
+  }, [agentStateBySession, publishAgentQueue, request, sendAgentInput]);
+
+  const queueAgentMessage = useCallback((sessionID, text, attachments = []) => {
+    const queueKey = agentQueueKey(webSocketURL(), sessionID);
+    const queue = agentQueueRef.current[queueKey] || new AgentMessageQueue();
+    agentQueueRef.current[queueKey] = queue;
+    const item = queue.enqueue({ text, attachments });
+    publishAgentQueue(sessionID, queue);
+    return item;
+  }, [publishAgentQueue]);
+
+  const sendAgentMessageFromView = useCallback((text, attachments = []) => {
+    const sessionID = appStateRef.current.activeSession;
+    if (!sessionID) return;
+    // Every composer submission gets a stable local ID first. The drain then
+    // selects structured `agent.message.send` or the legacy PTY fallback
+    // according to the negotiated capabilities, avoiding a second send path
+    // that could race the queue or lose idempotency.
+    queueAgentMessage(sessionID, text, attachments);
+    drainAgentQueue(sessionID);
+  }, [drainAgentQueue, queueAgentMessage]);
+
+  const editAgentQueueItem = useCallback((sessionID, itemID, text, attachments) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || !queue.edit(itemID, text, attachments)) return;
+    publishAgentQueue(sessionID, queue);
+    drainAgentQueue(sessionID);
+  }, [drainAgentQueue, publishAgentQueue]);
+
+  const deleteAgentQueueItem = useCallback((sessionID, itemID) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || !queue.remove(itemID)) return;
+    publishAgentQueue(sessionID, queue);
+  }, [publishAgentQueue]);
+
+  const moveAgentQueueItemToFront = useCallback((sessionID, itemID) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || !queue.moveToFront(itemID)) return;
+    publishAgentQueue(sessionID, queue);
+    drainAgentQueue(sessionID);
+  }, [drainAgentQueue, publishAgentQueue]);
+
+  const reorderAgentQueueItem = useCallback((sessionID, itemID, beforeID) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || !queue.reorder(itemID, beforeID)) return;
+    publishAgentQueue(sessionID, queue);
+    drainAgentQueue(sessionID);
+  }, [drainAgentQueue, publishAgentQueue]);
+
+  const retryAgentQueueItem = useCallback((sessionID, itemID) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || !queue.retry(itemID)) return;
+    publishAgentQueue(sessionID, queue);
+    drainAgentQueue(sessionID);
+  }, [drainAgentQueue, publishAgentQueue]);
+
+  useEffect(() => {
+    for (const [sessionID, state] of Object.entries(agentStateBySession)) {
+      if (state?.status?.activity === "ready"
+        || (state?.status?.activity === "blocked" && state?.status?.attention?.kind === "input")) {
+        drainAgentQueue(sessionID);
+      }
+    }
+  }, [agentStateBySession, drainAgentQueue]);
+
+  useEffect(() => {
+    // Focus is granted asynchronously after the composer/terminal request;
+    // retry the active Session's queue at that exact control boundary.
+    if (focusedSessionID) drainAgentQueue(focusedSessionID);
+  }, [focusedSessionID, drainAgentQueue]);
+
+  const activeAgentTurn = useCallback(sessionID => {
+    const state = agentStateBySession[sessionID];
+    const explicit = state?.turn?.id || state?.turn;
+    if (Number(explicit) > 0) return Number(explicit);
+    const events = state?.events || [];
+    const value = [...events].reverse().find(event => Number(event?.turn) > 0)?.turn;
+    return Number(value) || 0;
+  }, [agentStateBySession]);
+
+  const cancelAgentTurn = useCallback(sessionID => {
+    if (!agentCapabilitiesRef.current.has("agent-interrupt-v1")) return;
+    const turn = activeAgentTurn(sessionID);
+    if (!turn || agentInterruptInFlightRef.current.has(sessionID)) return;
+    agentInterruptInFlightRef.current.add(sessionID);
+    setAgentActionError("");
+    const sent = request(
+      "agent.turn.interrupt",
+      { session: sessionID, turn, reason: "cancel" },
+      () => agentInterruptInFlightRef.current.delete(sessionID),
+      error => {
+        agentInterruptInFlightRef.current.delete(sessionID);
+        setAgentActionError(String(error || "Cancel failed"));
+      },
+    );
+    if (!sent) {
+      agentInterruptInFlightRef.current.delete(sessionID);
+      setAgentActionError("Connection unavailable");
+    }
+  }, [activeAgentTurn, request]);
+
+  const sendAgentMessageNow = useCallback((sessionID, text, attachments = []) => {
+    if (!agentCapabilitiesRef.current.has("agent-interrupt-v1")) {
+      return Promise.reject(new Error("This Host does not support interrupting turns"));
+    }
+    if (attachments.length > 0 && !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+      return Promise.reject(new Error("This Host does not support attachments"));
+    }
+    const turn = activeAgentTurn(sessionID);
+    const value = String(text || "").trim();
+    if (!turn || !value || agentInterruptInFlightRef.current.has(sessionID)) {
+      return Promise.reject(new Error("The active Agent turn is unavailable"));
+    }
+    const item = queueAgentMessage(sessionID, value, attachments);
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    queue.markSending(item.id);
+    publishAgentQueue(sessionID, queue);
+    agentInterruptInFlightRef.current.add(sessionID);
+    setAgentActionError("");
+    return new Promise((resolve, reject) => {
+      const finish = (result, error = "") => {
+        agentInterruptInFlightRef.current.delete(sessionID);
+        const stillFocused = appStateRef.current.activeSession === sessionID
+          && focusedSessionRef.current === sessionID;
+        if (error || !result?.accepted) {
+          if (stillFocused) queue.markFailed(item.id, error || "Host did not accept Send now");
+          else queue.markQueued(item.id);
+          publishAgentQueue(sessionID, queue);
+          const detail = error || "Host did not accept Send now";
+          setAgentActionError(detail);
+          reject(new Error(detail));
+          return;
+        }
+        queue.deliver(item.id);
+        publishAgentQueue(sessionID, queue);
+        resolve(result);
+      };
+      const sent = request(
+        "agent.turn.interrupt",
+        {
+          session: sessionID,
+          turn,
+          reason: "send_now",
+          replacement: {
+            session: sessionID,
+            clientMessageId: item.id,
+            text: value,
+            ...(attachments.length ? { attachments } : {}),
+          },
+        },
+        result => finish(result),
+        error => finish(null, String(error || "Send now failed")),
+      );
+      if (!sent) finish(null, "Connection unavailable");
+    });
+  }, [activeAgentTurn, publishAgentQueue, queueAgentMessage, request]);
+
+  const respondAgentInteraction = useCallback((sessionID, value) => {
+    if (!agentCapabilitiesRef.current.has("agent-interactions-v1")) {
+      return Promise.reject(new Error("This Host does not support interactions"));
+    }
+    setAgentActionError("");
+    return new Promise((resolve, reject) => {
+      const failed = detail => {
+        const error = String(detail || "Interaction response failed");
+        setAgentActionError(error);
+        reject(new Error(error));
+      };
+      const sent = request(
+        "agent.interaction.respond",
+        {
+          session: sessionID,
+          requestId: value.requestId,
+          kind: value.kind,
+          response: value.response,
+        },
+        resolve,
+        failed,
+      );
+      if (!sent) failed("Connection unavailable");
+    });
+  }, [request]);
 
   const fitTerminal = useCallback(() => {
     if (fitTimerRef.current !== null) {
@@ -1375,6 +1704,14 @@ export default function App() {
     }
 
     switch (message.t) {
+    case "welcome":
+      agentCapabilitiesRef.current = new Set(
+        Array.isArray(message.capabilities)
+          ? message.capabilities.filter(value => typeof value === "string")
+          : [],
+      );
+      setAgentCapabilitiesState([...agentCapabilitiesRef.current]);
+      break;
     case "response": {
       const handler = pendingRequestsRef.current.get(message.id);
       pendingRequestsRef.current.delete(message.id);
@@ -1585,6 +1922,24 @@ export default function App() {
       setCatalog(previous => updateSessionAgentStatus(previous, message.session, status));
       break;
     }
+    case "agent.turn": {
+      const turn = Number(message.turn) || 0;
+      if (!turn) break;
+      setAgentStateBySession(previous => {
+        const current = previous[message.session] || {};
+        const sameEpoch = !message.epoch || !current.epoch || current.epoch === message.epoch;
+        return {
+          ...previous,
+          [message.session]: {
+            ...current,
+            epoch: message.epoch || current.epoch,
+            turn: { id: turn, status: message.status || "unknown" },
+            events: sameEpoch ? current.events || [] : [],
+          },
+        };
+      });
+      break;
+    }
     case "runtimeMetadata":
       setCatalog(previous => {
         const session = previous.sessions.get(message.session);
@@ -1698,6 +2053,8 @@ export default function App() {
       // selected session; do not send an unsubscribe over the closing socket.
       cancelSubscription(false);
       settingsLoadedRef.current = false;
+      agentCapabilitiesRef.current = new Set();
+      setAgentCapabilitiesState([]);
       setConnectionStatus({ message: "Connecting…", online: false });
       return;
     }
@@ -2188,6 +2545,7 @@ export default function App() {
         url: webSocketURL(),
         token: runtime.token,
         getToken: () => runtime.token,
+        capabilities: ["roster-delta", ...agentCapabilities],
         onMessage: event => messageHandlerRef.current(event),
         onState: state => connectionStateHandlerRef.current(state),
       });
@@ -2495,7 +2853,19 @@ export default function App() {
       });
       return;
     }
+    // Capture the endpoint identity at mutation start. A delayed response
+    // from an old Host must clear only that Host's local queue and draft.
+    const endpointIdentity = webSocketURL();
+    const queueKey = agentQueueKey(endpointIdentity, dialog.id);
     request("session.delete", { id: dialog.id }, () => {
+      delete agentQueueRef.current[queueKey];
+      setAgentQueueBySession(previous => {
+        if (!(dialog.id in previous)) return previous;
+        const next = { ...previous };
+        delete next[dialog.id];
+        return next;
+      });
+      removeAgentDraft(localStorage, endpointIdentity, dialog.id);
       // If the deleted session owns the visible terminal, clear it right away
       // instead of waiting for the next roster broadcast. The empty-state
       // overlay is opaque, but the xterm surface behind it must not keep the
@@ -2717,13 +3087,6 @@ export default function App() {
   const selectedAgentEvents = selectedSession
     ? agentStateBySession[selectedSession.id]?.events || []
     : [];
-  const agentModel = useMemo(() => {
-    if (selectedSession?.agentModel) return formatAgentModel(selectedSession.agentModel);
-    for (let index = selectedAgentEvents.length - 1; index >= 0; index--) {
-      if (selectedAgentEvents[index].model) return formatAgentModel(selectedAgentEvents[index].model);
-    }
-    return "";
-  }, [selectedAgentEvents, selectedSession]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
   // An integrated Codex/Claude session is only safe to message once its CLI
   // has actually started. Before the binding/transcript exists, the TUI may
@@ -2790,7 +3153,6 @@ export default function App() {
               connection={connectionStatus}
               agentSession={isAgentSession ? selectedSession : null}
               agentViewActive={agentViewActive}
-              agentModel={agentModel}
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
               onOpenMenu={() => setDrawerOpen(true)}
@@ -2826,19 +3188,6 @@ export default function App() {
                 >
                   {paneDisplayTitle}
                 </span>
-                {isAgentSession && (agentModel || selectedSession?.agentSessionId) && (
-                  <span className="pane-agent-meta">
-                    {agentModel && <span className="pane-agent-model">{agentModel}</span>}
-                    {selectedSession?.agentSessionId && (
-                      <code
-                        className="pane-agent-session"
-                        title={selectedSession.agentSessionId}
-                      >
-                        {selectedSession.agentSessionId}
-                      </code>
-                    )}
-                  </span>
-                )}
                 {isAgentSession && (agentViewActive ? (
                   <button type="button" className="pane-action" onClick={() => toggleAgentView("terminal")}>
                     Terminal
@@ -2881,25 +3230,37 @@ export default function App() {
                 />
               </Suspense>
             )}
-            {isAgentSession && (
-              <div className="agent-view-host" hidden={!agentViewActive}>
-                <AgentView
-                  session={selectedSession}
-                  events={selectedAgentEvents}
-                  status={agentStateBySession[selectedSession.id]?.status || null}
-                  onSend={sendAgentInput}
-                  onInterrupt={interruptAgent}
-                  onOpenTerminal={() => toggleAgentView("terminal")}
-                  ready={agentViewReady}
-                  hasControl={focusedSessionID === selectedSession.id}
-                  hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
-                  loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
-                  onLoadMore={() => {
-                    const state = agentStateBySession[selectedSession.id];
-                    loadAgentHistory(selectedSession.id, state?.historyCursor || 0);
-                  }}
-                />
-              </div>
+            {agentViewActive && (
+              <AgentView
+                session={selectedSession}
+                turn={agentStateBySession[selectedSession.id]?.turn || selectedSession.agentTurn || null}
+                events={selectedAgentEvents}
+                status={agentStateBySession[selectedSession.id]?.status || null}
+                onSend={sendAgentMessageFromView}
+                onRequestControl={() => requestSessionFocus(true)}
+                onOpenTerminal={() => toggleAgentView("terminal")}
+                ready={agentViewReady}
+                hasControl={focusedSessionID === selectedSession.id}
+                endpointIdentity={webSocketURL()}
+                capabilities={agentCapabilitiesState}
+                actionError={agentActionError}
+                onCancel={() => cancelAgentTurn(selectedSession.id)}
+                onSendNow={(text, attachments) => sendAgentMessageNow(selectedSession.id, text, attachments)}
+                onInteraction={value => respondAgentInteraction(selectedSession.id, value)}
+                onUploadAttachments={uploadAgentAttachments}
+                queueItems={agentQueueBySession[selectedSession.id] || []}
+                onQueueEdit={(itemID, text, attachments) => editAgentQueueItem(selectedSession.id, itemID, text, attachments)}
+                onQueueDelete={itemID => deleteAgentQueueItem(selectedSession.id, itemID)}
+                onQueueMoveToFront={itemID => moveAgentQueueItemToFront(selectedSession.id, itemID)}
+                onQueueReorder={(itemID, beforeID) => reorderAgentQueueItem(selectedSession.id, itemID, beforeID)}
+                onQueueRetry={itemID => retryAgentQueueItem(selectedSession.id, itemID)}
+                hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
+                loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
+                onLoadMore={() => {
+                  const state = agentStateBySession[selectedSession.id];
+                  loadAgentHistory(selectedSession.id, state?.historyCursor || 0);
+                }}
+              />
             )}
             <TerminalSearch
               open={terminalSearchOpen}
