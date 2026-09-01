@@ -29,6 +29,9 @@ type Project struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// SetupScript is an optional executable path, relative to Path unless
+	// absolute. It runs in newly created managed worktrees only.
+	SetupScript string `json:"setupScript,omitempty"`
 	// AutoImportGitWorktrees controls whether this project imports every
 	// existing Git worktree when the project is added or the setting is enabled.
 	// It is deliberately project-scoped; one repository's worktree policy must
@@ -388,8 +391,8 @@ type State struct {
 	Operations []OperationAudit `json:"operations,omitempty"`
 	// WorktreeOwnershipMigrated records that legacy workspace ownership has
 	// been reconciled against the configured Warren worktree root.
-	WorktreeOwnershipMigrated bool `json:"worktreeOwnershipMigrated,omitempty"`
-	WarrenVersion string `json:"warrenVersion,omitempty"`
+	WorktreeOwnershipMigrated bool   `json:"worktreeOwnershipMigrated,omitempty"`
+	WarrenVersion             string `json:"warrenVersion,omitempty"`
 }
 
 const (
