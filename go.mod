@@ -7,7 +7,7 @@ require github.com/gorilla/websocket v1.5.3
 require github.com/openai/openai-go v1.12.0
 
 require (
-	github.com/abcdlsj/ghostline v1.1.2
+	github.com/abcdlsj/ghostline v1.1.3
 	github.com/ncruces/go-sqlite3 v0.35.3
 )
 

@@ -28,8 +28,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/abcdlsj/ghostty/releases/download/warren-ghosttykit-v1.0.0/GhosttyKit.xcframework.zip",
-            checksum: "ddc36b7b093e7d34b01596c9b5c1093a780aa1a828186428693aeaef723a5220"
+            url: "https://github.com/abcdlsj/ghostty/releases/download/warren-ghosttykit-v1.0.1/GhosttyKit.xcframework.zip",
+            checksum: "741d9757eb5f74ca5ef83055ffaed447794be0edb31a45f26b2a53c46bb22099"
         ),
     ]
 )
