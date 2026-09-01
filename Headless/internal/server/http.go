@@ -2273,6 +2273,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, value)
+	case "project.setupScript":
+		value, err := p.server.Service.SetProjectSetupScript(
+			stringParam(params, "project"),
+			stringParam(params, "script"),
+		)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "project.remove":
 		if err := p.server.Service.RemoveProject(stringParam(params, "id"), boolParam(params, "force")); err != nil {
 			return err
@@ -2294,13 +2303,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"moved": true})
 	case "workspace.create":
-		value, err := p.server.Service.CreateTaskWorkspaceWithRequestID(
-			stringParam(params, "project"),
-			stringParam(params, "task"),
-			stringParam(params, "branch"),
-			stringParam(params, "name"),
-			stringParam(params, "path"),
-			stringParam(params, "requestId"),
+		setupArgs := stringSliceParam(params, "setupArgs")
+		runSetupScript := boolParam(params, "runSetupScript")
+		value, err := p.server.Service.CreateTaskWorkspaceWithSetup(
+			stringParam(params, "project"), stringParam(params, "task"),
+			stringParam(params, "branch"), stringParam(params, "name"),
+			stringParam(params, "path"), stringParam(params, "requestId"),
+			runSetupScript, setupArgs,
 		)
 		if err != nil {
 			return err

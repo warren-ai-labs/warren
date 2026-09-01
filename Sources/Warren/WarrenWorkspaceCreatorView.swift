@@ -12,11 +12,13 @@ struct WarrenWorkspaceCreatorView: View {
     init(
         project: Project,
         onCancel: @escaping @MainActor () -> Void,
-        onCreate: @escaping @MainActor (WorkspaceCreationRequest) async throws -> Void
+        onCreate: @escaping @MainActor (WorkspaceCreationRequest) async throws -> Void,
+        runSetupScript: Bool? = nil
     ) {
         self.project = project
         self.onCancel = onCancel
         _coordinator = StateObject(wrappedValue: WarrenWorkspaceCreationCoordinator(
+            runSetupScript: runSetupScript ?? false,
             onCreate: onCreate,
             onDismiss: onCancel
         ))
@@ -56,6 +58,36 @@ struct WarrenWorkspaceCreatorView: View {
                 if coordinator.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     coordinator.displayName = value
                 }
+            }
+
+            if let setupScript = project.setupScript,
+               !setupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Toggle("Run setup script", isOn: coordinator.binding(\.runSetupScript))
+                    .toggleStyle(.switch)
+                    .font(WarrenTypography.dialogBody)
+                    .disabled(coordinator.isSubmitting)
+                    .accessibilityIdentifier("workspace-creation.run-setup-script")
+
+                Text("Configured script: \(setupScript)")
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(2)
+
+                WarrenInputField(
+                    "Setup arguments",
+                    text: coordinator.binding(\.setupArgumentsText),
+                    placeholder: "One argument per line",
+                    monospaced: true,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting || !coordinator.runSetupScript)
+                .accessibilityIdentifier("workspace-creation.setup-arguments")
+
+                Text("The script runs in the new worktree. The first two arguments are the main repository and worktree paths.")
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Text("Worktree files are stored under ~/.warren/worktrees.")
@@ -110,6 +142,8 @@ final class WarrenWorkspaceCreationCoordinator: ObservableObject {
     @Published var displayName: String { didSet { clearServerError() } }
     @Published var branch: String { didSet { clearServerError() } }
     @Published var path: String { didSet { clearServerError() } }
+    @Published var runSetupScript: Bool { didSet { clearServerError() } }
+    @Published var setupArgumentsText: String { didSet { clearServerError() } }
     @Published private(set) var isSubmitting = false
     @Published private(set) var errorMessage: String?
 
@@ -122,6 +156,8 @@ final class WarrenWorkspaceCreationCoordinator: ObservableObject {
         displayName: String = "",
         branch: String = "",
         path: String = "",
+        runSetupScript: Bool = false,
+        setupArgumentsText: String = "",
         onCreate: @escaping @MainActor (WorkspaceCreationRequest) async throws -> Void,
         onDismiss: @escaping @MainActor () -> Void
     ) {
@@ -129,6 +165,8 @@ final class WarrenWorkspaceCreationCoordinator: ObservableObject {
         self.displayName = displayName
         self.branch = branch
         self.path = path
+        self.runSetupScript = runSetupScript
+        self.setupArgumentsText = setupArgumentsText
         self.onCreate = onCreate
         self.onDismiss = onDismiss
     }
@@ -146,7 +184,9 @@ final class WarrenWorkspaceCreationCoordinator: ObservableObject {
         let draft = WarrenWorkspaceCreationDraft(
             displayName: displayName,
             branch: branch,
-            path: path
+            path: path,
+            runSetupScript: runSetupScript,
+            setupArgumentsText: setupArgumentsText
         )
         if let lastSubmittedDraft, lastSubmittedDraft != draft {
             requestID = UUID()
@@ -156,7 +196,9 @@ final class WarrenWorkspaceCreationCoordinator: ObservableObject {
             requestID: requestID,
             displayName: draft.displayName,
             branch: draft.branch,
-            path: draft.path
+            path: draft.path,
+            runSetupScript: draft.runSetupScript,
+            setupArguments: draft.setupArguments
         )
 
         do {
@@ -186,4 +228,12 @@ private struct WarrenWorkspaceCreationDraft: Equatable {
     let displayName: String
     let branch: String
     let path: String
+    let runSetupScript: Bool
+    let setupArgumentsText: String
+
+    var setupArguments: [String] {
+        setupArgumentsText
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
 }
