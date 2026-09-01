@@ -350,6 +350,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let id: String
         let name: String
         let path: String
+        let setupScript: String?
         let autoImportGitWorktrees: Bool?
         let pinned: Bool?
     }
@@ -849,9 +850,15 @@ enum WarrenRemoteWorkspaceProtocol {
             "name": creation.displayName,
             "path": creation.path,
             "requestId": creation.requestID.uuidString.lowercased(),
+            "runSetupScript": creation.runSetupScript ? "true" : "false",
         ]
         if let taskID {
             params["task"] = taskID.description
+        }
+        if !creation.setupArguments.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: creation.setupArguments),
+           let value = String(data: data, encoding: .utf8) {
+            params["setupArgs"] = value
         }
         return params
     }
@@ -2468,6 +2475,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ])
     }
 
+    func setProjectSetupScript(_ projectID: ProjectID, script: String) {
+        request("project.setupScript", params: [
+            "project": projectID.description,
+            "script": script.trimmingCharacters(in: .whitespacesAndNewlines),
+        ])
+    }
+
     func listProjectWorktrees(_ projectID: ProjectID) async throws -> [WarrenDesktopWorktreeCandidate] {
         guard let wire else { throw URLError(.notConnectedToInternet) }
         let data = try await wire.request("project.worktrees", params: ["project": projectID.description])
@@ -3329,6 +3343,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 "id": taskID.description,
                 "workspace": workspaceID.description,
             ])
+        case .deleteTask(let id):
+            request("task.remove", params: ["id": id.description])
         case .deleteProject(let id):
             deleteProject(id)
         case .deleteWorkspace(let id, let removeLocalWorktree):
@@ -3392,6 +3408,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .moveSession(let id, let destination):
             moveSession(id, to: destination)
         case .importSuperset, .requestNewWorkspace, .requestProjectWorktreeImport,
+             .requestProjectSetupScript,
              .setProjectAutoImportGitWorktrees, .requestNewSession,
              .toggleSidebar:
             break
@@ -4376,6 +4393,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 hostID: hostID,
                 name: value.name,
                 rootPath: value.path,
+                setupScript: value.setupScript,
                 autoImportGitWorktrees: value.autoImportGitWorktrees ?? false,
                 pinned: value.pinned ?? false
             )
@@ -5155,7 +5173,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private static func tabID(_ id: TerminalSessionID) -> String { "remote-\(id.description)" }
 }
 
-private extension WarrenDesktopProjection {
+extension WarrenDesktopProjection {
     func reorderingTabs(tabID: String, accordingTo orderedIDs: [String]) -> Self {
         let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var orderedTabs = orderedIDs.compactMap { tabsByID[$0] }.makeIterator()
@@ -5168,6 +5186,7 @@ private extension WarrenDesktopProjection {
         return Self(
             host: host,
             groups: groups,
+            tasks: taskGroups.map(\.task),
             sessions: sessions,
             tabs: reorderedTabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,

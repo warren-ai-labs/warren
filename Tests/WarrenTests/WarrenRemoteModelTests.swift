@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import WarrenDesktop
 import WarrenDomain
+import WarrenClientCore
 @testable import Warren
 
 final class WarrenRemoteModelTests: XCTestCase {
@@ -642,6 +643,62 @@ final class WarrenRemoteModelTests: XCTestCase {
             from: Data("{\"t\":\"roster.delta\",\"baseRevision\":8,\"revision\":10}".utf8)
         )
         XCTAssertNil(updated.applying(try XCTUnwrap(staleMessage.delta)))
+    }
+
+    func testReorderingTabsPreservesTasksInProjection() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "delivery",
+            path: "/tmp/api-delivery"
+        )
+        let firstSessionID = TerminalSessionID()
+        let secondSessionID = TerminalSessionID()
+        let firstTab = ClientTab(
+            id: "first",
+            title: "First",
+            sessionID: firstSessionID
+        )
+        let secondTab = ClientTab(
+            id: "second",
+            title: "Second",
+            sessionID: secondSessionID
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [
+                WarrenDesktopSession(
+                    id: firstSessionID,
+                    workspaceID: workspace.id,
+                    title: "First"
+                ),
+                WarrenDesktopSession(
+                    id: secondSessionID,
+                    workspaceID: workspace.id,
+                    title: "Second"
+                ),
+            ],
+            tabs: [firstTab, secondTab],
+            sessionWorkspaceIDs: [
+                firstSessionID: workspace.id,
+                secondSessionID: workspace.id,
+            ]
+        )
+
+        let reordered = projection.reorderingTabs(
+            tabID: firstTab.id,
+            accordingTo: [secondTab.id, firstTab.id]
+        )
+
+        XCTAssertEqual(reordered.taskGroups.map(\.task), [task])
+        XCTAssertEqual(reordered.taskGroups.first?.workspaces, [workspace])
+        XCTAssertEqual(reordered.tabs.map(\.id), [secondTab.id, firstTab.id])
     }
 
     func testRemoteRosterDecodesAgentTurn() throws {
