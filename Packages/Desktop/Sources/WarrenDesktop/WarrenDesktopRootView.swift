@@ -63,6 +63,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let openAITitleEnabled: Bool
     private let onSetOpenAISetting: (String, String) -> Void
     private let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
+    private let onSetProjectSetupScript: (ProjectID, String) -> Void
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -166,6 +167,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void = { _, _, _ in
             throw URLError(.unsupportedURL)
         },
+        onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
@@ -224,6 +226,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.openAITitleEnabled = openAITitleEnabled
         self.onSetOpenAISetting = onSetOpenAISetting
         self.onTestOpenAI = onTestOpenAI
+        self.onSetProjectSetupScript = onSetProjectSetupScript
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
@@ -844,6 +847,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 openAITitleEnabled: openAITitleEnabled,
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
+                projects: projection.groups.map(\.project),
+                onSetProjectSetupScript: onSetProjectSetupScript,
                 initialSettingsSection: settingsDeepLinkSection,
                 publicAccessPrefill: settingsPublicAccessPrefill,
                 relayPrefill: settingsRelayPrefill
@@ -1487,6 +1492,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             return (false, "Warren is reconnecting. Try again when the connection is restored.")
         }
         switch request {
+        case .task(let task):
+            guard projection.taskGroups.contains(where: { $0.task.id == task.id }) else {
+                return (false, "This task is no longer available.")
+            }
         case .workspace(let workspace, let project):
             guard let liveWorkspace = projection.workspace(id: workspace.id) else {
                 return (false, "This workspace is no longer available.")
@@ -1522,6 +1531,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             let validation = deletionValidation(for: pendingDeletion)
             WarrenModalSurface {
                 switch pendingDeletion {
+                case .task(let task):
+                    WarrenDesktopDeleteTaskConfirmation(
+                        task: task,
+                        onCancel: dismissDeletion,
+                        onConfirm: {
+                            dispatch(.deleteTask(task.id))
+                            dismissDeletion()
+                        },
+                        isConfirmEnabled: validation.isEnabled,
+                        validationMessage: validation.message
+                    )
                 case .workspace(let workspace, let project):
                     WarrenDesktopDeleteWorkspaceConfirmation(
                         workspace: workspace,

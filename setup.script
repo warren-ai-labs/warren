@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -eu
+
+output=".warren-setup-result.txt"
+
+{
+    printf '%s\n' "Warren setup script ran"
+    printf 'main_repo=%s\n' "${1-}"
+    printf 'worktree=%s\n' "${2-}"
+    printf 'custom_arg=%s\n' "${3-}"
+    printf 'pwd=%s\n' "$PWD"
+    printf 'WARREN_PROJECT_NAME=%s\n' "${WARREN_PROJECT_NAME-}"
+    printf 'WARREN_WORKSPACE_NAME=%s\n' "${WARREN_WORKSPACE_NAME-}"
+    printf 'WARREN_WORKSPACE_BRANCH=%s\n' "${WARREN_WORKSPACE_BRANCH-}"
+} > "$output"

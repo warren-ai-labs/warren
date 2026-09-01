@@ -5,6 +5,7 @@ import WarrenDomain
 import WarrenObservation
 
 enum WarrenDesktopDeletionRequest {
+    case task(WarrenTask)
     case workspace(Workspace, project: Project?)
     case project(Project, workspaceCount: Int)
     case terminalGroup(TerminalGroup, sessionCount: Int)
@@ -442,6 +443,17 @@ struct WarrenDesktopSidebarRows: View {
         }
         .padding(.horizontal, WarrenSpacing.compact)
         .id("task.\(group.task.id.description)")
+        .contextMenu {
+            if !isInteractionDisabled {
+                WarrenDesktopContextMenu([
+                    .button(
+                        title: "Delete Task…",
+                        destructive: true,
+                        action: { onRequestDeletion(.task(group.task)) }
+                    ),
+                ])
+            }
+        }
     }
 
     private func taskAddMenu(_ group: WarrenDesktopTaskGroup) -> some View {
@@ -477,6 +489,10 @@ struct WarrenDesktopSidebarRows: View {
                         }
                     }
                 }
+            }
+            Divider()
+            Button("Delete Task…", role: .destructive) {
+                onRequestDeletion(.task(group.task))
             }
         } label: {
             Image(systemName: "plus")
@@ -704,6 +720,9 @@ struct WarrenDesktopSidebarRows: View {
                 },
                 onImportWorktrees: {
                     onAction(.requestProjectWorktreeImport(group.project.id))
+                },
+                onConfigureSetupScript: {
+                    onAction(.requestProjectSetupScript(group.project.id))
                 },
                 onToggleAutoImportWorktrees: {
                     onAction(.setProjectAutoImportGitWorktrees(
@@ -1222,6 +1241,56 @@ private struct WarrenDesktopSidebarSectionHeader: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct WarrenDesktopDeleteTaskConfirmation: View {
+    let task: WarrenTask
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+    let isConfirmEnabled: Bool
+    let validationMessage: String?
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
+            Text("Delete task?")
+                .font(WarrenTypography.dialogTitle)
+                .foregroundStyle(tokens.foreground)
+
+            Text("\u{201C}\(task.name)\u{201D} will be removed from Warren.")
+                .font(WarrenTypography.dialogBody)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Linked workspaces and their terminal sessions will be kept and detached from this task.")
+                .font(WarrenTypography.dialogBody)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(WarrenTypography.dialogBody)
+                    .foregroundStyle(tokens.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                    .keyboardShortcut(.cancelAction)
+                Button("Delete", action: onConfirm)
+                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
+                    .disabled(!isConfirmEnabled)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(WarrenSpacing.large)
+        .frame(width: 390)
+        .onExitCommand(perform: onCancel)
     }
 }
 
