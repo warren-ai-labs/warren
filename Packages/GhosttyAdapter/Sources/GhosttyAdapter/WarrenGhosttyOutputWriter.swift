@@ -7,8 +7,11 @@ public enum TerminalSnapshotRestoreResult: Equatable, Sendable {
     case restored
     /// A live output drain owns the feed lock; retry without blocking the main actor.
     case feedBusy
-    /// The surface or snapshot was rejected by the native restore path.
+    /// Ghostty rejected the snapshot itself.
     case rejected
+    /// Ghostty accepted the snapshot, but the runtime configuration could not
+    /// be reapplied. The grid is valid, so the caller can retry config only.
+    case configRejected
 }
 
 /// A point in the ordered output stream used to synchronize presentation with
@@ -322,7 +325,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         guard terminalFeedLock.try() else { return .feedBusy }
         defer { terminalFeedLock.unlock() }
         guard inMemory.restoreSnapshot(data) else { return .rejected }
-        guard reapplyRuntimeConfig() else { return .rejected }
+        guard reapplyRuntimeConfig() else { return .configRejected }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
         return .restored
     }

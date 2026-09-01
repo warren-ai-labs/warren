@@ -495,7 +495,15 @@ public final class TerminalSurfaceManager {
         sequence: UInt64
     ) -> TerminalSnapshotRestoreResult {
         guard let entry = entries[sessionID] else { return .rejected }
-        return entry.surface.restoreSnapshotResult(data, epoch: epoch, sequence: sequence)
+        let result = entry.surface.restoreSnapshotResult(data, epoch: epoch, sequence: sequence)
+        if result == .configRejected {
+            TerminalDiagnostics.log("atomic_recovery_config_rejected", [
+                "session": sessionID.description,
+                "epoch": String(epoch),
+                "sequence": String(sequence),
+            ])
+        }
+        return result
     }
 
     public func endSearch(in sessionID: TerminalSessionID) {
