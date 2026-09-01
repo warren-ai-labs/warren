@@ -3,6 +3,38 @@ import XCTest
 import WarrenTransport
 
 final class IOSPersistenceTests: XCTestCase {
+    func testSessionRailAggregatesOnlyAboveTwoSessions() {
+        XCTAssertEqual(sessionRailLayout(for: 0), .tabs)
+        XCTAssertEqual(sessionRailLayout(for: 2), .tabs)
+        XCTAssertEqual(sessionRailLayout(for: 3), .aggregate)
+    }
+
+    func testAgentModelAndCopyFeedbackFormatting() {
+        XCTAssertEqual(formatAgentModel("5.6-sol"), "5.6 Sol")
+        XCTAssertEqual(formatAgentModel("openai/gpt-5.4"), "GPT 5.4")
+        XCTAssertEqual(cleanCopiedText("  hello\r\nworld  "), "hello\nworld")
+        XCTAssertEqual(truncateCopiedText(String(repeating: "x", count: 121))?.count, 121)
+        XCTAssertNil(truncateCopiedText("   "))
+    }
+
+    func testComposerActionInterruptsOnlyWhileWorking() {
+        XCTAssertEqual(agentComposerAction(activity: .working, hasControl: true, hasText: false), .interrupt)
+        XCTAssertEqual(agentComposerAction(activity: .ready, hasControl: true, hasText: true), .send)
+        XCTAssertEqual(agentComposerAction(activity: .ready, hasControl: true, hasText: false), .unavailable)
+        XCTAssertEqual(agentComposerAction(activity: .failed, hasControl: true, hasText: true), .unavailable)
+        XCTAssertEqual(agentComposerAction(activity: .blocked, hasControl: true, hasText: true), .unavailable)
+        let approval = WarrenRemoteAgentAttention(kind: .approval, reason: "permission")
+        XCTAssertEqual(
+            agentComposerAction(activity: .blocked, hasControl: true, hasText: true, attention: approval),
+            .unavailable
+        )
+        let question = WarrenRemoteAgentAttention(kind: .input, reason: "question")
+        XCTAssertEqual(
+            agentComposerAction(activity: .blocked, hasControl: true, hasText: true, attention: question),
+            .send
+        )
+    }
+
     func testNavigationRoundTripDoesNotContainEndpointToken() throws {
         let defaults = UserDefaults(suiteName: "warren-ios-test-\(UUID())")!
         let store = IOSLocalStore(defaults: defaults, keychain: IOSKeychainStore(service: "warren-ios-test"))
@@ -552,7 +584,16 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertTrue(model.canSendAgent)
 
         model.sendAgentMessage("queued while working")
+        model.sendAgentMessage("remove this locally")
+        XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], 2)
+        let queued = try XCTUnwrap(model.agentQueuedMessages(for: sessionID).first)
+        let removable = try XCTUnwrap(model.agentQueuedMessages(for: sessionID).last)
+        XCTAssertTrue(model.editQueuedAgentMessage(sessionID: sessionID, id: queued.id, text: "edited locally"))
+        XCTAssertEqual(model.agentQueuedMessages(for: sessionID).first?.text, "edited locally")
+        XCTAssertTrue(model.deleteQueuedAgentMessage(sessionID: sessionID, id: removable.id))
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], 1)
+        XCTAssertTrue(model.retryQueuedAgentMessage(sessionID: sessionID, id: queued.id))
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID] ?? [], [])
         let sentWhileWorking = await task.sentMessages
         XCTAssertEqual(binaryPayloads(from: sentWhileWorking).count, 0)
 
@@ -571,7 +612,7 @@ final class IOSPersistenceTests: XCTestCase {
         let payloads = binaryPayloads(from: sent)
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], nil)
         XCTAssertGreaterThanOrEqual(payloads.count, 2)
-        XCTAssertEqual(payloads[0], Data("queued while working".utf8))
+        XCTAssertEqual(payloads[0], Data("edited locally".utf8))
         XCTAssertEqual(payloads[1], Data([0x1B, 0x5B, 0x31, 0x33, 0x75]))
         model.stop()
     }

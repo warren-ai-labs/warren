@@ -1,7 +1,60 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { agentEventLimit, groupAgentEvents, mergeAgentEvents } from "./agent.js";
+import {
+  agentEventLimit,
+  agentComposerAction,
+  composerHeightForText,
+  deleteAgentQueueItem,
+  editAgentQueueItem,
+  enqueueAgentMessage,
+  formatAgentModel,
+  groupAgentEvents,
+  mergeAgentEvents,
+  moveAgentQueueItem,
+  retryAgentQueueItem,
+} from "./agent.js";
+
+test("formatAgentModel turns wire names into readable labels", () => {
+  assert.equal(formatAgentModel("5.6-sol"), "5.6 Sol");
+  assert.equal(formatAgentModel("openai/gpt-5.4"), "GPT 5.4");
+  assert.equal(formatAgentModel(""), "");
+});
+
+test("composerHeightForText starts at two lines and caps at six", () => {
+  assert.equal(composerHeightForText(""), 60);
+  assert.equal(composerHeightForText("one\ntwo\nthree"), 82);
+  assert.equal(composerHeightForText(Array.from({ length: 20 }, () => "line").join("\n")), 148);
+});
+
+test("agentComposerAction switches the primary button to interrupt while working", () => {
+  assert.equal(agentComposerAction({ activity: "working" }, { hasControl: true }), "interrupt");
+  assert.equal(agentComposerAction({ activity: "ready" }, { hasControl: true, hasText: true }), "send");
+  assert.equal(agentComposerAction({ activity: "failed" }, { hasControl: true, hasText: true }), "unavailable");
+  assert.equal(
+    agentComposerAction({ activity: "blocked", attention: { kind: "approval" } }, { hasControl: true, hasText: true }),
+    "unavailable",
+  );
+  assert.equal(agentComposerAction({ activity: "blocked" }, { hasControl: true, hasText: true }), "unavailable");
+  assert.equal(
+    agentComposerAction({ activity: "blocked", attention: { kind: "input" } }, { hasControl: true, hasText: true }),
+    "send",
+  );
+});
+
+test("agent queue remains immutable while editing, ordering and retrying", () => {
+  let queue = enqueueAgentMessage([], " first ", "a");
+  queue = enqueueAgentMessage(queue, "second", "b");
+  assert.deepEqual(queue.map(item => item.text), ["first", "second"]);
+  const edited = editAgentQueueItem(queue, "a", "updated");
+  assert.deepEqual(queue.map(item => item.text), ["first", "second"]);
+  assert.deepEqual(edited.map(item => item.text), ["updated", "second"]);
+  const moved = moveAgentQueueItem(edited, 0, 2);
+  assert.deepEqual(moved.map(item => item.id), ["b", "a"]);
+  const retried = retryAgentQueueItem(moved, "a");
+  assert.deepEqual(retried.map(item => item.id), ["a", "b"]);
+  assert.deepEqual(deleteAgentQueueItem(retried, "a").map(item => item.id), ["b"]);
+});
 
 test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {
   const existing = [

@@ -1,5 +1,88 @@
 export const agentEventLimit = 2000;
 
+/** Formats wire model identifiers for compact human-facing metadata. */
+export function formatAgentModel(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  const leaf = value.split("/").at(-1) || value;
+  const words = leaf
+    .replaceAll("_", "-")
+    .split("-")
+    .filter(Boolean);
+  return words.map(word => {
+    const lower = word.toLowerCase();
+    if (lower === "gpt") return "GPT";
+    if (lower === "llm") return "LLM";
+    if (lower === "sol") return "Sol";
+    if (lower === "sonnet") return "Sonnet";
+    if (lower === "haiku") return "Haiku";
+    if (lower === "opus") return "Opus";
+    return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+  }).join(" ");
+}
+
+/**
+ * Computes the textarea height without touching the DOM. The composer starts
+ * at two lines, grows to six, and then lets the textarea scroll internally.
+ */
+export function composerHeightForText(text = "", {
+  lineHeight = 22,
+  minLines = 2,
+  maxLines = 6,
+  verticalPadding = 16,
+} = {}) {
+  const lines = Math.max(1, String(text).split("\n").reduce((total, line) => total + Math.max(1, Math.ceil(line.length / 80)), 0));
+  const visibleLines = Math.min(maxLines, Math.max(minLines, lines));
+  return visibleLines * lineHeight + verticalPadding;
+}
+
+export function agentComposerAction(status, { hasControl = true, hasText = false } = {}) {
+  if (!hasControl) return "unavailable";
+  const activity = String(status?.activity || "").toLowerCase();
+  if (["failed", "stalled", "exited", "unknown"].includes(activity)) return "unavailable";
+  if (activity === "working") return "interrupt";
+  if (status?.attention && status.attention.kind !== "input") return "unavailable";
+  if (activity === "blocked" && status?.attention?.kind !== "input") return "unavailable";
+  return hasText ? "send" : "unavailable";
+}
+
+function queueItemID() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `queue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function enqueueAgentMessage(queue = [], text, id = queueItemID()) {
+  const value = String(text || "").trim();
+  if (!value) return [...queue];
+  return [...queue, { id, text: value }];
+}
+
+export function editAgentQueueItem(queue = [], id, text) {
+  const value = String(text || "").trim();
+  if (!value) return queue.filter(item => item.id !== id);
+  return queue.map(item => item.id === id ? { ...item, text: value } : item);
+}
+
+export function deleteAgentQueueItem(queue = [], id) {
+  return queue.filter(item => item.id !== id);
+}
+
+export function moveAgentQueueItem(queue = [], from, to) {
+  if (!Number.isInteger(from) || from < 0 || from >= queue.length) return [...queue];
+  const target = Math.min(Math.max(Number.isInteger(to) ? to : 0, 0), queue.length);
+  const next = [...queue];
+  const [item] = next.splice(from, 1);
+  const adjusted = target > from ? target - 1 : target;
+  next.splice(Math.min(Math.max(adjusted, 0), next.length), 0, item);
+  return next;
+}
+
+export function retryAgentQueueItem(queue = [], id) {
+  const index = queue.findIndex(item => item.id === id);
+  if (index < 0) return [...queue];
+  return moveAgentQueueItem(queue, index, 0);
+}
+
 /**
  * Merges agent event batches by sequence number. Transcripts are append-only,
  * but a replayed history can overlap a live batch after a reconnect, so the
