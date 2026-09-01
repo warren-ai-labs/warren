@@ -421,7 +421,7 @@ private struct SessionTabRail: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if sessions.count <= 5 {
+            if sessions.count <= 2 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
                         ForEach(sessions) { session in
@@ -457,7 +457,6 @@ private struct SessionTabRail: View {
                 Button(action: showSwitcher) {
                     HStack(spacing: 7) {
                         Image(systemName: "rectangle.stack")
-                        Text("Sessions")
                         Text("\(sessions.count)")
                             .font(IOSTypography.metric)
                         Spacer()
@@ -467,8 +466,16 @@ private struct SessionTabRail: View {
                     .foregroundStyle(IOSTheme.secondaryText)
                     .padding(.horizontal, 13)
                     .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                    .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
+                            .stroke(IOSTheme.ring.opacity(0.8), lineWidth: 1)
+                    }
                 }
                 .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .accessibilityLabel("Switch session")
+                .accessibilityValue("\(sessions.count) sessions")
             }
         }
         .background(IOSTheme.chrome)
