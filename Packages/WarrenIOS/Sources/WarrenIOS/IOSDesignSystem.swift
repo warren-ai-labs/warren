@@ -380,7 +380,9 @@ struct IOSShimmerText: View {
     }
 
     private func shimmerPhase(at date: Date) -> Double {
-        let duration = 1.35
+        // Keep the highlight calm enough to read as a status cue rather than
+        // a progress spinner. The Web Agent footer uses the same cadence.
+        let duration = 3.2
         let elapsed = date.timeIntervalSinceReferenceDate
         return (elapsed.truncatingRemainder(dividingBy: duration) + duration)
             .truncatingRemainder(dividingBy: duration) / duration
