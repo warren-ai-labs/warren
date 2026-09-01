@@ -256,6 +256,11 @@ type AgentEvent struct {
 	DurationMs   int64       `json:"durationMs,omitempty"`
 	Sidechain    bool        `json:"sidechain,omitempty"`
 	Timestamp    time.Time   `json:"timestamp,omitempty"`
+	// Payload carries the optional structured object used by RFC 0010
+	// interaction, plan, activity, plugin, subagent and attachment events.
+	// A map keeps old clients source-compatible while unknown fields remain
+	// safely ignored by decoders that do not render the event type.
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // AgentTurnStatus describes one explicit turn boundary in an agent transcript.

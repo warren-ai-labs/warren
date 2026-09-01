@@ -98,6 +98,67 @@ final class IOSPersistenceTests: XCTestCase {
         ])
     }
 
+    func testDevelopmentEndpointIsAddedWithoutChangingActiveRelay() {
+        let defaults = UserDefaults(suiteName: "warren-ios-development-endpoint-\(UUID())")!
+        let keychain = IOSKeychainStore(service: "warren-ios-development-endpoint-\(UUID())")
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+        let relay = WarrenRemoteEndpointConfiguration(
+            name: "Remote Relay",
+            url: "https://relay.example.test",
+            token: "relay-token",
+            type: "relay",
+            hostID: "host-1",
+            routeID: "route-1"
+        )
+        let development = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "http://192.0.2.10:8789",
+            token: "local-token"
+        )
+
+        store.endpoint = relay
+        XCTAssertTrue(store.ensureDevelopmentEndpoint(development))
+        XCTAssertEqual(store.endpoint?.name, relay.name)
+        XCTAssertEqual(store.endpoint?.url, relay.url)
+        XCTAssertEqual(store.endpoint?.token, relay.token)
+        XCTAssertEqual(store.endpoints.map(\.name), [relay.name, development.name])
+        XCTAssertEqual(store.endpoint(named: development.name)?.url, development.url)
+        XCTAssertEqual(store.endpoint(named: development.name)?.token, development.token)
+    }
+
+    func testDevelopmentEndpointRefreshDoesNotReplaceRelayWithSameName() {
+        let defaults = UserDefaults(suiteName: "warren-ios-development-relay-name-\(UUID())")!
+        let keychain = IOSKeychainStore(service: "warren-ios-development-relay-name-\(UUID())")
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+        let relay = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "https://relay.example.test",
+            token: "relay-token",
+            type: "relay",
+            hostID: "host-2",
+            routeID: "route-2"
+        )
+        let development = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "http://192.0.2.11:8789",
+            token: "local-token"
+        )
+
+        store.endpoint = relay
+        XCTAssertFalse(store.ensureDevelopmentEndpoint(development))
+        XCTAssertEqual(store.endpoints, [relay])
+        XCTAssertEqual(store.endpoint?.hostID, relay.hostID)
+        XCTAssertEqual(store.endpoint?.routeID, relay.routeID)
+        XCTAssertEqual(store.endpoint?.token, relay.token)
+    }
+
+    func testAgentDraftKeySeparatesEndpointAndSessionPunctuation() {
+        let first = IOSLocalStore.agentDraftKey(endpointIdentity: "host.a", sessionID: "session")
+        let second = IOSLocalStore.agentDraftKey(endpointIdentity: "host", sessionID: "a.session")
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(first.hasPrefix("warren.agent-draft."))
+    }
+
     @MainActor
     func testCreatedAgentSessionDefaultsToAgentDisplayMode() async throws {
         let task = IOSScriptedWebSocketTask()
@@ -533,7 +594,7 @@ final class IOSPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testQueuesAgentMessagesWhileWorkingUntilReady() async throws {
+    func testQueuesAgentMessagesWhileWorkingUntilExecutableBoundary() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
         await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
@@ -586,19 +647,18 @@ final class IOSPersistenceTests: XCTestCase {
         model.sendAgentMessage("queued while working")
         model.sendAgentMessage("remove this locally")
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], 2)
-        let queued = try XCTUnwrap(model.agentQueuedMessages(for: sessionID).first)
-        let removable = try XCTUnwrap(model.agentQueuedMessages(for: sessionID).last)
-        XCTAssertTrue(model.editQueuedAgentMessage(sessionID: sessionID, id: queued.id, text: "edited locally"))
-        XCTAssertEqual(model.agentQueuedMessages(for: sessionID).first?.text, "edited locally")
-        XCTAssertTrue(model.deleteQueuedAgentMessage(sessionID: sessionID, id: removable.id))
+        let queued = try XCTUnwrap(model.agentQueueBySessionID[sessionID]?.items.first)
+        let removable = try XCTUnwrap(model.agentQueueBySessionID[sessionID]?.items.last)
+        XCTAssertTrue(model.editQueuedAgentMessage(sessionID: sessionID, itemID: queued.id, text: "edited locally"))
+        XCTAssertEqual(model.agentQueueBySessionID[sessionID]?.items.first?.text, "edited locally")
+        XCTAssertTrue(model.deleteQueuedAgentMessage(sessionID: sessionID, itemID: removable.id))
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], 1)
-        XCTAssertTrue(model.retryQueuedAgentMessage(sessionID: sessionID, id: queued.id))
         XCTAssertEqual(model.agentEventsBySessionID[sessionID] ?? [], [])
         let sentWhileWorking = await task.sentMessages
         XCTAssertEqual(binaryPayloads(from: sentWhileWorking).count, 0)
 
         await task.enqueue(.text(
-            "{\"t\":\"agent.status\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"status\":{\"activity\":\"ready\"}}"
+            "{\"t\":\"agent.status\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"status\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\"}}}"
         ))
         var sent = await task.sentMessages
         for _ in 0..<400 {

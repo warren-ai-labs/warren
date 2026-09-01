@@ -45,7 +45,7 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 		"t":                    "auth",
 		"token":                token,
 		"version":              api.Version,
-		"capabilities":         []string{"roster-delta"},
+		"capabilities":         api.HostCapabilities(),
 		"terminalStateFormats": []string{terminalStateFormatANSI},
 	})
 }
@@ -67,7 +67,7 @@ func DialRelay(ctx context.Context, relayURL, hostID, accessToken string) (*Clie
 		"access_token":         accessToken,
 		"client_id":            store.NewID(),
 		"version":              api.Version,
-		"capabilities":         []string{"roster-delta"},
+		"capabilities":         api.HostCapabilities(),
 		"terminalStateFormats": []string{terminalStateFormatANSI},
 	})
 }
@@ -201,11 +201,15 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 
-func (c *Client) Request(ctx context.Context, method string, params map[string]any, result any) error {
+func (c *Client) Request(ctx context.Context, method string, params any, result any) error {
+	encodedParams, err := requestParams(params)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := store.NewID()
-	if err := c.connection.WriteJSON(api.Envelope{Type: "request", ID: id, Method: method, Params: params}); err != nil {
+	if err := c.connection.WriteJSON(api.Envelope{Type: "request", ID: id, Method: method, Params: encodedParams}); err != nil {
 		return err
 	}
 	for {
@@ -238,6 +242,24 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 		}
 		c.stash(messageType, data)
 	}
+}
+
+func requestParams(value any) (map[string]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if result, ok := value.(map[string]any); ok {
+		return result, nil
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode request parameters: %w", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("encode request parameters: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Roster(ctx context.Context) (api.State, error) {
@@ -308,6 +330,59 @@ func (c *Client) AgentSnapshot(ctx context.Context, sessionID string) (api.Agent
 func (c *Client) SubscribeAgent(ctx context.Context, sessionID string) (api.AgentSubscriptionResult, error) {
 	var value api.AgentSubscriptionResult
 	err := c.Request(ctx, "agent.subscribe", map[string]any{"session": sessionID}, &value)
+	return value, err
+}
+
+// RespondAgentInteraction submits a Question or Permission answer. The Host
+// uses requestId as an idempotency key, so callers may safely retry the same
+// response after reconnecting.
+func (c *Client) RespondAgentInteraction(ctx context.Context, response api.AgentInteractionResponse) (api.AgentInteractionResult, error) {
+	var value api.AgentInteractionResult
+	err := c.Request(ctx, "agent.interaction.respond", response, &value)
+	return value, err
+}
+
+// InterruptAgentTurn requests a semantic cancel or atomic Send now. A
+// replacement message is sent as part of the same Host request when present.
+func (c *Client) InterruptAgentTurn(ctx context.Context, request api.AgentTurnInterruptRequest) (api.AgentTurnInterruptResult, error) {
+	var value api.AgentTurnInterruptResult
+	err := c.Request(ctx, "agent.turn.interrupt", request, &value)
+	return value, err
+}
+
+// SendAgentMessage uses the structured message path. Plain text callers may
+// continue using sendAgentInput/PTY; this method is required for attachments
+// and carries an explicit clientMessageId for idempotent retries.
+func (c *Client) SendAgentMessage(ctx context.Context, request api.AgentMessageSendRequest) (api.AgentMessageSendResult, error) {
+	var value api.AgentMessageSendResult
+	err := c.Request(ctx, "agent.message.send", request, &value)
+	return value, err
+}
+
+func (c *Client) PrepareAgentAttachment(ctx context.Context, request api.AgentAttachmentPrepareRequest) (api.AgentAttachmentPrepareResult, error) {
+	var value api.AgentAttachmentPrepareResult
+	err := c.Request(ctx, "agent.attachment.prepare", request, &value)
+	return value, err
+}
+
+// PutAgentAttachmentChunk sends one base64 encoded chunk. The JSON transport
+// keeps this API usable by the CLI and Relay; binary adapters can still fill
+// Data with their own encoded representation at the protocol boundary.
+func (c *Client) PutAgentAttachmentChunk(ctx context.Context, request api.AgentAttachmentChunkRequest) (api.AgentAttachmentResult, error) {
+	var value api.AgentAttachmentResult
+	err := c.Request(ctx, "agent.attachment.chunk", request, &value)
+	return value, err
+}
+
+func (c *Client) CompleteAgentAttachment(ctx context.Context, request api.AgentAttachmentCompleteRequest) (api.AgentAttachmentResult, error) {
+	var value api.AgentAttachmentResult
+	err := c.Request(ctx, "agent.attachment.complete", request, &value)
+	return value, err
+}
+
+func (c *Client) AbortAgentAttachment(ctx context.Context, request api.AgentAttachmentAbortRequest) (api.AgentAttachmentResult, error) {
+	var value api.AgentAttachmentResult
+	err := c.Request(ctx, "agent.attachment.abort", request, &value)
 	return value, err
 }
 

@@ -3,30 +3,67 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
-  composerHeightForText,
-  agentComposerAction,
-  deleteAgentQueueItem,
-  editAgentQueueItem,
-  enqueueAgentMessage,
+  agentDraftMaximumBytes,
+  copyAgentText,
+  copyableAgentText,
   formatAgentModel,
   groupAgentEvents,
-  moveAgentQueueItem,
-  retryAgentQueueItem,
+  loadAgentDraft,
+  normalizeAgentEventType,
+  projectAgentEvents,
+  removeAgentDraft,
+  saveAgentDraft,
+  validateAgentAttachment,
 } from "./agent.js";
 import { sessionDisplayTitle } from "./title.js";
 
+// Keep the active-work cue light and human. The phrase is deliberately
+// provider-neutral so the composer never grows a second Session/Model rail.
+const AGENT_WORKING_PHRASES = [
+  "Fermenting…",
+  "Fiddle-faddling…",
+  "Booping…",
+  "Pondering…",
+  "Whirring…",
+  "Tinkering…",
+  "Conjuring…",
+  "Mulling…",
+  "Warming up…",
+  "Plotting…",
+  "Wiggling…",
+  "Riffing…",
+  "Hatching…",
+  "Stirring…",
+  "Percolating…",
+  "Polishing…",
+];
 export function AgentView({
   session,
+  turn = null,
   events = [],
   status = null,
   onSend,
-  onInterrupt = () => {},
+  onRequestControl = () => {},
   onOpenTerminal,
   ready = true,
   hasControl = true,
   hasMore = false,
   loadingMore = false,
   onLoadMore = () => {},
+  endpointIdentity = "default",
+  capabilities = [],
+  actionError = "",
+  onCancel = () => {},
+  onSendNow = () => {},
+  onInteraction = () => {},
+  onUploadAttachments = async () => { throw new Error("Attachments are unavailable"); },
+  onEditResend = null,
+  queueItems = [],
+  onQueueEdit = () => {},
+  onQueueDelete = () => {},
+  onQueueMoveToFront = () => {},
+  onQueueReorder = () => {},
+  onQueueRetry = () => {},
 }) {
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -36,79 +73,81 @@ export function AgentView({
   const anchorElementRef = useRef(null);
   const anchorOffsetRef = useRef(null);
   const skipFollowRef = useRef(false);
-  const [draft, setDraft] = useState("");
-  const [queueBySession, setQueueBySession] = useState({});
+  const [draft, setDraft] = useState(() => loadAgentDraft(localStorage, endpointIdentity, session?.id));
   const [showQueue, setShowQueue] = useState(false);
-  const [editingQueueID, setEditingQueueID] = useState(null);
-  const [queueEditText, setQueueEditText] = useState("");
-  const [attachmentNotice, setAttachmentNotice] = useState(false);
-  const sessionID = session?.id || "";
-  const queueDrainRef = useRef({ sessionID: null, sentWhileReady: false });
-  const blocks = groupAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
+  const [attachments, setAttachments] = useState([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [draftWarning, setDraftWarning] = useState("");
+  const [workingPhraseIndex, setWorkingPhraseIndex] = useState(0);
+  const workingTurnKeyRef = useRef(null);
+  const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
-  const mode = agentModeLabel(session);
   const modelLabel = formatAgentModel(agentModel(session, events));
-  const queue = queueBySession[sessionID] || [];
   const canCompose = ready && hasControl && canSendForStatus(agentStatus);
-  const activity = String(agentStatus?.activity || "").toLowerCase();
-  const composerAction = agentComposerAction(agentStatus, {
-    hasControl: canCompose,
-    hasText: Boolean(draft.trim()),
-  });
   const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
-  // The Host projects a session-level lifecycle. "working" is the only state
-  // that means the agent is actively producing output; "blocked"/"stalled"
-  // are waiting on a human, not running, so they must not show the shim.
-  const running = activity === "working";
+  const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
+  const canInteract = capabilities.includes("agent-interactions-v1");
+  const canUpload = capabilities.includes("agent-attachments-v1");
+  const showWorking = shouldShowWorking(agentStatus, events);
+  const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
+  const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
+  const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
+  const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
 
-  useEffect(() => {
-    setEditingQueueID(null);
-    setQueueEditText("");
-    setShowQueue(false);
-    setAttachmentNotice(false);
-    queueDrainRef.current = { sessionID, sentWhileReady: false };
-  }, [sessionID]);
-
-  const updateQueue = updater => {
-    setQueueBySession(previous => {
-      const current = previous[sessionID] || [];
-      const next = updater(current);
-      return next.length > 0
-        ? { ...previous, [sessionID]: next }
-        : Object.fromEntries(Object.entries(previous).filter(([id]) => id !== sessionID));
-    });
+  const copyMessage = async event => {
+    const value = copyableAgentText(event);
+    if (!value) return;
+    const copied = await copyAgentText(value);
+    setCopyStatus(copied ? "Copied" : "Copy failed");
+    setTimeout(() => setCopyStatus(""), 1600);
   };
-
-  const sendQueuedItem = item => {
-    if (!item || !canCompose) return;
-    if (activity === "ready") {
-      queueDrainRef.current = { sessionID, sentWhileReady: true };
-    }
-    onSend(item.text);
-    updateQueue(current => deleteAgentQueueItem(current, item.id));
+  const editAndResend = value => {
+    if (onEditResend) onEditResend(value);
+    else setDraft(value);
+    inputRef.current?.focus();
   };
 
   useEffect(() => {
-    const activity = String(agentStatus?.activity || "").toLowerCase();
-    if (queueDrainRef.current.sessionID !== sessionID) {
-      queueDrainRef.current = { sessionID, sentWhileReady: false };
-    }
-    if (activity !== "ready") {
-      queueDrainRef.current.sentWhileReady = false;
+    setDraft(loadAgentDraft(localStorage, endpointIdentity, session?.id));
+    setAttachments([]);
+    setUploadingAttachments(false);
+    setSubmitError("");
+    setDraftWarning("");
+    setWorkingPhraseIndex(0);
+    workingTurnKeyRef.current = null;
+  }, [endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    if (workingTurnKeyRef.current === null) {
+      workingTurnKeyRef.current = workingTurnKey;
       return;
     }
-    if (!queueDrainRef.current.sentWhileReady && queue.length > 0 && canCompose) {
-      sendQueuedItem(queue[0]);
-    }
-  }, [activity, canCompose, queue, sessionID]);
+    if (workingTurnKeyRef.current === workingTurnKey) return;
+    workingTurnKeyRef.current = workingTurnKey;
+    // Change the copy at a turn boundary only. A continuously changing label
+    // competes with the transcript and makes one turn feel like many.
+    setWorkingPhraseIndex(index => (index + 1) % AGENT_WORKING_PHRASES.length);
+  }, [workingTurnKey]);
 
-  useLayoutEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    resizeComposerTextarea(input, draft);
-  }, [draft, sessionID]);
+  useEffect(() => {
+    const value = String(draft || "");
+    const timer = setTimeout(() => {
+      if (new TextEncoder().encode(value).length <= agentDraftMaximumBytes) {
+        saveAgentDraft(localStorage, endpointIdentity, session?.id, value);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [draft, endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    const flush = () => saveAgentDraft(localStorage, endpointIdentity, session?.id, draft);
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [draft, endpointIdentity, session?.id]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -127,14 +166,6 @@ export function AgentView({
       pinToBottomRef.current = false;
     }
   }, [events.length, session?.id]);
-
-  useLayoutEffect(() => {
-    if (!running) return;
-    const list = listRef.current;
-    if (!list) return;
-    const followsBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
-    if (pinToBottomRef.current || followsBottom) list.scrollTop = list.scrollHeight;
-  }, [running]);
 
   const loadEarlier = () => {
     // Older pages are inserted above the first existing message, so after
@@ -184,30 +215,82 @@ export function AgentView({
     if (followsBottom) list.scrollTop = list.scrollHeight;
   }, [events.length]);
 
-  const submit = () => {
-    if (!ready || !canCompose) return;
-    const value = draft.trim();
-    if (!value) return;
-    if (running) {
-      updateQueue(current => enqueueAgentMessage(current, value));
-    } else if (queue.length > 0) {
-      // Preserve FIFO ordering when a local queue already exists. A direct
-      // send would otherwise jump ahead of messages the user explicitly
-      // queued while the Agent was working.
-      updateQueue(current => enqueueAgentMessage(current, value));
-    } else {
-      onSend(value);
-    }
-    setDraft("");
-    inputRef.current?.focus();
+  const addAttachments = files => {
+    const values = Array.from(files || []).filter(file => file && typeof file.name === "string");
+    if (!values.length) return;
+    setAttachments(previous => [
+      ...previous,
+      ...values.map(file => {
+        const validation = validateAgentAttachment(file);
+        return {
+          file,
+          status: validation.ok ? "selected" : "failed",
+          progress: 0,
+          error: validation.ok ? "" : validation.error,
+        };
+      }),
+    ]);
   };
 
-  const primaryAction = () => {
-    if (running) {
-      onInterrupt();
+  const removeAttachment = index => {
+    if (uploadingAttachments) return;
+    setAttachments(previous => previous.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const retryAttachment = index => {
+    if (uploadingAttachments) return;
+    setAttachments(previous => previous.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, status: "selected", progress: 0, error: "" } : item
+    )));
+  };
+
+  const submit = async (sendNow = false) => {
+    if (!ready) return;
+    const value = draft.trim();
+    if (!value) return;
+    if (!canCompose || uploadingAttachments) return;
+    if (attachments.length > 0 && (!canUpload || attachments.some(item => item.status === "failed"))) return;
+    setSubmitError("");
+    setUploadingAttachments(attachments.length > 0);
+    let refs = [];
+    try {
+      refs = attachments.length > 0
+        ? await onUploadAttachments(
+          attachments.map(item => item.file),
+          (index, progress, error = "") => {
+            setAttachments(previous => previous.map((item, itemIndex) => (
+              itemIndex === index
+                ? { ...item, status: error ? "failed" : progress >= 1 ? "ready" : "uploading", progress, error }
+                : item
+            )));
+          },
+        )
+        : [];
+    } catch (error) {
+      const reason = String(error?.message || error || "Upload failed");
+      setAttachments(previous => previous.map(item => ({ ...item, status: "failed", error: reason })));
+      setSubmitError(reason);
+      setUploadingAttachments(false);
       return;
     }
-    submit();
+    try {
+      if (sendNow) await onSendNow(value, refs);
+      else onSend(value, refs);
+    } catch (error) {
+      // The atomic Send now request owns the replacement's local queue item.
+      // Keep the draft/attachments visible here so a failed request can be
+      // retried without silently discarding the user's input.
+      const reason = String(error?.message || error || "Send failed");
+      setSubmitError(reason);
+      setUploadingAttachments(false);
+      return;
+    }
+    setDraft("");
+    setDraftWarning("");
+    removeAgentDraft(localStorage, endpointIdentity, session?.id);
+    setAttachments([]);
+    inputRef.current?.focus();
+    setUploadingAttachments(false);
   };
 
   return (
@@ -215,8 +298,16 @@ export function AgentView({
       className="agent-view"
       onPointerDown={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
+      onDragOver={event => {
+        if (canUpload && event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      }}
+      onDrop={event => {
+        if (!canUpload) return;
+        event.preventDefault();
+        addAttachments(event.dataTransfer?.files);
+      }}
     >
-      <div ref={listRef} className="agent-events" aria-label={`${displayTitle} conversation`}>
+      <div ref={listRef} className="agent-events" aria-label="Agent conversation">
         {hasMore && (
           <button
             ref={loadMoreRef}
@@ -240,109 +331,143 @@ export function AgentView({
             // intentionally not a conversation row on mobile or Web.
             block.kind === "usage"
               ? null
-              : <AgentBlock key={blockKindKey(block, index)} block={block} />
+              : <AgentBlock
+                key={blockKindKey(block, index)}
+                block={block}
+                onInteraction={onInteraction}
+                canInteract={canInteract}
+                onCopy={copyMessage}
+                onEditResend={editAndResend}
+                isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
+              />
           ))
-        )}
-        {running && (
-          <div className="agent-working agent-working-inline" aria-live="polite">
-            <span className="codex-caret" aria-hidden="true" />
-            <span className="agent-working-shimmer">Working</span>
-            <span className="agent-working-provider">{displayTitle}</span>
-          </div>
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
+      {showWorking && (
+        <div className="agent-working" role="status" aria-live="polite">
+          <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
+          <span className="agent-working-provider">{displayTitle}</span>
+        </div>
+      )}
+      {(actionError || submitError) && (
+        <div className="agent-action-error" role="alert">{actionError || submitError}</div>
+      )}
+      {draftWarning && (
+        <div className="agent-draft-warning" role="status">{draftWarning}</div>
+      )}
+      {copyStatus && <div className="agent-copy-status" role="status" aria-live="polite">{copyStatus}</div>}
+      {showQueue && (
+        <AgentQueuePanel
+          items={queueItems}
+          onClose={() => setShowQueue(false)}
+          onEdit={onQueueEdit}
+          onDelete={onQueueDelete}
+          onMoveToFront={onQueueMoveToFront}
+          onReorder={onQueueReorder}
+          onRetry={onQueueRetry}
+        />
+      )}
       {ready ? (
         <form
           className="agent-input"
           onSubmit={event => {
             event.preventDefault();
-            submit();
+            void submit();
           }}
         >
-          {attachmentNotice && (
-            <div className="agent-attachment-notice" role="status">
-              Attachments are not supported by this Host.
+          <div className="agent-input-surface">
+            {attachments.length > 0 && (
+              <div className="agent-attachment-list" aria-label="Selected attachments">
+                {attachments.map((item, index) => (
+                  <span key={`${item.file.name}-${item.file.lastModified}-${index}`} className={`agent-attachment-chip ${item.status}`}>
+                    <span>{item.file.name}</span>
+                    {item.status === "uploading" && <small>{Math.round(item.progress * 100)}%</small>}
+                    {item.status === "failed" && <><small title={item.error}>Failed</small><button type="button" onClick={() => retryAttachment(index)}>Retry</button></>}
+                    {!uploadingAttachments && <button type="button" onClick={() => removeAttachment(index)} aria-label={`Remove ${item.file.name}`}>×</button>}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="agent-input-row">
+              <textarea
+                ref={inputRef}
+                value={draft}
+                onChange={event => {
+                  const value = event.target.value;
+                  setDraft(value);
+                  setDraftWarning(
+                    new TextEncoder().encode(value).length > agentDraftMaximumBytes
+                      ? "Draft is too large to save locally."
+                      : "",
+                  );
+                }}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+                    event.preventDefault();
+                    void submit();
+                  }
+                }}
+                onPaste={event => {
+                  if (!canUpload || !event.clipboardData?.files?.length) return;
+                  addAttachments(event.clipboardData.files);
+                }}
+                onFocus={() => {
+                  if (!hasControl && ready && canSendForStatus(agentStatus)) onRequestControl();
+                }}
+                placeholder="Message…"
+                aria-label="Message"
+                rows={1}
+                enterKeyHint="send"
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck="false"
+                readOnly={!ready || !canSendForStatus(agentStatus)}
+                disabled={uploadingAttachments}
+              />
+            </div>
+            <div className="agent-input-controls" aria-label="Agent details">
+              <label className="agent-attachment-picker" title="Attach files">
+                <span aria-hidden="true">＋</span>
+                <input
+                  type="file"
+                  multiple
+                  onChange={event => {
+                    addAttachments(event.target.files);
+                    event.target.value = "";
+                  }}
+                  aria-label="Attach files"
+                  disabled={!canUpload || uploadingAttachments}
+                />
+              </label>
+              {modelLabel && <code>{modelLabel}</code>}
+              <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments} aria-label="Send">
+                <SendIcon />
+              </button>
+            </div>
+          </div>
+          {showInputMeta && (
+            <div className="agent-input-meta" aria-label="Agent controls">
+              {disabledReason && (
+                <span className={`agent-input-reason${!hasControl ? " locked" : ""}`}>
+                  {!hasControl && <LockIcon />}
+                  {disabledReason}
+                </span>
+              )}
+              {queueItems.length > 0 && (
+                <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
+                  Queue {queueItems.length}
+                </button>
+              )}
+              {canInterrupt && (
+                <>
+                  <button type="button" className="agent-cancel-button" onClick={onCancel}>Cancel</button>
+                  {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments} onClick={() => { void submit(true); }}>Send now</button>}
+                </>
+              )}
             </div>
           )}
-          {showQueue && queue.length > 0 && (
-            <AgentQueueList
-              queue={queue}
-              editingID={editingQueueID}
-              editText={queueEditText}
-              canSendNow={canCompose && !running}
-              onBeginEdit={item => {
-                setEditingQueueID(item.id);
-                setQueueEditText(item.text);
-              }}
-              onSaveEdit={(id, text) => {
-                updateQueue(current => editAgentQueueItem(current, id, text));
-                setEditingQueueID(null);
-              }}
-              onCancelEdit={() => setEditingQueueID(null)}
-              onEditText={setQueueEditText}
-              onDelete={id => updateQueue(current => deleteAgentQueueItem(current, id))}
-              onMove={(from, to) => updateQueue(current => moveAgentQueueItem(current, from, to))}
-              onRetry={id => {
-                updateQueue(current => retryAgentQueueItem(current, id));
-                const item = queue.find(value => value.id === id);
-                if (item && canCompose && !running) sendQueuedItem(item);
-              }}
-            />
-          )}
-          <div className="agent-input-surface">
-            <textarea
-              ref={inputRef}
-              value={draft}
-              onChange={event => {
-                setDraft(event.target.value);
-                resizeComposerTextarea(event.currentTarget, event.target.value);
-              }}
-              onKeyDown={event => {
-                if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder={`Message ${displayTitle}…`}
-              aria-label="Message"
-              rows={2}
-              enterKeyHint="send"
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck="false"
-              disabled={!canCompose}
-            />
-          </div>
-          <div className="agent-input-controls" aria-label="Agent details">
-            <button
-              type="button"
-              className="agent-attach"
-              aria-label="Add image or attachment"
-              onClick={() => setAttachmentNotice(value => !value)}
-            >
-              +
-            </button>
-            <span>{agentKindLabel(session?.kind) || displayTitle}</span>
-            {mode && <span className="agent-mode-badge">{mode}</span>}
-            {modelLabel && <code>{modelLabel}</code>}
-            {queue.length > 0 && (
-              <button type="button" className="agent-queue-toggle" onClick={() => setShowQueue(value => !value)}>
-                Queue {queue.length}
-              </button>
-            )}
-            {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
-            <button
-              type="button"
-              className={`agent-send${composerAction === "interrupt" ? " interrupt" : ""}`}
-              disabled={composerAction === "unavailable"}
-              aria-label={composerAction === "interrupt" ? "Interrupt Agent" : "Send"}
-              onClick={primaryAction}
-            >
-              {running ? <StopIcon /> : <SendIcon />}
-            </button>
-          </div>
         </form>
       ) : (
         <div className="agent-starting">
@@ -353,49 +478,6 @@ export function AgentView({
       )}
     </div>
   );
-}
-
-function agentKindLabel(kind) {
-  switch (String(kind || "").trim().toLowerCase()) {
-  case "codex": return "Codex";
-  case "claude":
-  case "claude-code": return "Claude";
-  case "opencode":
-  case "open-code": return "OpenCode";
-  default: return "";
-  }
-}
-
-function agentModel(session, events = []) {
-  const model = String(session?.agentModel || [...events].reverse().find(event => event.model)?.model || "").trim();
-  return model || "";
-}
-
-function agentModeLabel(session) {
-  const kind = String(session?.kind || "").trim().toLowerCase();
-  const command = String(session?.command || "").trim().toLowerCase();
-  if (!kind && !command) return "";
-  if (kind === "codex") {
-    // Warren's --dangerously-bypass-hook-trust only trusts the managed hook;
-    // it does not disable Codex approvals or the sandbox.
-    if (command.includes("--dangerously-bypass-approvals-and-sandbox")
-      || command.includes("--full-auto")
-      || command.includes("--yolo")) return "YOLO";
-    if (command.includes("--ask-for-approval")) return "Ask";
-  }
-  if (kind === "claude" || kind === "claude-code") {
-    if (command.includes("--dangerously-skip-permissions") || command.includes("bypasspermissions")) return "YOLO";
-    if (command.includes("acceptedits")) return "Edit";
-    if (command.includes("permission-mode plan")) return "Plan";
-    if (command.includes("permission-mode default")) return "Ask";
-    if (command.includes("permission-mode dontask")) return "Auto";
-  }
-  if (kind === "opencode" || kind === "open-code") {
-    if (command.includes("--dangerously") || command.includes("--yolo") || command.includes("--auto-approve")) return "YOLO";
-    const match = command.match(/--(?:agent|mode)(?:=|\s+)([^\s]+)/);
-    if (match) return match[1].charAt(0).toUpperCase() + match[1].slice(1);
-  }
-  return "";
 }
 
 function AgentAttention({ attention, onOpenTerminal }) {
@@ -433,80 +515,57 @@ function AgentAttention({ attention, onOpenTerminal }) {
   );
 }
 
-function AgentQueueList({
-  queue,
-  editingID,
-  editText,
-  canSendNow,
-  onBeginEdit,
-  onSaveEdit,
-  onCancelEdit,
-  onEditText,
-  onDelete,
-  onMove,
-  onRetry,
-}) {
-  const editRef = useRef(null);
-
-  useLayoutEffect(() => {
-    const input = editRef.current;
-    if (!input) return;
-    resizeComposerTextarea(input, editText);
-  }, [editingID, editText]);
-
-  return (
-    <div className="agent-queue" aria-label="Queued messages">
-      <div className="agent-queue-heading">
-        <span>Queued messages</span>
-        <span>Local</span>
-      </div>
-      {queue.map((item, index) => (
-        <div className="agent-queue-item" key={item.id}>
-          {editingID === item.id ? (
-            <textarea
-              ref={editRef}
-              value={editText}
-              onChange={event => {
-                onEditText(event.target.value);
-                resizeComposerTextarea(event.currentTarget, event.target.value);
-              }}
-              rows={2}
-              aria-label="Edit queued message"
-              autoFocus
-            />
-          ) : (
-            <div className="agent-queue-text">{item.text}</div>
-          )}
-          <div className="agent-queue-actions">
-            {editingID === item.id ? (
-              <>
-                <button type="button" onClick={() => onSaveEdit(item.id, editText)}>Save</button>
-                <button type="button" onClick={onCancelEdit}>Cancel</button>
-              </>
-            ) : (
-              <>
-                <button type="button" onClick={() => onBeginEdit(item)} aria-label="Edit queued message">Edit</button>
-                <button type="button" onClick={() => onDelete(item.id)} aria-label="Delete queued message">Delete</button>
-              </>
-            )}
-            <button type="button" onClick={() => onMove(index, Math.max(0, index - 1))} disabled={index === 0} aria-label="Move queued message up">↑</button>
-            <button type="button" onClick={() => onMove(index, Math.min(queue.length, index + 2))} disabled={index === queue.length - 1} aria-label="Move queued message down">↓</button>
-            <button type="button" onClick={() => onRetry(item.id)} disabled={!canSendNow}>Send now</button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function canSendForStatus(status) {
   if (!status) return true;
   const activity = String(status.activity || "").toLowerCase();
   if (["failed", "stalled", "exited", "unknown"].includes(activity)) return false;
-  if (activity === "blocked" && status.attention?.kind !== "input") return false;
   // An input/question attention is intentionally answerable in the composer;
   // approval and warning attention must be reviewed in the Terminal.
   return !status.attention || status.attention.kind === "input";
+}
+
+function shouldShowWorking(status, events) {
+  if (status?.activity !== "working") return false;
+  const visible = (events || []).filter(event => !isHiddenAgentEvent(event));
+  const last = visible.at(-1);
+  if (!last) return true;
+  // A completed assistant message is the stronger visual signal. Hosts can
+  // publish a trailing working status while the final transcript event is
+  // still settling, so do not leave a cue under already-finished prose.
+  const type = normalizeAgentEventType(last.type);
+  const role = normalizeAgentEventType(last.role);
+  const assistant = type === "assistant" || role === "assistant";
+  return !(assistant && String(last.content || "").trim());
+}
+
+function agentTurnID(turn, events) {
+  const explicit = typeof turn === "object" ? turn?.id : turn;
+  const explicitID = Number(explicit);
+  if (Number.isSafeInteger(explicitID) && explicitID > 0) return explicitID;
+  for (const event of [...(events || [])].reverse()) {
+    const eventID = Number(event?.turn);
+    if (Number.isSafeInteger(eventID) && eventID > 0) return eventID;
+  }
+  return 0;
+}
+
+// A few older Hosts publish agent events without a turn field. Use the
+// explicit turn when available, then the latest user event as the stable
+// boundary for a new turn. Do not use the latest arbitrary event: reasoning
+// and tool deltas would make the working copy change several times per turn.
+function agentTurnKey(turn, events) {
+  const explicit = agentTurnID(turn, []);
+  if (explicit) return `turn:${explicit}`;
+  const values = Array.isArray(events) ? events : [];
+  const latestUser = [...values].reverse().find(isUserAgentEvent);
+  if (latestUser) {
+    const eventTurn = Number(latestUser.turn);
+    if (Number.isSafeInteger(eventTurn) && eventTurn > 0) return `turn:${eventTurn}`;
+    const identity = String(latestUser.id || latestUser.seq || latestUser.timestamp || "").trim();
+    if (identity) return `user:${identity}`;
+  }
+  const eventTurn = agentTurnID(null, values);
+  return eventTurn ? `turn:${eventTurn}` : "unknown";
 }
 
 function agentInputDisabledReason({ ready, hasControl, status }) {
@@ -524,16 +583,9 @@ function agentInputDisabledReason({ ready, hasControl, status }) {
   }
 }
 
-function resizeComposerTextarea(textarea, text) {
-  if (!textarea) return;
-  const minimumHeight = composerHeightForText("");
-  const maximumHeight = composerHeightForText("", { minLines: 6, maxLines: 6 });
-  textarea.style.height = "auto";
-  const measured = Number.isFinite(textarea.scrollHeight) ? textarea.scrollHeight : 0;
-  const fallback = composerHeightForText(text);
-  const height = Math.min(maximumHeight, Math.max(minimumHeight, measured || fallback));
-  textarea.style.height = `${height}px`;
-  textarea.style.overflowY = measured > height ? "auto" : "hidden";
+function agentModel(session, events = []) {
+  const model = String(session?.agentModel || [...events].reverse().find(event => event.model)?.model || "").trim();
+  return model || "";
 }
 
 function isHiddenAgentEvent(event) {
@@ -546,6 +598,11 @@ function isHiddenAgentEvent(event) {
     || (event?.usage && String(event?.content || "").trim().toLowerCase() === "token usage");
 }
 
+function isUserAgentEvent(event) {
+  return normalizeAgentEventType(event?.type) === "user"
+    || normalizeAgentEventType(event?.role) === "user";
+}
+
 function blockKindKey(block, index) {
   const id = block.call?.id || block.event?.id || block.event?.seq || block.call?.seq;
   const sequence = block.call?.seq || block.event?.seq;
@@ -555,17 +612,29 @@ function blockKindKey(block, index) {
   return `${block.kind}-${id || "event"}-${sequence || index}`;
 }
 
-function AgentBlock({ block }) {
+function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEditResend = () => {}, isLastUser = false, canInteract = false }) {
   switch (block.kind) {
+  case "structured":
+    return <StructuredAgentBlock event={block.event} onInteraction={onInteraction} canInteract={canInteract} />;
   case "user":
   case "assistant": {
     const event = block.event;
     const interrupted = isInterrupted(event);
-    if (event.type === "user") {
+    if (isUserAgentEvent(event)) {
       return (
         <div className={`agent-message user${interrupted ? " interrupted" : ""}`}>
           <div className="agent-bubble">
             <MarkdownContent value={event.content || ""} />
+          </div>
+          <div className="agent-message-actions">
+            <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
+              <CopyIcon />
+            </button>
+            {isLastUser && (
+              <button type="button" onClick={() => onEditResend(event.content || "")} aria-label="Edit and resend message" title="Edit and resend message">
+                <EditIcon />
+              </button>
+            )}
           </div>
           <div className="agent-message-meta">
             {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
@@ -577,6 +646,11 @@ function AgentBlock({ block }) {
     return (
       <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
         <MarkdownContent value={event.content || ""} />
+        <div className="agent-message-actions">
+          <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
+            <CopyIcon />
+          </button>
+        </div>
         <div className="agent-message-meta">
           {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
           {event.durationMs ? formatDuration(event.durationMs) : ""}
@@ -632,6 +706,274 @@ function AgentBlock({ block }) {
       </details>
     );
   }
+}
+
+function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false }) {
+  const type = String(event?.type || "").trim().toLowerCase().replaceAll("-", "_");
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+  const state = String(payload.state || "").toLowerCase();
+  const title = payload.title || payload.label || payload.name || type.replaceAll("_", " ");
+  const [submitting, setSubmitting] = useState(false);
+  const [answers, setAnswers] = useState({});
+  const [customAnswers, setCustomAnswers] = useState({});
+  const requestID = String(payload.requestId || "").trim();
+  const pending = canInteract && (state === "pending" || state === "submitting") && requestID;
+  const questions = type === "question"
+    ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => ({
+      ...question,
+      id: String(question?.id || `question-${index}`),
+      prompt: String(question?.prompt || question?.title || "Question"),
+      selection: String(question?.selection || "single").toLowerCase() === "multiple" ? "multiple" : "single",
+      required: question?.required !== false,
+      allowCustom: Boolean(question?.allowCustom),
+      options: Array.isArray(question?.options) ? question.options : [],
+    }))
+    : [];
+  const permissionOptions = type === "permission" && Array.isArray(payload.options) ? payload.options : [];
+  const submitResponse = response => {
+    if (!pending || submitting || state !== "pending") return;
+    setSubmitting(true);
+    try {
+      const result = onInteraction({ requestId: requestID, kind: type, response });
+      // App-level request adapters return a Promise when the Host rejects the
+      // response. Restore the card so a transient failure is retryable.
+      Promise.resolve(result).catch(() => setSubmitting(false));
+    } catch {
+      setSubmitting(false);
+    }
+  };
+  const toggleQuestionOption = (question, optionID) => {
+    if (!pending || submitting || state !== "pending") return;
+    setAnswers(previous => {
+      const selected = new Set(previous[question.id] || []);
+      if (question.selection === "multiple") {
+        if (selected.has(optionID)) selected.delete(optionID);
+        else selected.add(optionID);
+      } else {
+        selected.clear();
+        selected.add(optionID);
+      }
+      return { ...previous, [question.id]: [...selected] };
+    });
+  };
+  const submitQuestionAnswers = () => {
+    const normalized = {};
+    const custom = {};
+    for (const question of questions) {
+      const selected = Array.isArray(answers[question.id]) ? answers[question.id] : [];
+      const customValue = String(customAnswers[question.id] || "").trim();
+      if (selected.length > 0 || customValue) normalized[question.id] = selected;
+      if (customValue) custom[question.id] = customValue;
+    }
+    submitResponse({ answers: normalized, ...(Object.keys(custom).length ? { customAnswers: custom } : {}) });
+  };
+  const questionsValid = questions.every(question => {
+    if (!question.required) return true;
+    return (answers[question.id] || []).length > 0 || String(customAnswers[question.id] || "").trim().length > 0;
+  });
+  const cancelInteraction = () => submitResponse({ cancelled: true });
+  const selectPermission = option => submitResponse({ decision: option.id || option.value });
+  const optionID = option => String(option?.id || option?.value || "");
+
+  useEffect(() => {
+    if (state !== "pending") setSubmitting(false);
+  }, [state]);
+
+  const interactionPending = pending && state === "pending";
+  const isSelected = (questionID, id) => (answers[questionID] || []).includes(id);
+
+  const questionContent = questions.map(question => (
+    <fieldset className="agent-question" key={question.id}>
+      <legend>{question.prompt}</legend>
+      <div className="agent-structured-options" role={question.selection === "multiple" ? "group" : "radiogroup"} aria-label={question.prompt}>
+        {question.options.map((option, index) => {
+          const id = optionID(option) || `option-${index}`;
+          const selected = isSelected(question.id, id);
+          return (
+            <button
+              key={`${question.id}-${id}`}
+              type="button"
+              className={selected ? "selected" : ""}
+              onClick={() => toggleQuestionOption(question, id)}
+              disabled={!interactionPending}
+              aria-pressed={selected}
+            >
+              <span>{option.label || option.id || option.value || id}</span>
+              {option.description && <small>{option.description}</small>}
+            </button>
+          );
+        })}
+      </div>
+      {question.allowCustom && (
+        <input
+          className="agent-question-custom"
+          value={customAnswers[question.id] || ""}
+          onChange={event => setCustomAnswers(previous => ({ ...previous, [question.id]: event.target.value }))}
+          placeholder="Custom answer"
+          aria-label={`${question.prompt} custom answer`}
+          disabled={!interactionPending}
+        />
+      )}
+    </fieldset>
+  ));
+
+  const permissionContent = permissionOptions.map((option, index) => {
+    const id = optionID(option) || `option-${index}`;
+    return (
+      <button key={id} type="button" onClick={() => selectPermission(option)} disabled={!interactionPending}>
+        <span>{option.label || option.id || option.value || id}</span>
+        {option.description && <small>{option.description}</small>}
+      </button>
+    );
+  });
+
+  const responseControls = interactionPending && canInteract && (
+    <div className="agent-structured-actions">
+      {type === "question" && <button type="button" onClick={submitQuestionAnswers} disabled={submitting || !questionsValid}>Submit</button>}
+      {(type === "question" || type === "permission") && <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>}
+    </div>
+  );
+
+  return (
+    <section className={`agent-structured agent-structured-${type}`} aria-label={title}>
+      <div className="agent-structured-head">
+        <span className="agent-structured-icon" aria-hidden="true">{structuredIcon(type)}</span>
+        <strong>{title}</strong>
+        <span className={`agent-structured-state ${state}`}>{structuredStateLabel(state)}</span>
+      </div>
+      {payload.description && <p className="agent-structured-description">{payload.description}</p>}
+      {pending && type === "question" && questionContent}
+      {pending && type === "permission" && permissionContent.length > 0 && (
+        <div className="agent-structured-options" role="group" aria-label={`${title} options`}>{permissionContent}</div>
+      )}
+      {responseControls}
+      {!canInteract && (type === "question" || type === "permission") && (state === "pending" || state === "submitting") && (
+        <p className="agent-structured-readonly" role="status">This Host does not support responding here.</p>
+      )}
+      {(type === "plan" || type === "todo") && Array.isArray(payload.items) && (
+        <ul className="agent-structured-items">
+          {payload.items.map((item, index) => (
+            <li key={item.id || index} className={item.state || "pending"}>
+              <span aria-hidden="true">{item.state === "completed" ? "✓" : "○"}</span>
+              {item.label || item.title || item.prompt || ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {type !== "question" && type !== "permission" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
+        <p className="agent-structured-summary">{payload.summary || payload.detail || payload.name}</p>
+      )}
+    </section>
+  );
+}
+
+function structuredIcon(type) {
+  return {
+    question: "?",
+    permission: "✓",
+    plan: "☷",
+    todo: "☑",
+    activity: "•",
+    plugin: "◆",
+    subagent: "◇",
+    attachment: "⌕",
+  }[type] || "•";
+}
+
+function structuredStateLabel(state) {
+  return {
+    pending: "Pending",
+    submitting: "Submitting…",
+    resolved: "Resolved",
+    completed: "Completed",
+    cancelled: "Cancelled",
+    canceled: "Cancelled",
+    failed: "Failed",
+    in_progress: "In progress",
+  }[state] || (state ? state.replaceAll("_", " ") : "Details");
+}
+
+function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onReorder, onRetry }) {
+  const [editingID, setEditingID] = useState(null);
+  const [editingText, setEditingText] = useState("");
+  const [deleteID, setDeleteID] = useState(null);
+  const [draggingID, setDraggingID] = useState(null);
+
+  const beginEdit = item => {
+    setEditingID(item.id);
+    setEditingText(item.text);
+    setDeleteID(null);
+  };
+
+  const saveEdit = item => {
+    const value = editingText.trim();
+    if (value) onEdit(item.id, value, item.attachments || []);
+    setEditingID(null);
+    setEditingText("");
+  };
+
+  return (
+    <div className="agent-queue-panel" role="dialog" aria-modal="true" aria-label="Queued messages">
+      <div className="agent-queue-panel-head"><strong>Queued messages</strong><button type="button" onClick={onClose} aria-label="Close queue">×</button></div>
+      {items.length === 0 ? <p>No queued messages.</p> : items.map(item => (
+        <div
+          className={`agent-queue-item ${item.status || "queued"}`}
+          key={item.id}
+          draggable={item.status !== "sending"}
+          onDragStart={() => setDraggingID(item.id)}
+          onDragEnd={() => setDraggingID(null)}
+          onDragOver={event => {
+            if (draggingID && draggingID !== item.id && item.status !== "sending") event.preventDefault();
+          }}
+          onDrop={event => {
+            event.preventDefault();
+            if (draggingID && draggingID !== item.id && item.status !== "sending") onReorder(draggingID, item.id);
+            setDraggingID(null);
+          }}
+        >
+          {editingID === item.id ? (
+            <textarea
+              className="agent-queue-edit"
+              value={editingText}
+              onChange={event => setEditingText(event.target.value)}
+              aria-label="Edit queued message"
+              autoFocus
+            />
+          ) : (
+            <div className="agent-queue-item-text">{item.text}</div>
+          )}
+          {item.attachments?.length > 0 && (
+            <div className="agent-queue-item-attachments" aria-label="Queued attachments">
+              {item.attachments.map(attachment => <span key={attachment.attachmentId}>{attachment.name || attachment.attachmentId}</span>)}
+            </div>
+          )}
+          {item.failureReason && <div className="agent-queue-error">{item.failureReason}</div>}
+          <div className="agent-queue-actions">
+            {editingID === item.id ? (
+              <>
+                <button type="button" onClick={() => saveEdit(item)} disabled={!editingText.trim()}>Save</button>
+                <button type="button" onClick={() => setEditingID(null)}>Cancel</button>
+              </>
+            ) : item.status === "failed" && <button type="button" onClick={() => onRetry(item.id)}>Retry</button>}
+            {item.status !== "sending" && editingID !== item.id && (
+              <button type="button" className="agent-icon-button" onClick={() => beginEdit(item)} aria-label="Edit queued message" title="Edit queued message">
+                <EditIcon />
+              </button>
+            )}
+            {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => onMoveToFront(item.id)}>Move to front</button>}
+            {item.status !== "sending" && editingID !== item.id && (deleteID === item.id ? (
+              <>
+                <span className="agent-queue-delete-confirm">Delete?</span>
+                <button type="button" onClick={() => { onDelete(item.id); setDeleteID(null); }}>Confirm</button>
+                <button type="button" onClick={() => setDeleteID(null)}>Keep</button>
+              </>
+            ) : <button type="button" onClick={() => setDeleteID(item.id)}>Delete</button>)}
+            {item.status === "sending" && <span aria-live="polite">Sending…</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ActivityGroup({ block }) {
@@ -806,6 +1148,24 @@ function displayToolName(name) {
   return names[name] || name || "Tool";
 }
 
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="8" y="8" width="11" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m4 16.5-.8 4.3 4.3-.8L19 8.5a2.1 2.1 0 0 0-3-3z" />
+      <path d="m14.5 7.5 2 2" />
+    </svg>
+  );
+}
+
 function SendIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -814,10 +1174,11 @@ function SendIcon() {
   );
 }
 
-function StopIcon() {
+function LockIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    <svg className="agent-lock-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="3.5" y="7" width="9" height="6" rx="1.2" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
     </svg>
   );
 }
