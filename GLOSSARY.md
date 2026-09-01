@@ -104,6 +104,34 @@ issues scoped access capabilities, and forwards owner or Public Access routes.
 It is shared infrastructure and is not a Warren Host, Workspace, or Terminal
 Session.
 
+**Relay Administrator**:
+The person or organization that operates a Warren Relay as shared
+infrastructure. A Relay Administrator manages Relay policy and Host
+enrollment, but is not necessarily the operator of any Warren Host. Relay
+Administrator authority must not be required by a Warren client after a Host
+has been enrolled.
+
+**Host Enrollment**:
+The one-time act of joining a Warren Host to a Warren Relay using an
+administrator-issued enrollment invitation. Enrollment establishes the
+Host's durable Relay identity; the Relay Administrator's authority and
+credentials are not part of the Host's client configuration.
+
+**Host Operator**:
+The person or managed device responsible for a Warren Host. A Host Operator
+can make that Host reachable to Warren clients without gaining control over
+the Relay deployment or other Hosts.
+
+**Pairing Invite**:
+An opaque, bearer-valued link that grants a Warren client access to one
+enrolled Host for the Relay-configured sharing window. A Pairing Invite may be
+used by multiple clients until it expires or the Host's pairing generation is
+rotated; it is not an enrollment invitation.
+
+**Warren Client**:
+A Desktop or iOS application that consumes an enrolled Host or Pairing Invite.
+A Warren Client does not administer the shared Relay control plane.
+
 **Relay access capability**:
 A short-lived signed credential issued after pairing. It authorizes a specific
 Host and scope and is distinct from the Host Secret used by the daemon.
