@@ -14,6 +14,37 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestPairingWindowDefaultsToSevenDays(t *testing.T) {
+	server, err := NewServer(Config{
+		PublicURL:     "https://relay.example.test",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "https://relay.example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = 7 * 24 * time.Hour
+	if server.config.PairingTTL != expected || server.config.PairingTicketTTL != expected {
+		t.Fatalf("pairing windows = %s/%s, want %s", server.config.PairingTTL, server.config.PairingTicketTTL, expected)
+	}
+
+	custom, err := NewServer(Config{
+		PublicURL:        "https://relay.example.test",
+		AdminToken:       "admin-bootstrap",
+		SigningKey:       []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin:    "https://relay.example.test",
+		PairingTTL:       3 * 24 * time.Hour,
+		PairingTicketTTL: 72 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.config.PairingTTL != 3*24*time.Hour || custom.config.PairingTicketTTL != 72*time.Hour {
+		t.Fatalf("custom pairing windows = %s/%s", custom.config.PairingTTL, custom.config.PairingTicketTTL)
+	}
+}
+
 func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	const hostID = "00000000-0000-4000-8000-000000000001"
 	server, err := NewServer(Config{
@@ -56,10 +87,11 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 		t.Fatalf("pair: response=%v err=%v", pairResponse, err)
 	}
 	var paired struct {
-		Token  string `json:"access_token"`
-		WebURL string `json:"web_url"`
+		Token         string `json:"access_token"`
+		WebURL        string `json:"web_url"`
+		PairingTicket string `json:"pairing_ticket"`
 	}
-	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil || paired.Token == "" {
+	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil || paired.Token == "" || paired.PairingTicket == "" {
 		t.Fatal("missing access token")
 	}
 	pairResponse.Body.Close()
@@ -67,11 +99,31 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 		t.Fatalf("unexpected web URL: %s", paired.WebURL)
 	}
 
+	// A pairing code is intentionally reusable during its TTL so one generated
+	// link can be shared with more than one client. A new code still replaces
+	// the previous code, and Host revocation/re-enrollment invalidates it.
 	reused, err := http.Post(httpServer.URL+"/v1/pair", "application/json", bytes.NewReader(body))
-	if err != nil || reused.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("pairing code was reusable: response=%v err=%v", reused, err)
+	if err != nil || reused.StatusCode != http.StatusCreated {
+		t.Fatalf("pairing code could not provision a second client: response=%v err=%v", reused, err)
 	}
 	reused.Body.Close()
+
+	// Rotating the pairing code also fences tickets issued from the previous
+	// code. Existing short-lived access capabilities remain usable until their
+	// normal expiry, but an old QR/link cannot create another session.
+	rotatedRequest, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/pairing", nil)
+	rotatedRequest.Header.Set("Authorization", "Bearer admin-bootstrap")
+	rotatedResponse, err := http.DefaultClient.Do(rotatedRequest)
+	if err != nil || rotatedResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("rotate pairing code: response=%v err=%v", rotatedResponse, err)
+	}
+	rotatedResponse.Body.Close()
+	oldTicketBody, _ := json.Marshal(map[string]string{"pairing_ticket": paired.PairingTicket})
+	oldTicketResponse, err := http.Post(httpServer.URL+"/v1/session/exchange", "application/json", bytes.NewReader(oldTicketBody))
+	if err != nil || oldTicketResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old pairing ticket remained valid: response=%v err=%v", oldTicketResponse, err)
+	}
+	oldTicketResponse.Body.Close()
 
 	client, _, err := websocket.DefaultDialer.Dial(
 		websocketBase+"/v1/client/connect",
@@ -519,7 +571,7 @@ func TestPairingCodeExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	current = current.Add(time.Minute + time.Nanosecond)
-	if _, err := registry.consumePairing(hostID, code); err == nil {
+	if _, _, err := registry.consumePairing(hostID, code); err == nil {
 		t.Fatal("expired pairing code was accepted")
 	}
 }

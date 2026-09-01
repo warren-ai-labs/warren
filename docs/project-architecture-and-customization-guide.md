@@ -469,7 +469,7 @@ path for Hosts that are directly reachable by the operator.
 `RelayService` implements:
 
 - Host provisioning and hashed credentials;
-- one-time, short-lived pairing codes;
+- reusable seven-day-by-default pairing codes and client links;
 - HMAC-SHA256 access tokens bound to Host generation;
 - Host revocation and credential rotation;
 - Web Client to Host WebSocket multiplexing;

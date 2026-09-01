@@ -40,9 +40,11 @@ const relaySessionBase = usesControlPlane
   ? relayPath(`${relayHostPath}/v1/session`)
   : "";
 
-// Relay links carry a one-time pairing ticket in the fragment. Exchange it
+// Relay links carry a shareable pairing ticket in the fragment. Exchange it
 // immediately over HTTPS and scrub the URL before rendering or navigating;
-// only the short-lived access capability remains in memory.
+// only the short-lived access capability remains in memory. The ticket remains
+// valid for the Relay's configured sharing window so another device can use
+// the same link.
 export const tokenReady = usesControlPlane
   ? (suppliedToken
       ? fetch(`${relaySessionBase}/exchange`, {

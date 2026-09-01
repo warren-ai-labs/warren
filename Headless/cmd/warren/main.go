@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -133,7 +134,7 @@ func relayCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "enroll", "pair", "pairing", "begin-pairing", "status", "tunnel", "revoke":
+	case "register", "enroll", "pair", "pairing", "begin-pairing", "share", "link", "pair-link", "pairing-link", "status", "tunnel", "revoke":
 	default:
 		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
 	}
@@ -166,6 +167,28 @@ func relayCommand(args []string) error {
 		// Authorization; doing so makes accidental credential forwarding more
 		// likely when the command is run with global --token.
 		return relayEnroll(base+"/v1/hosts/"+url.PathEscape(hostID)+"/enroll", base, hostID, ticket, secret)
+	case "register":
+		adminToken, credentialErr := relayAdminCredential(flags)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		secret := stringValueDefault(flags, "secret", daemonToken())
+		if strings.TrimSpace(secret) == "" {
+			return newUsageError("--secret or WARREN_TOKEN_FILE is required", relayUsageText())
+		}
+		registeredHostID := strings.TrimSpace(hostID)
+		if registeredHostID == "" {
+			var err error
+			registeredHostID, err = newHostID()
+			if err != nil {
+				return fmt.Errorf("generate Host ID: %w", err)
+			}
+		}
+		name := strings.TrimSpace(stringValueDefault(flags, "name", localHostName()))
+		if name == "" {
+			name = "Warren Host"
+		}
+		return relayRegister(base, registeredHostID, name, adminToken, secret, boolValue(flags, "share"), flags)
 	case "pair":
 		code := stringValue(flags, "code")
 		if hostID == "" || code == "" {
@@ -181,6 +204,15 @@ func relayCommand(args []string) error {
 			return newUsageError("--host is required", relayUsageText())
 		}
 		return relayRequest(http.MethodPost, base+"/v1/hosts/"+url.PathEscape(hostID)+"/pairing", credential, nil)
+	case "share", "link", "pair-link", "pairing-link":
+		credential, credentialErr := relayManagementCredential(flags, true)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		if hostID == "" {
+			return newUsageError("--host is required", relayUsageText())
+		}
+		return relayShare(base, hostID, credential, flags)
 	case "status":
 		token = relayAccessCredential(flags, token)
 		if hostID == "" || token == "" {
@@ -251,6 +283,9 @@ func missingRelayPositionals(command string, flags map[string]any) string {
 func validateRelayFlags(command string, flags map[string]any) error {
 	allowed := map[string]bool{"url": true, "relay-url": true, "host": true, "host-id": true, "help": true, "h": true}
 	switch command {
+	case "register":
+		allowed["admin-token"], allowed["secret"] = true, true
+		allowed["name"], allowed["share"], allowed["qr"], allowed["open"] = true, true, true, true
 	case "enroll":
 		allowed["ticket"], allowed["secret"] = true, true
 	case "pair":
@@ -258,6 +293,10 @@ func validateRelayFlags(command string, flags map[string]any) error {
 	case "pairing", "begin-pairing", "status", "revoke":
 		allowed["token"] = true
 		allowed["host-secret"], allowed["admin-token"] = true, true
+	case "share", "link", "pair-link", "pairing-link":
+		allowed["token"] = true
+		allowed["host-secret"], allowed["admin-token"] = true, true
+		allowed["qr"], allowed["open"] = true, true
 	case "tunnel":
 		allowed["token"] = true
 		allowed["host-secret"], allowed["admin-token"] = true, true
@@ -336,6 +375,304 @@ func relayManagementCredential(flags map[string]any, allowHostSecret bool) (stri
 		return "", newUsageError("--host-secret or --admin-token is required (configured Relay access tokens cannot mutate routes)", relayUsageText())
 	}
 	return "", newUsageError("--admin-token is required for relay revoke", relayUsageText())
+}
+
+// relayAdminCredential resolves the bootstrap credential used only to create
+// a Relay Host record. A configured access capability or Host Secret must not
+// be silently promoted to administrator authority.
+func relayAdminCredential(flags map[string]any) (string, error) {
+	if value := strings.TrimSpace(stringValue(flags, "admin-token")); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(os.Getenv("WARREN_RELAY_ADMIN_TOKEN")); value != "" {
+		return value, nil
+	}
+	return "", newUsageError("--admin-token or WARREN_RELAY_ADMIN_TOKEN is required", relayUsageText())
+}
+
+func newHostID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	// RFC 4122 version 4 UUID layout. Relay validates this shape before
+	// storing it, so keep generation in the CLI rather than shelling out to
+	// platform-specific uuidgen implementations.
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+func localHostName() string {
+	value, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func relayRegister(base, hostID, name, adminToken, secret string, share bool, flags map[string]any) error {
+	value, err := doRelayRequest(http.MethodPost, base+"/v1/hosts", adminToken, map[string]any{
+		"id":   hostID,
+		"name": name,
+	})
+	if err != nil {
+		return err
+	}
+	provisioned, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("Relay registration returned an invalid response")
+	}
+	ticket := strings.TrimSpace(stringValueAny(provisioned, "enrollment_ticket"))
+	if ticket == "" {
+		return errors.New("Relay registration did not return an enrollment ticket")
+	}
+	enrollment, err := doRelayRequest(
+		http.MethodPost,
+		base+"/v1/hosts/"+url.PathEscape(hostID)+"/enroll",
+		"",
+		map[string]any{"enrollment_ticket": ticket, "host_secret": secret},
+	)
+	if err != nil {
+		return err
+	}
+	enrolled, ok := enrollment.(map[string]any)
+	if !ok {
+		return errors.New("Relay enrollment returned an invalid response")
+	}
+	keyID := strings.TrimSpace(stringValueAny(enrolled, "relay_key_id"))
+	key := strings.TrimSpace(stringValueAny(enrolled, "relay_public_key"))
+	if keyID == "" {
+		keyID = strings.TrimSpace(stringValueAny(provisioned, "relay_key_id"))
+	}
+	if key == "" {
+		key = strings.TrimSpace(stringValueAny(provisioned, "relay_public_key"))
+	}
+	if keyID == "" || key == "" {
+		return errors.New("Relay enrollment did not return a signing key")
+	}
+	if err := saveRelayEnrollment(base, hostID, keyID, key); err != nil {
+		return err
+	}
+
+	if share {
+		return relayShare(base, hostID, secret, flags)
+	}
+	result := map[string]any{
+		"registered": true,
+		"host_id":    hostID,
+		"relay_url":  base,
+	}
+	if outputJSON {
+		return printValue(result)
+	}
+	printKVTable([][2]string{
+		{"REGISTERED", "yes"},
+		{"HOST ID", hostID},
+		{"RELAY URL", base},
+		{"NEXT", "warren relay share --url " + base + " --host " + hostID + " --host-secret <host-secret>"},
+	})
+	return nil
+}
+
+func relayShare(base, hostID, credential string, flags map[string]any) error {
+	value, err := beginRelayPairing(base, hostID, credential)
+	if err != nil {
+		return err
+	}
+	pairing, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("Relay pairing returned an invalid response")
+	}
+	code := strings.TrimSpace(stringValueAny(pairing, "pairing_code"))
+	if code == "" {
+		return errors.New("Relay pairing did not return a pairing code")
+	}
+	pairedValue, err := doRelayRequest(
+		http.MethodPost,
+		base+"/v1/pair",
+		"",
+		map[string]any{"host_id": hostID, "pairing_code": code},
+	)
+	if err != nil {
+		return err
+	}
+	paired, ok := pairedValue.(map[string]any)
+	if !ok {
+		return errors.New("Relay pairing exchange returned an invalid response")
+	}
+	link := strings.TrimSpace(stringValueAny(paired, "web_url"))
+	if link == "" {
+		return errors.New("Relay pairing exchange did not return a link")
+	}
+	expiresIn := intValueAny(paired, "pairing_expires_in")
+	if expiresIn <= 0 {
+		expiresIn = intValueAny(pairing, "expires_in")
+	}
+	result := map[string]any{
+		"host_id":     hostID,
+		"pairing_url": link,
+		"expires_in":  expiresIn,
+		"reusable":    true,
+	}
+	if qr, requested := relayQRPath(flags); requested {
+		if err := writeRelayQRCode(qr, link); err != nil {
+			return err
+		}
+		result["qr_path"] = qr
+	}
+	if boolValue(flags, "open") {
+		if err := openRelayURL(link); err != nil {
+			return err
+		}
+	}
+	if outputJSON {
+		return printValue(result)
+	}
+	pairs := [][2]string{
+		{"PAIRING URL", link},
+		{"EXPIRES IN", formatRelayTTL(expiresIn)},
+		{"REUSABLE", "yes (until expiry or Host re-registration)"},
+	}
+	if qr, requested := relayQRPath(flags); requested {
+		pairs = append(pairs, [2]string{"QR", qr})
+	}
+	printKVTable(pairs)
+	return nil
+}
+
+// beginRelayPairing may race the daemon's connector startup when `relay
+// register --share` has just persisted its settings. Retry only the explicit
+// offline response for a short, bounded window; authentication and validation
+// failures remain immediate so a bad credential is never masked as readiness.
+func beginRelayPairing(base, hostID, credential string) (any, error) {
+	const (
+		attempts = 20
+		delay    = 250 * time.Millisecond
+	)
+	endpoint := base + "/v1/hosts/" + url.PathEscape(hostID) + "/pairing"
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		value, err := doRelayRequest(http.MethodPost, endpoint, credential, nil)
+		if err == nil {
+			return value, nil
+		}
+		lastErr = err
+		var responseErr *relayHTTPError
+		if !errors.As(err, &responseErr) ||
+			responseErr.status != http.StatusConflict ||
+			strings.TrimSpace(strings.ToLower(responseErr.body)) != "host offline" {
+			return nil, err
+		}
+		if attempt+1 < attempts {
+			time.Sleep(delay)
+		}
+	}
+	return nil, lastErr
+}
+
+func saveRelayEnrollment(relayURL, hostID, keyID, key string) error {
+	settingsPath := env("WARREN_SETTINGS_FILE", settings.DefaultPath())
+	loaded, err := settings.Load(settingsPath)
+	if err != nil {
+		return fmt.Errorf("load Warren settings: %w", err)
+	}
+	loaded.Relay.Enabled = true
+	loaded.Relay.URL = strings.TrimRight(strings.TrimSpace(relayURL), "/")
+	loaded.Relay.HostID = strings.TrimSpace(hostID)
+	loaded.Relay.RelayKeyID = strings.TrimSpace(keyID)
+	loaded.Relay.RelayKey = strings.TrimSpace(key)
+	loaded.Relay.LastError = ""
+	if err := settings.Save(settingsPath, loaded); err != nil {
+		return fmt.Errorf("save Warren Relay settings: %w", err)
+	}
+	return nil
+}
+
+func stringValueAny(value map[string]any, key string) string {
+	result, _ := value[key].(string)
+	return result
+}
+
+func intValueAny(value map[string]any, key string) int {
+	switch item := value[key].(type) {
+	case float64:
+		return int(item)
+	case int:
+		return item
+	case json.Number:
+		result, _ := item.Int64()
+		return int(result)
+	default:
+		return 0
+	}
+}
+
+func formatRelayTTL(seconds int) string {
+	if seconds <= 0 {
+		return "unknown"
+	}
+	duration := time.Duration(seconds) * time.Second
+	if duration%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(duration/(24*time.Hour)))
+	}
+	if duration%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(duration/time.Hour))
+	}
+	return duration.String()
+}
+
+func relayQRPath(flags map[string]any) (string, bool) {
+	raw, ok := flags["qr"]
+	if !ok {
+		return "", false
+	}
+	if value, isString := raw.(string); isString && strings.TrimSpace(value) != "" && value != "true" {
+		return filepath.Clean(strings.TrimSpace(value)), true
+	}
+	return filepath.Clean(env("WARREN_RELAY_QR_PATH", "warren-relay-pairing.png")), true
+}
+
+func writeRelayQRCode(path, link string) error {
+	encoder, err := exec.LookPath("qrencode")
+	if err != nil {
+		return errors.New("qrencode is required for --qr; install qrencode or omit --qr to print the pairing link")
+	}
+	if parent := filepath.Dir(path); parent != "." && parent != "" {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return fmt.Errorf("create QR directory: %w", err)
+		}
+	}
+	command := exec.Command(encoder, "-o", path, "-")
+	command.Stdin = strings.NewReader(link)
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("generate QR: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("protect QR file: %w", err)
+	}
+	return nil
+}
+
+func openRelayURL(link string) error {
+	commandName := "open"
+	if _, err := exec.LookPath(commandName); err != nil {
+		commandName = "xdg-open"
+	}
+	command, err := exec.LookPath(commandName)
+	if err != nil {
+		return errors.New("cannot open pairing link: neither open nor xdg-open is available")
+	}
+	commandProcess := exec.Command(command, link)
+	commandProcess.Stdout = io.Discard
+	commandProcess.Stderr = io.Discard
+	if err := commandProcess.Start(); err != nil {
+		return fmt.Errorf("open pairing link: %w", err)
+	}
+	return nil
 }
 
 func relayEndpointValues(flags map[string]any) (string, string, string, error) {
@@ -496,19 +833,8 @@ func relayEnroll(endpoint, relayURL, hostID, ticket, secret string) error {
 	if strings.TrimSpace(keyID) == "" || strings.TrimSpace(key) == "" {
 		return errors.New("relay enrollment did not return a signing key")
 	}
-	settingsPath := env("WARREN_SETTINGS_FILE", settings.DefaultPath())
-	loaded, err := settings.Load(settingsPath)
-	if err != nil {
-		return fmt.Errorf("load Warren settings: %w", err)
-	}
-	loaded.Relay.Enabled = true
-	loaded.Relay.URL = strings.TrimRight(strings.TrimSpace(relayURL), "/")
-	loaded.Relay.HostID = strings.TrimSpace(hostID)
-	loaded.Relay.RelayKeyID = strings.TrimSpace(keyID)
-	loaded.Relay.RelayKey = strings.TrimSpace(key)
-	loaded.Relay.LastError = ""
-	if err := settings.Save(settingsPath, loaded); err != nil {
-		return fmt.Errorf("save Warren Relay settings: %w", err)
+	if err := saveRelayEnrollment(relayURL, hostID, keyID, key); err != nil {
+		return err
 	}
 	if outputJSON {
 		return printValue(value)
@@ -2936,6 +3262,8 @@ var bareBooleanFlags = map[string]bool{
 	"no-truncate":           true,
 	"no-prompt":             true,
 	"raw":                   true,
+	"share":                 true,
+	"open":                  true,
 	"terminal":              true,
 	"text":                  true,
 	"text-only":             true,
@@ -3741,20 +4069,27 @@ func usage() { fmt.Print(usageText()) }
 
 func relayUsageText() string {
 	return `Usage:
+  warren relay register --url RELAY_URL --admin-token ADMIN_TOKEN [--name HOST_NAME] [--secret HOST_SECRET] [--share] [--qr [PATH]] [--open]
   warren relay enroll --url RELAY_URL --host HOST_ID --ticket TICKET --secret HOST_SECRET
   warren relay pairing --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
   warren relay pair --url RELAY_URL --host HOST_ID --code PAIRING_CODE
+  warren relay share --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET [--qr [PATH]] [--open]
   warren relay status --url RELAY_URL --host HOST_ID --token ACCESS_TOKEN
   warren relay tunnel enable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET [--auth-mode owner|public] [--public-hostname HOSTNAME] [--path-prefix PREFIX]
   warren relay tunnel disable --url RELAY_URL --host HOST_ID --host-secret HOST_SECRET
   warren relay revoke --url RELAY_URL --host HOST_ID --admin-token ADMIN_TOKEN
 
-relay pairing issues a one-time code; relay pair consumes that code and prints a
-short-lived access capability. Add a Relay endpoint explicitly with
+relay register creates a Host record and enrolls the local daemon in one step.
+relay share creates a reusable pairing link (valid for the configured pairing
+window, seven days by default) and can write a QR PNG with --qr. The link can
+be scanned by multiple devices; generating a new link replaces the old one.
+Use relay pairing and relay pair separately when scripting the two API calls.
+Add a Relay endpoint explicitly with
   warren endpoint add NAME --type relay --url RELAY_URL --token ACCESS_TOKEN --host-id HOST_ID
-Relay capabilities are short-lived and are never written by relay pair. The
-legacy --token spelling remains accepted when supplied explicitly on a Relay
-management command; it is never inferred from a configured Relay endpoint.
+The access capability is rotated behind the reusable link and is never written
+by relay share. The legacy --token spelling remains accepted when supplied
+explicitly on a Relay management command; it is never inferred from a
+configured Relay endpoint.
 `
 }
 
@@ -3765,7 +4100,7 @@ Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
 
 	Commands:
-	  relay enroll|pairing|pair|status|tunnel enable|disable|revoke
+	  relay register|enroll|pairing|pair|share|status|tunnel enable|disable|revoke
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   task list|create|remove|rename|pin|move|attach|detach|workspace

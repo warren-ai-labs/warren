@@ -18,6 +18,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/gorilla/websocket"
 )
 
@@ -40,6 +41,153 @@ func TestDoRelayRequestDoesNotFollowRedirect(t *testing.T) {
 	case <-targetHit:
 		t.Fatal("Relay client followed a redirect and replayed the request")
 	default:
+	}
+}
+
+func TestNewHostIDIsUUIDv4(t *testing.T) {
+	value, err := newHostID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		t.Fatalf("Host ID = %q, want UUID layout", value)
+	}
+	if value[14] != '4' || !strings.ContainsRune("89ab", rune(value[19])) {
+		t.Fatalf("Host ID = %q, want UUIDv4 version/variant", value)
+	}
+	for index, character := range value {
+		if strings.ContainsRune("-", character) {
+			continue
+		}
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			t.Fatalf("Host ID contains non-hex character at %d: %q", index, value)
+		}
+	}
+}
+
+func TestRelayRegisterCreatesAndEnrollsHost(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000011"
+	var requests []struct {
+		method string
+		path   string
+		auth   string
+		body   map[string]any
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body := map[string]any{}
+		if request.Body != nil {
+			_ = json.NewDecoder(request.Body).Decode(&body)
+		}
+		requests = append(requests, struct {
+			method string
+			path   string
+			auth   string
+			body   map[string]any
+		}{request.Method, request.URL.Path, request.Header.Get("Authorization"), body})
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/hosts":
+			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","enrollment_ticket":"ticket-1","relay_key_id":"key-1","relay_public_key":"public-key-1"}`)
+		case "/v1/hosts/" + hostID + "/enroll":
+			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","enrolled":true,"relay_key_id":"key-1","relay_public_key":"public-key-1"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv("WARREN_SETTINGS_FILE", settingsPath)
+	previous := struct {
+		json                         bool
+		url, token, name, configPath string
+	}{outputJSON, endpointURL, endpointToken, endpointName, configPath}
+	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", filepath.Join(t.TempDir(), "missing-config.json")
+	t.Cleanup(func() {
+		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
+	})
+
+	output, err := captureStdout(t, func() error {
+		return run([]string{
+			"--json", "relay", "register", "--url", server.URL, "--host", hostID,
+			"--name", "Test Host", "--admin-token", "admin-token", "--secret", "host-secret",
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("register output: %v\n%s", err, output)
+	}
+	if result["registered"] != true || result["host_id"] != hostID || result["relay_url"] != server.URL {
+		t.Fatalf("register result = %#v", result)
+	}
+	if strings.Contains(output, "ticket-1") || strings.Contains(output, "host-secret") || strings.Contains(output, "public-key-1") {
+		t.Fatalf("register output leaked enrollment material: %s", output)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %#v, want registration and enrollment", requests)
+	}
+	if requests[0].method != http.MethodPost || requests[0].path != "/v1/hosts" || requests[0].auth != "Bearer admin-token" {
+		t.Fatalf("registration request = %#v", requests[0])
+	}
+	if requests[0].body["id"] != hostID || requests[0].body["name"] != "Test Host" {
+		t.Fatalf("registration body = %#v", requests[0].body)
+	}
+	if requests[1].method != http.MethodPost || requests[1].path != "/v1/hosts/"+hostID+"/enroll" || requests[1].auth != "" {
+		t.Fatalf("enrollment request = %#v", requests[1])
+	}
+	if requests[1].body["enrollment_ticket"] != "ticket-1" || requests[1].body["host_secret"] != "host-secret" || len(requests[1].body) != 2 {
+		t.Fatalf("enrollment body = %#v", requests[1].body)
+	}
+	loaded, err := settings.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Relay.Enabled || loaded.Relay.URL != server.URL || loaded.Relay.HostID != hostID || loaded.Relay.RelayKeyID != "key-1" || loaded.Relay.RelayKey != "public-key-1" {
+		t.Fatalf("saved Relay settings = %+v", loaded.Relay)
+	}
+}
+
+func TestRelayShareCreatesReusableLink(t *testing.T) {
+	const hostID = "00000000-0000-4000-8000-000000000012"
+	var requests []struct{ path, auth string }
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests = append(requests, struct{ path, auth string }{request.URL.Path, request.Header.Get("Authorization")})
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/hosts/" + hostID + "/pairing":
+			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","pairing_code":"pairing-code","expires_in":604800}`)
+		case "/v1/pair":
+			_, _ = io.WriteString(writer, `{"host_id":"`+hostID+`","access_token":"do-not-print","pairing_ticket":"ticket","web_url":"https://relay.example/h/`+hostID+`/#t=ticket","pairing_expires_in":604800}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	previous := outputJSON
+	outputJSON = true
+	t.Cleanup(func() { outputJSON = previous })
+	output, err := captureStdout(t, func() error {
+		return relayShare(server.URL, hostID, "host-secret", map[string]any{})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("share output: %v\n%s", err, output)
+	}
+	if result["pairing_url"] != "https://relay.example/h/"+hostID+"/#t=ticket" || result["expires_in"] != float64(604800) || result["reusable"] != true {
+		t.Fatalf("share result = %#v", result)
+	}
+	if strings.Contains(output, "do-not-print") || strings.Contains(output, "pairing-code") {
+		t.Fatalf("share output leaked access or pairing credentials: %s", output)
+	}
+	if len(requests) != 2 || requests[0].path != "/v1/hosts/"+hostID+"/pairing" || requests[0].auth != "Bearer host-secret" || requests[1].path != "/v1/pair" || requests[1].auth != "" {
+		t.Fatalf("share requests = %#v", requests)
 	}
 }
 

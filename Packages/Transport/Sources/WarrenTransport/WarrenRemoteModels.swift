@@ -84,7 +84,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         return components.url
     }
 
-    /// The HTTPS endpoint used to exchange a one-time Relay pairing ticket.
+    /// The HTTPS endpoint used to exchange a shareable Relay pairing ticket.
     /// The host-scoped form preserves reverse-proxy prefixes and lets Relay
     /// bind the ticket to the Host identity in the URL.
     public var relaySessionExchangeURL: URL? {
@@ -145,9 +145,11 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     }
 }
 
-/// The result of exchanging a one-time Relay pairing ticket. The access
+/// The result of exchanging a shareable Relay pairing ticket. The access
 /// capability is intentionally short-lived and belongs in memory/Keychain;
-/// Relay remains the authority for refresh rotation.
+/// Relay remains the authority for refresh rotation. The ticket itself stays
+/// valid for the Relay's configured sharing window so multiple devices can
+/// exchange the same QR/link.
 public struct WarrenRelaySessionExchange: Codable, Equatable, Hashable, Sendable {
     public let hostID: String
     public let accessToken: String

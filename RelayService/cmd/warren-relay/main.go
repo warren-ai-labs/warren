@@ -24,8 +24,9 @@ func main() {
 		DataURL:          env("WARREN_RELAY_DATA", "./data/registry.json"),
 		AllowedOrigin:    allowedOrigin,
 		TunnelBaseDomain: env("WARREN_RELAY_TUNNEL_BASE_DOMAIN", "tunnel.local"),
-		PairingTTL:       10 * time.Minute,
-		AccessTTL:        15 * time.Minute,
+		PairingTTL:       durationEnv("WARREN_RELAY_PAIRING_TTL", 7*24*time.Hour),
+		PairingTicketTTL: durationEnv("WARREN_RELAY_PAIRING_TICKET_TTL", 7*24*time.Hour),
+		AccessTTL:        durationEnv("WARREN_RELAY_ACCESS_TTL", 15*time.Minute),
 		Logger:           slog.Default(),
 	})
 	if err != nil {
@@ -54,4 +55,16 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func durationEnv(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		log.Fatalf("%s must be a valid duration: %v", name, err)
+	}
+	return duration
 }

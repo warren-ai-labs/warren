@@ -38,7 +38,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Warren connects to your local Warren Host to show Sessions and terminals.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Warren uses the camera to scan a one-time Relay pairing QR code.</string>
+	<string>Warren uses the camera to scan a shareable Relay pairing QR code.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
