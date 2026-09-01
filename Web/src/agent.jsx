@@ -2,7 +2,17 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { groupAgentEvents } from "./agent.js";
+import {
+  composerHeightForText,
+  agentComposerAction,
+  deleteAgentQueueItem,
+  editAgentQueueItem,
+  enqueueAgentMessage,
+  formatAgentModel,
+  groupAgentEvents,
+  moveAgentQueueItem,
+  retryAgentQueueItem,
+} from "./agent.js";
 import { sessionDisplayTitle } from "./title.js";
 
 export function AgentView({
@@ -10,6 +20,7 @@ export function AgentView({
   events = [],
   status = null,
   onSend,
+  onInterrupt = () => {},
   onOpenTerminal,
   ready = true,
   hasControl = true,
@@ -26,17 +37,78 @@ export function AgentView({
   const anchorOffsetRef = useRef(null);
   const skipFollowRef = useRef(false);
   const [draft, setDraft] = useState("");
+  const [queueBySession, setQueueBySession] = useState({});
+  const [showQueue, setShowQueue] = useState(false);
+  const [editingQueueID, setEditingQueueID] = useState(null);
+  const [queueEditText, setQueueEditText] = useState("");
+  const [attachmentNotice, setAttachmentNotice] = useState(false);
+  const sessionID = session?.id || "";
+  const queueDrainRef = useRef({ sessionID: null, sentWhileReady: false });
   const blocks = groupAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
   const mode = agentModeLabel(session);
+  const modelLabel = formatAgentModel(agentModel(session, events));
+  const queue = queueBySession[sessionID] || [];
   const canCompose = ready && hasControl && canSendForStatus(agentStatus);
+  const activity = String(agentStatus?.activity || "").toLowerCase();
+  const composerAction = agentComposerAction(agentStatus, {
+    hasControl: canCompose,
+    hasText: Boolean(draft.trim()),
+  });
   const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
   // The Host projects a session-level lifecycle. "working" is the only state
   // that means the agent is actively producing output; "blocked"/"stalled"
   // are waiting on a human, not running, so they must not show the shim.
-  const running = agentStatus?.activity === "working";
+  const running = activity === "working";
+
+  useEffect(() => {
+    setEditingQueueID(null);
+    setQueueEditText("");
+    setShowQueue(false);
+    setAttachmentNotice(false);
+    queueDrainRef.current = { sessionID, sentWhileReady: false };
+  }, [sessionID]);
+
+  const updateQueue = updater => {
+    setQueueBySession(previous => {
+      const current = previous[sessionID] || [];
+      const next = updater(current);
+      return next.length > 0
+        ? { ...previous, [sessionID]: next }
+        : Object.fromEntries(Object.entries(previous).filter(([id]) => id !== sessionID));
+    });
+  };
+
+  const sendQueuedItem = item => {
+    if (!item || !canCompose) return;
+    if (activity === "ready") {
+      queueDrainRef.current = { sessionID, sentWhileReady: true };
+    }
+    onSend(item.text);
+    updateQueue(current => deleteAgentQueueItem(current, item.id));
+  };
+
+  useEffect(() => {
+    const activity = String(agentStatus?.activity || "").toLowerCase();
+    if (queueDrainRef.current.sessionID !== sessionID) {
+      queueDrainRef.current = { sessionID, sentWhileReady: false };
+    }
+    if (activity !== "ready") {
+      queueDrainRef.current.sentWhileReady = false;
+      return;
+    }
+    if (!queueDrainRef.current.sentWhileReady && queue.length > 0 && canCompose) {
+      sendQueuedItem(queue[0]);
+    }
+  }, [activity, canCompose, queue, sessionID]);
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    resizeComposerTextarea(input, draft);
+  }, [draft, sessionID]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -55,6 +127,14 @@ export function AgentView({
       pinToBottomRef.current = false;
     }
   }, [events.length, session?.id]);
+
+  useLayoutEffect(() => {
+    if (!running) return;
+    const list = listRef.current;
+    if (!list) return;
+    const followsBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
+    if (pinToBottomRef.current || followsBottom) list.scrollTop = list.scrollHeight;
+  }, [running]);
 
   const loadEarlier = () => {
     // Older pages are inserted above the first existing message, so after
@@ -105,12 +185,29 @@ export function AgentView({
   }, [events.length]);
 
   const submit = () => {
-    if (!ready) return;
+    if (!ready || !canCompose) return;
     const value = draft.trim();
     if (!value) return;
-    onSend(value);
+    if (running) {
+      updateQueue(current => enqueueAgentMessage(current, value));
+    } else if (queue.length > 0) {
+      // Preserve FIFO ordering when a local queue already exists. A direct
+      // send would otherwise jump ahead of messages the user explicitly
+      // queued while the Agent was working.
+      updateQueue(current => enqueueAgentMessage(current, value));
+    } else {
+      onSend(value);
+    }
     setDraft("");
     inputRef.current?.focus();
+  };
+
+  const primaryAction = () => {
+    if (running) {
+      onInterrupt();
+      return;
+    }
+    submit();
   };
 
   return (
@@ -147,19 +244,14 @@ export function AgentView({
           ))
         )}
         {running && (
-          <div className="agent-running-shim" aria-live="polite">
+          <div className="agent-working agent-working-inline" aria-live="polite">
             <span className="codex-caret" aria-hidden="true" />
-            <span className="agent-running-label">{displayTitle} is working…</span>
+            <span className="agent-working-shimmer">Working</span>
+            <span className="agent-working-provider">{displayTitle}</span>
           </div>
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
-      {shouldShowWorking(agentStatus, events) && (
-        <div className="agent-working" aria-live="polite">
-          <span className="agent-working-shimmer">Working</span>
-          <span className="agent-working-provider">{displayTitle}</span>
-        </div>
-      )}
       {ready ? (
         <form
           className="agent-input"
@@ -168,11 +260,44 @@ export function AgentView({
             submit();
           }}
         >
+          {attachmentNotice && (
+            <div className="agent-attachment-notice" role="status">
+              Attachments are not supported by this Host.
+            </div>
+          )}
+          {showQueue && queue.length > 0 && (
+            <AgentQueueList
+              queue={queue}
+              editingID={editingQueueID}
+              editText={queueEditText}
+              canSendNow={canCompose && !running}
+              onBeginEdit={item => {
+                setEditingQueueID(item.id);
+                setQueueEditText(item.text);
+              }}
+              onSaveEdit={(id, text) => {
+                updateQueue(current => editAgentQueueItem(current, id, text));
+                setEditingQueueID(null);
+              }}
+              onCancelEdit={() => setEditingQueueID(null)}
+              onEditText={setQueueEditText}
+              onDelete={id => updateQueue(current => deleteAgentQueueItem(current, id))}
+              onMove={(from, to) => updateQueue(current => moveAgentQueueItem(current, from, to))}
+              onRetry={id => {
+                updateQueue(current => retryAgentQueueItem(current, id));
+                const item = queue.find(value => value.id === id);
+                if (item && canCompose && !running) sendQueuedItem(item);
+              }}
+            />
+          )}
           <div className="agent-input-surface">
             <textarea
               ref={inputRef}
               value={draft}
-              onChange={event => setDraft(event.target.value)}
+              onChange={event => {
+                setDraft(event.target.value);
+                resizeComposerTextarea(event.currentTarget, event.target.value);
+              }}
               onKeyDown={event => {
                 if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
                   event.preventDefault();
@@ -181,7 +306,7 @@ export function AgentView({
               }}
               placeholder={`Message ${displayTitle}…`}
               aria-label="Message"
-              rows={1}
+              rows={2}
               enterKeyHint="send"
               autoCapitalize="off"
               autoCorrect="off"
@@ -189,15 +314,34 @@ export function AgentView({
               spellCheck="false"
               disabled={!canCompose}
             />
-            <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose} aria-label="Send">
-              <SendIcon />
-            </button>
           </div>
-          <div className="agent-input-meta" aria-label="Agent details">
+          <div className="agent-input-controls" aria-label="Agent details">
+            <button
+              type="button"
+              className="agent-attach"
+              aria-label="Add image or attachment"
+              onClick={() => setAttachmentNotice(value => !value)}
+            >
+              +
+            </button>
             <span>{agentKindLabel(session?.kind) || displayTitle}</span>
             {mode && <span className="agent-mode-badge">{mode}</span>}
-            {agentModel(session, events) && <code>{agentModel(session, events)}</code>}
+            {modelLabel && <code>{modelLabel}</code>}
+            {queue.length > 0 && (
+              <button type="button" className="agent-queue-toggle" onClick={() => setShowQueue(value => !value)}>
+                Queue {queue.length}
+              </button>
+            )}
             {disabledReason && <span className="agent-input-reason">{disabledReason}</span>}
+            <button
+              type="button"
+              className={`agent-send${composerAction === "interrupt" ? " interrupt" : ""}`}
+              disabled={composerAction === "unavailable"}
+              aria-label={composerAction === "interrupt" ? "Interrupt Agent" : "Send"}
+              onClick={primaryAction}
+            >
+              {running ? <StopIcon /> : <SendIcon />}
+            </button>
           </div>
         </form>
       ) : (
@@ -289,21 +433,77 @@ function AgentAttention({ attention, onOpenTerminal }) {
   );
 }
 
-function shouldShowWorking(status, events) {
-  if (status?.activity !== "working") return false;
-  const visible = events.filter(event => !isHiddenAgentEvent(event));
-  const last = visible.at(-1);
-  // Providers may normalize an assistant message by role while preserving a
-  // provider-native type. Treat either representation as a completed reply;
-  // otherwise a late hook status can leave the shimmer below the final text.
-  const isAssistant = last?.type === "assistant" || last?.role === "assistant";
-  return !(isAssistant && String(last.content || "").trim());
+function AgentQueueList({
+  queue,
+  editingID,
+  editText,
+  canSendNow,
+  onBeginEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onEditText,
+  onDelete,
+  onMove,
+  onRetry,
+}) {
+  const editRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const input = editRef.current;
+    if (!input) return;
+    resizeComposerTextarea(input, editText);
+  }, [editingID, editText]);
+
+  return (
+    <div className="agent-queue" aria-label="Queued messages">
+      <div className="agent-queue-heading">
+        <span>Queued messages</span>
+        <span>Local</span>
+      </div>
+      {queue.map((item, index) => (
+        <div className="agent-queue-item" key={item.id}>
+          {editingID === item.id ? (
+            <textarea
+              ref={editRef}
+              value={editText}
+              onChange={event => {
+                onEditText(event.target.value);
+                resizeComposerTextarea(event.currentTarget, event.target.value);
+              }}
+              rows={2}
+              aria-label="Edit queued message"
+              autoFocus
+            />
+          ) : (
+            <div className="agent-queue-text">{item.text}</div>
+          )}
+          <div className="agent-queue-actions">
+            {editingID === item.id ? (
+              <>
+                <button type="button" onClick={() => onSaveEdit(item.id, editText)}>Save</button>
+                <button type="button" onClick={onCancelEdit}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={() => onBeginEdit(item)} aria-label="Edit queued message">Edit</button>
+                <button type="button" onClick={() => onDelete(item.id)} aria-label="Delete queued message">Delete</button>
+              </>
+            )}
+            <button type="button" onClick={() => onMove(index, Math.max(0, index - 1))} disabled={index === 0} aria-label="Move queued message up">↑</button>
+            <button type="button" onClick={() => onMove(index, Math.min(queue.length, index + 2))} disabled={index === queue.length - 1} aria-label="Move queued message down">↓</button>
+            <button type="button" onClick={() => onRetry(item.id)} disabled={!canSendNow}>Send now</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function canSendForStatus(status) {
   if (!status) return true;
   const activity = String(status.activity || "").toLowerCase();
   if (["failed", "stalled", "exited", "unknown"].includes(activity)) return false;
+  if (activity === "blocked" && status.attention?.kind !== "input") return false;
   // An input/question attention is intentionally answerable in the composer;
   // approval and warning attention must be reviewed in the Terminal.
   return !status.attention || status.attention.kind === "input";
@@ -322,6 +522,18 @@ function agentInputDisabledReason({ ready, hasControl, status }) {
   case "unknown": return "Agent status is unavailable.";
   default: return "";
   }
+}
+
+function resizeComposerTextarea(textarea, text) {
+  if (!textarea) return;
+  const minimumHeight = composerHeightForText("");
+  const maximumHeight = composerHeightForText("", { minLines: 6, maxLines: 6 });
+  textarea.style.height = "auto";
+  const measured = Number.isFinite(textarea.scrollHeight) ? textarea.scrollHeight : 0;
+  const fallback = composerHeightForText(text);
+  const height = Math.min(maximumHeight, Math.max(minimumHeight, measured || fallback));
+  textarea.style.height = `${height}px`;
+  textarea.style.overflowY = measured > height ? "auto" : "hidden";
 }
 
 function isHiddenAgentEvent(event) {
@@ -598,6 +810,14 @@ function SendIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
       <path d="M4 20.5 21 12 4 3.5l1.8 6.9 8.5 1.6-8.5 1.6z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
     </svg>
   );
 }

@@ -59,7 +59,7 @@ import {
   terminalSize,
   waitForTerminalFont,
 } from "./terminal.js";
-import { mergeAgentEvents } from "./agent.js";
+import { formatAgentModel, mergeAgentEvents } from "./agent.js";
 import { AgentView } from "./agent.jsx";
 import {
   AgentCompletionEventChannel,
@@ -849,6 +849,14 @@ export default function App() {
         sendInput("\x1b[13u");
       }
     }, 80);
+  }, [sendInput]);
+
+  const interruptAgent = useCallback(() => {
+    const state = appStateRef.current;
+    if (!state.activeSession || state.attachedSession !== state.activeSession) return;
+    // Interrupt uses the same authoritative PTY control lease as Terminal's
+    // Ctrl-C shortcut. The Host publishes the resulting Agent status.
+    sendInput(new Uint8Array([0x03]));
   }, [sendInput]);
 
   const fitTerminal = useCallback(() => {
@@ -2710,11 +2718,12 @@ export default function App() {
     ? agentStateBySession[selectedSession.id]?.events || []
     : [];
   const agentModel = useMemo(() => {
+    if (selectedSession?.agentModel) return formatAgentModel(selectedSession.agentModel);
     for (let index = selectedAgentEvents.length - 1; index >= 0; index--) {
-      if (selectedAgentEvents[index].model) return selectedAgentEvents[index].model;
+      if (selectedAgentEvents[index].model) return formatAgentModel(selectedAgentEvents[index].model);
     }
     return "";
-  }, [selectedAgentEvents]);
+  }, [selectedAgentEvents, selectedSession]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
   // An integrated Codex/Claude session is only safe to message once its CLI
   // has actually started. Before the binding/transcript exists, the TUI may
@@ -2872,22 +2881,25 @@ export default function App() {
                 />
               </Suspense>
             )}
-            {agentViewActive && (
-              <AgentView
-                session={selectedSession}
-                events={selectedAgentEvents}
-                status={agentStateBySession[selectedSession.id]?.status || null}
-                onSend={sendAgentInput}
-                onOpenTerminal={() => toggleAgentView("terminal")}
-                ready={agentViewReady}
-                hasControl={focusedSessionID === selectedSession.id}
-                hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
-                loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
-                onLoadMore={() => {
-                  const state = agentStateBySession[selectedSession.id];
-                  loadAgentHistory(selectedSession.id, state?.historyCursor || 0);
-                }}
-              />
+            {isAgentSession && (
+              <div className="agent-view-host" hidden={!agentViewActive}>
+                <AgentView
+                  session={selectedSession}
+                  events={selectedAgentEvents}
+                  status={agentStateBySession[selectedSession.id]?.status || null}
+                  onSend={sendAgentInput}
+                  onInterrupt={interruptAgent}
+                  onOpenTerminal={() => toggleAgentView("terminal")}
+                  ready={agentViewReady}
+                  hasControl={focusedSessionID === selectedSession.id}
+                  hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
+                  loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
+                  onLoadMore={() => {
+                    const state = agentStateBySession[selectedSession.id];
+                    loadAgentHistory(selectedSession.id, state?.historyCursor || 0);
+                  }}
+                />
+              </div>
             )}
             <TerminalSearch
               open={terminalSearchOpen}

@@ -11,6 +11,27 @@ import UIKit
 /// Keep the native editing behavior, but make the caret follow the font's
 /// point-size scale just like the text it accompanies.
 private final class AgentComposerTextView: UITextView {
+    private let minimumLines: CGFloat = 2
+    private let maximumLines: CGFloat = 6
+
+    override var intrinsicContentSize: CGSize {
+        let lineHeight = font?.lineHeight ?? 20
+        let verticalInset = textContainerInset.top + textContainerInset.bottom
+        let minimumHeight = minimumLines * lineHeight + verticalInset
+        let maximumHeight = maximumLines * lineHeight + verticalInset
+        let fallbackLines = max(1, text.components(separatedBy: .newlines).count)
+        let fallbackHeight = CGFloat(fallbackLines) * lineHeight + verticalInset
+        let measured: CGFloat
+        if bounds.width > 0 {
+            let fitted = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
+            measured = fitted.isFinite && fitted > 0 ? fitted : fallbackHeight
+        } else {
+            measured = fallbackHeight
+        }
+        let height = min(max(measured, minimumHeight), maximumHeight)
+        return CGSize(width: UIView.noIntrinsicMetric, height: height)
+    }
+
     override func caretRect(for position: UITextPosition) -> CGRect {
         var rect = super.caretRect(for: position)
         guard let font else { return rect }
@@ -45,10 +66,12 @@ private struct AgentComposerInput: UIViewRepresentable {
         ]
         view.backgroundColor = .clear
         view.adjustsFontForContentSizeCategory = true
-        view.isScrollEnabled = false
+        view.isScrollEnabled = true
         view.textContainer.lineFragmentPadding = 0
         view.textContainerInset = UIEdgeInsets(top: 5, left: 7, bottom: 5, right: 2)
-        view.textContainer.maximumNumberOfLines = 3
+        // Let the text view retain all content so the six-line frame cap can
+        // scroll internally instead of truncating the user's draft.
+        view.textContainer.maximumNumberOfLines = 0
         view.textContainer.lineBreakMode = .byWordWrapping
         view.autocorrectionType = .default
         view.autocapitalizationType = .sentences
@@ -66,6 +89,7 @@ private struct AgentComposerInput: UIViewRepresentable {
         }
         if view.text != text {
             view.text = text
+            view.invalidateIntrinsicContentSize()
         }
 
         if isFocused, !view.isFirstResponder {
@@ -88,6 +112,7 @@ private struct AgentComposerInput: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             guard text.wrappedValue != textView.text else { return }
             text.wrappedValue = textView.text
+            (textView as? AgentComposerTextView)?.invalidateIntrinsicContentSize()
         }
 
         func textViewDidBeginEditing(_: UITextView) {
@@ -121,6 +146,16 @@ private struct AgentChatBottomOffsetPreferenceKey: PreferenceKey {
     }
 }
 
+private struct AgentCopyFeedback: Equatable {
+    let blockID: String
+    let text: String
+}
+
+private struct AgentCopyCandidate: Equatable {
+    let blockID: String
+    let source: String
+}
+
 /// Native Agent transcript surface. It follows Warren Web's mobile hierarchy:
 /// assistant prose is open and readable, while reasoning/tool activity is a
 /// compact disclosure rail. The composer is the one raised surface on the
@@ -139,6 +174,15 @@ public struct AgentChatView: View {
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var lastObservedUserEventKey: String?
     @State private var didInitializeUserTurnTracking = false
+    @State private var attachmentNotice = false
+    @State private var showingAttachmentActions = false
+    @State private var copiedFeedback: AgentCopyFeedback?
+    @State private var copiedTextDismissTask: Task<Void, Never>?
+    @State private var copyCandidate: AgentCopyCandidate?
+    @State private var copyCandidateExpiryTask: Task<Void, Never>?
+    @State private var editingQueueID: UUID?
+    @State private var queueEditText = ""
+    @State private var showQueue = false
     @FocusState private var composerFocused: Bool
 
     private let historyPullThreshold: CGFloat = 56
@@ -191,9 +235,18 @@ public struct AgentChatView: View {
                                     .frame(maxWidth: .infinity, minHeight: 240)
                             } else {
                                 ForEach(blocks) { block in
-                                    displayBlockView(block)
+                                    displayBlockView(
+                                        block,
+                                        copiedFeedback: copiedFeedback,
+                                        onCopyArm: { value in armCopyCandidate(value, blockID: block.id) }
+                                    )
                                         .id(block.id)
                                 }
+                            }
+                            if shouldShowWorking {
+                                AgentWorkingFooter(phrase: workingPhrase)
+                                    .id("agent-working")
+                                    .transition(.opacity)
                             }
                             GeometryReader { geometry in
                                 Color.clear
@@ -238,6 +291,14 @@ public struct AgentChatView: View {
                     }
                     .onChange(of: agentState.agentEventRevisionBySessionID[sessionID] ?? 0) { _, _ in
                         observeAgentRevision(using: proxy)
+                    }
+                    .onChange(of: model.agentStatusBySessionID[sessionID]?.activity) { _, _ in
+                        guard shouldShowWorking, isNearLatest else { return }
+                        Task { @MainActor in
+                            await Task.yield()
+                            guard shouldShowWorking, isNearLatest else { return }
+                            scrollToLatest(using: proxy, animated: false)
+                        }
                     }
                     .onPreferenceChange(AgentChatTopOffsetPreferenceKey.self) { offset in
                         handleTopOffset(offset, blocks: blocks)
@@ -354,13 +415,10 @@ public struct AgentChatView: View {
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if shouldShowWorking {
-                        AgentWorkingFooter(phrase: workingPhrase)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
                     composer
                 }
-                .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
+                // The Working row lives in the transcript. Its visibility must
+                // not animate or resize the composer/safe-area surface.
                 .animation(.easeInOut(duration: 0.22), value: model.agentAttention(for: sessionID))
                 .animation(.easeInOut(duration: 0.22), value: composerFocused)
             }
@@ -375,6 +433,10 @@ public struct AgentChatView: View {
         }
         .onChange(of: model.currentSessionID) { _, selectedSessionID in
             guard selectedSessionID == sessionID else { return }
+            copiedTextDismissTask?.cancel()
+            copyCandidateExpiryTask?.cancel()
+            copiedFeedback = nil
+            copyCandidate = nil
             didTriggerHistoryPull = false
             historyScrollAnchorID = nil
             showReturnToLatest = false
@@ -384,6 +446,38 @@ public struct AgentChatView: View {
             didInitializeUserTurnTracking = model.agentHistoryLoaded(for: sessionID)
             guard !model.agentHistoryLoaded(for: sessionID) else { return }
             model.loadOlderAgentHistory()
+        }
+        .onChange(of: model.displayMode) { _, mode in
+            guard mode != .agent else { return }
+            copyCandidateExpiryTask?.cancel()
+            copyCandidate = nil
+            copiedTextDismissTask?.cancel()
+            copiedFeedback = nil
+        }
+        .onDisappear {
+            copiedTextDismissTask?.cancel()
+            copyCandidateExpiryTask?.cancel()
+            copyCandidate = nil
+        }
+#if canImport(UIKit)
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            handleClipboardChange()
+        }
+#endif
+        .confirmationDialog(
+            "Add image or attachment",
+            isPresented: $showingAttachmentActions,
+            titleVisibility: .visible
+        ) {
+            Button("Choose image", systemImage: "photo") {
+                showAttachmentUnsupportedNotice()
+            }
+            Button("Choose file", systemImage: "doc") {
+                showAttachmentUnsupportedNotice()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This Host does not accept Agent attachments yet.")
         }
     }
 
@@ -502,13 +596,52 @@ public struct AgentChatView: View {
         }
     }
 
+    private func armCopyCandidate(_ value: String, blockID: String) {
+        guard !cleanCopiedText(value).isEmpty else { return }
+        copyCandidateExpiryTask?.cancel()
+        copyCandidate = AgentCopyCandidate(blockID: blockID, source: value)
+        copyCandidateExpiryTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            copyCandidate = nil
+        }
+    }
+
+#if canImport(UIKit)
+    private func handleClipboardChange() {
+        guard let candidate = copyCandidate else { return }
+        copyCandidateExpiryTask?.cancel()
+        copyCandidate = nil
+        guard let value = UIPasteboard.general.string else { return }
+        let cleaned = cleanCopiedText(value)
+        let source = cleanCopiedText(candidate.source)
+        guard !cleaned.isEmpty, source.contains(cleaned) else { return }
+        showCopyFeedback(cleaned, blockID: candidate.blockID)
+    }
+#endif
+
+    private func showCopyFeedback(_ value: String, blockID: String) {
+        guard let preview = truncateCopiedText(value) else { return }
+        copiedTextDismissTask?.cancel()
+        withAnimation(.easeOut(duration: 0.18)) {
+            copiedFeedback = AgentCopyFeedback(blockID: blockID, text: preview)
+        }
+        copiedTextDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                copiedFeedback = nil
+            }
+        }
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let reason = model.agentDisabledReason,
                model.hasControlLease,
                model.agentAttention(for: sessionID) == nil,
                agentStatus?.activity != .working {
-                Label(reason, systemImage: model.hasControlLease ? "hourglass" : "lock.fill")
+                Label(reason, systemImage: "hourglass")
                     .font(IOSTypography.status)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .padding(.horizontal, 18)
@@ -517,89 +650,135 @@ public struct AgentChatView: View {
                     .layoutPriority(1)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .bottom, spacing: 7) {
-                    ZStack(alignment: .topLeading) {
-                        Text("Message \(agentKind)…")
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 5)
-                            .opacity(draft.isEmpty ? 1 : 0)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(!draft.isEmpty)
+            if attachmentNotice {
+                Label("Attachments are not supported by this Host.", systemImage: "paperclip.badge.ellipsis")
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 18)
+                    .transition(.opacity)
+            }
+
+            if showQueue, !queueItems.isEmpty {
+                IOSAgentQueueList(
+                    items: queueItems,
+                    editingID: $editingQueueID,
+                    editText: $queueEditText,
+                    canSendNow: agentComposerAction(
+                        activity: agentStatus?.activity,
+                        hasControl: model.hasControlLease,
+                        hasText: true,
+                        attention: agentStatus?.attention
+                    ) == .send,
+                    onEdit: { id, text in _ = model.editQueuedAgentMessage(sessionID: sessionID, id: id, text: text) },
+                    onDelete: { id in _ = model.deleteQueuedAgentMessage(sessionID: sessionID, id: id) },
+                    onMove: { from, to in _ = model.moveQueuedAgentMessage(sessionID: sessionID, from: from, to: to) },
+                    onRetry: { id in _ = model.retryQueuedAgentMessage(sessionID: sessionID, id: id) }
+                )
+                .padding(.horizontal, 12)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                ZStack(alignment: .topLeading) {
+                    Text("Message \(agentKind)…")
+                        .font(IOSTypography.input)
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .opacity(draft.isEmpty ? 1 : 0)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(!draft.isEmpty)
 #if canImport(UIKit)
-                        AgentComposerInput(
-                            text: $draft,
-                            isFocused: Binding(
-                                get: { composerFocused },
-                                set: { composerFocused = $0 }
-                            )
+                    AgentComposerInput(
+                        text: $draft,
+                        isFocused: Binding(
+                            get: { composerFocused },
+                            set: { composerFocused = $0 }
                         )
-                            .frame(minHeight: 30, maxHeight: 46)
+                    )
+                    .frame(minHeight: 48, maxHeight: 144)
 #else
-                        TextField("", text: $draft, axis: .vertical)
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(1...3)
-                            .frame(minHeight: 30, maxHeight: 46)
-                            .padding(.horizontal, 2)
-                            .padding(.vertical, 0)
-                            .textFieldStyle(.plain)
-                            .focused($composerFocused)
-                            .accessibilityLabel("Agent message")
+                    TextField("", text: $draft, axis: .vertical)
+                        .font(IOSTypography.input)
+                        .foregroundStyle(IOSTheme.text)
+                        .lineLimit(2...6)
+                        .frame(minHeight: 48, maxHeight: 144)
+                        .padding(.horizontal, 3)
+                        .textFieldStyle(.plain)
+                        .focused($composerFocused)
+                        .accessibilityLabel("Agent message")
 #endif
-                    }
-                    Button {
-                        let value = draft
-                        draft = ""
-                        workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
-                        model.sendAgentMessage(value)
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(IOSTheme.background)
-                            .frame(width: 26, height: 26)
-                            .background(IOSTheme.text, in: Circle())
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .opacity(canSend ? 1 : 0.32)
-                    .accessibilityLabel("Send Agent message")
-                    .padding(.bottom, 2)
                 }
 
-                HStack(spacing: 8) {
+                HStack(alignment: .center, spacing: 7) {
+                    Button {
+                        showingAttachmentActions = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add image or attachment")
+
                     Text(agentKind)
                         .font(IOSTypography.label)
                         .foregroundStyle(IOSTheme.secondaryText)
                     if let mode = agentMode {
                         AgentModeBadge(title: mode)
                     }
-                    if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
-                        Text("·")
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                        Text("Queued \(queued)")
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.amber)
-                    }
                     if let agentModel = model.agentModel(for: sessionID) {
-                        Text("·")
-                            .foregroundStyle(IOSTheme.tertiaryText)
                         Text(agentModel)
                             .font(IOSTypography.metadata)
                             .foregroundStyle(IOSTheme.secondaryText)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                    if !queueItems.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) { showQueue.toggle() }
+                        } label: {
+                            Text("Queue \(queueItems.count)")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.amber)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show queued messages")
+                    }
+                    if agentStatus?.activity == .working,
+                       !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button(action: queueDraft) {
+                            Text("Queue")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.amber)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Queue Agent message")
+                    }
                     Spacer(minLength: 0)
+
+                    Button(action: primaryComposerAction) {
+                        Image(systemName: composerAction == .interrupt ? "stop.fill" : "arrow.up")
+                            .font(.system(size: composerAction == .interrupt ? 11 : 12, weight: .bold))
+                            .foregroundStyle(IOSTheme.background)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                IOSTheme.text,
+                                in: RoundedRectangle(cornerRadius: composerAction == .interrupt ? 7 : 14, style: .continuous)
+                            )
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(composerAction == .unavailable)
+                    .opacity(composerAction == .unavailable ? 0.32 : 1)
+                    .accessibilityLabel(composerAction == .interrupt ? "Interrupt Agent" : "Send Agent message")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 5)
                 .padding(.bottom, 3)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
+            .padding(.horizontal, 8)
             .padding(.top, 1)
             .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay {
@@ -611,6 +790,46 @@ public struct AgentChatView: View {
         }
         .padding(.top, 3)
         .background(IOSTheme.background)
+    }
+
+    private var queueItems: [IOSAgentQueuedMessage] {
+        model.agentQueuedMessages(for: sessionID)
+    }
+
+    private var composerAction: IOSAgentComposerAction {
+        agentComposerAction(
+            activity: agentStatus?.activity,
+            hasControl: model.hasControlLease,
+            hasText: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            attention: agentStatus?.attention
+        )
+    }
+
+    private func primaryComposerAction() {
+        switch composerAction {
+        case .interrupt:
+            _ = model.interruptAgent()
+        case .send:
+            let value = draft
+            draft = ""
+            workingPhrase = AgentWorkingPhrases.random(excluding: workingPhrase)
+            model.sendAgentMessage(value)
+        case .unavailable:
+            break
+        }
+    }
+
+    private func queueDraft() {
+        let value = draft
+        draft = ""
+        model.sendAgentMessage(value)
+        composerFocused = true
+    }
+
+    private func showAttachmentUnsupportedNotice() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            attachmentNotice = true
+        }
     }
 
     private var agentStatus: WarrenRemoteAgentStatus? {
@@ -644,24 +863,113 @@ public struct AgentChatView: View {
         }
     }
 
-    private var canSend: Bool {
-        model.canSendAgent && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var shouldShowWorking: Bool {
-        guard agentStatus?.activity == .working else { return false }
-        guard let last = (agentState.agentEventsBySessionID[sessionID] ?? [])
-            .last(where: { !$0.isHiddenFromMobile }) else { return true }
-        // A provider may briefly publish `working` after its final assistant
-        // event. The completed message is the stronger visual signal, so do
-        // not leave a shimmer below it during that race.
-        return !(last.isAssistantEvent && !(last.content?.isEmpty ?? true))
+        // The Host status is authoritative. Even while an assistant message
+        // streams partial content, keep the working cue at the transcript
+        // tail so it never gets mistaken for a composer placeholder.
+        return agentStatus?.activity == .working
     }
 
     private var agentMode: String? {
         let session = model.roster?.sessions.first(where: { $0.id == sessionID })
         let provider = agentKind == "Agent" ? session?.kind : agentKind
         return agentModeLabel(provider: provider, command: session?.command)
+    }
+}
+
+private struct IOSAgentQueueList: View {
+    let items: [IOSAgentQueuedMessage]
+    @Binding var editingID: UUID?
+    @Binding var editText: String
+    let canSendNow: Bool
+    let onEdit: (UUID, String) -> Void
+    let onDelete: (UUID) -> Void
+    let onMove: (Int, Int) -> Void
+    let onRetry: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Queued messages")
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                Spacer(minLength: 0)
+                Text("Local")
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.tertiaryText)
+            }
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                HStack(alignment: .top, spacing: 7) {
+                    if editingID == item.id {
+                        TextField("Message", text: $editText, axis: .vertical)
+                            .font(IOSTypography.input)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(2...6)
+                            .textFieldStyle(.plain)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Save") {
+                            onEdit(item.id, editText)
+                            editingID = nil
+                        }
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.accent)
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(item.text)
+                            .font(IOSTypography.input)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(6)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            editText = item.text
+                            editingID = item.id
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .accessibilityLabel("Edit queued message")
+                        Button { onDelete(item.id) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(IOSTheme.red)
+                        .accessibilityLabel("Delete queued message")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .background(IOSTheme.chrome, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(IOSTheme.ring.opacity(0.65), lineWidth: 1)
+                }
+                HStack(spacing: 10) {
+                    Button { onMove(index, max(0, index - 1)) } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(index == 0)
+                    .accessibilityLabel("Move message up")
+                    Button { onMove(index, min(items.count, index + 2)) } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(index == items.count - 1)
+                    .accessibilityLabel("Move message down")
+                    Button { onRetry(item.id) } label: {
+                        Label("Send now", systemImage: "paperplane")
+                    }
+                    .disabled(!canSendNow)
+                    .accessibilityLabel("Send queued message now")
+                    Spacer(minLength: 0)
+                }
+                .font(IOSTypography.status)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .padding(.leading, 8)
+            }
+        }
     }
 }
 
@@ -689,14 +997,26 @@ private struct AgentEmptyState: View {
 private struct AgentMarkdownText: View {
     private let value: String
     private let font: Font
+    private let onCopyArm: (() -> Void)?
 
-    init(value: String, font: Font = IOSTypography.body) {
+    init(value: String, font: Font = IOSTypography.body, onCopyArm: (() -> Void)? = nil) {
         self.value = value
         self.font = font
+        self.onCopyArm = onCopyArm
     }
 
     var body: some View {
         IOSMarkdownView(value: value, font: font)
+            .textSelection(.enabled)
+#if canImport(UIKit)
+            // Long press is the native iOS entry point for text selection.
+            // Arming a short-lived candidate lets the system copy action stay
+            // untouched while the pasteboard observer identifies its result.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.35)
+                    .onEnded { _ in onCopyArm?() }
+            )
+#endif
     }
 }
 
@@ -1217,24 +1537,71 @@ private extension WarrenRemoteAgentEvent {
 
 @ViewBuilder
 @MainActor
-private func displayBlockView(_ block: AgentDisplayBlock) -> some View {
+private func displayBlockView(
+    _ block: AgentDisplayBlock,
+    copiedFeedback: AgentCopyFeedback?,
+    onCopyArm: @escaping (String) -> Void
+) -> some View {
+    let source = displayBlockText(for: block)
+    Group {
+        switch block {
+        case .event(let event):
+            AgentEventBlock(event: event, onCopyArm: { onCopyArm(source) })
+        case .activity(let activity):
+            AgentActivityGroupBlock(activity: activity, onCopyArm: onCopyArm)
+        }
+    }
+    .overlay(alignment: .topTrailing) {
+        if let copiedFeedback,
+           copiedFeedback.blockID == block.id {
+            CopyFeedbackBubble(text: copiedFeedback.text)
+                .transition(.move(edge: .bottom).combined(with: .scale).combined(with: .opacity))
+                .offset(y: -8)
+        }
+    }
+}
+
+private func displayBlockText(for block: AgentDisplayBlock) -> String {
     switch block {
     case .event(let event):
-        AgentEventBlock(event: event)
+        return event.content ?? event.output ?? event.error ?? ""
     case .activity(let activity):
-        AgentActivityGroupBlock(activity: activity)
+        if let content = activity.reasoningEvents
+            .compactMap({ $0.content?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) {
+            return content
+        }
+        return activity.firstToolSummary ?? ""
+    }
+}
+
+private struct CopyFeedbackBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(IOSTypography.metadata)
+            .foregroundStyle(IOSTheme.text)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(IOSTheme.chrome.opacity(0.96), in: Capsule())
+            .overlay { Capsule().stroke(IOSTheme.ring, lineWidth: 1) }
+            .accessibilityLabel("Copied \(text)")
     }
 }
 
 private struct AgentEventBlock: View {
     let event: WarrenRemoteAgentEvent
+    let onCopyArm: () -> Void
 
     var body: some View {
         if isUser {
             HStack {
                 Spacer(minLength: 34)
                 VStack(alignment: .trailing, spacing: 4) {
-                    AgentMarkdownText(value: event.content ?? "", font: IOSTypography.userMessage)
+                    AgentMarkdownText(value: event.content ?? "", font: IOSTypography.userMessage, onCopyArm: onCopyArm)
                         .foregroundStyle(IOSTheme.text)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
@@ -1290,7 +1657,7 @@ private struct AgentEventBlock: View {
     private var eventBody: some View {
         VStack(alignment: .leading, spacing: 7) {
             if let content = event.content, !content.isEmpty {
-                AgentMarkdownText(value: content, font: IOSTypography.agentConversation)
+                AgentMarkdownText(value: content, font: IOSTypography.agentConversation, onCopyArm: onCopyArm)
                     .foregroundStyle(IOSTheme.agentText)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1429,10 +1796,12 @@ private struct AgentCompactionMarker: View {
 
 private struct AgentActivityGroupBlock: View {
     let activity: AgentActivityGroup
+    let onCopyArm: (String) -> Void
     @State private var expanded = false
 
-    init(activity: AgentActivityGroup) {
+    init(activity: AgentActivityGroup, onCopyArm: @escaping (String) -> Void = { _ in }) {
         self.activity = activity
+        self.onCopyArm = onCopyArm
         _expanded = State(initialValue: activity.status == .failed || activity.status == .interrupted)
     }
 
@@ -1482,7 +1851,8 @@ private struct AgentActivityGroupBlock: View {
                             ForEach(Array(activity.reasoningEvents.enumerated()), id: \.element.idForSwiftUI) { index, event in
                                 AgentReasoningEntry(
                                     event: event,
-                                    step: activity.reasoningEvents.count > 1 ? index + 1 : nil
+                                    step: activity.reasoningEvents.count > 1 ? index + 1 : nil,
+                                    onCopyArm: { onCopyArm(event.content ?? "") }
                                 )
                             }
                         }
@@ -1549,11 +1919,13 @@ private struct AgentActivityGroupBlock: View {
 private struct AgentReasoningEntry: View {
     let event: WarrenRemoteAgentEvent
     let step: Int?
+    let onCopyArm: () -> Void
     @State private var expanded = false
 
-    init(event: WarrenRemoteAgentEvent, step: Int? = nil) {
+    init(event: WarrenRemoteAgentEvent, step: Int? = nil, onCopyArm: @escaping () -> Void = {}) {
         self.event = event
         self.step = step
+        self.onCopyArm = onCopyArm
     }
 
     var body: some View {
@@ -1588,7 +1960,7 @@ private struct AgentReasoningEntry: View {
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
 
             if expanded, let content = event.content, !content.isEmpty {
-                AgentMarkdownText(value: content, font: IOSTypography.helper)
+                AgentMarkdownText(value: content, font: IOSTypography.helper, onCopyArm: onCopyArm)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
                     .padding(.leading, 18)

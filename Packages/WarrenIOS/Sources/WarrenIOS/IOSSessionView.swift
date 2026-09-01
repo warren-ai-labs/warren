@@ -363,6 +363,40 @@ private func sessionProviderID(
     }
 }
 
+private func sessionProviderTitle(
+    _ session: WarrenRemoteRoster.Session,
+    events: [WarrenRemoteAgentEvent]? = nil
+) -> String {
+    switch sessionProviderID(for: session, events: events) {
+    case "claude": return "Claude"
+    case "codex": return "Codex"
+    case "opencode": return "OpenCode"
+    default: return "Shell"
+    }
+}
+
+private func sessionStatusTitle(_ session: WarrenRemoteRoster.Session, status: WarrenRemoteAgentStatus? = nil) -> String {
+    if let status = status ?? session.agentStatus {
+        switch status.activity {
+        case .ready: return "Ready"
+        case .working: return "Working"
+        case .blocked: return "Blocked"
+        case .stalled: return "Stalled"
+        case .failed: return "Failed"
+        case .exited: return "Exited"
+        case .unknown: return "Unknown"
+        }
+    }
+    return session.isRunning ? "Running" : "Stopped"
+}
+
+private func sessionStatusColor(_ session: WarrenRemoteRoster.Session, status: WarrenRemoteAgentStatus? = nil) -> Color {
+    if let status = status ?? session.agentStatus {
+        return IOSTheme.statusColor(status)
+    }
+    return session.isRunning ? IOSTheme.green : IOSTheme.secondaryText
+}
+
 private struct SessionProviderMark: View {
     @ObservedObject var model: IOSApplicationModel
     @ObservedObject var agentState: IOSAgentLiveState
@@ -421,7 +455,7 @@ private struct SessionTabRail: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if sessions.count <= 5 {
+            if sessionRailLayout(for: sessions.count) == .tabs {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
                         ForEach(sessions) { session in
@@ -455,20 +489,41 @@ private struct SessionTabRail: View {
                 }
             } else {
                 Button(action: showSwitcher) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "rectangle.stack")
-                        Text("Sessions")
+                    HStack(spacing: 9) {
+                        SessionProviderMark(
+                            model: model,
+                            agentState: agentState,
+                            session: currentSession,
+                            slotSize: 23
+                        )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(currentSession.displayTitle.isEmpty ? "Untitled session" : currentSession.displayTitle)
+                                .font(IOSTypography.label)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            HStack(spacing: 5) {
+                                IOSStatusDot(color: sessionStatusColor(currentSession, status: model.agentStatusBySessionID[currentSession.id]), size: 5)
+                                Text("\(sessionProviderTitle(currentSession, events: agentState.agentEventsBySessionID[currentSession.id])) · \(sessionStatusTitle(currentSession, status: model.agentStatusBySessionID[currentSession.id]))")
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(sessions.count)")
                             .font(IOSTypography.metric)
-                        Spacer()
+                            .foregroundStyle(IOSTheme.tertiaryText)
                         Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(IOSTheme.tertiaryText)
                     }
-                    .font(IOSTypography.label)
-                    .foregroundStyle(IOSTheme.secondaryText)
                     .padding(.horizontal, 13)
-                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Switch session, \(currentSession.displayTitle), \(sessions.count) sessions")
             }
         }
         .background(IOSTheme.chrome)
@@ -477,6 +532,10 @@ private struct SessionTabRail: View {
                 .fill(IOSTheme.separator)
                 .frame(height: 1)
         }
+    }
+
+    private var currentSession: WarrenRemoteRoster.Session {
+        sessions.first(where: { $0.id == activeSessionID }) ?? sessions[0]
     }
 }
 
@@ -507,12 +566,22 @@ private struct SessionSwitcherSheet: View {
                                     Text(session.displayTitle.isEmpty ? "Untitled session" : session.displayTitle)
                                         .font(model.currentSessionID == session.id ? IOSTypography.bodyEmphasis : IOSTypography.body)
                                         .foregroundStyle(IOSTheme.text)
-                                        .lineLimit(2)
+                                        .lineLimit(nil)
                                         .iosNaturalWrap()
+                                        .fixedSize(horizontal: false, vertical: true)
                                         .layoutPriority(1)
                                     Text(session.process ?? session.kind.capitalized)
                                         .font(IOSTypography.metadata)
                                         .foregroundStyle(IOSTheme.secondaryText)
+                                    HStack(spacing: 5) {
+                                        IOSStatusDot(
+                                            color: sessionStatusColor(session, status: model.agentStatusBySessionID[session.id]),
+                                            size: 5
+                                        )
+                                        Text(sessionStatusTitle(session, status: model.agentStatusBySessionID[session.id]))
+                                            .font(IOSTypography.status)
+                                            .foregroundStyle(IOSTheme.secondaryText)
+                                    }
                                 }
                                 Spacer(minLength: 8)
                                 if model.currentSessionID == session.id {

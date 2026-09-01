@@ -330,8 +330,8 @@ public struct IOSAgentActivityMark: View {
 }
 
 /// A compact status label with a moving highlight for active work. It is used
-/// in the Agent composer so the activity cue stays at the bottom of the
-/// session while Workspace and Session rails remain stable.
+/// at the end of the Agent transcript so the activity cue stays attached to
+/// the latest turn while Workspace and Session rails remain stable.
 struct IOSShimmerText: View {
     private let title: String
     private let color: Color
@@ -380,7 +380,7 @@ struct IOSShimmerText: View {
     }
 
     private func shimmerPhase(at date: Date) -> Double {
-        let duration = 1.35
+        let duration = 2.40
         let elapsed = date.timeIntervalSinceReferenceDate
         return (elapsed.truncatingRemainder(dividingBy: duration) + duration)
             .truncatingRemainder(dividingBy: duration) / duration

@@ -71,6 +71,7 @@ public final class IOSApplicationModel: ObservableObject {
     public var agentEventRevisionBySessionID: [String: UInt64] { agentState.agentEventRevisionBySessionID }
     @Published public private(set) var agentStatusBySessionID: [String: WarrenRemoteAgentStatus] = [:]
     @Published public private(set) var agentQueuedMessageCountBySessionID: [String: Int] = [:]
+    @Published public private(set) var agentQueuedMessagesBySessionID: [String: [IOSAgentQueuedMessage]] = [:]
     @Published public private(set) var historyLoadingBySessionID: Set<String> = []
     @Published public private(set) var navigation: IOSNavigationState
     @Published public private(set) var endpointMetadata: IOSEndpointMetadata
@@ -122,7 +123,7 @@ public final class IOSApplicationModel: ObservableObject {
     private var pendingTerminalFocusBySessionID: Set<String> = []
     private var pendingSessionSelectionID: String?
     private var pendingSessionDeletion: PendingSessionDeletion?
-    private var pendingAgentMessagesBySessionID: [String: [String]] = [:]
+    private var pendingAgentMessagesBySessionID: [String: [IOSAgentQueuedMessage]] = [:]
     private var agentMessageSubmissionsInFlight: Set<String> = []
 
     private struct PendingSessionDeletion {
@@ -415,6 +416,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentStatusBySessionID = [:]
         displayModeBySessionID = [:]
         agentQueuedMessageCountBySessionID = [:]
+        agentQueuedMessagesBySessionID = [:]
         pendingAgentMessagesBySessionID = [:]
         agentMessageSubmissionsInFlight = []
         historyLoadingBySessionID = []
@@ -928,10 +930,89 @@ public final class IOSApplicationModel: ObservableObject {
             enqueueAgentMessage(value, for: sessionID)
         case .blocked:
             guard status.attention?.kind == .input else { return }
-            submitAgentMessage(value, for: sessionID)
+            if agentMessageSubmissionsInFlight.contains(sessionID)
+                || !(pendingAgentMessagesBySessionID[sessionID]?.isEmpty ?? true) {
+                enqueueAgentMessage(value, for: sessionID)
+                drainQueuedAgentMessages(for: sessionID)
+            } else {
+                submitAgentMessage(value, for: sessionID)
+            }
         case .stalled, .failed, .exited, .unknown:
             return
         }
+    }
+
+    /// Sends Ctrl-C through the existing PTY control lease. Interrupt is a
+    /// presentation action, not a new Agent wire request; the Host remains
+    /// authoritative for the resulting status and transcript markers.
+    @discardableResult
+    public func interruptAgent() -> Bool {
+        guard let sessionID = currentSessionID,
+              hasControlLease,
+              agentStatus(for: sessionID)?.activity == .working else { return false }
+        sendTerminalInput(Data([0x03]))
+        return true
+    }
+
+    /// Returns a snapshot of messages that have not yet entered the Host
+    /// transcript. The returned values are safe for SwiftUI list rendering;
+    /// mutation must go through the methods below.
+    public func agentQueuedMessages(for sessionID: String) -> [IOSAgentQueuedMessage] {
+        pendingAgentMessagesBySessionID[sessionID] ?? []
+    }
+
+    @discardableResult
+    public func editQueuedAgentMessage(
+        sessionID: String,
+        id: UUID,
+        text: String
+    ) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              var queue = pendingAgentMessagesBySessionID[sessionID],
+              let index = queue.firstIndex(where: { $0.id == id }) else { return false }
+        queue[index].text = value
+        setPendingAgentQueue(queue, for: sessionID)
+        return true
+    }
+
+    @discardableResult
+    public func deleteQueuedAgentMessage(sessionID: String, id: UUID) -> Bool {
+        guard var queue = pendingAgentMessagesBySessionID[sessionID],
+              let index = queue.firstIndex(where: { $0.id == id }) else { return false }
+        queue.remove(at: index)
+        setPendingAgentQueue(queue, for: sessionID)
+        return true
+    }
+
+    @discardableResult
+    public func moveQueuedAgentMessage(
+        sessionID: String,
+        from source: Int,
+        to destination: Int
+    ) -> Bool {
+        guard var queue = pendingAgentMessagesBySessionID[sessionID],
+              queue.indices.contains(source),
+              !queue.isEmpty else { return false }
+        let target = min(max(destination, 0), queue.count)
+        let item = queue.remove(at: source)
+        let adjustedTarget = target > source ? target - 1 : target
+        queue.insert(item, at: min(max(adjustedTarget, 0), queue.count))
+        setPendingAgentQueue(queue, for: sessionID)
+        return true
+    }
+
+    /// Places a queued message at the front and lets the normal ready-state
+    /// drain submit it. This is intentionally local until the Host accepts it.
+    @discardableResult
+    public func retryQueuedAgentMessage(sessionID: String, id: UUID) -> Bool {
+        guard var queue = pendingAgentMessagesBySessionID[sessionID],
+              let index = queue.firstIndex(where: { $0.id == id }) else { return false }
+        let item = queue.remove(at: index)
+        queue.insert(item, at: 0)
+        setPendingAgentQueue(queue, for: sessionID)
+        drainQueuedAgentMessages(for: sessionID)
+        return true
     }
 
     private func submitAgentMessage(_ value: String, for sessionID: String) {
@@ -979,14 +1060,16 @@ public final class IOSApplicationModel: ObservableObject {
     private func drainQueuedAgentMessages(for sessionID: String) {
         guard currentSessionID == sessionID,
               hasControlLease,
-              agentStatus(for: sessionID)?.activity == .ready,
+              let status = agentStatus(for: sessionID),
               !agentMessageSubmissionsInFlight.contains(sessionID),
               var queue = pendingAgentMessagesBySessionID[sessionID],
               !queue.isEmpty else { return }
-        let value = queue.removeFirst()
+        guard status.activity == .ready
+            || (status.activity == .blocked && status.attention?.kind == .input) else { return }
+        let item = queue.removeFirst()
         pendingAgentMessagesBySessionID[sessionID] = queue
-        updateAgentQueuedMessageCount(for: sessionID)
-        submitAgentMessage(value, for: sessionID)
+        publishPendingAgentQueue(for: sessionID)
+        submitAgentMessage(item.text, for: sessionID)
     }
 
     private func enqueueAgentMessage(
@@ -994,20 +1077,32 @@ public final class IOSApplicationModel: ObservableObject {
         for sessionID: String,
         atFront: Bool = false
     ) {
+        let item = IOSAgentQueuedMessage(text: value)
         if atFront {
-            pendingAgentMessagesBySessionID[sessionID, default: []].insert(value, at: 0)
+            pendingAgentMessagesBySessionID[sessionID, default: []].insert(item, at: 0)
         } else {
-            pendingAgentMessagesBySessionID[sessionID, default: []].append(value)
+            pendingAgentMessagesBySessionID[sessionID, default: []].append(item)
         }
-        updateAgentQueuedMessageCount(for: sessionID)
+        publishPendingAgentQueue(for: sessionID)
     }
 
-    private func updateAgentQueuedMessageCount(for sessionID: String) {
+    private func setPendingAgentQueue(_ queue: [IOSAgentQueuedMessage], for sessionID: String) {
+        if queue.isEmpty {
+            pendingAgentMessagesBySessionID.removeValue(forKey: sessionID)
+        } else {
+            pendingAgentMessagesBySessionID[sessionID] = queue
+        }
+        publishPendingAgentQueue(for: sessionID)
+    }
+
+    private func publishPendingAgentQueue(for sessionID: String) {
         let count = pendingAgentMessagesBySessionID[sessionID]?.count ?? 0
         if count == 0 {
             agentQueuedMessageCountBySessionID.removeValue(forKey: sessionID)
+            agentQueuedMessagesBySessionID.removeValue(forKey: sessionID)
         } else {
             agentQueuedMessageCountBySessionID[sessionID] = count
+            agentQueuedMessagesBySessionID[sessionID] = pendingAgentMessagesBySessionID[sessionID]
         }
     }
 
@@ -1026,13 +1121,14 @@ public final class IOSApplicationModel: ObservableObject {
     /// inferred from provider text or Agent timing.
     public func agentModel(for sessionID: String) -> String? {
         guard let events = agentEventsBySessionID[sessionID] else { return nil }
-        return events
+        let value = events
             .reversed()
             .compactMap { event in
                 let value = event.model?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return value?.isEmpty == false ? value : nil
             }
             .first
+        return formatAgentModel(value)
     }
 
     public func sessions(inWorkspace workspaceID: String) -> [WarrenRemoteRoster.Session] {
@@ -1182,7 +1278,7 @@ public final class IOSApplicationModel: ObservableObject {
         pendingTerminalFocusBySessionID.remove(sessionID)
         terminalRecoveryRequests.remove(sessionID)
         pendingAgentMessagesBySessionID.removeValue(forKey: sessionID)
-        updateAgentQueuedMessageCount(for: sessionID)
+        publishPendingAgentQueue(for: sessionID)
         hasControlLease = false
     }
 
