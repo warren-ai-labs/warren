@@ -886,6 +886,7 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case importSuperset
     case requestNewWorkspace(ProjectID, taskID: TaskID? = nil)
     case requestProjectWorktreeImport(ProjectID)
+    case requestProjectSetupScript(ProjectID)
     case setProjectAutoImportGitWorktrees(ProjectID, Bool)
     case renameProject(ProjectID, String)
     case renameWorkspace(WorkspaceID, String)

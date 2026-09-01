@@ -46,6 +46,8 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
     public let hostID: HostID
     public var name: String
     public var rootPath: String
+    /// Optional executable used to initialize newly created worktrees.
+    public var setupScript: String?
     /// Whether this project automatically imports every existing Git
     /// worktree. The policy belongs to the project, not the Host.
     public var autoImportGitWorktrees: Bool
@@ -58,6 +60,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         hostID: HostID,
         name: String,
         rootPath: String,
+        setupScript: String? = nil,
         autoImportGitWorktrees: Bool = false,
         pinned: Bool = false,
         order: Int = 0
@@ -66,6 +69,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         self.hostID = hostID
         self.name = name
         self.rootPath = rootPath
+        self.setupScript = setupScript
         self.autoImportGitWorktrees = autoImportGitWorktrees
         self.pinned = pinned
         self.order = order
@@ -76,6 +80,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         case hostID
         case name
         case rootPath
+        case setupScript
         case autoImportGitWorktrees
         case pinned
         case order
@@ -87,6 +92,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         hostID = try container.decode(HostID.self, forKey: .hostID)
         name = try container.decode(String.self, forKey: .name)
         rootPath = try container.decode(String.self, forKey: .rootPath)
+        setupScript = try container.decodeIfPresent(String.self, forKey: .setupScript)
         autoImportGitWorktrees = try container.decodeIfPresent(Bool.self, forKey: .autoImportGitWorktrees) ?? false
         pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0

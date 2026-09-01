@@ -4,6 +4,29 @@ import UniformTypeIdentifiers
 import WarrenDesignSystem
 import WarrenDomain
 
+private enum WarrenSetupScriptContract {
+    struct EnvironmentVariable: Identifiable {
+        let name: String
+        let description: String
+
+        var id: String { name }
+    }
+
+    static let environmentVariables = [
+        EnvironmentVariable(name: "WARREN_PROJECT_ID", description: "The Warren project ID."),
+        EnvironmentVariable(name: "WARREN_PROJECT_NAME", description: "The project name."),
+        EnvironmentVariable(name: "WARREN_PROJECT_PATH", description: "The main repository path."),
+        EnvironmentVariable(name: "WARREN_MAIN_REPO_PATH", description: "Alias for the main repository path."),
+        EnvironmentVariable(name: "WARREN_WORKSPACE_ID", description: "The newly created Workspace ID."),
+        EnvironmentVariable(name: "WARREN_WORKSPACE_NAME", description: "The newly created Workspace name."),
+        EnvironmentVariable(name: "WARREN_WORKSPACE_PATH", description: "The new Worktree path."),
+        EnvironmentVariable(name: "WARREN_WORKTREE_PATH", description: "Alias for the new Worktree path."),
+        EnvironmentVariable(name: "WARREN_WORKSPACE_BRANCH", description: "The new Worktree branch."),
+        EnvironmentVariable(name: "WARREN_TASK_ID", description: "The Task ID, or empty when unattached."),
+        EnvironmentVariable(name: "WARREN_SETUP_SCRIPT", description: "The resolved setup script path."),
+    ]
+}
+
 private extension WarrenDesktopSettingsSection {
     var iconName: String {
         switch self {
@@ -37,7 +60,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "trae", "agent", "visible", "hidden"]
-        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "shell", "AI", "Claude", "Codex"]
+        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup", "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .publicAccess: [rawValue, detail, "gnar", "edge", "endpoint", "invite key", "approval key", "enrollment key", "tunnel", "internet"]
@@ -65,6 +88,8 @@ struct WarrenDesktopSettingsView: View {
     let onSetAutoOpenShell: (Bool) -> Void
     let autoStartAI: Bool
     let onSetAutoStartAI: (Bool) -> Void
+    let projects: [Project]
+    let onSetProjectSetupScript: (ProjectID, String) -> Void
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -130,6 +155,7 @@ struct WarrenDesktopSettingsView: View {
     @FocusState private var searchFocused: Bool
     @State private var installedIDEs: [InstalledIDE] = []
     @State private var customIDEs = WarrenDesktopCustomIDEStore.load()
+    @State private var setupScriptValues: [ProjectID: String] = [:]
 
     private var visibleSections: [SettingsSection] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -521,6 +547,59 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+
+        }
+    }
+
+    private func setupScriptRow(
+        _ project: Project,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+            Text(project.name)
+                .font(WarrenTypography.settingsBody)
+            Text("Path relative to the repository root, or an absolute path")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+            settingsInputField(
+                "Setup script",
+                text: Binding(
+                    get: { setupScriptValues[project.id] ?? project.setupScript ?? "" },
+                    set: { setupScriptValues[project.id] = $0 }
+                ),
+                placeholder: "scripts/setup.script"
+            )
+            .accessibilityIdentifier("settings.project.setup-script.\(project.id)")
+            HStack(spacing: WarrenSpacing.compact) {
+                Button("Clear") {
+                    setupScriptValues[project.id] = ""
+                    onSetProjectSetupScript(project.id, "")
+                }
+                .buttonStyle(.plain)
+                .font(WarrenTypography.settingsAction)
+                .foregroundStyle(tokens.mutedForeground)
+                .disabled((setupScriptValues[project.id] ?? project.setupScript ?? "").isEmpty)
+                .accessibilityIdentifier("settings.project.setup-script.clear.\(project.id)")
+                Button("Save") {
+                    saveSetupScript(for: project)
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                .accessibilityIdentifier("settings.workspaces.setup-script.save.\(project.id)")
+            }
+        }
+        .padding(.bottom, WarrenSpacing.small)
+    }
+
+    private func saveSetupScript(for project: Project) {
+        onSetProjectSetupScript(
+            project.id,
+            setupScriptValues[project.id] ?? project.setupScript ?? ""
+        )
+    }
+
+    private func syncSetupScriptValues() {
+        for project in projects where setupScriptValues[project.id] == nil {
+            setupScriptValues[project.id] = project.setupScript ?? ""
         }
     }
 
@@ -644,7 +723,50 @@ struct WarrenDesktopSettingsView: View {
             .font(WarrenTypography.settingsSupporting)
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+                Text("Repository setup scripts")
+                    .font(WarrenTypography.settingsSectionTitle)
+                if projects.isEmpty {
+                    Text("No repositories are configured on this Host yet.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                } else {
+                    ForEach(projects) { project in
+                        setupScriptRow(project, tokens: tokens)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
+                Text("Setup script environment")
+                    .font(WarrenTypography.settingsSectionTitle)
+                Text(
+                    "Warren adds the following variables to the inherited daemon environment. "
+                        + "The first two positional arguments are the main repository path and the new Worktree path; custom arguments follow."
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                    ForEach(WarrenSetupScriptContract.environmentVariables) { variable in
+                        HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.standard) {
+                            Text(variable.name)
+                                .font(WarrenTypography.settingsSupporting)
+                                .monospaced()
+                                .frame(width: 230, alignment: .leading)
+                            Text(variable.description)
+                                .font(WarrenTypography.settingsSupporting)
+                                .foregroundStyle(tokens.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("settings.setup-script.environment.\(variable.id)")
+                    }
+                }
+            }
         }
+        .onAppear { syncSetupScriptValues() }
     }
 
     private func notificationsSection(tokens: WarrenColorTokens) -> some View {
