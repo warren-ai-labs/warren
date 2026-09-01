@@ -3825,6 +3825,48 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Writes a rejected atomic snapshot next to the terminal diagnostics log.
+    /// The daemon only serves the current terminal state, so without this file
+    /// the exact failing bytes are unrecoverable after a reconnect re-captures
+    /// a new boundary. Bounded so a failing session cannot fill the disk.
+    private func persistRejectedSnapshot(
+        sessionID: TerminalSessionID,
+        payload: Data
+    ) {
+        let directory = URL(
+            fileURLWithPath: NSHomeDirectory()
+                .appending("/Library/Logs/Warren/failed-snapshots")
+        )
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            let existing = try fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).filter {
+                $0.lastPathComponent.hasSuffix(".bin")
+            }
+            if existing.count >= 10 {
+                for file in existing.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+                .prefix(existing.count - 9) {
+                    try? fm.removeItem(at: file)
+                }
+            }
+            let name = "\(Int(Date().timeIntervalSince1970))-\(sessionID.description).bin"
+            try payload.write(to: directory.appendingPathComponent(name), options: .atomic)
+            TerminalDiagnostics.log("atomic_rejected_snapshot_dumped", [
+                "session": sessionID.description,
+                "bytes": String(payload.count),
+                "file": name,
+            ])
+        } catch {
+            TerminalDiagnostics.log("atomic_rejected_snapshot_dump_failed", [
+                "session": sessionID.description,
+                "error": String(describing: error),
+            ])
+        }
+    }
+
     private func failAtomicRecovery(
         sessionID: TerminalSessionID,
         reason: String,
@@ -3904,8 +3946,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     }
                     // At this point all lifecycle prerequisites are true, so
                     // a failure means the Ghostline payload itself is invalid
-                    // rather than a cold-mount race. Reconnect the transport
-                    // and let the daemon produce a fresh boundary.
+                    // rather than a cold-mount race. Persist the exact payload
+                    // before reconnecting so a later recurrence can be
+                    // reproduced offline against the same bytes.
+                    self.persistRejectedSnapshot(
+                        sessionID: sessionID,
+                        payload: pending.payload
+                    )
                     self.failAtomicRecovery(
                         sessionID: sessionID,
                         reason: "native snapshot rejected after surface became ready"
