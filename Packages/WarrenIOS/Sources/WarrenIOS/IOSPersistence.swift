@@ -227,6 +227,40 @@ public final class IOSLocalStore: @unchecked Sendable {
         endpoints.first(where: { $0.name == name })
     }
 
+    /// Adds or refreshes the local development Host without changing the
+    /// active Host. A Relay entry with the same display name is user-owned and
+    /// is left untouched.
+    @discardableResult
+    public func ensureDevelopmentEndpoint(
+        _ development: WarrenRemoteEndpointConfiguration
+    ) -> Bool {
+        guard !development.token.isEmpty,
+              !development.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              development.webSocketURL != nil else {
+            return false
+        }
+
+        guard let existing = endpoint(named: development.name) else {
+            saveEndpoint(development, activate: false)
+            return true
+        }
+        guard !existing.isRelay else { return false }
+
+        let isManagedDevelopmentEndpoint = existing.type == development.type
+            && existing.hostID == development.hostID
+            && existing.routeID == development.routeID
+        guard isManagedDevelopmentEndpoint else { return false }
+        guard existing.url != development.url || existing.token != development.token else {
+            return false
+        }
+        saveEndpoint(
+            development,
+            replacingName: existing.name,
+            activate: false
+        )
+        return true
+    }
+
     /// Persists an endpoint, optionally replacing an existing list item. The
     /// token is written only to the Keychain; the list remains metadata-only.
     public func saveEndpoint(

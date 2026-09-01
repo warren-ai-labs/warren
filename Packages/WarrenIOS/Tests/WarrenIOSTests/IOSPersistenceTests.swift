@@ -66,6 +66,60 @@ final class IOSPersistenceTests: XCTestCase {
         ])
     }
 
+    func testDevelopmentEndpointIsAddedWithoutChangingActiveRelay() {
+        let defaults = UserDefaults(suiteName: "warren-ios-development-endpoint-\(UUID())")!
+        let keychain = IOSKeychainStore(service: "warren-ios-development-endpoint-\(UUID())")
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+        let relay = WarrenRemoteEndpointConfiguration(
+            name: "Remote Relay",
+            url: "https://relay.example.test",
+            token: "relay-token",
+            type: "relay",
+            hostID: "host-1",
+            routeID: "route-1"
+        )
+        let development = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "http://192.0.2.10:8789",
+            token: "local-token"
+        )
+
+        store.endpoint = relay
+        XCTAssertTrue(store.ensureDevelopmentEndpoint(development))
+        XCTAssertEqual(store.endpoint?.name, relay.name)
+        XCTAssertEqual(store.endpoint?.url, relay.url)
+        XCTAssertEqual(store.endpoint?.token, relay.token)
+        XCTAssertEqual(store.endpoints.map(\.name), [relay.name, development.name])
+        XCTAssertEqual(store.endpoint(named: development.name)?.url, development.url)
+        XCTAssertEqual(store.endpoint(named: development.name)?.token, development.token)
+    }
+
+    func testDevelopmentEndpointRefreshDoesNotReplaceRelayWithSameName() {
+        let defaults = UserDefaults(suiteName: "warren-ios-development-relay-name-\(UUID())")!
+        let keychain = IOSKeychainStore(service: "warren-ios-development-relay-name-\(UUID())")
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+        let relay = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "https://relay.example.test",
+            token: "relay-token",
+            type: "relay",
+            hostID: "host-2",
+            routeID: "route-2"
+        )
+        let development = WarrenRemoteEndpointConfiguration(
+            name: "Warren LAN",
+            url: "http://192.0.2.11:8789",
+            token: "local-token"
+        )
+
+        store.endpoint = relay
+        XCTAssertFalse(store.ensureDevelopmentEndpoint(development))
+        XCTAssertEqual(store.endpoints, [relay])
+        XCTAssertEqual(store.endpoint?.hostID, relay.hostID)
+        XCTAssertEqual(store.endpoint?.routeID, relay.routeID)
+        XCTAssertEqual(store.endpoint?.token, relay.token)
+    }
+
     func testAgentDraftKeySeparatesEndpointAndSessionPunctuation() {
         let first = IOSLocalStore.agentDraftKey(endpointIdentity: "host.a", sessionID: "session")
         let second = IOSLocalStore.agentDraftKey(endpointIdentity: "host", sessionID: "a.session")
