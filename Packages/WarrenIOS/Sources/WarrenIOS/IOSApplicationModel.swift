@@ -677,14 +677,43 @@ public final class IOSApplicationModel: ObservableObject {
     /// keyboard is a local presentation action, not a collaboration action.
     public func dismissKeyboard() {
         #if canImport(UIKit)
+        // First, try to resign the terminal's text view
+        if let window = UIApplication.shared.windows.first {
+            for subview in window.subviews where subview.isKind(of: UIView.classForCoder()) {
+                subview.resignFirstResponder()
+            }
+        }
+        
+        // Then try the standard approach
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
             from: nil,
             for: nil
         )
+        
+        // Finally, try to find and resign any UITextView
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.findAndResignTextView()
+        }
         #endif
     }
+    
+    #if canImport(UIKit)
+    private func findAndResignTextView() {
+        guard let window = UIApplication.shared.windows.first else { return }
+        self.resignFromView(window)
+    }
+    
+    private func resignFromView(_ view: UIView) {
+        if view.isKind(of: UITextView.classForCoder()), let textView = view as? UITextView {
+            textView.resignFirstResponder()
+        }
+        for subview in view.subviews {
+            resignFromView(subview)
+        }
+    }
+    #endif
 
     public func selectWorkspace(_ workspaceID: String) {
         pendingSessionDeletion = nil

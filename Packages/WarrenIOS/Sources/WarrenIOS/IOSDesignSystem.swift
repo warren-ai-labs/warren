@@ -635,16 +635,16 @@ public struct IOSModeToggle: View {
 
     public var body: some View {
         if isAgentSession {
-            HStack(spacing: 1) {
+            HStack(spacing: 0) {
                 modeButton(.terminal, symbol: "terminal", accessibilityLabel: "Terminal")
+                    .padding(.trailing, 1)
                 modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: "Agent chat")
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
-            .padding(WarrenSpacing.xxs)
-            .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous))
+            .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
-                    .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 1)
+                RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                    .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 0.5)
             }
             .fixedSize(horizontal: true, vertical: false)
         }
@@ -661,13 +661,13 @@ public struct IOSModeToggle: View {
             Image(systemName: symbol)
                 .font(IOSTypography.button)
                 .foregroundStyle(selection == mode ? IOSTheme.text : IOSTheme.secondaryText)
-                .frame(width: 44, height: 44)
+                .frame(width: 40, height: 40)
                 .background(selection == mode ? IOSTheme.muted : .clear, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .stroke(
                             focusedMode == mode.rawValue ? IOSTheme.focusRing : .clear,
-                            lineWidth: focusedMode == mode.rawValue ? 2 : 0
+                            lineWidth: focusedMode == mode.rawValue ? 1 : 0
                         )
                 }
         }

@@ -232,18 +232,29 @@ private struct HostDashboardView: View {
                     )
                     .padding(.top, 42)
                 } else {
+                    // Active Agent Sessions as collapsible section
                     if !activeAgentSessions.isEmpty {
-                        AgentActivitySummary(
+                        ActiveAgentSessionsSection(
                             sessions: activeAgentSessions,
                             workspaces: workspaces,
                             projects: projects,
                             agentStatusBySessionID: model.agentStatusBySessionID,
+                            activeSessionID: model.currentSessionID,
+                            isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")),
+                            toggle: {
+                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                                    let key = sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")
+                                    if collapsedSectionIDs.contains(key) {
+                                        collapsedSectionIDs.remove(key)
+                                    } else {
+                                        collapsedSectionIDs.insert(key)
+                                    }
+                                }
+                            },
                             openSession: openSession
                         )
-                        .opacity(collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")) ? 0 : 1)
-                        .frame(height: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")) ? 0 : nil)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")))
                     }
+                    
                     projectSections
                     unassignedWorkspaceSection
                     terminalGroupSection
@@ -756,6 +767,60 @@ private struct CollapsibleSectionHeader: View {
         .accessibilityLabel(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
         .padding(.top, 20)
         .padding(.bottom, 4)
+    }
+}
+
+private struct ActiveAgentSessionsSection: View {
+    let sessions: [WarrenRemoteRoster.Session]
+    let workspaces: [WarrenRemoteRoster.Workspace]
+    let projects: [WarrenRemoteRoster.Project]
+    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
+    let activeSessionID: String?
+    let isCollapsed: Bool
+    let toggle: () -> Void
+    let openSession: (String) -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CollapsibleSectionHeader(
+                title: "Active agent sessions",
+                count: sessions.count,
+                symbol: "brain.head.profile",
+                isCollapsed: isCollapsed,
+                toggle: toggle
+            )
+            if !isCollapsed {
+                ForEach(sessions) { session in
+                    Button { openSession(session.id) } label: {
+                        AgentActivitySummaryRow(
+                            session: session,
+                            subtitle: subtitle(for: session),
+                            status: agentStatusBySessionID[session.id] ?? session.agentStatus
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+    
+    private func subtitle(for session: WarrenRemoteRoster.Session) -> String {
+        if let workspaceID = session.workspaceID,
+           let workspace = workspaces.first(where: { $0.id == workspaceID }) {
+            let workspaceName = workspace.branch?.isEmpty == false
+                ? workspace.branch!
+                : (workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
+            if let project = projects.first(where: { $0.id == workspace.projectID }),
+               !project.name.isEmpty,
+               !workspaceName.isEmpty {
+                return "\(project.name) · \(workspaceName)"
+            }
+            return workspaceName.isEmpty ? "Workspace" : workspaceName
+        }
+        if let groupID = session.terminalGroupID {
+            return "Terminal group · \(groupID)"
+        }
+        return session.directory ?? "Host session"
     }
 }
 
