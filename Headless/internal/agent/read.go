@@ -77,8 +77,8 @@ func ProjectEvents(events []api.AgentEvent, options ReadOptions) ([]api.AgentEve
 // into memory.
 func ReadTranscript(ctx context.Context, provider, path string, options ReadOptions) ([]api.AgentEvent, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" {
-		return nil, fmt.Errorf("unsupported agent provider %q (want codex, claude, opencode, or pi)", provider)
+	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" {
+		return nil, fmt.Errorf("unsupported agent provider %q (want codex, claude, opencode, pi, or qoder)", provider)
 	}
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("agent transcript path is required")

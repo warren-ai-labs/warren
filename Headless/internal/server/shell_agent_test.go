@@ -514,3 +514,160 @@ func TestEnsureAgentAdoptsDedicatedPiBinding(t *testing.T) {
 	}
 	entry.watcher.Close()
 }
+
+func TestEnsureAgentAdoptsDedicatedQoderSession(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	qoderRoot := t.TempDir()
+	t.Setenv("QODER_SESSION_DIR", qoderRoot)
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, workspaceID := store.NewID(), store.NewID()
+	now := time.Now().UTC()
+	if err := state.Update(func(v *api.State) error {
+		v.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: now}}
+		v.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: now}}
+		// Dedicated Qoder session: the injected AgentSessionID matches the
+		// --session-id qoder was launched with.
+		v.Sessions = []api.Session{{ID: "session-qoder-dedicated", WorkspaceID: workspaceID, Title: "Qoder", Kind: "qoder", Runtime: "runtime-qoder", Lifecycle: "running", AgentSessionID: "warren-qoder-injected", CreatedAt: now}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-qoder", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime, AgentFinder: agent.DefaultFinder{}}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+
+	// Before qoder writes anything there is no binding and no transcript:
+	// ensureAgent leaves the placeholder so reconcile can retry.
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil && entry.watcher != nil {
+		t.Fatal("expected no watcher before the qoder transcript exists")
+	}
+	// A running dedicated qoder session shows ready on the roster even before
+	// its first transcript event arrives.
+	roster := service.Roster(context.Background())
+	for _, rosterSession := range roster.Sessions {
+		if rosterSession.ID == session.ID && (rosterSession.AgentStatus == nil || rosterSession.AgentStatus.Activity != "ready") {
+			t.Fatalf("roster qoder pre-watcher status = %+v, want ready", rosterSession.AgentStatus)
+		}
+	}
+
+	// Qoder writes <config>/projects/<cwd-slug>/<session-id>.jsonl. The cwd
+	// slug replaces path separators with dashes, matching the CLI.
+	targetPath := agent.QoderTranscriptPath(directory, "warren-qoder-injected")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte(
+		`{"type":"workspace-directories","sessionId":"warren-qoder-injected","directories":["`+directory+`"]}`+"\n"+
+			`{"type":"user","uuid":"u1","timestamp":"2026-09-02T10:00:01.000Z","message":{"role":"user","content":"hello"},"cwd":"`+directory+`","sessionId":"warren-qoder-injected"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reconcile throttles discovery for 5s per session; clear lastFind so the
+	// retry re-runs discovery now that the file exists.
+	if entry != nil {
+		entry.lastFind = time.Time{}
+	}
+	entry, err = service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("expected a watcher after the qoder transcript appears")
+	}
+	if got := entry.watcher.Path(); got != targetPath {
+		t.Fatalf("watcher path = %q, want %q", got, targetPath)
+	}
+	current := state.Snapshot()
+	if current.Sessions[0].AgentSessionID != "warren-qoder-injected" || current.Sessions[0].TranscriptPath != targetPath {
+		t.Fatalf("dedicated session meta = %#v", current.Sessions[0])
+	}
+	// The roster reflects a live qoder agent: with events replayed the status
+	// follows the transcript (the fixture ends mid-turn, so working is the
+	// tracker's own result and proves events flow through the watcher).
+	rosterAfter := service.Roster(context.Background())
+	for _, rosterSession := range rosterAfter.Sessions {
+		if rosterSession.ID != session.ID {
+			continue
+		}
+		if rosterSession.AgentStatus == nil || rosterSession.AgentStatus.Activity == "" {
+			t.Fatalf("roster qoder status = %+v, want a live activity", rosterSession.AgentStatus)
+		}
+	}
+	entry.watcher.Close()
+}
+
+func TestEnsureAgentAdoptsQoderShellBinding(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	qoderRoot := t.TempDir()
+	t.Setenv("QODER_SESSION_DIR", qoderRoot)
+
+	state := newStateWithSession(t, "session-qoder-shell", "runtime-qoder-shell")
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-qoder-shell", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+
+	// The qoder SessionStart hook reports {provider:"qoder", sessionId,
+	// transcriptPath}; resolve the transcript from the report.
+	targetPath := filepath.Join(qoderRoot, "projects", "-tmp-"+filepath.Base(directory), "qoder-shell-1.jsonl")
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "qoder",
+		SessionID:      "qoder-shell-1",
+		TranscriptPath: targetPath,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The reported transcript is not on disk yet.
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil && entry.watcher != nil {
+		t.Fatal("expected no watcher before the qoder transcript exists")
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte(
+		`{"type":"user","uuid":"u1","timestamp":"2026-09-02T10:00:01.000Z","message":{"role":"user","content":"hello"},"cwd":"`+directory+`","sessionId":"qoder-shell-1"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil {
+		entry.lastFind = time.Time{}
+	}
+	entry, err = service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("expected a watcher after the qoder transcript flush")
+	}
+	if got := entry.watcher.Path(); got != targetPath {
+		t.Fatalf("watcher path = %q, want %q", got, targetPath)
+	}
+	current := state.Snapshot()
+	if current.Sessions[0].AgentSessionID != "qoder-shell-1" || current.Sessions[0].TranscriptPath != targetPath {
+		t.Fatalf("shell session meta = %#v", current.Sessions[0])
+	}
+	entry.watcher.Close()
+}
