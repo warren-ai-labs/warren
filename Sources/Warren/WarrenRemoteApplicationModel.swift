@@ -3960,7 +3960,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func failAtomicRecovery(
         sessionID: TerminalSessionID,
         reason: String,
-        closeWire: Bool = true
+        closeWire: Bool = false
     ) {
         TerminalDiagnostics.log("atomic_recovery_failed", [
             "session": sessionID.description,
@@ -4067,7 +4067,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     )
                     self.failAtomicRecovery(
                         sessionID: sessionID,
-                        reason: "native snapshot rejected after surface became ready"
+                        reason: "native snapshot rejected after surface became ready",
+                        closeWire: true
                     )
                     return
                 }
