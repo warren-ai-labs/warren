@@ -715,7 +715,7 @@ public struct AgentChatView: View {
                         // Model name / metadata (white/light color)
                         if let metadata = agentComposerMetadata {
                             Text(metadata)
-                                .font(IOSDesignSystem.IOSTypography.metadata)
+                                .font(IOSTypography.metadata)
                                 .foregroundStyle(IOSTheme.text)  // White/bright color
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -731,7 +731,7 @@ public struct AgentChatView: View {
                             sendComposerMessage()
                         } label: {
                             Image(systemName: "arrow.up")
-                                .font(IOSDesignSystem.IOSTypography.button)
+                                .font(IOSTypography.button)
                                 .foregroundStyle(IOSTheme.background)  // White icon
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
