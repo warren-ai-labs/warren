@@ -174,6 +174,9 @@ private struct HostDashboardView: View {
         if workspaces.contains(where: { !assigned.contains($0.projectID) }) {
             ids.append(sectionID(kind: "unassigned", id: "workspaces"))
         }
+        if !activeAgentSessions.isEmpty {
+            ids.append(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions"))
+        }
         if !(model.roster?.terminalGroups ?? []).isEmpty {
             ids.append(sectionID(kind: "groups", id: "terminal-groups"))
         }
@@ -237,6 +240,9 @@ private struct HostDashboardView: View {
                             agentStatusBySessionID: model.agentStatusBySessionID,
                             openSession: openSession
                         )
+                        .opacity(collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")) ? 0 : 1)
+                        .frame(height: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")) ? 0 : nil)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")))
                     }
                     projectSections
                     unassignedWorkspaceSection
