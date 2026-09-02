@@ -55,7 +55,7 @@ type HTTPServer struct {
 	RelayRouteClient func() (*relay.RouteClient, error)
 	// RelayPairing creates a safe client-facing invite. The callback owns the
 	// Host Secret and returns only an opaque URL plus its expiry metadata.
-	RelayPairing  func(context.Context) (relay.PairingResult, error)
+	RelayPairing func(context.Context) (relay.PairingResult, error)
 	// RelayState is queried by /healthz to surface the supervised connector's
 	// current state. Optional: a nil callback reports an unconfigured relay.
 	RelayState    func() api.RelayHealth
@@ -219,10 +219,10 @@ func (s *HTTPServer) Handler() http.Handler {
 			"ghostlineTagVersion":      s.GhostlineTagVersion,
 			"ghostlineSkippedSessions": skippedSessions,
 			"status": api.HealthSubsystems{
-				Store:                   storeStatus,
-				Migrations:              migrationsStatus,
+				Store:                    storeStatus,
+				Migrations:               migrationsStatus,
 				GhostlineSkippedSessions: skippedSessions,
-				Relay:                   relayHealth,
+				Relay:                    relayHealth,
 			},
 		})
 	})
@@ -2714,13 +2714,19 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		p.logInfo("subscribe: begin", "session", id, "anchor", anchorLabel,
 			"claim", claimControl, "claimSpecified", claimSpecified,
 			"size", fmt.Sprintf("%dx%d", columns, rows), "specified", sizeSpecified)
+		stepStart := time.Now()
+		markStep := func(step string) {
+			p.logInfo("subscribe: step", "session", id, "step", step, "ms", time.Since(stepStart).Milliseconds())
+		}
 		lock, resume, err := p.server.Service.prepareAttach(ctx, session)
 		if err != nil {
 			return err
 		}
+		markStep("prepareAttach")
 		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
 			p.server.Service.reservePeerCursorOutput(p, session.ID)
 		}
+		markStep("reservePeerCursorOutput")
 		if err := ctx.Err(); err != nil {
 			lock.Unlock()
 			resume()
@@ -2737,6 +2743,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 			p.claimControl(session)
 		}
+		markStep("registerAndClaim")
 		if err := ctx.Err(); err != nil {
 			lock.Unlock()
 			resume()
@@ -2756,12 +2763,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			p.server.Service.detachPeer(p, session.ID)
 			return err
 		}
+		markStep("writeSubscribed")
 		if err := p.server.Service.attachOutputLocked(ctx, p, session, anchor, "session.subscribe"); err != nil {
 			lock.Unlock()
 			resume()
 			p.server.Service.detachPeer(p, session.ID)
 			return err
 		}
+		markStep("attachOutputLocked")
 		lock.Unlock()
 		resume()
 		return nil
