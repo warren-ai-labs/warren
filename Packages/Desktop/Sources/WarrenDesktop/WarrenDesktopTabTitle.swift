@@ -78,6 +78,7 @@ enum WarrenDesktopTabTitle {
         case .codex: "codex"
         case .opencode: "opencode"
         case .pi: "pi"
+        case .qoder: "qoder"
         case .trae: "trae"
         case .shell, .custom: nil
         }
@@ -90,6 +91,7 @@ enum WarrenDesktopTabTitle {
         case .codex: "codex"
         case .opencode: "opencode"
         case .pi: "pi"
+        case .qoder: "qoder"
         case .trae: "trae"
         case .custom: kind.displayName
         }

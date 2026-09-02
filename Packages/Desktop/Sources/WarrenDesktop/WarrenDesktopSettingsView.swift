@@ -776,6 +776,8 @@ struct WarrenDesktopSettingsView: View {
             settingsInputField("OpenCode", text: $opencodeCommand, placeholder: "opencode")
         case .pi:
             settingsInputField("Pi", text: $piCommand, placeholder: "pi")
+        case .qoder:
+            EmptyView()
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:

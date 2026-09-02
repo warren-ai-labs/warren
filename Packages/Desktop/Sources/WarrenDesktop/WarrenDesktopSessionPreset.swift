@@ -241,6 +241,7 @@ extension TerminalSessionKind {
         case .codex: "curlybraces"
         case .opencode: "terminal.fill"
         case .pi: "function"
+        case .qoder: "sparkle"
         case .trae: "sparkle.magnifyingglass"
         case .custom: "hammer"
         }
