@@ -371,6 +371,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case codex
     case opencode
     case pi
+    case qoder
     case trae
     case custom
 
@@ -381,6 +382,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .codex: "Codex"
         case .opencode: "OpenCode"
         case .pi: "Pi"
+        case .qoder: "Qoder"
         case .trae: "Trae Agent"
         case .custom: "Custom"
         }
@@ -492,6 +494,10 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
     public static let pi = Self(
         kind: .pi,
         command: "pi"
+    )
+    public static let qoder = Self(
+        kind: .qoder,
+        command: "qoder"
     )
     public static let trae = Self(
         kind: .trae,

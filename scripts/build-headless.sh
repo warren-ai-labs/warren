@@ -5,6 +5,7 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 output_directory="${1:-$repository_root/.build/headless}"
 mkdir -p "$output_directory"
+output_directory="$(cd "$output_directory" && pwd)"
 
 build_version="$(bash "$repository_root/scripts/version.sh")"
 build_revision="$(git -C "$repository_root" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
