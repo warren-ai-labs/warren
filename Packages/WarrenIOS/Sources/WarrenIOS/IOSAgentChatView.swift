@@ -2635,7 +2635,7 @@ private struct AgentActivityGroupBlock: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(activity.title)
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(activityStatusLabel)")
 
             if expanded {
                 VStack(alignment: .leading, spacing: 9) {
@@ -2713,6 +2713,15 @@ private struct AgentActivityGroupBlock: View {
         case .failed: return IOSTheme.red
         case .interrupted: return IOSTheme.yellow
         case .completed: return IOSTheme.green
+        }
+    }
+
+    private var activityStatusLabel: String {
+        switch activity.status {
+        case .running: return "Running"
+        case .failed: return "Failed"
+        case .interrupted: return "Interrupted"
+        case .completed: return "Completed"
         }
     }
 }
@@ -2827,7 +2836,7 @@ private struct AgentToolBlockView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(tool.call.toolName))
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(tool.status))")
 
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
@@ -2912,7 +2921,7 @@ private struct AgentToolOutputBlock: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(event.toolName))
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(event.toolStatus ?? "success"))")
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     if let output = event.output, !output.isEmpty {
