@@ -313,6 +313,43 @@ func EnsureOpenCodeBindPlugin() (bool, error) {
 	return true, nil
 }
 
+// PiExtensionPath returns the Warren-managed Pi extension path. Pi
+// auto-discovers global extensions from ~/.pi/agent/extensions/ (honoring
+// PI_CODING_AGENT_DIR), so a global install covers shell overlays in every
+// workspace. A deterministic filename with a marker makes repeated daemon
+// starts idempotent.
+func PiExtensionPath() string {
+	if value := strings.TrimSpace(os.Getenv("WARREN_PI_EXTENSION_PATH")); value != "" {
+		return value
+	}
+	root := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if root == "" {
+		home, _ := os.UserHomeDir()
+		root = filepath.Join(home, ".pi", "agent")
+	}
+	return filepath.Join(root, "extensions", "warren-bind.ts")
+}
+
+// EnsurePiBindExtension installs the Warren binding extension for Pi. It is
+// the hook-equivalent for Pi: on session_start the extension reads
+// WARREN_SESSION_ID and WARREN_BIND_FILE from the environment Warren injects
+// into the surrounding shell, then atomically writes the binding file so the
+// daemon can resolve the Pi JSONL transcript without cwd+mtime guessing.
+func EnsurePiBindExtension() (bool, error) {
+	path := PiExtensionPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, fmt.Errorf("create Pi extension directory: %w", err)
+	}
+	existing, err := os.ReadFile(path)
+	if err == nil && string(existing) == piBindExtensionSource {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(piBindExtensionSource), 0o600); err != nil {
+		return false, fmt.Errorf("write Pi bind extension: %w", err)
+	}
+	return true, nil
+}
+
 // ensureAgentHooks merges the Warren-managed hook command into the
 // SessionStart and SessionEnd arrays of either Codex hooks.json or Claude
 // settings.json. The marker in the command makes repeated installs
@@ -592,3 +629,50 @@ write_status "ready" "" "" ""
 printf '%s\n' '{"continue":true}'
 exit 0
 `
+
+// piBindExtensionSource is the hook-equivalent for Pi. Pi has no lifecycle
+// hooks like Codex/Claude; extensions are the supported integration surface.
+// The extension reads the Warren-managed bind environment (injected into the
+// surrounding shell session by BindEnvironment) and writes the binding file
+// on session_start, when ctx.sessionManager already exposes the session id and
+// the target JSONL path (the file may not be flushed until the first message,
+// so the daemon waits for it to appear before tailing). Re-binds on every
+// session start so a manual `/resume` or `/fork` inside the shell points
+// Warren at the conversation the user actually switched to. The marker string
+// appears in the comment so the daemon can find and update its own entry
+// idempotently.
+// ${hookCommandMarker}
+const piBindExtensionSource = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import * as fs from "node:fs"
+import * as path from "node:path"
+
+function atomicWrite(filePath: string, data: string) {
+  const dir = path.dirname(filePath)
+  fs.mkdirSync(dir, { recursive: true })
+  const tmp = filePath + ".tmp." + process.pid
+  fs.writeFileSync(tmp, data)
+  fs.renameSync(tmp, filePath)
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    const bindFile = process.env.WARREN_BIND_FILE
+    const warrenSession = process.env.WARREN_SESSION_ID
+    if (!bindFile || !warrenSession) return
+    const sessionId = ctx.sessionManager.getSessionId() || ""
+    const sessionFile = ctx.sessionManager.getSessionFile() || ""
+    if (!sessionId || !sessionFile) return
+    const payload =
+      JSON.stringify({
+        provider: "pi",
+        sessionId,
+        transcriptPath: sessionFile,
+        cwd: process.env.WARREN_WORKSPACE_PATH || "",
+        updatedAt: new Date().toISOString(),
+      }) + "\n"
+    try {
+      atomicWrite(bindFile, payload)
+    } catch {}
+  })
+}
+// warren-agent-bind-v1`

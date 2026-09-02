@@ -370,6 +370,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case claude
     case codex
     case opencode
+    case pi
     case trae
     case custom
 
@@ -379,6 +380,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .claude: "Claude Code"
         case .codex: "Codex"
         case .opencode: "OpenCode"
+        case .pi: "Pi"
         case .trae: "Trae Agent"
         case .custom: "Custom"
         }
@@ -453,6 +455,11 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
     public let requestID: UUID?
     public let kind: TerminalSessionKind
     public let command: String?
+    /// An explicit user-chosen session name. Built-in presets leave this nil:
+    /// their launch title is presentation copy owned by the caller's catalog
+    /// and must not become the session's user-set custom title, which would
+    /// suppress automatic AI title generation. Only a real user naming action
+    /// (CLI `--title`, an input field, a future user-defined preset) sets it.
     public let title: String?
 
     public init(
@@ -470,24 +477,25 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
     }
 
     public static let shell = Self(kind: .shell)
-    public static let claude = Self(kind: .claude, command: "claude", title: "Claude Code")
+    public static let claude = Self(kind: .claude, command: "claude")
     /// Warren owns and verifies its managed lifecycle hook. This flag bypasses
     /// only Codex's hook trust prompt; it does not bypass command approvals or
     /// the sandbox.
     public static let codex = Self(
         kind: .codex,
-        command: "codex --dangerously-bypass-hook-trust",
-        title: "Codex"
+        command: "codex --dangerously-bypass-hook-trust"
     )
     public static let opencode = Self(
         kind: .opencode,
-        command: "opencode",
-        title: "OpenCode"
+        command: "opencode"
+    )
+    public static let pi = Self(
+        kind: .pi,
+        command: "pi"
     )
     public static let trae = Self(
         kind: .trae,
-        command: "trae-cli interactive",
-        title: "Trae Agent"
+        command: "trae-cli interactive"
     )
 
     public func identified(by requestID: UUID = UUID()) -> Self {

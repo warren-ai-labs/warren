@@ -144,6 +144,12 @@ type Connector struct {
 	streams    map[connectionID]*stream
 	usedIDs    map[connectionID]struct{}
 	writes     sync.Mutex
+	// lastState is the most recent state string forwarded to OnState. It is
+	// exposed via State() for /healthz and other liveness probes.
+	lastState string
+	// lastError is the most recent connectOnce failure, retained so /healthz
+	// can surface a stable error while the connector is between attempts.
+	lastError string
 }
 
 type stream struct {
@@ -265,6 +271,11 @@ func (connector *Connector) runLoop(ctx context.Context, done chan struct{}) {
 		if ctx.Err() != nil {
 			return
 		}
+		if err != nil {
+			connector.recordError(err)
+		} else {
+			connector.recordError(nil)
+		}
 		connector.state("waiting")
 		delay := BackoffDelay(attempt, connector.config.Random)
 		attempt++
@@ -282,9 +293,36 @@ func (connector *Connector) runLoop(ctx context.Context, done chan struct{}) {
 }
 
 func (connector *Connector) state(value string) {
+	connector.mu.Lock()
+	connector.lastState = value
+	connector.mu.Unlock()
 	if connector.config.OnState != nil {
 		connector.config.OnState(value)
 	}
+}
+
+// State returns a snapshot of the supervised connector. running reflects the
+// dial loop; connected reflects an open WebSocket; currentState is the most
+// recent label surfaced to OnState ("connecting", "waiting", "open"); lastError
+// is the most recent connectOnce failure or empty when the last attempt
+// succeeded.
+func (connector *Connector) State() (running, connected bool, currentState, lastError string) {
+	connector.mu.Lock()
+	defer connector.mu.Unlock()
+	return connector.run, connector.conn != nil, connector.lastState, connector.lastError
+}
+
+// recordError stores the most recent dial outcome. A nil error clears
+// lastError so /healthz can distinguish a fresh failure from a stale one
+// after a successful reconnect.
+func (connector *Connector) recordError(err error) {
+	connector.mu.Lock()
+	defer connector.mu.Unlock()
+	if err == nil {
+		connector.lastError = ""
+		return
+	}
+	connector.lastError = err.Error()
 }
 
 func BackoffDelay(attempt int, randomFn func() float64) time.Duration {

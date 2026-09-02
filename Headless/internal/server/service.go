@@ -814,7 +814,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
-		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
+		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 		if turn := s.agentTurn(session.ID); turn.ID > 0 {
@@ -2535,9 +2535,25 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 			return api.Session{}, err
 		}
 	}
+	if kind == "pi" {
+		if strings.TrimSpace(command) == "" {
+			command = "pi"
+		}
+		if err := agent.ValidatePiCommand(command); err != nil {
+			return api.Session{}, err
+		}
+	}
+	if kind == "qoder" {
+		if strings.TrimSpace(command) == "" {
+			command = "qoder"
+		}
+		if err := agent.ValidateQoderCommand(command); err != nil {
+			return api.Session{}, err
+		}
+	}
 	customTitle := strings.TrimSpace(title)
 	defaultTitle := map[string]string{
-		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "trae": "Trae",
+		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "trae": "Trae", "pi": "Pi", "qoder": "Qoder",
 	}[kind]
 	if defaultTitle == "" {
 		fields := strings.Fields(command)
@@ -2546,6 +2562,15 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		} else {
 			defaultTitle = "Shell"
 		}
+	}
+	// A title that merely repeats the kind-derived default is not a user-set
+	// name: preset bars used to echo their display label ("Pi", "Codex") as
+	// the create title, which occupied the custom-title slot and suppressed
+	// automatic AI title generation. Keep CustomTitle empty in that case so
+	// the roster falls back to Title until a real rename or generated title
+	// arrives.
+	if customTitle == defaultTitle {
+		customTitle = ""
 	}
 	sessionKind := runtimeKind
 	if sessionKind == "" {
@@ -2563,6 +2588,14 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		if injected != command {
 			command = injected
 			injectedClaude = true
+		}
+	}
+	injectedQoder := false
+	if kind == "qoder" {
+		injected := agent.InjectQoderSessionID(command, id)
+		if injected != command {
+			command = injected
+			injectedQoder = true
 		}
 	}
 	// Every session gets the binding environment so a CLI started manually
@@ -2600,6 +2633,9 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		session.Scope = api.SessionScopeTerminalGroup
 	}
 	if injectedClaude {
+		session.AgentSessionID = id
+	}
+	if injectedQoder {
 		session.AgentSessionID = id
 	}
 	storeStartedAt := time.Now()
@@ -3472,7 +3508,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 // running sessions. A deep Store snapshot is intentionally expensive, so the
 // lifecycle loop must not take one for every session it inspects.
 func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
-	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode"
+	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
 		return nil, nil
@@ -3547,13 +3583,29 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			}
 			agentSessionID = opencodeBinding.SessionID
 			transcriptPath = opencodeBinding.CachePath
+		} else if session.Kind == "pi" {
+			// Pi reports its own session id and transcript path through the
+			// binding extension on session_start, exactly like the Codex/Claude
+			// hooks report their CLI's conversation. Warren launches pi without
+			// an injected --session-id (that would make pi warn about a missing
+			// history), so the extension's session id is the only stable anchor.
+			// The JSONL may not be flushed until pi receives its first message;
+			// the extension's target path is a second anchor once it appears.
+			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil && binding.Provider == "pi" && binding.SessionID != "" {
+				agentSessionID = binding.SessionID
+				transcriptPath = agent.FindPiTranscript(binding.SessionID)
+				if transcriptPath == "" && binding.TranscriptPath != "" {
+					if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
+						transcriptPath = binding.TranscriptPath
+					}
+				}
+			}
 		} else {
 			transcriptPath = s.boundTranscript(session, workspacePath)
 			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
 				agentSessionID = binding.SessionID
 			}
 		}
-
 		s.agentsMu.Lock()
 		entry := s.agents[session.ID]
 		if entry == nil {
@@ -3590,7 +3642,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		}
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
-		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode") {
+		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi") {
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
@@ -3637,6 +3689,23 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			provider = binding.Provider
 			agentSessionID = opencodeBinding.SessionID
 			transcriptPath = opencodeBinding.CachePath
+		} else if binding.Provider == "pi" {
+			// Pi shell overlay: the extension writes {provider:"pi",
+			// sessionId, transcriptPath} on session_start. Resolve the
+			// transcript by the injected session id first; the file may not be
+			// flushed until pi receives its first message, so the extension's
+			// target path is a second anchor once it appears on disk.
+			provider = binding.Provider
+			agentSessionID = binding.SessionID
+			transcriptPath = agent.FindPiTranscript(binding.SessionID)
+			if transcriptPath == "" && binding.TranscriptPath != "" {
+				if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
+					transcriptPath = binding.TranscriptPath
+				}
+			}
+			if transcriptPath == "" {
+				return nil, nil
+			}
 		} else {
 			info, statErr := os.Stat(binding.TranscriptPath)
 			if statErr != nil || info.IsDir() {
@@ -3810,7 +3879,7 @@ func (s *Service) clearShellAgent(session api.Session) {
 }
 
 func (s *Service) clearShellAgentWithState(session api.Session, state *api.State) {
-	if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" {
+	if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" {
 		return
 	}
 	s.agentsMu.Lock()
@@ -4447,7 +4516,7 @@ func (s *Service) agentTranscriptChunk(
 	if !ok {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session not found: %s", sessionID)
 	}
-	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.AgentSessionID == "" {
+	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.Kind != "pi" && session.AgentSessionID == "" {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session is not bound to an agent: %s", sessionID)
 	}
 	if session.TranscriptPath == "" && session.Lifecycle == "running" {
@@ -4602,7 +4671,7 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 		// a transcript binding. Allow the initial subscription so agent send can
 		// deliver that prompt and let reconciliation attach the watcher later.
 		if sessionExists && session.Lifecycle == "running" &&
-			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode") {
+			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi") {
 			return nil
 		}
 		return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)

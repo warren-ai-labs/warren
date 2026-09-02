@@ -56,6 +56,9 @@ type HTTPServer struct {
 	// RelayPairing creates a safe client-facing invite. The callback owns the
 	// Host Secret and returns only an opaque URL plus its expiry metadata.
 	RelayPairing  func(context.Context) (relay.PairingResult, error)
+	// RelayState is queried by /healthz to surface the supervised connector's
+	// current state. Optional: a nil callback reports an unconfigured relay.
+	RelayState    func() api.RelayHealth
 	BuildVersion  string
 	BuildRevision string
 	BuildDirty    bool
@@ -180,13 +183,33 @@ func (s *HTTPServer) Handler() http.Handler {
 			rpcVersion = s.GhostlineVersion
 		}
 		skippedSessions := 0
+		migrationPhase := ""
 		if s.Service != nil && s.Service.Store != nil {
 			if migration := s.Service.Store.Snapshot().GhostlineMigration; migration != nil {
 				skippedSessions = len(migration.SkippedSessions)
+				migrationPhase = migration.Phase
 			}
 		}
+		storeStatus := api.HealthUnavailable
+		if s.Service != nil && s.Service.Store != nil {
+			storeStatus = api.HealthReady
+		}
+		migrationsStatus := api.HealthCleared
+		if migrationPhase != "" && migrationPhase != api.GhostlineMigrationRetired {
+			migrationsStatus = api.HealthPending
+		}
+		relayHealth := api.RelayHealth{State: api.HealthUnconfigured}
+		if s.RelayState != nil {
+			relayHealth = s.RelayState()
+		}
+		ready := storeStatus == api.HealthReady &&
+			migrationsStatus == api.HealthCleared &&
+			(relayHealth.State == api.HealthUnconfigured ||
+				relayHealth.State == api.HealthConnected ||
+				relayHealth.State == api.HealthDisconnected)
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"ok":                       true,
+			"ready":                    ready,
 			"version":                  api.Version,
 			"build":                    s.BuildVersion,
 			"revision":                 s.BuildRevision,
@@ -195,6 +218,12 @@ func (s *HTTPServer) Handler() http.Handler {
 			"ghostlineRPCVersion":      rpcVersion,
 			"ghostlineTagVersion":      s.GhostlineTagVersion,
 			"ghostlineSkippedSessions": skippedSessions,
+			"status": api.HealthSubsystems{
+				Store:                   storeStatus,
+				Migrations:              migrationsStatus,
+				GhostlineSkippedSessions: skippedSessions,
+				Relay:                   relayHealth,
+			},
 		})
 	})
 	mux.HandleFunc("GET /v1/state", s.handleState)

@@ -66,7 +66,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
-        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "trae", "agent", "visible", "hidden"]
+        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup", "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex", "sidebar", "tasks", "visibility"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
@@ -123,6 +123,8 @@ struct WarrenDesktopSettingsView: View {
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
     @AppStorage(WarrenPreferenceKey.presetCommandOpenCode)
     private var opencodeCommand = "opencode"
+    @AppStorage(WarrenPreferenceKey.presetCommandPi)
+    private var piCommand = "pi"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -490,6 +492,7 @@ struct WarrenDesktopSettingsView: View {
                     claudeCommand = "claude"
                     codexCommand = "codex --dangerously-bypass-hook-trust"
                     opencodeCommand = "opencode"
+                    piCommand = "pi"
                     traeCommand = "trae-cli interactive"
                     presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
                     hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
@@ -771,6 +774,8 @@ struct WarrenDesktopSettingsView: View {
             )
         case .opencode:
             settingsInputField("OpenCode", text: $opencodeCommand, placeholder: "opencode")
+        case .pi:
+            settingsInputField("Pi", text: $piCommand, placeholder: "pi")
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:

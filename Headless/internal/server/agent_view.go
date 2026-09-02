@@ -653,6 +653,19 @@ func sendAgentMessageInput(ctx context.Context, runtime Runtime, sessionID, text
 	return runtime.Input(ctx, sessionID, []byte{0x1b, 0x5b, 0x31, 0x33, 0x75})
 }
 
+// interruptAgentTurnInput sends the terminal interrupt byte (Ctrl+C) and, for
+// send_now, types the replacement message after the turn is cancelled. It is
+// the PTY fallback for Hosts without a provider-native AgentController.
+func interruptAgentTurnInput(ctx context.Context, runtime Runtime, sessionID string, request api.AgentTurnInterruptRequest) error {
+	if err := runtime.Input(ctx, sessionID, []byte{0x03}); err != nil {
+		return err
+	}
+	if request.Replacement != nil {
+		return sendAgentMessageInput(ctx, runtime, sessionID, request.Replacement.Text)
+	}
+	return nil
+}
+
 func (s *Service) respondAgentInteraction(ctx context.Context, request api.AgentInteractionResponse) (api.AgentInteractionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return api.AgentInteractionResult{}, err
@@ -835,9 +848,23 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			return api.AgentTurnInterruptResult{}, err
 		}
 	} else {
-		err := errors.New("agent interrupt transport is unavailable")
-		s.finishAgentAction(actionKey, call, nil, err)
-		return api.AgentTurnInterruptResult{}, err
+		// PTY fallback: cancel the in-flight turn with the terminal interrupt
+		// byte and type a send_now replacement, under the same per-session
+		// action lock as the message path.
+		session, _ := s.Session(request.Session)
+		runtime := s.runtimeFor(session)
+		if runtime == nil {
+			err := errors.New("agent interrupt transport is unavailable")
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentTurnInterruptResult{}, err
+		}
+		unlock := s.lockAgentSessionAction(request.Session)
+		err := interruptAgentTurnInput(ctx, runtime, session.Runtime, request)
+		unlock()
+		if err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentTurnInterruptResult{}, err
+		}
 	}
 	result := api.AgentTurnInterruptResult{Accepted: true, Session: request.Session, Turn: request.Turn, Status: "accepted"}
 	if request.Replacement != nil {

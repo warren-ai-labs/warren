@@ -106,6 +106,10 @@ run = "bash scripts/relay-dev.sh stop"
 description = "Run Relay auth, persistence and forwarding tests"
 run = "go test -race ./RelayService/..."
 
+[tasks."relay:e2e"]
+description = "Run the full Relay end-to-end test (relay up, host enroll, web pair, roster)"
+run = "go test -race -run TestRelayE2E -timeout 90s -v ./Headless/internal/relay/..."
+
 [tasks.accept]
 description = "Run local phase-one acceptance without screenshots or focus changes"
 run = "bash scripts/acceptance-smoke.sh"
@@ -126,3 +130,15 @@ run = "bash scripts/install-ios.sh --no-launch"
 [tasks.clean]
 description = "Clean build artifacts"
 run = "swift package clean && rm -rf .build Warren.app"
+
+[tasks."swift:clean-stale"]
+description = "Remove Packages/<name>/ directories that have no Package.swift (stale SwiftPM build leftovers)"
+run = "bash scripts/clean-stale-packages.sh"
+
+[tasks."protocol:gen"]
+description = "Regenerate Headless/internal/protocol/wire.go from protocol/warren.schema.json"
+run = "go generate ./Headless/internal/protocol/..."
+
+[tasks."protocol:check"]
+description = "Verify Go/Swift/TS/Relay bindings match protocol/warren.schema.json"
+run = "go test ./Headless/internal/protocol/drift/..."

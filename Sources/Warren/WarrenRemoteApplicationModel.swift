@@ -2533,12 +2533,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         Task { @MainActor [weak self] in
             defer { self?.finishCreatingSession(in: workspaceID) }
             do {
-                let data = try await wire.request("session.create", params: [
+                // Only an explicit user-chosen name becomes the session title.
+                // Built-in preset launches leave it nil so the Host keeps the
+                // custom-title slot free for automatic AI title generation.
+                var params: [String: String] = [
                     "workspace": workspaceID.description,
                     "command": launch.command ?? "",
                     "kind": launch.kind.rawValue,
-                    "title": launch.title ?? "",
-                ])
+                ]
+                if let title = launch.title {
+                    params["title"] = title
+                }
+                let data = try await wire.request("session.create", params: params)
                 let created = try JSONDecoder().decode(RemoteRoster.Session.self, from: data)
                 guard let sessionID = TerminalSessionID(uuidString: created.id) else {
                     throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
@@ -2577,12 +2583,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         Task { @MainActor [weak self] in
             defer { self?.finishCreatingSession(in: terminalGroupID) }
             do {
-                let data = try await wire.request("session.create", params: [
+                // Only an explicit user-chosen name becomes the session title.
+                // Built-in preset launches leave it nil so the Host keeps the
+                // custom-title slot free for automatic AI title generation.
+                var params: [String: String] = [
                     "group": terminalGroupID.description,
                     "command": launch.command ?? "",
                     "kind": launch.kind.rawValue,
-                    "title": launch.title ?? "",
-                ])
+                ]
+                if let title = launch.title {
+                    params["title"] = title
+                }
+                let data = try await wire.request("session.create", params: params)
                 let created = try JSONDecoder().decode(RemoteRoster.Session.self, from: data)
                 guard let sessionID = TerminalSessionID(uuidString: created.id) else {
                     throw NSError(domain: "WarrenRemote", code: 10, userInfo: [

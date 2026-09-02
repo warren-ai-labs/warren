@@ -1436,7 +1436,7 @@ func (p *parser) parseOpenCode(line []byte) []api.AgentEvent {
 				events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: part.ID, Type: "reasoning", Content: p.clip(delta), ContentDelta: isDelta, Model: model, Timestamp: timestamp})
 			}
 		case "tool":
-			toolName := part.Tool
+			toolName := canonicalToolName(openCodeProvider, part.Tool)
 			if toolName == "" {
 				toolName = "tool"
 			}

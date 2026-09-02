@@ -52,7 +52,6 @@ struct WarrenSSHHostPicker: View {
         }
         .frame(width: 560)
         .frame(minHeight: 440, idealHeight: 500, maxHeight: 620)
-        .warrenPresentationSurface(role: .sheet, cornerRadius: WarrenRadius.large)
         .onExitCommand(perform: onDismiss)
         .task {
             guard loadOnAppear else { return }

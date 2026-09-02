@@ -289,6 +289,7 @@ final class WarrenRemoteModelTests: XCTestCase {
                 "name": "Delivery API",
                 "path": "",
                 "requestId": requestID.uuidString.lowercased(),
+                "runSetupScript": "false",
             ]
         )
     }
@@ -315,6 +316,7 @@ final class WarrenRemoteModelTests: XCTestCase {
                 "name": "Standalone",
                 "path": "",
                 "requestId": requestID.uuidString.lowercased(),
+                "runSetupScript": "false",
             ]
         )
     }
@@ -352,6 +354,7 @@ final class WarrenRemoteModelTests: XCTestCase {
             "name": "Delivery API",
             "path": "/tmp/delivery",
             "requestId": requestID.uuidString.lowercased(),
+            "runSetupScript": "false",
         ]])
         XCTAssertTrue(coordinator.isSubmitting)
         XCTAssertEqual(dismissCount, 0)

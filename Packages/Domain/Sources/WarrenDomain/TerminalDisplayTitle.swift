@@ -172,6 +172,7 @@ public enum WarrenPreferenceKey {
     public static let presetCommandClaude = "terminal.presetCommand.claude"
     public static let presetCommandCodex = "terminal.presetCommand.codex"
     public static let presetCommandOpenCode = "terminal.presetCommand.opencode"
+    public static let presetCommandPi = "terminal.presetCommand.pi"
     public static let presetCommandTrae = "terminal.presetCommand.trae"
     public static let sessionPresetOrder = "terminal.presetOrder"
     public static let hiddenSessionPresets = "terminal.hiddenPresets"

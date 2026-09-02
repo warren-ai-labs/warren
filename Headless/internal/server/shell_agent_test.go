@@ -7,10 +7,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
+	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
 func TestEnsureAgentAdoptsShellBinding(t *testing.T) {
@@ -330,6 +332,18 @@ func TestCreateSessionSeparatesDefaultAndCustomTitle(t *testing.T) {
 	if defaultSession.Title != "Codex" || defaultSession.CustomTitle != "" {
 		t.Fatalf("default title semantics = %q/%q, want Codex/empty", defaultSession.Title, defaultSession.CustomTitle)
 	}
+
+	// A create title that only repeats the kind-derived default is not a
+	// user-set name (preset bars used to echo "Pi"/"Codex"). It must not
+	// occupy the custom-title slot or automatic AI title generation would be
+	// suppressed for every preset-launched agent session.
+	piSession, err := service.CreateSession(context.Background(), workspace.ID, "", "pi", "Pi", "")
+	if err != nil {
+		t.Fatalf("CreateSession with default-repeating title: %v", err)
+	}
+	if piSession.Title != "Pi" || piSession.CustomTitle != "" {
+		t.Fatalf("default-repeating title semantics = %q/%q, want Pi/empty", piSession.Title, piSession.CustomTitle)
+	}
 }
 
 type envRecordingRuntime struct {
@@ -352,4 +366,151 @@ func (r *envRecordingRuntime) lastEnv() []string {
 		return nil
 	}
 	return r.envs[len(r.envs)-1]
+}
+
+func TestEnsureAgentAdoptsPiShellBindingAfterTranscriptFlush(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	piRoot := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piRoot)
+
+	state := newStateWithSession(t, "session-pi-shell", "runtime-pi-shell")
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-pi-shell", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+
+	// The pi extension writes a binding on session_start. At that point the
+	// JSONL may not be flushed yet, so ensureAgent must neither bind nor clear
+	// the shell agent; it simply waits for the next reconcile.
+	targetPath := filepath.Join(piRoot, "2026-09-01T10-00-00-000Z_pi-shell-1.jsonl")
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "pi",
+		SessionID:      "pi-shell-1",
+		TranscriptPath: targetPath,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil {
+		t.Fatal("expected no watcher before the pi transcript exists")
+	}
+	current := state.Snapshot()
+	if current.Sessions[0].AgentSessionID != "" || current.Sessions[0].TranscriptPath != "" {
+		t.Fatalf("shell session must stay unbound before flush: %#v", current.Sessions[0])
+	}
+
+	// Pi flushes the session file once the first message lands. The finder
+	// resolves it by the injected session id and the watcher starts.
+	if err := os.WriteFile(targetPath, []byte(
+		`{"type":"session","version":3,"id":"pi-shell-1","timestamp":"2026-09-01T10:00:00.000Z","cwd":"/work"}`+"\n"+
+			`{"type":"message","id":"m1","parentId":null,"timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":"hello","timestamp":1788320000000}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err = service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("expected a watcher after the pi transcript flush")
+	}
+	if got := entry.watcher.Path(); got != targetPath {
+		t.Fatalf("watcher path = %q, want %q", got, targetPath)
+	}
+	current = state.Snapshot()
+	if current.Sessions[0].AgentSessionID != "pi-shell-1" || current.Sessions[0].TranscriptPath != targetPath {
+		t.Fatalf("shell session meta = %#v", current.Sessions[0])
+	}
+	entry.watcher.Close()
+}
+
+func TestEnsureAgentAdoptsDedicatedPiBinding(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	piRoot := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piRoot)
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, workspaceID := store.NewID(), store.NewID()
+	now := time.Now().UTC()
+	if err := state.Update(func(v *api.State) error {
+		v.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: now}}
+		v.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: now}}
+		// Dedicated Pi session: no injected AgentSessionID, exactly like the
+		// Codex/Claude launch path that waits for the hook binding.
+		v.Sessions = []api.Session{{ID: "session-pi-dedicated", WorkspaceID: workspaceID, Title: "Pi", Kind: "pi", Runtime: "runtime-pi", Lifecycle: "running", CreatedAt: now}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-pi", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime, AgentFinder: agent.DefaultFinder{}}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+
+	// Before pi flushes anything there is no binding: ensureAgent leaves the
+	// placeholder in place so reconcile can retry once the extension reports.
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil && entry.watcher != nil {
+		t.Fatal("expected no watcher before the pi binding exists")
+	}
+
+	// The extension writes {provider:"pi", sessionId, transcriptPath} on
+	// session_start; pi then flushes the JSONL file for that session id.
+	targetPath := filepath.Join(piRoot, "2026-09-01T10-00-00-000Z_pi-dedicated-1.jsonl")
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "pi",
+		SessionID:      "pi-dedicated-1",
+		TranscriptPath: targetPath,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte(
+		`{"type":"session","version":3,"id":"pi-dedicated-1","timestamp":"2026-09-01T10:00:00.000Z","cwd":"/work"}`+"\n"+
+			`{"type":"message","id":"m1","parentId":null,"timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":"hello","timestamp":1788320000000}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reconcile throttles discovery for 5s per session. Bypass the throttle in
+	// the test by clearing the placeholder's lastFind so the second call re-runs
+	// discovery with the binding now present.
+	if entry != nil {
+		entry.lastFind = time.Time{}
+	}
+	entry, err = service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("expected a watcher after the dedicated pi binding is available")
+	}
+	if got := entry.watcher.Path(); got != targetPath {
+		t.Fatalf("watcher path = %q, want %q", got, targetPath)
+	}
+	current := state.Snapshot()
+	if current.Sessions[0].AgentSessionID != "pi-dedicated-1" || current.Sessions[0].TranscriptPath != targetPath {
+		t.Fatalf("dedicated session meta = %#v", current.Sessions[0])
+	}
+	entry.watcher.Close()
 }

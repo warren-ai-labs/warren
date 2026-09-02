@@ -65,6 +65,13 @@ func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, aft
 			return "", err
 		}
 		return binding.CachePath, nil
+	case "pi":
+		// Pi sessions are bound by the deterministic --session-id Warren
+		// injects at creation, so the generic cwd+mtime finder has no
+		// identity to search with. Dedicated sessions resolve through
+		// boundTranscript; this fallback deliberately returns nothing
+		// instead of adopting an unrelated conversation.
+		return "", nil
 	default:
 		return "", nil
 	}
@@ -531,6 +538,15 @@ type parser struct {
 	// single terminal tool transition) instead of duplicating the whole
 	// message on every poll.
 	opencodeMessages map[string]openCodeMessageSnapshot
+	// claudeCallTool mirrors codexCallTool for Claude transcripts. Claude's
+	// user-role tool_result blocks do not carry the originating tool name,
+	// so the parser records it when the matching tool_use block arrives.
+	claudeCallTool map[string]string
+	// claudeInteractions tracks the kind of a pending Claude structured
+	// interaction (question or permission) by its tool_use id, so the answer
+	// tool_result can close the card as resolved instead of leaking a bare
+	// tool_output.
+	claudeInteractions map[string]string
 }
 
 func newParser(provider string) *parser {
@@ -539,11 +555,13 @@ func newParser(provider string) *parser {
 
 func newParserWithContentLimit(provider string, contentLimit int) *parser {
 	return &parser{
-		provider:         provider,
-		contentLimit:     contentLimit,
-		tracker:          *NewActivityTracker(),
-		codexCallTool:    map[string]string{},
-		opencodeMessages: map[string]openCodeMessageSnapshot{},
+		provider:           provider,
+		contentLimit:       contentLimit,
+		tracker:            *NewActivityTracker(),
+		codexCallTool:      map[string]string{},
+		claudeCallTool:     map[string]string{},
+		claudeInteractions: map[string]string{},
+		opencodeMessages:   map[string]openCodeMessageSnapshot{},
 	}
 }
 
@@ -556,7 +574,7 @@ func (p *parser) clip(value string) string {
 }
 
 func (p *parser) parse(line []byte) []api.AgentEvent {
-	events := p.parseLine(line)
+	events := compactRenderable(p.parseLine(line))
 	for index := range events {
 		p.tracker.Observe(events[index])
 		if !events[index].Sidechain {
@@ -595,6 +613,8 @@ func (p *parser) parseLine(line []byte) []api.AgentEvent {
 		return p.parseClaude(line)
 	case "opencode":
 		return p.parseOpenCode(line)
+	case "pi":
+		return p.parsePi(line)
 	default:
 		return nil
 	}
@@ -775,8 +795,7 @@ func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 		p.codexModel = payload.Model
 		return nil
 	case "compacted":
-		event.Type = "system"
-		event.Content = "History compacted"
+		event.Type = "compaction"
 		return []api.AgentEvent{event}
 	case "response_item":
 		var payload codexPayload
@@ -838,7 +857,7 @@ func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 		case "function_call", "local_shell_call":
 			event.ID = payload.ID
 			event.Type = "tool_call"
-			event.ToolName = payload.Name
+			event.ToolName = canonicalToolName("codex", payload.Name)
 			event.CallID = payload.CallID
 			if event.ToolName == "" && payload.Type == "local_shell_call" {
 				event.ToolName = "shell"
@@ -884,7 +903,7 @@ func (p *parser) parseCodex(line []byte) []api.AgentEvent {
 		case "custom_tool_call":
 			event.ID = payload.ID
 			event.Type = "tool_call"
-			event.ToolName = payload.Name
+			event.ToolName = canonicalToolName("codex", payload.Name)
 			if event.ToolName == "" {
 				event.ToolName = "custom_tool"
 			}
@@ -1297,8 +1316,35 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 		var blocks []claudeBlock
 		if json.Unmarshal(record.Message.Content, &blocks) == nil {
 			var events []api.AgentEvent
+			sawToolResult := false
 			for _, block := range blocks {
 				if block.Type != "tool_result" {
+					continue
+				}
+				sawToolResult = true
+				// A tool_result answering a Claude structured tool closes the
+				// card instead of leaking a bare tool_output. Question and
+				// permission answer with a resolved event sharing the original
+				// tool_use id; TodoWrite has no display value beyond the list.
+				if kind := p.claudeInteractions[block.ToolUseID]; kind != "" {
+					delete(p.claudeInteractions, block.ToolUseID)
+					if kind == "question" || kind == "permission" {
+						state := "resolved"
+						if block.IsError {
+							state = "cancelled"
+						}
+						title := "Question"
+						if kind == "permission" {
+							title = "Permission"
+						}
+						events = append(events, api.AgentEvent{
+							Provider:  "claude",
+							ID:        block.ToolUseID,
+							Type:      kind,
+							Payload:   map[string]any{"requestId": block.ToolUseID, "title": title, "state": state},
+							Timestamp: timestamp,
+						})
+					}
 					continue
 				}
 				output := p.content(block.Content)
@@ -1307,6 +1353,7 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 					ID:        record.UUID,
 					CallID:    block.ToolUseID,
 					Type:      "tool_output",
+					ToolName:  p.claudeCallTool[block.ToolUseID],
 					Output:    output,
 					Timestamp: timestamp,
 				}
@@ -1323,7 +1370,7 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 				}
 				events = append(events, event)
 			}
-			if len(events) > 0 {
+			if sawToolResult {
 				return events
 			}
 		}
@@ -1334,11 +1381,13 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 		if strings.HasPrefix(strings.TrimSpace(content), "[Request interrupted") {
 			p.tracker.TurnAborted()
 			return []api.AgentEvent{{
-				Provider:  "claude",
-				ID:        record.UUID,
-				Type:      "system",
-				Content:   p.clip(content),
-				Timestamp: timestamp,
+				Provider:   "claude",
+				ID:         record.UUID,
+				Type:       "system",
+				Content:    p.clip(content),
+				StopReason: "interrupted",
+				Sidechain:  record.IsSidechain,
+				Timestamp:  timestamp,
 			}}
 		}
 		if record.IsCompactSummary {
@@ -1399,26 +1448,68 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 			}
 			switch block.Type {
 			case "text":
-				event.Type = "assistant"
-				event.Content = p.clip(block.Text)
+				if record.IsSidechain {
+					// Subagent text becomes a structured subagent event so
+					// the UI renders it via the shared RFC 0010 subagent
+					// path instead of an inline assistant bubble.
+					event.Type = "subagent"
+					event.Payload = map[string]any{
+						"subagentId": record.UUID,
+						"label":      "Subagent",
+						"state":      "completed",
+						"summary":    p.clip(block.Text),
+					}
+				} else {
+					event.Type = "assistant"
+					event.Content = p.clip(block.Text)
+				}
 			case "thinking", "redacted_thinking":
 				event.Type = "reasoning"
 				event.Content = p.clip(firstNonEmpty(block.Thinking, "…"))
 			case "tool_use":
-				event.Type = "tool_call"
-				event.ToolName = block.Name
-				event.CallID = block.ID
-				event.ToolInput = rawToAny(block.Input, p.contentLimit)
-				if input, ok := event.ToolInput.(map[string]any); ok {
-					if path, ok := input["file_path"].(string); ok && path != "" {
-						event.Files = []string{path}
+				canonicalName := canonicalToolName("claude", block.Name)
+				switch canonicalName {
+				case "ask_user_question":
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					event.Type = "question"
+					event.Payload = claudeQuestionPayload(block.ID, input)
+					if block.ID != "" {
+						p.claudeInteractions[block.ID] = "question"
+					}
+				case "permission_request":
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					event.Type = "permission"
+					event.Payload = claudePermissionPayload(block.ID, input)
+					if block.ID != "" {
+						p.claudeInteractions[block.ID] = "permission"
+					}
+				case "todowrite":
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					event.Type = "todo"
+					event.ID = "claude-todos"
+					event.Payload = claudeTodoPayload(input)
+					if block.ID != "" {
+						p.claudeInteractions[block.ID] = "todo"
+					}
+				default:
+					event.Type = "tool_call"
+					event.ToolName = canonicalName
+					event.CallID = block.ID
+					event.ToolInput = rawToAny(block.Input, p.contentLimit)
+					if event.ToolName != "" && event.CallID != "" {
+						p.claudeCallTool[event.CallID] = event.ToolName
+					}
+					if input, ok := event.ToolInput.(map[string]any); ok {
+						if path, ok := input["file_path"].(string); ok && path != "" {
+							event.Files = []string{path}
+						}
 					}
 				}
 			default:
 				event.Type = "unknown"
 				event.Content = p.clip(firstNonEmpty(block.Text, block.Thinking, p.content(block.Content), string(record.Message.Content)))
 			}
-			if event.Content != "" || event.ToolName != "" {
+			if event.Content != "" || event.ToolName != "" || event.Payload != nil {
 				events = append(events, event)
 			}
 		}
@@ -1451,40 +1542,36 @@ func (p *parser) parseClaude(line []byte) []api.AgentEvent {
 		if kind == "" {
 			kind = "attachment"
 		}
+		// Hooks are protocol noise. The state file (WARREN_STATE_FILE) and
+		// the activity tracker already reflect hook outcomes, so emitting
+		// a system event here would only pollute the agent view timeline
+		// and break the tool_call/tool_output folding inside activity
+		// groups by inserting a conversation-boundary event between them.
 		if strings.HasPrefix(kind, "hook_") {
-			label := record.Attachment.HookName
-			if label == "" {
-				label = record.Attachment.HookEvent
-			}
-			event := api.AgentEvent{
-				Provider:  "claude",
-				ID:        record.UUID,
-				Type:      "system",
-				Content:   "Hook: " + label,
-				Timestamp: timestamp,
-			}
-			if output := p.content(record.Attachment.Content); output != "" {
-				if p.contentLimit > 0 {
-					output = truncate(output, 240)
-				}
-				event.Content += " · " + output
-			}
-			return []api.AgentEvent{event}
+			return nil
 		}
 		if kind == "agent_listing_delta" || kind == "skill_listing" {
+			content := p.content(record.Attachment.Content)
+			if content == "" {
+				return nil
+			}
 			return []api.AgentEvent{{
 				Provider:  "claude",
 				ID:        record.UUID,
 				Type:      "system_instructions",
-				Content:   p.content(record.Attachment.Content),
+				Content:   content,
 				Timestamp: timestamp,
 			}}
+		}
+		content := p.clip(firstNonEmpty(p.content(record.Attachment.Content), p.content(record.Content)))
+		if content == "" {
+			return nil
 		}
 		return []api.AgentEvent{{
 			Provider:  "claude",
 			ID:        record.UUID,
 			Type:      "attachment",
-			Content:   p.clip(firstNonEmpty(p.content(record.Attachment.Content), p.content(record.Content))),
+			Content:   content,
 			Timestamp: timestamp,
 		}}
 	default:
@@ -1665,4 +1752,131 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+// asBool reads a JSON boolean that may also arrive as the string "true"/"1"
+// from transcripts that store tool input loosely.
+func asBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return typed == "true" || typed == "1"
+	default:
+		return false
+	}
+}
+
+// claudeQuestionPayload maps Claude's AskUserQuestion tool input to the RFC
+// 0010 question payload. Claude emits `question`/`header`/`multiSelect` and
+// options that carry only a label, while RFC 0010 clients render `prompt`/
+// `selection` and need a stable option id to echo back in
+// agent.interaction.respond. The option label doubles as the id so the echoed
+// answer is already the value Claude expects in its tool_result.
+func claudeQuestionPayload(requestID string, input map[string]any) map[string]any {
+	questions := make([]any, 0)
+	if raw, ok := input["questions"].([]any); ok {
+		for index, item := range raw {
+			question, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			prompt := firstNonEmpty(stringValue(question["question"]), stringValue(question["header"]), "Question")
+			selection := "single"
+			if asBool(question["multiSelect"]) {
+				selection = "multiple"
+			}
+			options := make([]any, 0)
+			if rawOptions, ok := question["options"].([]any); ok {
+				for optionIndex, optionItem := range rawOptions {
+					option, ok := optionItem.(map[string]any)
+					if !ok {
+						continue
+					}
+					entry := map[string]any{
+						"id":    firstNonEmpty(stringValue(option["label"]), fmt.Sprintf("option-%d", optionIndex)),
+						"label": stringValue(option["label"]),
+					}
+					if description := stringValue(option["description"]); description != "" {
+						entry["description"] = description
+					}
+					options = append(options, entry)
+				}
+			}
+			questions = append(questions, map[string]any{
+				"id":          fmt.Sprintf("q%d", index),
+				"prompt":      prompt,
+				"selection":   selection,
+				"required":    true,
+				"allowCustom": false,
+				"options":     options,
+			})
+		}
+	}
+	return map[string]any{
+		"requestId": requestID,
+		"title":     "Question",
+		"questions": questions,
+		"state":     "pending",
+	}
+}
+
+// claudePermissionPayload maps Claude's PermissionRequest tool input to the
+// RFC 0010 permission payload. The tool name becomes the sanitized `action`
+// summary and the decision choices become `options`; command arguments and
+// other sensitive input are deliberately not copied across the boundary.
+func claudePermissionPayload(requestID string, input map[string]any) map[string]any {
+	action := stringValue(input["tool"])
+	if action == "" {
+		action = "tool"
+	}
+	return map[string]any{
+		"requestId":   requestID,
+		"title":       "Permission",
+		"action":      action,
+		"description": "Claude requests permission to run " + action,
+		"options": []any{
+			map[string]any{"id": "allow", "label": "Allow"},
+			map[string]any{"id": "deny", "label": "Deny"},
+			map[string]any{"id": "allow_always", "label": "Always allow"},
+			map[string]any{"id": "deny_always", "label": "Always deny"},
+		},
+		"state": "pending",
+	}
+}
+
+// claudeTodoPayload maps Claude's TodoWrite tool input to the RFC 0010 todo
+// payload. Claude manages one todo list per session, so the card uses a stable
+// id and each TodoWrite call overwrites the previous list instead of creating
+// a duplicate card.
+func claudeTodoPayload(input map[string]any) map[string]any {
+	items := make([]any, 0)
+	if raw, ok := input["todos"].([]any); ok {
+		for _, item := range raw {
+			todo, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			state := strings.ToLower(firstNonEmpty(stringValue(todo["status"]), "pending"))
+			items = append(items, map[string]any{
+				"label": stringValue(todo["content"]),
+				"state": state,
+			})
+		}
+	}
+	overall := "completed"
+	for _, item := range items {
+		if todo, ok := item.(map[string]any); ok {
+			if state := stringValue(todo["state"]); state != "completed" && state != "cancelled" {
+				overall = "in_progress"
+				break
+			}
+		}
+	}
+	return map[string]any{
+		"todoId": "claude-todos",
+		"title":  "Todos",
+		"items":  items,
+		"state":  overall,
+	}
 }

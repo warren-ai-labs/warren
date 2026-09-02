@@ -1615,6 +1615,7 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
     case codex
     case claude
     case opencode
+    case pi
 
     var id: String { rawValue }
 
@@ -1624,6 +1625,7 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         case .codex: return "Codex"
         case .claude: return "Claude"
         case .opencode: return "OpenCode"
+        case .pi: return "Pi"
         }
     }
 
@@ -1633,6 +1635,7 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         case .codex: return "curlybraces"
         case .claude: return "sparkles"
         case .opencode: return "terminal.fill"
+        case .pi: return "function"
         }
     }
 
@@ -1642,6 +1645,7 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         case .codex: return "codex --dangerously-bypass-hook-trust"
         case .claude: return "claude"
         case .opencode: return "opencode"
+        case .pi: return "pi"
         }
     }
 }

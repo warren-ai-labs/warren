@@ -26,6 +26,7 @@ import (
 
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
+	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/server"
@@ -212,8 +213,16 @@ func main() {
 			if _, err := agent.EnsureClaudeBindHook(agent.ClaudeConfigDir()); err != nil {
 				return err
 			}
-			_, err := agent.EnsureOpenCodeBindPlugin()
-			return err
+			if _, err := agent.EnsureOpenCodeBindPlugin(); err != nil {
+				return err
+			}
+			if _, err := agent.EnsurePiBindExtension(); err != nil {
+				return err
+			}
+			if _, err := agent.EnsureQoderBindHook(agent.QoderConfigDir()); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 	serviceContext, stopService := context.WithCancel(context.Background())
@@ -255,6 +264,7 @@ func main() {
 	httpHandler.RelayStop = relaySupervisor.Stop
 	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
 	httpHandler.RelayPairing = relaySupervisor.Pairing
+	httpHandler.RelayState = relaySupervisor.State
 	if service.Settings.Relay.Enabled || service.Settings.PublicTunnel.Enabled || strings.TrimSpace(*relayURL) != "" {
 		if err := relaySupervisor.Start(); err != nil {
 			logger.Warn("relay connector disabled", "error", err)
@@ -420,6 +430,55 @@ func (supervisor *relaySupervisor) Stop() {
 	supervisor.mu.Unlock()
 	if connector != nil {
 		connector.Stop()
+	}
+}
+
+// State reports the supervised connector's current health for /healthz. It
+// returns an unconfigured RelayHealth when the supervisor has never been
+// started, so the healthz probe can distinguish "owner has not enrolled" from
+// "supervised connector is between dial attempts".
+func (supervisor *relaySupervisor) State() api.RelayHealth {
+	value, _, err := supervisor.desiredSettings()
+	if err != nil {
+		return api.RelayHealth{State: api.HealthUnconfigured}
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	supervisor.mu.Lock()
+	connector := supervisor.connector
+	supervisor.mu.Unlock()
+	if connector == nil {
+		return api.RelayHealth{
+			Configured: urlValue != "" && hostID != "",
+			Connected:  false,
+			State:      api.HealthDisconnected,
+		}
+	}
+	running, connected, currentState, lastError := connector.State()
+	state := api.HealthDisconnected
+	switch {
+	case !running:
+		state = api.HealthDisconnected
+	case connected:
+		state = api.HealthConnected
+	case lastError != "":
+		state = api.HealthError
+	case currentState == "connecting":
+		state = api.HealthDisconnected
+	case currentState == "waiting":
+		state = api.HealthDisconnected
+	}
+	return api.RelayHealth{
+		Configured: true,
+		Connected:  connected,
+		State:      state,
+		LastError:  lastError,
 	}
 }
 

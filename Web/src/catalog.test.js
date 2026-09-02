@@ -154,7 +154,7 @@ test("roster falls back to launch command when process is absent", () => {
 });
 
 test("integrated agent tab keeps its purpose when the foreground process is a shell", () => {
-  for (const kind of ["claude", "codex", "opencode"]) {
+  for (const kind of ["claude", "codex", "opencode", "pi"]) {
     assert.equal(
       terminalTabTitle(
         { title: kind, kind, process: "zsh", directory: "/work/warren" },

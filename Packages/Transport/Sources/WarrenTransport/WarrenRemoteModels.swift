@@ -608,7 +608,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
                 return true
             }
             switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "codex", "claude", "opencode":
+            case "codex", "claude", "opencode", "pi":
                 return true
             default:
                 return false

@@ -508,20 +508,29 @@ function agentCorrelationID(event) {
   return String(event?.id || "").trim();
 }
 
-// OpenCode stores a mutable part and the Host exposes each observed update as
-// an append-only event. Fold those deltas back into one renderable message so
-// streaming replies do not produce a bubble (or React key) per database poll.
-// Other providers already emit one event per message and pass through intact.
+// Conversation-shaped events that providers stream as a seed plus
+// contentDelta updates: user, assistant, and reasoning text. Tool and
+// structured events carry their own lifecycle and are not folded here.
+function isCoalescibleAgentEvent(event) {
+  const type = normalizeAgentEventType(event?.type);
+  return type === "user" || type === "assistant" || isReasoningAgentEvent(event);
+}
+
+// Some providers (notably OpenCode) store a mutable part and the Host
+// exposes each observed update as an append-only event: a seed followed by
+// contentDelta=true updates. Fold those updates back into one renderable
+// message so streaming replies do not produce a bubble (or React key) per
+// database poll. Seeds and deltas share the same (type,id) key; providers
+// that emit one event per message still pass through intact.
 function coalesceAgentContent(events) {
   const result = [];
   const positions = new Map();
   for (const source of events || []) {
-    if (!source) continue;
-    if (!isOpenCodeContentEvent(source) || !source.id) {
+    if (!source || !source.id || !isCoalescibleAgentEvent(source)) {
       result.push(source);
       continue;
     }
-    const key = `${source.provider}:${source.type}:${source.id}`;
+    const key = `${source.type}:${source.id}`;
     const position = positions.get(key);
     if (position === undefined) {
       const event = { ...source };
@@ -545,11 +554,4 @@ function coalesceAgentContent(events) {
     result[position] = event;
   }
   return result;
-}
-
-function isOpenCodeContentEvent(event) {
-  return event.provider === "opencode"
-    && (normalizeAgentEventType(event.type) === "user"
-      || normalizeAgentEventType(event.type) === "assistant"
-      || isReasoningAgentEvent(event));
 }

@@ -70,6 +70,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "pi",
+            title: "Pi",
+            subtitle: "Launch the pi CLI in this project",
+            symbolName: "function",
+            createButtonTitle: "Start Pi",
+            request: .pi,
+            isPinned: true
+        ),
+        Self(
             id: "trae",
             title: "Trae Agent",
             subtitle: "Launch ByteDance's Trae Agent CLI in this project",
@@ -181,6 +190,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "claude": "Claude"
         case "codex": "Codex"
         case "opencode": "OpenCode"
+        case "pi": "Pi"
         case "trae": "Trae"
         default: title
         }
@@ -192,6 +202,8 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "claude": "preset-claude"
         case "codex": "preset-codex"
         case "opencode": "preset-opencode"
+        case "pi": "preset-pi"
+        case "qoder": "preset-qoder"
         case "trae": "preset-trae"
         default: nil
         }
@@ -199,14 +211,17 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
 
     public var isAI: Bool {
         switch request.kind {
-        case .claude, .codex, .opencode, .trae: true
+        case .claude, .codex, .opencode, .pi, .qoder, .trae: true
         case .shell, .custom: false
         }
     }
 
     /// Returns the launch request with the user's Settings command override
-    /// applied. The preset title remains the stable session name; it is not
-    /// replaced by the command text.
+    /// applied. The command override never replaces the launch kind. Built-in
+    /// presets carry no user title (the Host derives the display name from the
+    /// kind and keeps the custom-title slot free for automatic AI title
+    /// generation); only a future user-defined preset with an explicit title
+    /// would populate it.
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
     public func resolvedRequest(commandOverride: String) -> TerminalSessionLaunchRequest {
@@ -225,6 +240,7 @@ extension TerminalSessionKind {
         case .claude: "sparkles"
         case .codex: "curlybraces"
         case .opencode: "terminal.fill"
+        case .pi: "function"
         case .trae: "sparkle.magnifyingglass"
         case .custom: "hammer"
         }
