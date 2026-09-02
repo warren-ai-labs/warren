@@ -472,6 +472,97 @@ func TestSlowWorkspaceRemovalDoesNotBlockSessionCreate(t *testing.T) {
 	}
 }
 
+func TestSessionLifecycleMutationsDoNotBlockWebSocketReader(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime := &blockingCreateRuntime{
+			memoryRuntime: newMemoryRuntime(t),
+			entered:       make(chan struct{}),
+			release:       make(chan struct{}),
+		}
+		projectID := store.NewID()
+		workspaceID := store.NewID()
+		if err := state.Update(func(value *api.State) error {
+			value.Projects = []api.Project{{
+				ID: projectID, Name: "Project", Path: t.TempDir(), CreatedAt: time.Now().UTC(),
+			}}
+			value.Workspaces = []api.Workspace{{
+				ID: workspaceID, ProjectID: projectID, Name: "main", Path: t.TempDir(),
+				Kind: "root", CreatedAt: time.Now().UTC(),
+			}}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		service := &Service{Store: state, Runtime: runtime}
+		httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+		defer httpServer.Close()
+		connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+		defer connection.Close()
+
+		createID := store.NewID()
+		if err := connection.WriteJSON(api.Envelope{
+			Type: "request", ID: createID, Method: "session.create",
+			Params: map[string]any{"workspace": workspaceID, "kind": "shell"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-runtime.entered:
+		case <-time.After(time.Second):
+			t.Fatal("session.create did not reach the runtime")
+		}
+
+		rosterID := store.NewID()
+		if err := connection.WriteJSON(api.Envelope{Type: "request", ID: rosterID, Method: "roster"}); err != nil {
+			t.Fatal(err)
+		}
+		readResponseByID(t, connection, rosterID, time.Second)
+
+		close(runtime.release)
+		readResponseByID(t, connection, createID, time.Second)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		state, session := testSession(t)
+		runtime := &blockingKillRuntime{
+			memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("ready\n")}},
+			killStarted:   make(chan struct{}),
+			releaseKill:   make(chan struct{}),
+		}
+		service := &Service{Store: state, Runtime: runtime}
+		httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+		defer httpServer.Close()
+		connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+		defer connection.Close()
+
+		deleteID := store.NewID()
+		if err := connection.WriteJSON(api.Envelope{
+			Type: "request", ID: deleteID, Method: "session.delete",
+			Params: map[string]any{"id": session.ID},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-runtime.killStarted:
+		case <-time.After(time.Second):
+			t.Fatal("session.delete did not reach the runtime")
+		}
+
+		rosterID := store.NewID()
+		if err := connection.WriteJSON(api.Envelope{Type: "request", ID: rosterID, Method: "roster"}); err != nil {
+			t.Fatal(err)
+		}
+		readResponseByID(t, connection, rosterID, time.Second)
+
+		close(runtime.releaseKill)
+		readResponseByID(t, connection, deleteID, time.Second)
+	})
+}
+
 func TestWorkspaceSessionCreationDoesNotSerializeOtherWorkspaces(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test-host")
 	if err != nil {
@@ -1254,6 +1345,25 @@ func requestResult[T any](t *testing.T, connection *websocket.Conn, method strin
 			t.Fatal(err)
 		}
 		return result
+	}
+}
+
+func readResponseByID(t *testing.T, connection *websocket.Conn, id string, timeout time.Duration) api.Response {
+	t.Helper()
+	_ = connection.SetReadDeadline(time.Now().Add(timeout))
+	defer connection.SetReadDeadline(time.Time{})
+	for {
+		_, data, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response api.Response
+		if json.Unmarshal(data, &response) == nil && response.Type == "response" && response.ID == id {
+			if !response.OK {
+				t.Fatalf("request %s failed: %s", id, response.Error)
+			}
+			return response
+		}
 	}
 }
 

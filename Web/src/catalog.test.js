@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyRosterDelta,
   buildCatalog,
   moveInCatalog,
   rosterFromMessage,
@@ -97,6 +98,108 @@ test("catalog keeps agent binding fields on sessions", () => {
   assert.equal(session.transcriptPath, "/work/rollout.jsonl");
   assert.deepEqual(session.agentStatus, { activity: "working", attention: null });
   assert.deepEqual(session.agentTurn, { id: 2, status: "started" });
+});
+
+test("roster normalizes revision, terminal-group scope, and running sessions", () => {
+  const roster = rosterFromMessage({
+    state: {
+      revision: 7,
+      terminalGroups: [{ id: "group", name: "Inbox" }],
+      sessions: [
+        {
+          id: "workspace-session",
+          workspace: "workspace",
+          scope: "workspace",
+          lifecycle: "running",
+          kind: "shell",
+        },
+        {
+          id: "ended-session",
+          workspace: "workspace",
+          lifecycle: "exited",
+          kind: "shell",
+        },
+      ],
+    },
+  });
+
+  assert.equal(roster.revision, 7);
+  assert.deepEqual(roster.terminalGroups, [{ id: "group", name: "Inbox" }]);
+  assert.deepEqual(roster.tabs.map(tab => tab.session), ["workspace-session"]);
+  assert.equal(roster.tabs[0].scope, "workspace");
+});
+
+test("roster delta applies entity changes and session lifecycle updates", () => {
+  const baseline = rosterFromMessage({
+    state: {
+      revision: 3,
+      host: { id: "host", name: "before" },
+      tasks: [{ id: "task-a", name: "A" }],
+      projects: [{ id: "project-a", name: "A" }, { id: "project-b", name: "B" }],
+      workspaces: [{ id: "workspace-a", project: "project-a" }],
+      terminalGroups: [{ id: "group-a", name: "A" }],
+      sessions: [
+        { id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
+        { id: "session-b", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
+      ],
+    },
+  });
+
+  const updated = applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 3,
+    revision: 4,
+    host: { id: "host", name: "after" },
+    tasks: { upsert: [{ id: "task-b", name: "B" }], remove: ["task-a"] },
+    projects: { order: ["project-b", "project-a"] },
+    workspaces: {
+      upsert: [{ id: "workspace-b", project: "project-b" }],
+      order: ["workspace-b", "workspace-a"],
+    },
+    terminalGroups: { upsert: [{ id: "group-b", name: "B" }], remove: ["group-a"] },
+    sessions: {
+      upsert: [
+        { id: "session-a", workspace: "workspace-a", lifecycle: "exited", kind: "shell" },
+        { id: "session-c", workspace: "workspace-b", lifecycle: "running", kind: "codex" },
+      ],
+      order: ["session-c", "session-b", "session-a"],
+    },
+  });
+
+  assert.equal(updated.revision, 4);
+  assert.equal(updated.host.name, "after");
+  assert.deepEqual(updated.tasks.map(task => task.id), ["task-b"]);
+  assert.deepEqual(updated.projects.map(project => project.id), ["project-b", "project-a"]);
+  assert.deepEqual(updated.workspaces.map(workspace => workspace.id), ["workspace-b", "workspace-a"]);
+  assert.deepEqual(updated.terminalGroups.map(group => group.id), ["group-b"]);
+  assert.deepEqual(updated.tabs.map(tab => tab.session), ["session-c", "session-b"]);
+  assert.equal(updated.tabs[0].workspace, "workspace-b");
+});
+
+test("roster delta rejects stale, gapped, and malformed revisions", () => {
+  const baseline = rosterFromMessage({ state: { revision: 3 } });
+  assert.equal(applyRosterDelta(baseline, { t: "roster.delta", baseRevision: 2, revision: 3 }), null);
+  assert.equal(applyRosterDelta(baseline, { t: "roster.delta", baseRevision: 3, revision: 3 }), null);
+  assert.equal(applyRosterDelta(baseline, { t: "roster.delta", baseRevision: 4, revision: 5 }), null);
+  assert.equal(applyRosterDelta(baseline, { t: "roster.delta", baseRevision: 3, revision: "next" }), null);
+  assert.equal(applyRosterDelta({ ...baseline, revision: null }, {
+    t: "roster.delta",
+    baseRevision: 0,
+    revision: 1,
+  }), null);
+  assert.equal(applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 3,
+    revision: 4,
+    sessions: [],
+  }), null);
+  const alias = applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 3,
+    revision: 4,
+    groups: { upsert: [{ id: "group", name: "Inbox" }] },
+  });
+  assert.deepEqual(alias.terminalGroups.map(group => group.id), ["group"]);
 });
 
 test("catalog keeps merge state on workspaces", () => {

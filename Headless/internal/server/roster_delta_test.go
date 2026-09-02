@@ -105,6 +105,29 @@ func TestRosterDeltaSkipsIdenticalRoster(t *testing.T) {
 	}
 }
 
+func TestRosterDeltaCanClearGhostlineMigration(t *testing.T) {
+	before := api.State{
+		GhostlineMigration: &api.GhostlineMigration{
+			SessionID: "session", Phase: api.GhostlineMigrationCommitted,
+		},
+	}
+	after := api.State{}
+	delta := makeRosterDelta(before, after, 3, 4)
+	if !delta.hasChanges() || delta.GhostlineMigration == nil {
+		t.Fatalf("migration clear was omitted: %#v", delta)
+	}
+	if *delta.GhostlineMigration != nil {
+		t.Fatalf("migration clear should carry a nil inner pointer: %#v", *delta.GhostlineMigration)
+	}
+	data, err := json.Marshal(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"ghostlineMigration":null`) {
+		t.Fatalf("migration clear was not encoded as null: %s", data)
+	}
+}
+
 func TestRosterDeltaStreamUsesInitialRevisionAndChangedEntities(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
