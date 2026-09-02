@@ -226,6 +226,24 @@ public final class TerminalSurfaceManager {
             && entry.surface.terminalViewportIsValid
     }
 
+    /// Whether a retained surface is safe to install a native recovery
+    /// snapshot even though it is not the currently active tab.
+    ///
+    /// `isReadyForRecovery` intentionally requires the surface to be the
+    /// active tab and its AppKit view to be presentable, because the cold
+    /// attach flow also has to fit the view to its window. A warm surface
+    /// that was demoted (user switched tabs) keeps its native Ghostty
+    /// surface alive and ready off-screen, and its daemon output subscription
+    /// stays live; a snapshot that arrives during that window must be
+    /// installable immediately instead of waiting for the user to switch
+    /// back. Presenting the pixels is still gated by `schedulePresent` on the
+    /// next activation, so installing early never leaks a partial frame.
+    public func isReadyToInstallRecovery(_ sessionID: TerminalSessionID) -> Bool {
+        guard let entry = entries[sessionID] else { return false }
+        return entry.surface.terminalSurfaceIsReady
+            && entry.surface.terminalViewportIsValid
+    }
+
     /// Gives a mounted cold surface one synchronous opportunity to create its
     /// native Ghostty surface and synchronize metrics.  AppKit may have
     /// delivered `viewDidMoveToWindow` before Warren's reconciliation closure,

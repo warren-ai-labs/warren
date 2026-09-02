@@ -3990,21 +3990,43 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 guard let pending = self.pendingAtomicRecoveries[sessionID] else {
                     return
                 }
-                guard self.surfaceManager.prepareForRecovery(sessionID) else {
-                    do {
-                        try await Task.sleep(for: .milliseconds(16))
-                    } catch {
-                        return
+                if self.surfaceManager.isActive(sessionID) {
+                    // The selected surface follows the cold-attach path: fit
+                    // the view and wait for full presentability before
+                    // installing so the snapshot lands into a sized grid.
+                    guard self.surfaceManager.prepareForRecovery(sessionID) else {
+                        do {
+                            try await Task.sleep(for: .milliseconds(16))
+                        } catch {
+                            return
+                        }
+                        continue
                     }
-                    continue
-                }
-                guard self.surfaceManager.isReadyForRecovery(sessionID) else {
-                    do {
-                        try await Task.sleep(for: .milliseconds(16))
-                    } catch {
-                        return
+                    guard self.surfaceManager.isReadyForRecovery(sessionID) else {
+                        do {
+                            try await Task.sleep(for: .milliseconds(16))
+                        } catch {
+                            return
+                        }
+                        continue
                     }
-                    continue
+                } else {
+                    // The user switched away before this snapshot could be
+                    // installed. The warm surface keeps its native Ghostty
+                    // surface ready off-screen (and its output subscription
+                    // live), so install the bytes now without requiring the
+                    // tab to be active — otherwise the retry loop spins until
+                    // the user switches back, leaving the tab black on the
+                    // next visit. Pixel presentation is still gated by
+                    // schedulePresent on the next activation.
+                    guard self.surfaceManager.isReadyToInstallRecovery(sessionID) else {
+                        do {
+                            try await Task.sleep(for: .milliseconds(16))
+                        } catch {
+                            return
+                        }
+                        continue
+                    }
                 }
 
                 let restoreResult = self.surfaceManager.restoreSnapshotResult(
