@@ -91,6 +91,7 @@ public final class IOSApplicationModel: ObservableObject {
     @Published public private(set) var agentCapabilities: Set<String> = []
     @Published public private(set) var agentActionError: String?
     @Published public private(set) var historyLoadingBySessionID: Set<String> = []
+    @Published public private(set) var historyErrorBySessionID: [String: String] = [:]
     @Published public private(set) var navigation: IOSNavigationState
     @Published public private(set) var endpointMetadata: IOSEndpointMetadata
     /// Metadata for every saved Host. Tokens are never published here; each
@@ -118,6 +119,8 @@ public final class IOSApplicationModel: ObservableObject {
     private var clientLifecycleTask: Task<Void, Never>?
     private var sessionTask: Task<Void, Never>?
     private var sessionSelectionGeneration: UInt64 = 0
+    private var mutationGeneration: UInt64 = 0
+    private var clientGeneration: UInt64 = 0
     private var agentEpochBySessionID: [String: UInt64] = [:]
     private var agentEventKeysBySessionID: [String: Set<String>] = [:]
     /// Display mode is a presentation preference of each Session, not a
@@ -129,6 +132,8 @@ public final class IOSApplicationModel: ObservableObject {
     private var historyCursorBySessionID: [String: UInt64] = [:]
     private var historyHasMoreBySessionID: [String: Bool] = [:]
     private var historyLoadedBySessionID: Set<String> = []
+    private var historyRequestTokenBySessionID: [String: UInt64] = [:]
+    private var historyRequestSequence: UInt64 = 0
     private var terminalSizeBySessionID: [String: TerminalSize] = [:]
     private var terminalResizeTasksBySessionID: [String: Task<Void, Never>] = [:]
     private var pendingTerminalResizeBySessionID: [String: TerminalSize] = [:]
@@ -139,6 +144,8 @@ public final class IOSApplicationModel: ObservableObject {
     private var terminalRecoveryRequests: Set<String> = []
     private var terminalSubscriptionRequests: Set<String> = []
     private var pendingTerminalFocusBySessionID: Set<String> = []
+    private var terminalFocusGeneration: UInt64 = 0
+    private var terminalFocusRequestsBySessionID: [String: UInt64] = [:]
     private var pendingSessionSelectionID: String?
     private var pendingSessionDeletion: PendingSessionDeletion?
     // Pending entries contain stable local queue IDs rather than text copies.
@@ -146,6 +153,8 @@ public final class IOSApplicationModel: ObservableObject {
     // submitted, even when two queued messages have identical text.
     private var pendingAgentMessagesBySessionID: [String: [String]] = [:]
     private var agentMessageSubmissionsInFlight: Set<String> = []
+    private var agentMessageSubmissionTokenBySessionID: [String: UInt64] = [:]
+    private var agentMessageSubmissionSequence: UInt64 = 0
     /// Cancel and Send now share one per-Session gate. The token prevents a
     /// late response from an older request from clearing a newer request's
     /// in-flight marker after a retry.
@@ -249,9 +258,18 @@ public final class IOSApplicationModel: ObservableObject {
         eventTask = nil
         sessionTask?.cancel()
         sessionTask = nil
+        sessionSelectionGeneration &+= 1
+        mutationGeneration &+= 1
+        clientGeneration &+= 1
+        isMutating = false
         terminalResizeTasksBySessionID.values.forEach { $0.cancel() }
         terminalResizeTasksBySessionID.removeAll()
         pendingTerminalResizeBySessionID.removeAll()
+        historyRequestTokenBySessionID.removeAll()
+        historyLoadingBySessionID.removeAll()
+        historyErrorBySessionID.removeAll()
+        terminalFocusGeneration &+= 1
+        terminalFocusRequestsBySessionID.removeAll()
         let client = client
         let previousLifecycle = clientLifecycleTask
         clientLifecycleTask = Task {
@@ -259,6 +277,10 @@ public final class IOSApplicationModel: ObservableObject {
             await client.stop()
         }
         hasControlLease = false
+        if let currentSessionID {
+            invalidateAgentMessageSubmission(for: currentSessionID)
+        }
+        agentInterruptInFlightBySessionID.removeAll()
         if let currentSessionID {
             terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
             // WarrenRemoteClient retains the subscription intent while its
@@ -422,9 +444,18 @@ public final class IOSApplicationModel: ObservableObject {
         eventTask = nil
         sessionTask?.cancel()
         sessionTask = nil
+        sessionSelectionGeneration &+= 1
+        mutationGeneration &+= 1
+        clientGeneration &+= 1
+        isMutating = false
         terminalResizeTasksBySessionID.values.forEach { $0.cancel() }
         terminalResizeTasksBySessionID.removeAll()
         pendingTerminalResizeBySessionID.removeAll()
+        historyRequestTokenBySessionID.removeAll()
+        historyLoadingBySessionID.removeAll()
+        historyErrorBySessionID.removeAll()
+        terminalFocusGeneration &+= 1
+        terminalFocusRequestsBySessionID.removeAll()
         lastSentTerminalSizeBySessionID.removeAll()
         let previousLifecycle = clientLifecycleTask
         clientLifecycleTask = Task {
@@ -456,6 +487,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentQueueBySessionID = [:]
         pendingAgentMessagesBySessionID = [:]
         agentMessageSubmissionsInFlight = []
+        agentMessageSubmissionTokenBySessionID = [:]
         agentInterruptInFlightBySessionID = [:]
         invalidatedAgentDraftKeys = []
         agentEpochBySessionID = [:]
@@ -685,6 +717,20 @@ public final class IOSApplicationModel: ObservableObject {
         let generation = sessionSelectionGeneration
         let previousTask = sessionTask
         let oldSessionID = currentSessionID
+        let previousSession = oldSessionID.flatMap { id in
+            roster?.sessions.first(where: { $0.id == id && $0.isRunning })
+        }
+        invalidateAgentHistoryRequest(for: sessionID)
+        if let oldSessionID {
+            invalidateAgentHistoryRequest(for: oldSessionID)
+        }
+        invalidateAgentMessageSubmission(for: sessionID)
+        if let oldSessionID {
+            invalidateAgentMessageSubmission(for: oldSessionID)
+        }
+        agentInterruptInFlightBySessionID.removeAll()
+        terminalFocusGeneration &+= 1
+        terminalFocusRequestsBySessionID.removeAll()
         currentSessionID = sessionID
         navigation.sessionID = sessionID
         navigation.workspaceID = selectedSession.workspaceID
@@ -732,16 +778,35 @@ public final class IOSApplicationModel: ObservableObject {
                 await MainActor.run {
                     guard self.sessionSelectionGeneration == generation,
                           self.currentSessionID == sessionID else { return }
-                    if !Self.shouldRetainSubscriptionIntent(after: error) {
-                        self.terminalSubscriptionRequests.remove(sessionID)
-                    } else {
-                        // The transport records the subscription intent before
-                        // sending the request, so reconnect restoration can
-                        // complete this handoff after a transient disconnect.
-                        self.terminalSubscriptionRequests.insert(sessionID)
-                    }
+                    let retainIntent = Self.shouldRetainSubscriptionIntent(after: error)
                     self.terminalState.terminalSubscriptionBySessionID[sessionID] = false
-                    self.connectionState = .reconnecting
+                    self.terminalSubscriptionRequests.remove(sessionID)
+                    self.pendingTerminalFocusBySessionID.remove(sessionID)
+                    self.hasControlLease = false
+                    if let previousSession {
+                        // A rejected handoff must not leave navigation pointing
+                        // at a Session that is no longer subscribed. Restore the
+                        // previous scope immediately; its subscription intent
+                        // is retained for reconnect or retried while connected.
+                        self.currentSessionID = previousSession.id
+                        self.navigation.sessionID = previousSession.id
+                        self.navigation.workspaceID = previousSession.workspaceID
+                        self.navigation.terminalGroupID = previousSession.terminalGroupID
+                        self.applyPreferredDisplayMode(for: previousSession)
+                        self.terminalState.terminalReadyBySessionID[previousSession.id] = false
+                        self.terminalState.terminalSubscriptionBySessionID[previousSession.id] = false
+                        self.terminalSubscriptionRequests.insert(previousSession.id)
+                        if retainIntent {
+                            self.connectionState = .reconnecting
+                        } else {
+                            self.ensureTerminalSubscription(for: previousSession.id)
+                        }
+                    } else {
+                        self.currentSessionID = nil
+                        self.navigation.sessionID = nil
+                        if retainIntent { self.connectionState = .reconnecting }
+                    }
+                    self.persistNavigation()
                 }
             }
         }
@@ -770,9 +835,15 @@ public final class IOSApplicationModel: ObservableObject {
         sessionSelectionGeneration &+= 1
         let generation = sessionSelectionGeneration
         let previousTask = sessionTask
+        invalidateAgentHistoryRequest(for: oldSessionID)
+        invalidateAgentMessageSubmission(for: oldSessionID)
+        agentInterruptInFlightBySessionID.removeValue(forKey: oldSessionID)
+        terminalFocusGeneration &+= 1
+        terminalFocusRequestsBySessionID.removeAll()
+        let client = client
         sessionTask = Task { [weak self] in
             await previousTask?.value
-            _ = try? await self?.client.unsubscribe(sessionID: oldSessionID)
+            _ = try? await client.unsubscribe(sessionID: oldSessionID)
             guard let self, self.sessionSelectionGeneration == generation else { return }
             self.hasControlLease = false
             self.currentSessionID = nil
@@ -813,13 +884,20 @@ public final class IOSApplicationModel: ObservableObject {
             pendingTerminalFocusBySessionID.insert(sessionID)
             return
         }
+        guard terminalFocusRequestsBySessionID[sessionID] == nil else { return }
         pendingTerminalFocusBySessionID.remove(sessionID)
+        terminalFocusGeneration &+= 1
+        let generation = terminalFocusGeneration
+        terminalFocusRequestsBySessionID[sessionID] = generation
         let client = client
         Task { [weak self] in
             do {
                 let result = try await client.focus(sessionID: sessionID, focused: true, size: size)
                 await MainActor.run {
-                    guard let self, self.currentSessionID == sessionID else { return }
+                    guard let self,
+                          self.currentSessionID == sessionID,
+                          self.terminalFocusRequestsBySessionID[sessionID] == generation else { return }
+                    self.terminalFocusRequestsBySessionID.removeValue(forKey: sessionID)
                     self.hasControlLease = result.focused
                     if result.focused {
                         self.drainQueuedAgentMessages(for: sessionID)
@@ -827,7 +905,10 @@ public final class IOSApplicationModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    guard let self, self.currentSessionID == sessionID else { return }
+                    guard let self,
+                          self.currentSessionID == sessionID,
+                          self.terminalFocusRequestsBySessionID[sessionID] == generation else { return }
+                    self.terminalFocusRequestsBySessionID.removeValue(forKey: sessionID)
                     self.hasControlLease = false
                 }
             }
@@ -891,11 +972,17 @@ public final class IOSApplicationModel: ObservableObject {
         guard let sessionID = currentSessionID else { return }
         pendingTerminalFocusBySessionID.remove(sessionID)
         cancelTerminalResize(for: sessionID)
+        terminalFocusGeneration &+= 1
+        let focusGeneration = terminalFocusGeneration
+        terminalFocusRequestsBySessionID.removeValue(forKey: sessionID)
+        hasControlLease = false
         let client = client
         Task { [weak self] in
             _ = try? await client.focus(sessionID: sessionID, focused: false)
             await MainActor.run {
-                guard let self, self.currentSessionID == sessionID else { return }
+                guard let self,
+                      self.currentSessionID == sessionID,
+                      self.terminalFocusGeneration == focusGeneration else { return }
                 self.hasControlLease = false
             }
         }
@@ -913,6 +1000,8 @@ public final class IOSApplicationModel: ObservableObject {
         terminalResizeTasksBySessionID[sessionID]?.cancel()
         pendingTerminalResizeBySessionID[sessionID] = size
         let client = client
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
         terminalResizeTasksBySessionID[sessionID] = Task { [weak self] in
             do {
                 // SwiftTerm can report several intermediate cell sizes while
@@ -924,6 +1013,9 @@ public final class IOSApplicationModel: ObservableObject {
                 _ = try await client.resize(size)
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.sessionSelectionGeneration == selectionGeneration,
+                          self.clientGeneration == currentClientGeneration,
+                          self.currentSessionID == sessionID else { return }
                     guard self.pendingTerminalResizeBySessionID[sessionID] == size else { return }
                     self.lastSentTerminalSizeBySessionID[sessionID] = size
                     self.pendingTerminalResizeBySessionID.removeValue(forKey: sessionID)
@@ -932,6 +1024,9 @@ public final class IOSApplicationModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.sessionSelectionGeneration == selectionGeneration,
+                          self.clientGeneration == currentClientGeneration,
+                          self.currentSessionID == sessionID else { return }
                     if self.pendingTerminalResizeBySessionID[sessionID] == size {
                         self.pendingTerminalResizeBySessionID.removeValue(forKey: sessionID)
                         self.terminalResizeTasksBySessionID.removeValue(forKey: sessionID)
@@ -1121,6 +1216,56 @@ public final class IOSApplicationModel: ObservableObject {
         agentInterruptInFlightBySessionID.removeValue(forKey: sessionID)
     }
 
+    private func invalidateAgentMessageSubmission(for sessionID: String) {
+        agentMessageSubmissionsInFlight.remove(sessionID)
+        agentMessageSubmissionTokenBySessionID.removeValue(forKey: sessionID)
+        guard var queue = agentQueueBySessionID[sessionID] else { return }
+        var requeued = false
+        for item in queue.items where item.status == .sending {
+            if queue.markQueued(id: item.id) {
+                requeued = true
+                if !pendingAgentMessagesBySessionID[sessionID, default: []].contains(item.id) {
+                    pendingAgentMessagesBySessionID[sessionID, default: []].insert(item.id, at: 0)
+                }
+            }
+        }
+        if requeued {
+            agentQueueBySessionID[sessionID] = queue
+            updateAgentQueuedMessageCount(for: sessionID)
+        }
+    }
+
+    private func requeueAgentMessage(_ item: IOSAgentQueueItem, for sessionID: String) {
+        guard pendingSessionDeletion?.sessionID != sessionID else { return }
+        var queue = agentQueueBySessionID[sessionID] ?? IOSAgentMessageQueue()
+        if let existing = queue.items.first(where: { $0.id == item.id }) {
+            switch existing.status {
+            case .sending:
+                _ = queue.markQueued(id: item.id)
+            case .failed:
+                _ = queue.retry(id: item.id)
+            case .queued:
+                break
+            }
+        } else {
+            // The captured item is usually still marked `.sending`. If the
+            // user removed it after a session switch, re-adding that captured
+            // value must not resurrect a permanent spinner.
+            _ = queue.enqueue(IOSAgentQueueItem(
+                id: item.id,
+                text: item.text,
+                attachments: item.attachments,
+                createdAt: item.createdAt,
+                status: .queued
+            ))
+        }
+        if !pendingAgentMessagesBySessionID[sessionID, default: []].contains(item.id) {
+            pendingAgentMessagesBySessionID[sessionID, default: []].insert(item.id, at: 0)
+        }
+        agentQueueBySessionID[sessionID] = queue
+        updateAgentQueuedMessageCount(for: sessionID)
+    }
+
     @discardableResult
     public func cancelAgentTurn() -> Bool {
         guard supportsAgentCapability(WarrenRemoteAgentCapability.interrupt),
@@ -1130,6 +1275,8 @@ public final class IOSApplicationModel: ObservableObject {
             ?? agentEventsBySessionID[sessionID]?.last?.turn
             ?? 0
         guard turn > 0, let token = beginAgentInterrupt(for: sessionID) else { return false }
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
         let client = client
         agentActionError = nil
         Task { [weak self] in
@@ -1138,14 +1285,21 @@ public final class IOSApplicationModel: ObservableObject {
                     WarrenRemoteAgentTurnInterruptRequest(session: sessionID, turn: turn, reason: "cancel")
                 )
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self,
+                          self.agentInterruptInFlightBySessionID[sessionID] == token else { return }
                     self.finishAgentInterrupt(for: sessionID, token: token)
                 }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self,
+                          self.agentInterruptInFlightBySessionID[sessionID] == token else { return }
+                    let isCurrent = self.currentSessionID == sessionID
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
                     self.finishAgentInterrupt(for: sessionID, token: token)
-                    self.agentActionError = error.localizedDescription
+                    if isCurrent {
+                        self.agentActionError = error.localizedDescription
+                    }
                 }
             }
         }
@@ -1180,6 +1334,8 @@ public final class IOSApplicationModel: ObservableObject {
         agentQueueBySessionID[sessionID] = queue
         updateAgentQueuedMessageCount(for: sessionID)
 
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
         let client = client
         let replacement = WarrenRemoteAgentMessageSendRequest(
             session: sessionID,
@@ -1203,34 +1359,68 @@ public final class IOSApplicationModel: ObservableObject {
                 }
                 await MainActor.run {
                     guard let self else { return }
-                    self.finishAgentInterrupt(for: sessionID, token: interruptToken)
-                    if var localQueue = self.agentQueueBySessionID[sessionID] {
-                        _ = localQueue.deliver(id: item.id)
-                        self.agentQueueBySessionID[sessionID] = localQueue
+                    guard self.agentInterruptInFlightBySessionID[sessionID] == interruptToken else {
+                        // Session switches and reconnects invalidate the
+                        // interrupt token before an old response can arrive.
+                        // The queue item still needs a terminal state; a late
+                        // accepted response is already delivered by the Host,
+                        // while an item that remains local must not spin.
+                        if var localQueue = self.agentQueueBySessionID[sessionID],
+                           localQueue.items.contains(where: { $0.id == item.id }) {
+                            _ = localQueue.deliver(id: item.id)
+                            self.agentQueueBySessionID[sessionID] = localQueue
+                            self.pendingAgentMessagesBySessionID[sessionID]?.removeAll { $0 == item.id }
+                            self.updateAgentQueuedMessageCount(for: sessionID)
+                        }
+                        return
                     }
-                    self.updateAgentQueuedMessageCount(for: sessionID)
+                    let isCurrent = self.currentSessionID == sessionID
+                        && self.hasControlLease
+                        && self.pendingSessionDeletion?.sessionID != sessionID
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
+                    self.finishAgentInterrupt(for: sessionID, token: interruptToken)
+                    if isCurrent {
+                        if var localQueue = self.agentQueueBySessionID[sessionID] {
+                            _ = localQueue.deliver(id: item.id)
+                            self.agentQueueBySessionID[sessionID] = localQueue
+                        }
+                        self.updateAgentQueuedMessageCount(for: sessionID)
+                    } else {
+                        self.requeueAgentMessage(item, for: sessionID)
+                    }
                 }
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.agentInterruptInFlightBySessionID[sessionID] == interruptToken else {
+                        // The request is no longer authoritative, but the
+                        // stable local item remains retryable after the
+                        // session regains focus/control.
+                        self.requeueAgentMessage(item, for: sessionID)
+                        return
+                    }
+                    let canRetryInPlace = self.currentSessionID == sessionID
+                        && self.hasControlLease
+                        && self.pendingSessionDeletion?.sessionID != sessionID
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
                     self.finishAgentInterrupt(for: sessionID, token: interruptToken)
                     if var localQueue = self.agentQueueBySessionID[sessionID],
                        localQueue.items.contains(where: { $0.id == item.id }) {
-                        let canRetryInPlace = self.currentSessionID == sessionID
-                            && self.hasControlLease
-                            && self.pendingSessionDeletion?.sessionID != sessionID
                         if canRetryInPlace {
                             _ = localQueue.markFailed(id: item.id, reason: error.localizedDescription)
+                            self.agentQueueBySessionID[sessionID] = localQueue
+                            self.updateAgentQueuedMessageCount(for: sessionID)
                         } else {
-                            _ = localQueue.markQueued(id: item.id)
-                            if !self.pendingAgentMessagesBySessionID[sessionID, default: []].contains(item.id) {
-                                self.pendingAgentMessagesBySessionID[sessionID, default: []].insert(item.id, at: 0)
-                            }
+                            self.requeueAgentMessage(item, for: sessionID)
                         }
-                        self.agentQueueBySessionID[sessionID] = localQueue
-                        self.updateAgentQueuedMessageCount(for: sessionID)
+                    } else if canRetryInPlace {
+                        self.enqueueAgentMessage(item.text, for: sessionID, atFront: true)
                     }
-                    self.agentActionError = error.localizedDescription
+                    if self.currentSessionID == sessionID {
+                        self.agentActionError = error.localizedDescription
+                    }
                 }
             }
         }
@@ -1260,7 +1450,10 @@ public final class IOSApplicationModel: ObservableObject {
                 )
                 return true
             } catch {
-                await MainActor.run { self?.agentActionError = error.localizedDescription }
+                await MainActor.run {
+                    guard let self, self.currentSessionID == sessionID else { return }
+                    self.agentActionError = error.localizedDescription
+                }
                 return false
             }
         }
@@ -1282,6 +1475,19 @@ public final class IOSApplicationModel: ObservableObject {
         guard data.count <= 64 * 1024 * 1024 else {
             throw WarrenRemoteClientError.requestFailed("Attachment is too large.")
         }
+        guard currentSessionID == sessionID else {
+            throw WarrenRemoteClientError.requestFailed("Session changed; attachment upload canceled.")
+        }
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
+        let client = client
+        func ensureCurrentSession() throws {
+            guard currentSessionID == sessionID,
+                  sessionSelectionGeneration == selectionGeneration,
+                  clientGeneration == currentClientGeneration else {
+                throw WarrenRemoteClientError.requestFailed("Session changed; attachment upload canceled.")
+            }
+        }
         let digest = agentSHA256(data)
         let prepared = try await client.prepareAgentAttachment(
             WarrenRemoteAgentAttachmentPrepareRequest(
@@ -1292,12 +1498,14 @@ public final class IOSApplicationModel: ObservableObject {
                 sha256: digest
             )
         )
+        try ensureCurrentSession()
         let chunkSize = max(1, prepared.chunkSize)
         let uploadID = prepared.uploadID
         do {
             var offset = 0
             var sequence: UInt64 = 0
             while offset < data.count {
+                try ensureCurrentSession()
                 let end = min(offset + chunkSize, data.count)
                 let chunk = Data(data[offset..<end])
                 let chunkHash = agentSHA256(chunk)
@@ -1311,6 +1519,7 @@ public final class IOSApplicationModel: ObservableObject {
                         data: chunk.base64EncodedString()
                     )
                 )
+                try ensureCurrentSession()
                 guard result.accepted else {
                     throw WarrenRemoteClientError.requestFailed(result.error ?? "Attachment chunk was rejected.")
                 }
@@ -1318,6 +1527,7 @@ public final class IOSApplicationModel: ObservableObject {
                 sequence &+= 1
                 progress(Double(offset) / Double(max(data.count, 1)))
             }
+            try ensureCurrentSession()
             let completed = try await client.completeAgentAttachment(
                 WarrenRemoteAgentAttachmentCompleteRequest(
                     session: sessionID,
@@ -1326,6 +1536,7 @@ public final class IOSApplicationModel: ObservableObject {
                     sha256: digest
                 )
             )
+            try ensureCurrentSession()
             guard completed.accepted,
                   let attachmentID = completed.attachmentID, !attachmentID.isEmpty else {
                 throw WarrenRemoteClientError.requestFailed(completed.error ?? "Attachment completion was rejected.")
@@ -1352,28 +1563,32 @@ public final class IOSApplicationModel: ObservableObject {
             }
             return
         }
+        agentMessageSubmissionSequence &+= 1
+        let requestToken = agentMessageSubmissionSequence
+        agentMessageSubmissionTokenBySessionID[sessionID] = requestToken
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
         let client = client
         let timelineSupported = supportsAgentCapability(WarrenRemoteAgentCapability.timeline)
         let attachmentsSupported = supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
         Task { [weak self] in
             do {
                 let stillAllowed = await MainActor.run {
-                    guard let self else { return false }
+                    guard let self,
+                          self.agentMessageSubmissionTokenBySessionID[sessionID] == requestToken else { return false }
                     return self.currentSessionID == sessionID
                         && self.hasControlLease
                         && self.pendingSessionDeletion?.sessionID != sessionID
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
                 }
                 guard stillAllowed else {
                     await MainActor.run {
-                        guard let self else { return }
+                        guard let self,
+                              self.agentMessageSubmissionTokenBySessionID[sessionID] == requestToken else { return }
+                        self.agentMessageSubmissionTokenBySessionID.removeValue(forKey: sessionID)
                         self.agentMessageSubmissionsInFlight.remove(sessionID)
-                        if var queue = self.agentQueueBySessionID[sessionID], queue.markQueued(id: item.id) {
-                            self.agentQueueBySessionID[sessionID] = queue
-                            if !self.pendingAgentMessagesBySessionID[sessionID, default: []].contains(item.id) {
-                                self.pendingAgentMessagesBySessionID[sessionID, default: []].insert(item.id, at: 0)
-                            }
-                            self.updateAgentQueuedMessageCount(for: sessionID)
-                        }
+                        self.requeueAgentMessage(item, for: sessionID)
                     }
                     return
                 }
@@ -1396,47 +1611,60 @@ public final class IOSApplicationModel: ObservableObject {
                     try await client.sendAgentInput(item.text, sessionID: sessionID)
                 }
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self,
+                          self.agentMessageSubmissionTokenBySessionID[sessionID] == requestToken else { return }
+                    let isCurrent = self.currentSessionID == sessionID
+                        && self.hasControlLease
+                        && self.pendingSessionDeletion?.sessionID != sessionID
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
+                    self.agentMessageSubmissionTokenBySessionID.removeValue(forKey: sessionID)
                     self.agentMessageSubmissionsInFlight.remove(sessionID)
-                    if var localQueue = self.agentQueueBySessionID[sessionID],
-                       localQueue.items.contains(where: { $0.id == item.id }) {
-                        _ = localQueue.deliver(id: item.id)
-                        self.agentQueueBySessionID[sessionID] = localQueue
-                    }
-                    self.updateAgentQueuedMessageCount(for: sessionID)
-                    // Usually the Host emits working immediately and the
-                    // next ready event drains the remaining queue. Keep this
-                    // fallback for Hosts that only publish ready boundaries.
-                    if self.agentStatus(for: sessionID)?.activity == .ready {
-                        self.drainQueuedAgentMessages(for: sessionID)
+                    if isCurrent {
+                        if var localQueue = self.agentQueueBySessionID[sessionID],
+                           localQueue.items.contains(where: { $0.id == item.id }) {
+                            _ = localQueue.deliver(id: item.id)
+                            self.agentQueueBySessionID[sessionID] = localQueue
+                        }
+                        self.updateAgentQueuedMessageCount(for: sessionID)
+                        // Usually the Host emits working immediately and the
+                        // next ready event drains the remaining queue. Keep
+                        // this fallback for Hosts that only publish ready
+                        // boundaries.
+                        if self.agentStatus(for: sessionID)?.activity == .ready {
+                            self.drainQueuedAgentMessages(for: sessionID)
+                        }
+                    } else {
+                        self.requeueAgentMessage(item, for: sessionID)
                     }
                 }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
-                    self.agentMessageSubmissionsInFlight.remove(sessionID)
+                    guard let self,
+                          self.agentMessageSubmissionTokenBySessionID[sessionID] == requestToken else { return }
                     let canRetryInPlace = self.currentSessionID == sessionID
                         && self.hasControlLease
                         && self.pendingSessionDeletion?.sessionID != sessionID
-                    if var localQueue = self.agentQueueBySessionID[sessionID],
-                       localQueue.items.contains(where: { $0.id == item.id }) {
-                        if canRetryInPlace {
+                        && self.sessionSelectionGeneration == selectionGeneration
+                        && self.clientGeneration == currentClientGeneration
+                    self.agentMessageSubmissionTokenBySessionID.removeValue(forKey: sessionID)
+                    self.agentMessageSubmissionsInFlight.remove(sessionID)
+                    if canRetryInPlace {
+                        if var localQueue = self.agentQueueBySessionID[sessionID],
+                           localQueue.items.contains(where: { $0.id == item.id }) {
                             _ = localQueue.markFailed(id: item.id, reason: error.localizedDescription)
+                            self.agentQueueBySessionID[sessionID] = localQueue
+                            self.updateAgentQueuedMessageCount(for: sessionID)
                         } else {
-                            // A Session switch or lost control lease means the
-                            // request may never have reached the Host. Keep
-                            // the stable local identity queued for a later
-                            // focus/reconnect instead of leaving a permanent
-                            // `.sending` item that cannot be retried.
-                            _ = localQueue.markQueued(id: item.id)
-                            if !self.pendingAgentMessagesBySessionID[sessionID, default: []].contains(item.id) {
-                                self.pendingAgentMessagesBySessionID[sessionID, default: []].insert(item.id, at: 0)
-                            }
+                            self.enqueueAgentMessage(item.text, for: sessionID, atFront: true)
                         }
-                        self.agentQueueBySessionID[sessionID] = localQueue
-                        self.updateAgentQueuedMessageCount(for: sessionID)
-                    } else if canRetryInPlace {
-                        self.enqueueAgentMessage(item.text, for: sessionID, atFront: true)
+                    } else {
+                        // A Session switch or lost control lease means the
+                        // request may never have reached the Host. Keep the
+                        // stable local identity queued for a later
+                        // focus/reconnect instead of leaving a permanent
+                        // `.sending` item that cannot be retried.
+                        self.requeueAgentMessage(item, for: sessionID)
                     }
                 }
             }
@@ -1571,6 +1799,8 @@ public final class IOSApplicationModel: ObservableObject {
         guard !isMutating else { return }
         mutationError = nil
         isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
         let client = client
         Task { [weak self] in
             do {
@@ -1583,7 +1813,7 @@ public final class IOSApplicationModel: ObservableObject {
                     runtimeKind: runtimeKind
                 )
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.mutationGeneration == generation else { return }
                     self.isMutating = false
                     // The Host's response is authoritative for the launch
                     // kind. Set the local surface before the roster delta so
@@ -1600,8 +1830,9 @@ public final class IOSApplicationModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self?.isMutating = false
-                    self?.mutationError = error.localizedDescription
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    self.mutationError = error.localizedDescription
                 }
             }
         }
@@ -1615,6 +1846,8 @@ public final class IOSApplicationModel: ObservableObject {
         guard !sessionID.isEmpty, !isMutating else { return }
         mutationError = nil
         isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
         let retainingRoute = currentSessionID == sessionID
         let endpointIdentity = "\(endpointMetadata.name)|\(endpointMetadata.url)"
         if retainingRoute {
@@ -1630,7 +1863,7 @@ public final class IOSApplicationModel: ObservableObject {
             do {
                 let deleted = try await client.deleteSession(sessionID: sessionID)
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.mutationGeneration == generation else { return }
                     self.isMutating = false
                     self.pendingSessionSelectionID = nil
                     guard deleted else {
@@ -1656,7 +1889,7 @@ public final class IOSApplicationModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.mutationGeneration == generation else { return }
                     self.isMutating = false
                     if retainingRoute {
                         self.pendingSessionDeletion = nil
@@ -1687,6 +1920,9 @@ public final class IOSApplicationModel: ObservableObject {
     private func prepareCurrentSessionForDeletion(_ sessionID: String) {
         guard currentSessionID == sessionID else { return }
         sessionSelectionGeneration &+= 1
+        invalidateAgentHistoryRequest(for: sessionID)
+        invalidateAgentMessageSubmission(for: sessionID)
+        agentInterruptInFlightBySessionID.removeValue(forKey: sessionID)
         // The target is being removed; cancel an in-flight subscribe instead
         // of waiting for a response that can no longer be useful. The
         // completion path can then issue unsubscribe immediately; the target's
@@ -1708,10 +1944,16 @@ public final class IOSApplicationModel: ObservableObject {
         _ sessionID: String,
         endpointIdentity: String
     ) {
+        invalidateAgentHistoryRequest(for: sessionID)
+        historyCursorBySessionID.removeValue(forKey: sessionID)
+        historyHasMoreBySessionID.removeValue(forKey: sessionID)
+        historyLoadedBySessionID.remove(sessionID)
+        historyErrorBySessionID.removeValue(forKey: sessionID)
         agentQueueBySessionID.removeValue(forKey: sessionID)
         agentQueuedMessageCountBySessionID.removeValue(forKey: sessionID)
         pendingAgentMessagesBySessionID.removeValue(forKey: sessionID)
         agentMessageSubmissionsInFlight.remove(sessionID)
+        agentMessageSubmissionTokenBySessionID.removeValue(forKey: sessionID)
         agentInterruptInFlightBySessionID.removeValue(forKey: sessionID)
         draftSaveTasksBySessionID[sessionID]?.cancel()
         draftSaveTasksBySessionID.removeValue(forKey: sessionID)
@@ -1740,6 +1982,7 @@ public final class IOSApplicationModel: ObservableObject {
         }
 
         sessionSelectionGeneration &+= 1
+        invalidateAgentHistoryRequest(for: sessionID)
         let previousTask = sessionTask
         let client = client
         sessionTask = Task {
@@ -1764,6 +2007,9 @@ public final class IOSApplicationModel: ObservableObject {
         guard roster?.sessions.contains(where: { $0.id == sessionID && $0.isRunning }) == true else { return }
         terminalSubscriptionRequests.insert(sessionID)
         ensureTerminalSubscription(for: sessionID)
+        if !historyLoadedBySessionID.contains(sessionID) {
+            loadOlderAgentHistory()
+        }
     }
 
     public func renameWorkspace(_ workspaceID: String, name: String) {
@@ -1771,15 +2017,21 @@ public final class IOSApplicationModel: ObservableObject {
         guard !workspaceID.isEmpty, !normalized.isEmpty, !isMutating else { return }
         mutationError = nil
         isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
         let client = client
         Task { [weak self] in
             do {
                 _ = try await client.renameWorkspace(workspaceID: workspaceID, name: normalized)
-                await MainActor.run { self?.isMutating = false }
+                await MainActor.run {
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                }
             } catch {
                 await MainActor.run {
-                    self?.isMutating = false
-                    self?.mutationError = error.localizedDescription
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    self.mutationError = error.localizedDescription
                 }
             }
         }
@@ -1793,6 +2045,8 @@ public final class IOSApplicationModel: ObservableObject {
         guard !workspaceID.isEmpty, !isMutating else { return }
         mutationError = nil
         isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
         let client = client
         Task { [weak self] in
             do {
@@ -1802,7 +2056,7 @@ public final class IOSApplicationModel: ObservableObject {
                     removeWorktree: removeWorktree
                 )
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.mutationGeneration == generation else { return }
                     self.isMutating = false
                     if self.navigation.workspaceID == workspaceID {
                         self.navigation.workspaceID = nil
@@ -1812,8 +2066,9 @@ public final class IOSApplicationModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self?.isMutating = false
-                    self?.mutationError = error.localizedDescription
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    self.mutationError = error.localizedDescription
                 }
             }
         }
@@ -1829,6 +2084,8 @@ public final class IOSApplicationModel: ObservableObject {
         guard !projectID.isEmpty, !normalizedBranch.isEmpty, !isMutating else { return }
         mutationError = nil
         isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
         let client = client
         Task { [weak self] in
             do {
@@ -1838,11 +2095,15 @@ public final class IOSApplicationModel: ObservableObject {
                     name: name,
                     path: path
                 )
-                await MainActor.run { self?.isMutating = false }
+                await MainActor.run {
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                }
             } catch {
                 await MainActor.run {
-                    self?.isMutating = false
-                    self?.mutationError = error.localizedDescription
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    self.mutationError = error.localizedDescription
                 }
             }
         }
@@ -1898,6 +2159,11 @@ public final class IOSApplicationModel: ObservableObject {
         return status.attention
     }
 
+    private func invalidateAgentHistoryRequest(for sessionID: String) {
+        historyRequestTokenBySessionID.removeValue(forKey: sessionID)
+        historyLoadingBySessionID.remove(sessionID)
+    }
+
     /// Loads one older page. The Host owns pagination cursors; this method
     /// only merges sequence-unique events into the local transcript.
     public func loadOlderAgentHistory() {
@@ -1905,27 +2171,67 @@ public final class IOSApplicationModel: ObservableObject {
               roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
               historyLoadingBySessionID.insert(sessionID).inserted else { return }
         let before = historyCursorBySessionID[sessionID]
+        let selectionGeneration = sessionSelectionGeneration
+        let currentClientGeneration = clientGeneration
         let client = client
+        historyRequestSequence &+= 1
+        let requestToken = historyRequestSequence
+        historyRequestTokenBySessionID[sessionID] = requestToken
+        historyErrorBySessionID.removeValue(forKey: sessionID)
         Task { [weak self] in
-            defer {
-                Task { @MainActor in self?.historyLoadingBySessionID.remove(sessionID) }
-            }
-            // Mobile history is a conversation surface. Tool and reasoning
-            // events remain available in the live tail, but must not consume
-            // the entire page before older user/assistant messages arrive.
-            guard let page = try? await client.agentHistory(
-                sessionID: sessionID,
-                before: before,
-                conversationOnly: true
-            ) else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.mergeAgentEvents(page.events, sessionID: sessionID, epoch: page.epoch ?? 0, prepend: true)
-                self.historyLoadedBySessionID.insert(sessionID)
-                if let cursor = page.cursor {
-                    self.historyCursorBySessionID[sessionID] = cursor
+            do {
+                // Mobile history is a conversation surface. Tool and
+                // reasoning events remain available in the live tail, but
+                // must not consume the entire page before older user/
+                // assistant messages arrive.
+                let page = try await client.agentHistory(
+                    sessionID: sessionID,
+                    before: before,
+                    conversationOnly: true
+                )
+                await MainActor.run {
+                    guard let self,
+                          self.historyRequestTokenBySessionID[sessionID] == requestToken,
+                          self.sessionSelectionGeneration == selectionGeneration,
+                          self.clientGeneration == currentClientGeneration,
+                          self.currentSessionID == sessionID else { return }
+                    self.historyRequestTokenBySessionID.removeValue(forKey: sessionID)
+                    self.historyLoadingBySessionID.remove(sessionID)
+                    if let pageEpoch = page.epoch,
+                       pageEpoch != 0,
+                       let currentEpoch = self.agentEpochBySessionID[sessionID],
+                       currentEpoch != 0,
+                       pageEpoch != currentEpoch {
+                        self.historyErrorBySessionID[sessionID] = "Conversation changed. Try again."
+                        return
+                    }
+                    self.mergeAgentEvents(
+                        page.events,
+                        sessionID: sessionID,
+                        epoch: page.epoch ?? 0,
+                        prepend: true
+                    )
+                    self.historyLoadedBySessionID.insert(sessionID)
+                    self.historyErrorBySessionID.removeValue(forKey: sessionID)
+                    if let cursor = page.cursor {
+                        self.historyCursorBySessionID[sessionID] = cursor
+                    }
+                    self.historyHasMoreBySessionID[sessionID] = page.hasMore
                 }
-                self.historyHasMoreBySessionID[sessionID] = page.hasMore
+            } catch {
+                await MainActor.run {
+                    guard let self,
+                          self.historyRequestTokenBySessionID[sessionID] == requestToken,
+                          self.sessionSelectionGeneration == selectionGeneration,
+                          self.clientGeneration == currentClientGeneration,
+                          self.currentSessionID == sessionID else { return }
+                    self.historyRequestTokenBySessionID.removeValue(forKey: sessionID)
+                    self.historyLoadingBySessionID.remove(sessionID)
+                    let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.historyErrorBySessionID[sessionID] = detail.isEmpty
+                        ? "Unable to load Agent history. Try again."
+                        : detail
+                }
             }
         }
     }
@@ -1939,6 +2245,10 @@ public final class IOSApplicationModel: ObservableObject {
     /// that tail made the local event array non-empty.
     public func agentHistoryLoaded(for sessionID: String) -> Bool {
         historyLoadedBySessionID.contains(sessionID)
+    }
+
+    public func agentHistoryError(for sessionID: String) -> String? {
+        historyErrorBySessionID[sessionID]
     }
 
     private func consume(_ event: WarrenRemoteEvent) {
@@ -1959,6 +2269,12 @@ public final class IOSApplicationModel: ObservableObject {
             if state == .connected { connectionError = nil }
             if state != .connected {
                 hasControlLease = false
+                terminalFocusGeneration &+= 1
+                terminalFocusRequestsBySessionID.removeAll()
+                if let currentSessionID {
+                    invalidateAgentMessageSubmission(for: currentSessionID)
+                    agentInterruptInFlightBySessionID.removeValue(forKey: currentSessionID)
+                }
                 // Keep the last rendered checkpoint visible while offline,
                 // but force the next control request to wait for the new
                 // output registration after reconnect.
@@ -2036,6 +2352,8 @@ public final class IOSApplicationModel: ObservableObject {
                 historyCursorBySessionID.removeValue(forKey: sessionID)
                 historyHasMoreBySessionID.removeValue(forKey: sessionID)
                 historyLoadedBySessionID.remove(sessionID)
+                historyErrorBySessionID.removeValue(forKey: sessionID)
+                invalidateAgentHistoryRequest(for: sessionID)
             }
             if epoch != 0 {
                 agentEpochBySessionID[sessionID] = epoch
@@ -2056,6 +2374,11 @@ public final class IOSApplicationModel: ObservableObject {
                 agentState.agentEventsBySessionID[sessionID] = []
                 agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
                 agentEventKeysBySessionID[sessionID] = []
+                historyCursorBySessionID.removeValue(forKey: sessionID)
+                historyHasMoreBySessionID.removeValue(forKey: sessionID)
+                historyLoadedBySessionID.remove(sessionID)
+                historyErrorBySessionID.removeValue(forKey: sessionID)
+                invalidateAgentHistoryRequest(for: sessionID)
             }
             if epoch != 0 {
                 agentEpochBySessionID[sessionID] = epoch
@@ -2136,6 +2459,8 @@ public final class IOSApplicationModel: ObservableObject {
             historyCursorBySessionID.removeValue(forKey: sessionID)
             historyHasMoreBySessionID.removeValue(forKey: sessionID)
             historyLoadedBySessionID.remove(sessionID)
+            historyErrorBySessionID.removeValue(forKey: sessionID)
+            invalidateAgentHistoryRequest(for: sessionID)
         }
         if epoch != 0 {
             agentEpochBySessionID[sessionID] = epoch

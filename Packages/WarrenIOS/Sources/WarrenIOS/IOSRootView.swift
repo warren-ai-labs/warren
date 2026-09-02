@@ -1,4 +1,5 @@
 import SwiftUI
+import WarrenDesignSystem
 import WarrenTransport
 
 #if canImport(UIKit)
@@ -65,8 +66,7 @@ public struct IOSRootView: View {
         }
         .sheet(isPresented: $showingWorkspaceManager) {
             IOSWorkspaceManagementSheet(model: model, projectID: workspaceManagerProjectID)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .iosSheetPresentation(.medium, .large)
         }
         .onChange(of: showingWorkspaceManager) { _, isPresented in
             if !isPresented { workspaceManagerProjectID = nil }
@@ -90,10 +90,19 @@ public struct IOSRootView: View {
                 return
             }
             revealActiveSession(sessionID)
-            guard !navigationPath.contains(where: { route in
+            if let routeIndex = navigationPath.firstIndex(where: { route in
                 if case .session = route { return true }
                 return false
-            }) else { return }
+            }) {
+                // SessionView can switch siblings without changing the
+                // NavigationStack depth. Keep the path's identity in lockstep
+                // with the model so dismissal never returns to a deleted tab.
+                navigationPath[routeIndex] = .session(sessionID)
+                if routeIndex + 1 < navigationPath.count {
+                    navigationPath.removeSubrange((routeIndex + 1)..<navigationPath.count)
+                }
+                return
+            }
             navigationPath.append(.session(sessionID))
         }
     }
@@ -126,6 +135,7 @@ private struct HostDashboardView: View {
     @ObservedObject var model: IOSApplicationModel
     @Binding var collapsedSectionIDs: Set<String>
     @Binding var expandedWorkspaceIDs: Set<String>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let openWorkspace: (String) -> Void
     let openTerminalGroup: (String) -> Void
     let openSession: (String) -> Void
@@ -178,7 +188,7 @@ private struct HostDashboardView: View {
                     hasCollapsibleSections: !collapsibleSectionIDs.isEmpty,
                     isAllSectionsCollapsed: !collapsibleSectionIDs.isEmpty && collapsibleSectionIDs.allSatisfy { collapsedSectionIDs.contains($0) },
                     toggleAllSections: {
-                        withAnimation(.easeOut(duration: 0.16)) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                             let shouldCollapse = !collapsibleSectionIDs.isEmpty && !collapsibleSectionIDs.allSatisfy { collapsedSectionIDs.contains($0) }
                             if shouldCollapse {
                                 collapsedSectionIDs.formUnion(collapsibleSectionIDs)
@@ -271,7 +281,7 @@ private struct HostDashboardView: View {
                 expandedWorkspaceIDs: expandedWorkspaceIDs,
                 isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "project", id: project.id)),
                 toggle: {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                         let key = sectionID(kind: "project", id: project.id)
                         if collapsedSectionIDs.contains(key) {
                             collapsedSectionIDs.remove(key)
@@ -303,7 +313,7 @@ private struct HostDashboardView: View {
                 expandedWorkspaceIDs: expandedWorkspaceIDs,
                 isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "unassigned", id: "workspaces")),
                 toggle: {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                         toggleSection(kind: "unassigned", id: "workspaces")
                     }
                 },
@@ -329,7 +339,7 @@ private struct HostDashboardView: View {
                     symbol: "rectangle.split.3x1",
                     isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "groups", id: "terminal-groups")),
                     toggle: {
-                        withAnimation(.easeOut(duration: 0.16)) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                             toggleSection(kind: "groups", id: "terminal-groups")
                         }
                     }
@@ -394,7 +404,7 @@ private struct HostDashboardView: View {
     }
 
     private func toggleWorkspace(_ workspaceID: String) {
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
             if expandedWorkspaceIDs.contains(workspaceID) {
                 expandedWorkspaceIDs.remove(workspaceID)
             } else {
@@ -534,7 +544,7 @@ private struct HomeHeader: View {
                     Image(systemName: isAllSectionsCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 38, height: 44)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -547,7 +557,7 @@ private struct HomeHeader: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 42, height: 44)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .menuStyle(.automatic)
@@ -628,7 +638,7 @@ private struct ProjectSection: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .menuStyle(.automatic)
@@ -796,7 +806,7 @@ private struct WorkspaceRailRow: View {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(IOSTheme.tertiaryText)
-                            .frame(width: 34, height: 44)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1001,7 +1011,7 @@ private struct ScopeGroupRow: View {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(IOSTheme.tertiaryText)
-                            .frame(width: 34, height: 44)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1070,7 +1080,7 @@ struct IOSHostFooter: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 40, height: 44)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reconnect to Host")
@@ -1081,7 +1091,7 @@ struct IOSHostFooter: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 19, weight: .regular))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 40, height: 44)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Host settings")
@@ -1100,8 +1110,7 @@ struct IOSHostFooter: View {
                 hosts: hosts,
                 title: "Switch Host"
             )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            .iosSheetPresentation(.medium, .large)
         }
     }
 
@@ -1221,6 +1230,9 @@ private struct ScopeDetailView: View {
     let onDeleteWorkspace: (() -> Void)?
     let onDeleteSession: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingSessionID: String?
+    @State private var actionFeedback: String?
+    @State private var actionFeedbackGeneration = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1256,8 +1268,12 @@ private struct ScopeDetailView: View {
                             .contextMenu {
                                 if let onDeleteSession {
                                     Button("Delete session", role: .destructive) {
+                                        guard pendingSessionID == nil, !model.isMutating else { return }
+                                        pendingSessionID = session.id
+                                        showActionFeedback("Deleting…", duration: 0)
                                         onDeleteSession(session.id)
                                     }
+                                    .disabled(pendingSessionID != nil || model.isMutating)
                                 }
                             }
                         }
@@ -1278,10 +1294,44 @@ private struct ScopeDetailView: View {
             .scrollIndicators(.hidden)
         }
         .background(IOSTheme.background.ignoresSafeArea())
+        .overlay(alignment: .top) {
+            if let actionFeedback {
+                Text(actionFeedback)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
+                    .background(IOSTheme.chrome, in: Capsule())
+                    .overlay(Capsule().stroke(IOSTheme.separator, lineWidth: 1))
+                    .padding(.top, 8)
+                    .transition(.opacity)
+            }
+        }
         #if os(iOS) || os(visionOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
         .onAppear(perform: onAppear)
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard pendingSessionID != nil, wasMutating, !isMutating else { return }
+            let message: String
+            if let error = model.mutationError, !error.isEmpty {
+                message = "Session delete failed: \(error)"
+            } else {
+                message = "Session deleted"
+            }
+            pendingSessionID = nil
+            showActionFeedback(message)
+        }
+    }
+
+    private func showActionFeedback(_ message: String, duration: TimeInterval = 1.6) {
+        actionFeedbackGeneration &+= 1
+        let generation = actionFeedbackGeneration
+        actionFeedback = message
+        guard duration > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            if actionFeedbackGeneration == generation { actionFeedback = nil }
+        }
     }
 
     private var managementActions: AnyView? {
@@ -1303,7 +1353,7 @@ private struct ScopeDetailView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 42, height: 44)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .menuStyle(.automatic)
@@ -1433,6 +1483,10 @@ private struct WorkspaceView: View {
     @State private var showingRename = false
     @State private var showingDelete = false
     @State private var workspaceName = ""
+    @State private var renamePending = false
+    @State private var deletePending = false
+    @State private var actionFeedback: String?
+    @State private var actionFeedbackGeneration = 0
 
     var body: some View {
         let workspace = model.roster?.workspaces.first(where: { $0.id == workspaceID })
@@ -1453,13 +1507,38 @@ private struct WorkspaceView: View {
         )
         .sheet(isPresented: $showingNewSession) {
             IOSSessionCreationSheet(model: model, workspaceID: workspaceID, title: workspace?.name ?? "Workspace")
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+                .iosSheetPresentation(.medium)
+        }
+        .overlay(alignment: .top) {
+            if let actionFeedback {
+                Text(actionFeedback)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
+                    .background(IOSTheme.chrome, in: Capsule())
+                    .overlay(Capsule().stroke(IOSTheme.separator, lineWidth: 1))
+                    .padding(.top, 8)
+                    .transition(.opacity)
+            }
         }
         .alert("Rename workspace", isPresented: $showingRename) {
             TextField("Workspace name", text: $workspaceName)
-            Button("Save") { model.renameWorkspace(workspaceID, name: workspaceName) }
+            Button(renamePending ? "Saving…" : "Save") {
+                guard !renamePending,
+                      !model.isMutating,
+                      !workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                renamePending = true
+                showActionFeedback("Saving…", duration: 0)
+                model.renameWorkspace(workspaceID, name: workspaceName)
+            }
+            .disabled(
+                renamePending
+                    || model.isMutating
+                    || workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
             Button("Cancel", role: .cancel) {}
+                .disabled(renamePending)
         }
         .confirmationDialog(
             "Delete workspace?",
@@ -1467,11 +1546,45 @@ private struct WorkspaceView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Workspace", role: .destructive) {
+                guard !deletePending, !model.isMutating else { return }
+                deletePending = true
+                showActionFeedback("Deleting…", duration: 0)
                 model.deleteWorkspace(workspaceID)
             }
+            .disabled(deletePending || model.isMutating)
             Button("Cancel", role: .cancel) {}
+                .disabled(deletePending)
         } message: {
             Text("The workspace record will be removed. Running sessions must be deleted first.")
+        }
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard wasMutating, !isMutating else { return }
+            if renamePending {
+                renamePending = false
+                if let error = model.mutationError, !error.isEmpty {
+                    showActionFeedback("Workspace rename failed: \(error)")
+                } else {
+                    showActionFeedback("Workspace renamed")
+                }
+            }
+            if deletePending {
+                deletePending = false
+                if let error = model.mutationError, !error.isEmpty {
+                    showActionFeedback("Workspace delete failed: \(error)")
+                } else {
+                    showActionFeedback("Workspace deleted")
+                }
+            }
+        }
+    }
+
+    private func showActionFeedback(_ message: String, duration: TimeInterval = 1.6) {
+        actionFeedbackGeneration &+= 1
+        let generation = actionFeedbackGeneration
+        actionFeedback = message
+        guard duration > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            if actionFeedbackGeneration == generation { actionFeedback = nil }
         }
     }
 }
@@ -1497,8 +1610,7 @@ private struct TerminalGroupView: View {
         )
         .sheet(isPresented: $showingNewSession) {
             IOSSessionCreationSheet(model: model, terminalGroupID: groupID, title: group?.name ?? "Terminal group")
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+                .iosSheetPresentation(.medium)
         }
     }
 }
@@ -1662,6 +1774,7 @@ struct IOSSessionCreationSheet: View {
     @State private var selectedKind: IOSSessionCreationKind
     @State private var command = ""
     @State private var sessionTitle = ""
+    @State private var didSubmit = false
 
     init(
         model: IOSApplicationModel,
@@ -1723,6 +1836,8 @@ struct IOSSessionCreationSheet: View {
                     }
 
                     Button {
+                        guard !didSubmit, !model.isMutating else { return }
+                        didSubmit = true
                         model.createSession(
                             workspaceID: workspaceID,
                             terminalGroupID: terminalGroupID,
@@ -1731,17 +1846,16 @@ struct IOSSessionCreationSheet: View {
                             title: sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : sessionTitle
                         )
                         model.localStore.lastSessionKind = selectedKind.rawValue
-                        dismiss()
                     } label: {
-                        Text(model.isMutating ? "Creating…" : "Create session")
+                        Text(model.isMutating || didSubmit ? "Creating…" : "Create session")
                             .font(IOSTypography.button)
                             .foregroundStyle(IOSTheme.background)
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.isMutating)
-                    .opacity(model.isMutating ? 0.5 : 1)
+                    .disabled(model.isMutating || didSubmit)
+                    .opacity(model.isMutating || didSubmit ? 0.5 : 1)
                 }
                 .padding(16)
             }
@@ -1756,6 +1870,14 @@ struct IOSSessionCreationSheet: View {
             let oldDefault = oldKind.defaultCommand ?? ""
             if currentCommand.isEmpty || currentCommand == oldDefault {
                 command = newKind.defaultCommand ?? ""
+            }
+        }
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard didSubmit, wasMutating, !isMutating else { return }
+            if model.mutationError == nil {
+                dismiss()
+            } else {
+                didSubmit = false
             }
         }
     }
@@ -1775,6 +1897,10 @@ private struct IOSWorkspaceManagementSheet: View {
     @State private var renameWorkspaceID: String?
     @State private var renameName = ""
     @State private var deleteWorkspaceID: String?
+    @State private var renamePending = false
+    @State private var deletePending = false
+    @State private var actionFeedback: String?
+    @State private var actionFeedbackGeneration = 0
 
     private var workspaces: [WarrenRemoteRoster.Workspace] {
         (model.roster?.workspaces ?? [])
@@ -1874,7 +2000,7 @@ private struct IOSWorkspaceManagementSheet: View {
                                     Image(systemName: "ellipsis")
                                         .font(.system(size: 15, weight: .medium))
                                         .foregroundStyle(IOSTheme.tertiaryText)
-                                        .frame(width: 36, height: 44)
+                                        .frame(width: 44, height: 44)
                                 }
                                 .menuStyle(.automatic)
                                 .accessibilityLabel("Actions for workspace")
@@ -1909,37 +2035,99 @@ private struct IOSWorkspaceManagementSheet: View {
             #endif
         }
         .preferredColorScheme(.dark)
+        .overlay(alignment: .top) {
+            if let actionFeedback {
+                Text(actionFeedback)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
+                    .background(IOSTheme.chrome, in: Capsule())
+                    .overlay(Capsule().stroke(IOSTheme.separator, lineWidth: 1))
+                    .padding(.top, 8)
+                    .transition(.opacity)
+            }
+        }
         .sheet(isPresented: $showingCreate) {
-                            IOSWorkspaceCreationSheet(model: model, initialProjectID: projectID)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            IOSWorkspaceCreationSheet(model: model, initialProjectID: projectID)
+                .iosSheetPresentation(.medium, .large)
         }
         .alert("Rename workspace", isPresented: Binding(
             get: { renameWorkspaceID != nil },
+            // SwiftUI dismisses the alert immediately after Save. Keep the
+            // mutation guard independent from presentation state so the
+            // dismissed alert cannot be re-presented while the Host responds.
             set: { if !$0 { renameWorkspaceID = nil } }
         )) {
             TextField("Workspace name", text: $renameName)
-            Button("Save") {
-                if let id = renameWorkspaceID { model.renameWorkspace(id, name: renameName) }
+            Button(renamePending ? "Saving…" : "Save") {
+                guard !renamePending, !model.isMutating,
+                      !renameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let id = renameWorkspaceID else { return }
+                renamePending = true
+                showActionFeedback("Saving…", duration: 0)
+                model.renameWorkspace(id, name: renameName)
+            }
+            .disabled(
+                renamePending
+                    || model.isMutating
+                    || renameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+            Button("Cancel", role: .cancel) {
+                guard !renamePending else { return }
                 renameWorkspaceID = nil
             }
-            Button("Cancel", role: .cancel) { renameWorkspaceID = nil }
+            .disabled(renamePending)
         }
         .confirmationDialog(
             "Delete workspace?",
             isPresented: Binding(
                 get: { deleteWorkspaceID != nil },
+                // The confirmation dialog is dismissed before the delete
+                // response arrives; pending state still disables duplicate
+                // actions without pinning the dialog on screen.
                 set: { if !$0 { deleteWorkspaceID = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Delete Workspace", role: .destructive) {
-                if let id = deleteWorkspaceID { model.deleteWorkspace(id) }
+            Button(deletePending ? "Deleting…" : "Delete Workspace", role: .destructive) {
+                guard !deletePending, !model.isMutating,
+                      let id = deleteWorkspaceID else { return }
+                deletePending = true
+                showActionFeedback("Deleting…", duration: 0)
+                model.deleteWorkspace(id)
+            }
+            .disabled(deletePending || model.isMutating)
+            Button("Cancel", role: .cancel) {
+                guard !deletePending else { return }
                 deleteWorkspaceID = nil
             }
-            Button("Cancel", role: .cancel) { deleteWorkspaceID = nil }
+            .disabled(deletePending)
         } message: {
             Text("Running sessions must be deleted before the workspace can be removed.")
+        }
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard wasMutating, !isMutating else { return }
+            if renamePending {
+                renamePending = false
+                renameWorkspaceID = nil
+                showActionFeedback(model.mutationError == nil ? "Workspace renamed" : "Workspace rename failed")
+            }
+            if deletePending {
+                deletePending = false
+                deleteWorkspaceID = nil
+                showActionFeedback(model.mutationError == nil ? "Workspace deleted" : "Workspace delete failed")
+            }
+        }
+    }
+
+    private func showActionFeedback(_ message: String, duration: TimeInterval = 1.6) {
+        actionFeedbackGeneration &+= 1
+        let generation = actionFeedbackGeneration
+        actionFeedback = message
+        guard duration > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            if actionFeedbackGeneration == generation { actionFeedback = nil }
         }
     }
 }
@@ -1952,6 +2140,7 @@ private struct IOSWorkspaceCreationSheet: View {
     @State private var branch = ""
     @State private var name = ""
     @State private var path = ""
+    @State private var didSubmit = false
 
     init(model: IOSApplicationModel, initialProjectID: String? = nil) {
         self.model = model
@@ -2002,23 +2191,24 @@ private struct IOSWorkspaceCreationSheet: View {
                         }
 
                         Button {
+                            guard !didSubmit, !model.isMutating else { return }
+                            didSubmit = true
                             model.createWorkspace(
                                 projectID: projectID,
                                 branch: branch,
                                 name: name.isEmpty ? nil : name,
                                 path: path.isEmpty ? nil : path
                             )
-                            dismiss()
                         } label: {
-                            Text(model.isMutating ? "Creating…" : "Create workspace")
+                            Text(model.isMutating || didSubmit ? "Creating…" : "Create workspace")
                                 .font(IOSTypography.button)
                                 .foregroundStyle(IOSTheme.background)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .disabled(projectID.isEmpty || branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isMutating)
-                        .opacity(projectID.isEmpty || branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isMutating ? 0.45 : 1)
+                        .disabled(projectID.isEmpty || branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isMutating || didSubmit)
+                        .opacity(projectID.isEmpty || branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isMutating || didSubmit ? 0.45 : 1)
                     }
                 }
                 .padding(16)
@@ -2031,6 +2221,14 @@ private struct IOSWorkspaceCreationSheet: View {
         .preferredColorScheme(.dark)
         .onAppear {
             if projectID.isEmpty { projectID = initialProjectID ?? projects.first?.id ?? "" }
+        }
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard didSubmit, wasMutating, !isMutating else { return }
+            if model.mutationError == nil {
+                dismiss()
+            } else {
+                didSubmit = false
+            }
         }
     }
 }
@@ -2217,7 +2415,7 @@ public struct IOSEndpointConfigurationView: View {
                                         Image(systemName: "chevron.forward")
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundStyle(IOSTheme.tertiaryText)
-                                            .frame(width: 42, height: 62)
+                                            .frame(width: 44, height: 62)
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
@@ -2278,8 +2476,7 @@ public struct IOSEndpointConfigurationView: View {
         }
         .sheet(isPresented: $showingHostPicker) {
             IOSEndpointPickerSheet(model: model, hosts: hosts, title: "Switch Host")
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .iosSheetPresentation(.medium, .large)
         }
     }
 
@@ -2323,7 +2520,7 @@ private struct IOSEndpointDetailView: View {
                         Image(systemName: "pencil")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(IOSTheme.secondaryText)
-                            .frame(width: 42, height: 44)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

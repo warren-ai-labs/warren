@@ -1878,6 +1878,15 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testPresetLaunchFeedbackDisablesDuplicateStarts() {
+        XCTAssertFalse(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: true, isBusy: false, isPending: false))
+        XCTAssertTrue(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: true, isBusy: true, isPending: false))
+        XCTAssertTrue(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: true, isBusy: false, isPending: true))
+        XCTAssertTrue(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: false, isBusy: false, isPending: false))
+        XCTAssertEqual(WarrenDesktopPresetLaunchFeedback.label(isPending: true), "Starting…")
+        XCTAssertEqual(WarrenDesktopPresetLaunchFeedback.label(isPending: false), "Ready")
+    }
+
     func testEveryPresetAcceptsItsOwnCommandOverride() {
         for preset in WarrenDesktopSessionPreset.pinned {
             XCTAssertEqual(

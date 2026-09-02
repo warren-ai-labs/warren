@@ -16,7 +16,12 @@ export function reconnectDelay(attempt, random = Math.random) {
 export function rejectPendingRequests(pending, detail = "Connection lost") {
   const handlers = [...pending.values()];
   pending.clear();
-  for (const handler of handlers) handler?.onError?.(detail);
+  for (const handler of handlers) {
+    if (handler?.timer !== undefined && handler?.timer !== null) {
+      clearTimeout(handler.timer);
+    }
+    handler?.onError?.(detail);
+  }
 }
 
 // Headless WebSocket errors use the response envelope's `error` field.

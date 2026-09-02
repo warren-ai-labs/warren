@@ -55,6 +55,8 @@ struct WarrenDesktopTabBar: View {
     let onDismissActivity: (TerminalSessionID, AgentActivityState) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @State private var pendingTabID: String?
+    @State private var pendingTabGeneration = 0
 
     init(
         tabs: [ClientTab],
@@ -175,13 +177,14 @@ struct WarrenDesktopTabBar: View {
                     HStack(spacing: 0) {
                         ForEach(tabs) { tab in
                             let activity = tab.sessionID.flatMap { tabActivities[$0] }
+                            let isSelected = !embeddedEditorSelected && selectedTabID == tab.id
                             WarrenDesktopTabItem(
                                 tab: tab,
                                 displayTitle: tabTitles[tab.id] ?? tab.title,
                                 activity: activity,
-                                isSelected: !embeddedEditorSelected && selectedTabID == tab.id,
+                                isSelected: isSelected,
                                 isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
-                                onSelect: { onSelectTab(tab.id) },
+                                onSelect: { selectTab(tab.id) },
                                 onClose: { onCloseTab(tab.id) },
                                 onCloseOthers: { onCloseOtherTabs(tab.id) },
                                 onCloseAll: onCloseAllTabs,
@@ -214,6 +217,18 @@ struct WarrenDesktopTabBar: View {
                                     onMoveSession(sessionID, destination)
                                 }
                             )
+                            .disabled(pendingTabID != nil)
+                            .opacity(pendingTabID == tab.id ? 0.72 : 1)
+                            .overlay(alignment: .bottom) {
+                                // Keep the active state legible at a glance;
+                                // the overlay does not change the 36pt tab
+                                // contract or steal pointer events. The tab's
+                                // own button style supplies the focus ring.
+                                Rectangle()
+                                    .fill(pendingTabID == tab.id ? tokens.info : (isSelected ? tokens.highlight : .clear))
+                                    .frame(height: pendingTabID == tab.id || isSelected ? 2 : 0)
+                                    .allowsHitTesting(false)
+                            }
                         }
 
                         if embeddedEditorTabVisible {
@@ -222,6 +237,12 @@ struct WarrenDesktopTabBar: View {
                                 onSelect: onOpenEmbeddedEditor,
                                 onClose: onCloseEmbeddedEditor
                             )
+                            .overlay(alignment: .bottom) {
+                                Rectangle()
+                                    .fill(embeddedEditorSelected ? tokens.highlight : .clear)
+                                    .frame(height: embeddedEditorSelected ? 2 : 0)
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                     .background {
@@ -292,11 +313,44 @@ struct WarrenDesktopTabBar: View {
         .overlay(alignment: .bottom) {
             WarrenDesktopChromeDivider()
         }
+        .onChange(of: selectedTabID) { selectedID in
+            pendingTabGeneration &+= 1
+            pendingTabID = nil
+        }
+        .onChange(of: tabs) { _ in
+            // Workspace changes can remove or reuse a pending target without
+            // publishing a matching selection. Clear the visual gate
+            // immediately so the next workspace's tabs are never left
+            // disabled for the timeout.
+            guard let pendingTabID,
+                  !tabs.contains(where: { $0.id == pendingTabID }) else { return }
+            pendingTabGeneration &+= 1
+            self.pendingTabID = nil
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace tab bar")
     }
 
     private static let editorTabID = "warren.workspace.editor"
+
+    private func selectTab(_ tabID: String) {
+        guard pendingTabID == nil else { return }
+        guard selectedTabID != tabID else {
+            onSelectTab(tabID)
+            return
+        }
+        pendingTabGeneration &+= 1
+        let generation = pendingTabGeneration
+        pendingTabID = tabID
+        onSelectTab(tabID)
+        // A rejected selection should not leave the tab rail looking busy.
+        // The normal path clears this as soon as selectedTabID publishes.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            if pendingTabGeneration == generation, pendingTabID == tabID {
+                pendingTabID = nil
+            }
+        }
+    }
 }
 
 enum WarrenDesktopTabScrollPosition {

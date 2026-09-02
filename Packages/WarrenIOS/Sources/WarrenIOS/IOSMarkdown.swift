@@ -607,7 +607,7 @@ private struct IOSMarkdownInlineText: View {
                 .lineSpacing(3)
                 .iosNaturalWrap()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .tint(IOSTheme.blue)
+                .tint(IOSTheme.link)
         } else {
             Text(value)
                 .font(font)

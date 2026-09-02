@@ -1,4 +1,5 @@
 import SwiftUI
+import WarrenDesignSystem
 import WarrenTransport
 
 #if canImport(UIKit)
@@ -12,9 +13,15 @@ public struct SessionView: View {
     @ObservedObject private var terminalState: IOSTerminalState
     private let sessionID: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingSessionSwitcher = false
     @State private var showingDeleteConfirmation = false
     @State private var showingNewSession = false
+    @State private var pendingSessionID: String?
+    @State private var sessionSwitchGeneration = 0
+    @State private var deletePending = false
+    @State private var actionFeedback: String?
+    @State private var actionFeedbackGeneration = 0
     /// Keep a very small renderer cache for quick back-and-forth terminal
     /// switching. Agent is the primary surface, so this is intentionally
     /// bounded: the model owns durable snapshots/output, while SwiftTerm
@@ -63,8 +70,20 @@ public struct SessionView: View {
                     agentState: model.agentState,
                     activeSessionID: activeSessionID,
                     sessions: siblings,
-                    showSwitcher: { showingSessionSwitcher = true }
+                    showSwitcher: { showingSessionSwitcher = true },
+                    pendingSessionID: pendingSessionID,
+                    selectSession: selectSession
                 )
+            }
+
+            if let actionFeedback {
+                Text(actionFeedback)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .background(IOSTheme.chrome)
             }
 
             ZStack {
@@ -80,11 +99,18 @@ public struct SessionView: View {
                             output: terminalState.terminalOutputBySessionID[cachedSession.id] ?? Data(),
                             outputRevision: terminalState.terminalOutputRevisionBySessionID[cachedSession.id] ?? 0,
                             isReady: terminalState.terminalReadyBySessionID[cachedSession.id] ?? false,
-                            onInput: { model.sendTerminalInput($0) },
-                            onTap: { model.focusTerminal() },
-                            onResize: {
-                                model.updateTerminalSize($0, for: cachedSession.id)
-                                model.resizeTerminal($0)
+                            onInput: { data in
+                                guard model.currentSessionID == cachedSession.id else { return }
+                                model.sendTerminalInput(data)
+                            },
+                            onTap: {
+                                guard model.currentSessionID == cachedSession.id else { return }
+                                model.focusTerminal()
+                            },
+                            onResize: { size in
+                                guard model.currentSessionID == cachedSession.id else { return }
+                                model.updateTerminalSize(size, for: cachedSession.id)
+                                model.resizeTerminal(size)
                             }
                         )
                         .opacity(isActive && model.displayMode == .terminal ? 1 : 0)
@@ -98,7 +124,7 @@ public struct SessionView: View {
                     .allowsHitTesting(model.displayMode == .agent)
             }
             .background(IOSTheme.background)
-            .animation(.easeInOut(duration: 0.22), value: model.displayMode)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.displayMode)
         }
         .background(IOSTheme.background.ignoresSafeArea())
         #if os(iOS) || os(visionOS)
@@ -125,6 +151,12 @@ public struct SessionView: View {
             }
         }
         .onChange(of: model.currentSessionID) { _, selectedSessionID in
+            if let pendingSessionID,
+               selectedSessionID != pendingSessionID {
+                self.pendingSessionID = nil
+                sessionSwitchGeneration &+= 1
+                showActionFeedback("Session switch failed · Showing previous session")
+            }
             guard let selectedSessionID else { return }
             if model.displayMode == .terminal {
                 rememberTerminalSurface(selectedSessionID)
@@ -132,6 +164,38 @@ public struct SessionView: View {
                     await Task.yield()
                     model.focusTerminal()
                 }
+            }
+        }
+        .onChange(of: terminalState.terminalSubscriptionBySessionID) { _, subscriptions in
+            // `currentSessionID` changes locally before the Host accepts the
+            // replacement subscription. Confirm the switch only at the
+            // transport boundary so a rejected handoff does not look like a
+            // successful selection.
+            guard let pendingSessionID,
+                  subscriptions[pendingSessionID] == true else { return }
+            self.pendingSessionID = nil
+            sessionSwitchGeneration &+= 1
+            showActionFeedback("Session switched")
+        }
+        .onChange(of: model.connectionState) { _, state in
+            guard pendingSessionID != nil else { return }
+            switch state {
+            case .reconnecting, .disconnected, .stopped:
+                break
+            default:
+                return
+            }
+            pendingSessionID = nil
+            sessionSwitchGeneration &+= 1
+            showActionFeedback("Session switch interrupted · Reconnecting…")
+        }
+        .onChange(of: model.isMutating) { wasMutating, isMutating in
+            guard deletePending, wasMutating, !isMutating else { return }
+            deletePending = false
+            if let error = model.mutationError, !error.isEmpty {
+                showActionFeedback("Delete failed: \(error)")
+            } else {
+                showActionFeedback("Session deleted")
             }
         }
         .onChange(of: model.displayMode) { _, mode in
@@ -146,7 +210,12 @@ public struct SessionView: View {
                 model.focusTerminal()
             }
         }
-        .onDisappear { model.leaveSession(model.currentSessionID ?? sessionID) }
+        .onDisappear {
+            // A sibling switch reuses this NavigationStack route. Do not let
+            // the old view's teardown leave the newly selected Session.
+            guard model.currentSessionID == sessionID else { return }
+            model.leaveSession(sessionID)
+        }
         .sheet(isPresented: $showingNewSession) {
             IOSSessionCreationSheet(
                 model: model,
@@ -154,13 +223,11 @@ public struct SessionView: View {
                 terminalGroupID: session?.terminalGroupID,
                 title: sessionTitle(for: session)
             )
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
+            .iosSheetPresentation(.medium)
         }
         .sheet(isPresented: $showingSessionSwitcher) {
-            SessionSwitcherSheet(model: model, agentState: model.agentState, sessions: siblings)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            SessionSwitcherSheet(model: model, agentState: model.agentState, sessions: siblings, pendingSessionID: $pendingSessionID, selectSession: selectSession)
+                .iosSheetPresentation(.medium, .large)
         }
         .confirmationDialog(
             "Delete this session?",
@@ -168,11 +235,49 @@ public struct SessionView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Session", role: .destructive) {
+                guard !deletePending, !model.isMutating else { return }
+                deletePending = true
+                showActionFeedback("Deleting…", duration: 0)
                 model.deleteSession(activeSessionID)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The Host process and its transcript will be removed.")
+        }
+    }
+
+    @discardableResult
+    private func selectSession(_ id: String) -> Bool {
+        guard !id.isEmpty,
+              id != model.currentSessionID,
+              model.activeSessions.contains(where: { $0.id == id }),
+              pendingSessionID == nil,
+              !model.isMutating else { return false }
+        guard model.connectionState == .connected else {
+            showActionFeedback("Reconnecting…")
+            return false
+        }
+        pendingSessionID = id
+        sessionSwitchGeneration &+= 1
+        let generation = sessionSwitchGeneration
+        showActionFeedback("Switching session…")
+        model.selectSession(id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            guard pendingSessionID == id,
+                  sessionSwitchGeneration == generation else { return }
+            pendingSessionID = nil
+            showActionFeedback("Session switch failed · Try again")
+        }
+        return true
+    }
+
+    private func showActionFeedback(_ message: String, duration: TimeInterval = 1.6) {
+        actionFeedbackGeneration &+= 1
+        let generation = actionFeedbackGeneration
+        actionFeedback = message
+        guard duration > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            if actionFeedbackGeneration == generation { actionFeedback = nil }
         }
     }
 
@@ -239,7 +344,7 @@ private struct SessionHeader: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            IOSIconButton("line.3.horizontal", label: "Open sessions", action: onBack)
+            IOSIconButton("chevron.backward", label: "Back to sessions", action: onBack)
             VStack(alignment: .leading, spacing: 2) {
                 Text(sessionTitle)
                     .font(IOSTypography.sessionBarTitle)
@@ -283,15 +388,15 @@ private struct SessionHeader: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(IOSTypography.button)
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 42, height: 44)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .menuStyle(.automatic)
             .accessibilityLabel("Session actions")
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, WarrenSpacing.xs)
         .frame(minHeight: 56)
         .background(IOSTheme.chrome)
         .overlay(alignment: .bottom) {
@@ -324,11 +429,13 @@ private struct SessionHeader: View {
         guard let session else { return nil }
         if let workspaceID = session.workspaceID,
            let workspace = model.roster?.workspaces.first(where: { $0.id == workspaceID }) {
-            if let branch = workspace.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !branch.isEmpty {
-                return branch
+            let workspaceName = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let branch = workspace.branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !workspaceName.isEmpty, !branch.isEmpty, workspaceName != branch {
+                return "\(workspaceName) · \(branch)"
             }
-            if !workspace.name.isEmpty { return workspace.name }
+            if !branch.isEmpty { return branch }
+            if !workspaceName.isEmpty { return workspaceName }
             let leaf = pathLeaf(workspace.path)
             return leaf.isEmpty ? nil : leaf
         }
@@ -420,6 +527,8 @@ private struct SessionTabRail: View {
     let activeSessionID: String
     let sessions: [WarrenRemoteRoster.Session]
     let showSwitcher: () -> Void
+    let pendingSessionID: String?
+    let selectSession: (String) -> Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -428,7 +537,7 @@ private struct SessionTabRail: View {
                     HStack(spacing: 0) {
                         ForEach(sessions) { session in
                             Button {
-                                model.selectSession(session.id)
+                                _ = selectSession(session.id)
                             } label: {
                                 HStack(spacing: 6) {
                                     SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 20)
@@ -442,7 +551,7 @@ private struct SessionTabRail: View {
                                         .truncationMode(.tail)
                                 }
                                 .padding(.horizontal, 12)
-                                .frame(minHeight: 38)
+                                .frame(minHeight: 44)
                                 .overlay(alignment: .bottom) {
                                     Rectangle()
                                         .fill(session.id == activeSessionID ? IOSTheme.accent : .clear)
@@ -450,7 +559,13 @@ private struct SessionTabRail: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .disabled(pendingSessionID != nil || model.isMutating)
                             .accessibilityLabel("Session \(session.displayTitle)")
+                            .accessibilityValue(
+                                session.id == pendingSessionID
+                                    ? "Switching"
+                                    : (session.id == activeSessionID ? "Selected" : "Available")
+                            )
                             .accessibilityAddTraits(session.id == activeSessionID ? .isSelected : [])
                         }
                     }
@@ -467,7 +582,7 @@ private struct SessionTabRail: View {
                     .font(IOSTypography.label)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .padding(.horizontal, 13)
-                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
@@ -476,6 +591,7 @@ private struct SessionTabRail: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)
+                .disabled(pendingSessionID != nil || model.isMutating)
                 .accessibilityLabel("Switch session")
                 .accessibilityValue("\(sessions.count) sessions")
             }
@@ -493,6 +609,8 @@ private struct SessionSwitcherSheet: View {
     @ObservedObject var model: IOSApplicationModel
     @ObservedObject var agentState: IOSAgentLiveState
     let sessions: [WarrenRemoteRoster.Session]
+    @Binding var pendingSessionID: String?
+    let selectSession: (String) -> Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -507,8 +625,17 @@ private struct SessionSwitcherSheet: View {
                         .padding(.bottom, 12)
                     ForEach(sessions) { session in
                         Button {
-                            model.selectSession(session.id)
-                            dismiss()
+                            guard pendingSessionID == nil,
+                                  !model.isMutating,
+                                  session.id != model.currentSessionID else { return }
+                            guard selectSession(session.id) else { return }
+                            // The parent publishes the route synchronously;
+                            // yield once so dismissal observes the same
+                            // current Session instead of racing selection.
+                            Task { @MainActor in
+                                await Task.yield()
+                                dismiss()
+                            }
                         } label: {
                             HStack(spacing: 10) {
                                 SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 23)
@@ -527,6 +654,10 @@ private struct SessionSwitcherSheet: View {
                                 if model.currentSessionID == session.id {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(IOSTheme.accent)
+                                } else if pendingSessionID == session.id {
+                                    Text("Switching…")
+                                        .font(IOSTypography.status)
+                                        .foregroundStyle(IOSTheme.secondaryText)
                                 }
                             }
                             .padding(.horizontal, 16)
@@ -534,6 +665,7 @@ private struct SessionSwitcherSheet: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(pendingSessionID != nil || model.isMutating)
                         .overlay(alignment: .bottom) {
                             Rectangle()
                                 .fill(IOSTheme.separator.opacity(0.54))
