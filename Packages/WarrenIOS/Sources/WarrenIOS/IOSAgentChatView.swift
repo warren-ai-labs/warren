@@ -172,6 +172,7 @@ public struct AgentChatView: View {
     @State private var didTriggerHistoryPull = false
     @State private var historyScrollAnchorID: String?
     @State private var isNearLatest = true
+    @State private var isAtVeryBottom = true  // More strict check for "at very bottom"
     @State private var showReturnToLatest = false
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var draftSessionID: String?
@@ -199,6 +200,7 @@ public struct AgentChatView: View {
 
     private let historyPullThreshold: CGFloat = 56
     private let latestVisibilityThreshold: CGFloat = 72
+    private let nearBottomThreshold: CGFloat = 30  // More strict threshold for "at very bottom"
 
     public init(model: IOSApplicationModel, sessionID: String) {
         self.model = model
@@ -284,10 +286,12 @@ public struct AgentChatView: View {
                             .id("agent-bottom")
                             .onAppear {
                                 isNearLatest = true
+                                isAtVeryBottom = true
                                 showReturnToLatest = false
                             }
                             .onDisappear {
                                 isNearLatest = false
+                                isAtVeryBottom = false
                             }
                         }
                         .frame(maxWidth: 820)
@@ -308,6 +312,7 @@ public struct AgentChatView: View {
                         guard !didEstablishInitialScroll else { return }
                         didEstablishInitialScroll = true
                         isNearLatest = true
+                        isAtVeryBottom = true
                         Task { @MainActor in
                             await Task.yield()
                             proxy.scrollTo("agent-bottom", anchor: .bottom)
@@ -321,14 +326,22 @@ public struct AgentChatView: View {
                     }
                     .onPreferenceChange(AgentChatBottomOffsetPreferenceKey.self) { bottomY in
                         let distanceFromLatest = bottomY - viewport.size.height
+                        let wasAtVeryBottom = isAtVeryBottom
                         let wasNearLatest = isNearLatest
+                        
+                        // More strict check for "at very bottom"
+                        isAtVeryBottom = abs(distanceFromLatest) <= nearBottomThreshold
+                        
+                        // Keep original logic for proximity to latest
                         isNearLatest = distanceFromLatest <= latestVisibilityThreshold
-                        if isNearLatest {
+                        
+                        if isAtVeryBottom {
                             showReturnToLatest = false
-                        } else if wasNearLatest && !showReturnToLatest {
-                            // A user scroll, rather than a live event, moved
-                            // the transcript away from the latest message.
-                            // Keep the button hidden until a new event arrives.
+                        } else if wasAtVeryBottom && !isAtVeryBottom {
+                            // Left the very bottom area
+                            showReturnToLatest = true
+                        } else if wasNearLatest && !isNearLatest {
+                            // Moved away from the closest area
                             showReturnToLatest = false
                         }
                     }
@@ -372,6 +385,7 @@ public struct AgentChatView: View {
                         historyScrollAnchorID = nil
                         showReturnToLatest = false
                         isNearLatest = true
+                        isAtVeryBottom = true
                         Task { @MainActor in
                             await Task.yield()
                             scrollToLatest(using: proxy, animated: false)
@@ -486,6 +500,7 @@ public struct AgentChatView: View {
             historyScrollAnchorID = nil
             showReturnToLatest = false
             isNearLatest = true
+            isAtVeryBottom = true
             workingPhrase = AgentWorkingPhrases.defaultPhrase
             guard !model.agentHistoryLoaded(for: selectedSessionID) else { return }
             model.loadOlderAgentHistory()
@@ -551,7 +566,7 @@ public struct AgentChatView: View {
 
     private func handleNewContent(using proxy: ScrollViewProxy) {
         guard historyScrollAnchorID == nil else { return }
-        if isNearLatest {
+        if isAtVeryBottom {
             // Keep a live response pinned without an animation on every
             // streamed delta. Repeated animated scrolls are perceived as page
             // jumps, especially while the user is changing scroll direction.
@@ -575,6 +590,7 @@ public struct AgentChatView: View {
 
     private func scrollToLatest(using proxy: ScrollViewProxy, animated: Bool) {
         isNearLatest = true
+        isAtVeryBottom = true
         showReturnToLatest = false
         if animated, !reduceMotion {
             withAnimation(.easeInOut(duration: 0.18)) {
