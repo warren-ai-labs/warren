@@ -711,7 +711,7 @@ public struct AgentChatView: View {
                         // Model name / metadata
                         if let metadata = agentComposerMetadata {
                             Text(metadata)
-                                .font(IOSDesignSystem.IOSTypography.metadata)
+                                .font(IOSTypography.metadata)
                                 .foregroundStyle(IOSTheme.tertiaryText)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -728,7 +728,7 @@ public struct AgentChatView: View {
                                 isQueueSheetPresented = true
                             } label: {
                                 Text("Queued \(queued)")
-                                    .font(IOSDesignSystem.IOSTypography.metadata)
+                                    .font(IOSTypography.metadata)
                                     .foregroundStyle(IOSTheme.amber)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
@@ -742,7 +742,7 @@ public struct AgentChatView: View {
                         if model.canInterruptAgentTurn {
                             if cancelPending {
                                 Text("Cancelling…")
-                                    .font(IOSDesignSystem.IOSTypography.status)
+                                    .font(IOSTypography.status)
                                     .foregroundStyle(IOSTheme.secondaryText)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
@@ -752,7 +752,7 @@ public struct AgentChatView: View {
                                     cancelAgentTurn()
                                 } label: {
                                     Image(systemName: "stop.fill")
-                                        .font(IOSDesignSystem.IOSTypography.button)
+                                        .font(IOSTypography.button)
                                         .foregroundStyle(IOSTheme.red)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 6)
@@ -766,7 +766,7 @@ public struct AgentChatView: View {
                                         sendComposerMessage(sendNow: true)
                                     } label: {
                                         Text("Send now")
-                                            .font(IOSDesignSystem.IOSTypography.button)
+                                            .font(IOSTypography.button)
                                             .foregroundStyle(IOSTheme.amber)
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 6)
@@ -784,7 +784,7 @@ public struct AgentChatView: View {
                             sendComposerMessage()
                         } label: {
                             Image(systemName: "arrow.up")
-                                .font(IOSDesignSystem.IOSTypography.button)
+                                .font(IOSTypography.button)
                                 .foregroundStyle(IOSTheme.background)  // White text/icon
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
