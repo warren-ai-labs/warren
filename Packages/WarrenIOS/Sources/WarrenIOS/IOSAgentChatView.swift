@@ -1584,7 +1584,7 @@ private struct AgentActivityGroup {
             guard case .tool(let tool) = entry else { return nil }
             return tool.status
         }
-        if toolStatuses.contains("error") { return .failed }
+        if toolStatuses.contains(where: { $0 == "error" || $0 == "failed" }) { return .failed }
         if toolStatuses.contains("interrupted") { return .interrupted }
         if toolStatuses.contains("running") { return .running }
         return .completed
@@ -1940,6 +1940,42 @@ private struct AgentEventBlock: View {
 
 }
 
+/// A status rail is a reserved visual column at the leading edge of a
+/// disclosure row. Keeping it as a separate shape (instead of drawing a
+/// full-height rectangle over the content) leaves a predictable gap before
+/// the chevron and stays legible when nested rows are expanded.
+private struct AgentStatusRail: View {
+    let color: Color
+    let width: CGFloat
+    let opacity: Double
+    let leadingInset: CGFloat
+    let verticalInset: CGFloat
+
+    init(
+        color: Color,
+        width: CGFloat = 2,
+        opacity: Double = 0.86,
+        leadingInset: CGFloat = 2,
+        verticalInset: CGFloat = 3
+    ) {
+        self.color = color
+        self.width = width
+        self.opacity = opacity
+        self.leadingInset = leadingInset
+        self.verticalInset = verticalInset
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: width / 2, style: .continuous)
+            .fill(color.opacity(opacity))
+            .frame(width: width)
+            .padding(.leading, leadingInset)
+            .padding(.vertical, verticalInset)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 private struct AgentMessageActions: View {
     let event: WarrenRemoteAgentEvent
     var isLastUser = false
@@ -2010,9 +2046,11 @@ private struct AgentStructuredEventBlock: View {
                         .foregroundStyle(IOSTheme.text)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(stateLabel)
-                        .font(IOSTypography.metadata)
-                        .foregroundStyle(stateColor)
+                    if !isFailure {
+                        Text(stateLabel)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(stateColor)
+                    }
                 }
                 .frame(minHeight: 44)
             }
@@ -2022,12 +2060,12 @@ private struct AgentStructuredEventBlock: View {
 
             if expanded || kind == "question" || kind == "permission" {
                 detail
-                    .padding(.leading, 14)
+                    .padding(.leading, 12)
                     .padding(.bottom, 4)
             }
         }
         .padding(.vertical, WarrenSpacing.xs)
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -2036,11 +2074,7 @@ private struct AgentStructuredEventBlock: View {
         )
         .overlay(alignment: .leading) {
             if expanded || isFailure {
-                Rectangle()
-                    .fill(stateColor)
-                    .frame(width: 2)
-                    .padding(.leading, 2)
-                    .padding(.vertical, WarrenSpacing.xs)
+                AgentStatusRail(color: stateColor, width: 2, opacity: 0.92, verticalInset: WarrenSpacing.xs)
             }
         }
         .accessibilityElement(children: .contain)
@@ -2130,7 +2164,7 @@ private struct AgentStructuredEventBlock: View {
                     }
                     .font(IOSTypography.label)
                 }
-            } else if !state.isEmpty {
+            } else if !state.isEmpty, !isFailure {
                 Text(stateLabel)
                     .font(IOSTypography.status)
                     .foregroundStyle(stateColor)
@@ -2177,21 +2211,26 @@ private struct AgentStructuredEventBlock: View {
                     .font(IOSTypography.label)
                     .disabled(submitting || state != "pending")
                 }
-            } else if !state.isEmpty {
+            } else if !state.isEmpty, !isFailure {
                 Text(stateLabel)
                     .font(IOSTypography.status)
                     .foregroundStyle(stateColor)
             }
         case "plan", "todo":
             ForEach(planItems) { item in
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Image(systemName: item.state == "completed" ? "checkmark.circle.fill" : item.state == "in_progress" ? "circle.lefthalf.filled" : "circle")
-                        .foregroundStyle(item.state == "completed" ? IOSTheme.green : IOSTheme.secondaryText)
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(item.label)
                         .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.secondaryText)
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 8)
+                    if let state = planItemStateLabel(item.state) {
+                        Text(state)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(planItemStateColor(item.state))
+                            .lineLimit(1)
+                    }
                 }
+                .frame(minHeight: 38, alignment: .leading)
             }
         default:
             if let summary = payload.string("summary") ?? payload.string("detail") ?? event.content,
@@ -2276,6 +2315,25 @@ private struct AgentStructuredEventBlock: View {
 
     private var isFailure: Bool {
         state == "failed" || state == "error"
+    }
+
+    private func planItemStateLabel(_ value: String) -> String? {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "pending": return "Pending"
+        case "in_progress", "in-progress": return "In progress"
+        case "completed", "complete", "done": return "Completed"
+        case "cancelled", "canceled": return "Cancelled"
+        case "", "failed", "error": return nil
+        default: return value.capitalized
+        }
+    }
+
+    private func planItemStateColor(_ value: String) -> Color {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "completed", "complete", "done": return IOSTheme.green
+        case "in_progress", "in-progress": return IOSTheme.amber
+        default: return IOSTheme.tertiaryText
+        }
     }
 
     private var options: [AgentInteractionOption] {
@@ -2482,15 +2540,11 @@ private struct AgentSecondaryEventBlock: View {
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.52))
-                .frame(width: 1)
-                .padding(.leading, 2)
-                .padding(.vertical, 2)
+            AgentStatusRail(color: IOSTheme.separator, width: 1, opacity: 0.52, verticalInset: 2)
         }
     }
 
@@ -2611,26 +2665,22 @@ private struct AgentActivityGroupBlock: View {
                                 AgentToolBlockView(tool: tool)
                             }
                         }
-                        .padding(.horizontal, 9)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 6)
                         .background(IOSTheme.muted.opacity(0.28), in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
                 }
-                .padding(.leading, 16)
+                .padding(.leading, 12)
                 .padding(.bottom, 9)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            if expanded || activity.status == .failed {
-                Rectangle()
-                    .fill(activityStatusColor.opacity(0.70))
-                    .frame(width: 1)
-                    .padding(.vertical, 4)
-                    .padding(.leading, 2)
+            if expanded || activity.status == .running || activity.status == .failed {
+                AgentStatusRail(color: activityStatusColor, width: 2, opacity: 0.86, verticalInset: 4)
             }
         }
     }
@@ -2639,9 +2689,9 @@ private struct AgentActivityGroupBlock: View {
     private var activityStatusMark: some View {
         switch activity.status {
         case .running:
-            // Keep the activity rail non-verbal while a pulse makes a running
-            // group discoverable without adding another status label.
-            IOSAgentActivityMark(activity: .working, slotSize: 18)
+            // The amber rail is the sole running indicator in a disclosure
+            // row; a second circular mark on the trailing edge is noisy.
+            EmptyView()
         case .failed:
             EmptyView()
         case .interrupted:
@@ -2716,19 +2766,15 @@ private struct AgentReasoningEntry: View {
                 AgentMarkdownText(value: content, font: IOSTypography.helper)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
-                    .padding(.leading, 12)
+                    .padding(.leading, 10)
             }
         }
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             if expanded {
-                Rectangle()
-                    .fill(IOSTheme.separator.opacity(0.64))
-                    .frame(width: 1)
-                    .padding(.leading, 2)
-                    .padding(.vertical, 2)
+                AgentStatusRail(color: IOSTheme.separator, width: 1, opacity: 0.64, verticalInset: 2)
             }
         }
     }
@@ -2748,7 +2794,7 @@ private struct AgentToolBlockView: View {
 
     init(tool: AgentToolBlock) {
         self.tool = tool
-        _expanded = State(initialValue: tool.status == "error" || tool.status == "interrupted")
+        _expanded = State(initialValue: tool.status == "error" || tool.status == "failed" || tool.status == "interrupted")
     }
 
     var body: some View {
@@ -2811,19 +2857,15 @@ private struct AgentToolBlockView: View {
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
                 }
-                .padding(.leading, 12)
+                .padding(.leading, 10)
                 .padding(.bottom, 6)
             }
         }
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(toolStatusColor.opacity(0.64))
-                .frame(width: 1)
-                .padding(.leading, 2)
-                .padding(.vertical, 2)
+            AgentStatusRail(color: toolStatusColor, width: 2, opacity: 0.86, verticalInset: 2)
         }
     }
 
@@ -2886,20 +2928,16 @@ private struct AgentToolOutputBlock: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.leading, 12)
+                .padding(.leading, 10)
                 .padding(.bottom, 7)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(toolStatusColor.opacity(0.64))
-                .frame(width: 1)
-                .padding(.leading, 2)
-                .padding(.vertical, 2)
+            AgentStatusRail(color: toolStatusColor, width: 2, opacity: 0.86, verticalInset: 2)
         }
     }
 
@@ -2922,8 +2960,7 @@ private struct AgentToolStatusMark: View {
     var body: some View {
         switch status.lowercased() {
         case "running", "working":
-            IOSAgentActivityMark(activity: .working, slotSize: 17)
-                .accessibilityLabel("Tool running")
+            EmptyView()
         case "error", "failed":
             EmptyView()
         case "interrupted":
