@@ -61,7 +61,9 @@ private struct AgentComposerInput: UIViewRepresentable {
         view.isScrollEnabled = true
         view.showsVerticalScrollIndicator = false
         view.textContainer.lineFragmentPadding = 0
-        view.textContainerInset = UIEdgeInsets(top: 5, left: 7, bottom: 5, right: 2)
+        // A single-line draft sits in a 44pt control. Equal vertical insets
+        // center the glyphs and caret while leaving long drafts scrollable.
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 7, bottom: 8, right: 2)
         view.textContainer.maximumNumberOfLines = 0
         view.textContainer.lineBreakMode = .byWordWrapping
         view.autocorrectionType = .default
@@ -172,7 +174,6 @@ public struct AgentChatView: View {
     @State private var didTriggerHistoryPull = false
     @State private var historyScrollAnchorID: String?
     @State private var isNearLatest = true
-    @State private var isAtVeryBottom = true  // More strict check for "at very bottom"
     @State private var showReturnToLatest = false
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var draftSessionID: String?
@@ -200,7 +201,6 @@ public struct AgentChatView: View {
 
     private let historyPullThreshold: CGFloat = 56
     private let latestVisibilityThreshold: CGFloat = 72
-    private let nearBottomThreshold: CGFloat = 30  // More strict threshold for "at very bottom"
 
     public init(model: IOSApplicationModel, sessionID: String) {
         self.model = model
@@ -286,12 +286,7 @@ public struct AgentChatView: View {
                             .id("agent-bottom")
                             .onAppear {
                                 isNearLatest = true
-                                isAtVeryBottom = true
                                 showReturnToLatest = false
-                            }
-                            .onDisappear {
-                                isNearLatest = false
-                                isAtVeryBottom = false
                             }
                         }
                         .frame(maxWidth: 820)
@@ -312,7 +307,6 @@ public struct AgentChatView: View {
                         guard !didEstablishInitialScroll else { return }
                         didEstablishInitialScroll = true
                         isNearLatest = true
-                        isAtVeryBottom = true
                         Task { @MainActor in
                             await Task.yield()
                             proxy.scrollTo("agent-bottom", anchor: .bottom)
@@ -325,24 +319,17 @@ public struct AgentChatView: View {
                         handleTopOffset(offset, blocks: blocks)
                     }
                     .onPreferenceChange(AgentChatBottomOffsetPreferenceKey.self) { bottomY in
+                        guard bottomY.isFinite else { return }
                         let distanceFromLatest = bottomY - viewport.size.height
-                        let wasAtVeryBottom = isAtVeryBottom
                         let wasNearLatest = isNearLatest
-                        
-                        // More strict check for "at very bottom"
-                        isAtVeryBottom = abs(distanceFromLatest) <= nearBottomThreshold
-                        
-                        // Keep original logic for proximity to latest
                         isNearLatest = distanceFromLatest <= latestVisibilityThreshold
-                        
-                        if isAtVeryBottom {
+
+                        if isNearLatest {
                             showReturnToLatest = false
-                        } else if wasAtVeryBottom && !isAtVeryBottom {
-                            // Left the very bottom area
+                        } else if wasNearLatest {
+                            // Show the escape hatch as soon as the user leaves
+                            // the latest-message visibility window.
                             showReturnToLatest = true
-                        } else if wasNearLatest && !isNearLatest {
-                            // Moved away from the closest area
-                            showReturnToLatest = false
                         }
                     }
                     #if os(iOS)
@@ -385,7 +372,6 @@ public struct AgentChatView: View {
                         historyScrollAnchorID = nil
                         showReturnToLatest = false
                         isNearLatest = true
-                        isAtVeryBottom = true
                         Task { @MainActor in
                             await Task.yield()
                             scrollToLatest(using: proxy, animated: false)
@@ -500,7 +486,6 @@ public struct AgentChatView: View {
             historyScrollAnchorID = nil
             showReturnToLatest = false
             isNearLatest = true
-            isAtVeryBottom = true
             workingPhrase = AgentWorkingPhrases.defaultPhrase
             guard !model.agentHistoryLoaded(for: selectedSessionID) else { return }
             model.loadOlderAgentHistory()
@@ -564,9 +549,12 @@ public struct AgentChatView: View {
         model.loadOlderAgentHistory()
     }
 
-    private func handleNewContent(using proxy: ScrollViewProxy) {
+    private func handleNewContent(
+        using proxy: ScrollViewProxy,
+        shouldFollowLatest: Bool? = nil
+    ) {
         guard historyScrollAnchorID == nil else { return }
-        if isAtVeryBottom {
+        if shouldFollowLatest ?? isNearLatest {
             // Keep a live response pinned without an animation on every
             // streamed delta. Repeated animated scrolls are perceived as page
             // jumps, especially while the user is changing scroll direction.
@@ -577,20 +565,25 @@ public struct AgentChatView: View {
     }
 
     private func observeAgentRevision(using proxy: ScrollViewProxy) {
+        // Capture the user's intent before refreshing the rows. Updating the
+        // LazyVStack can briefly remove the bottom sentinel, so reading the
+        // live proximity state after that layout pass would incorrectly stop
+        // following a conversation that was already at the latest message.
+        let shouldFollowLatest = isNearLatest
         refreshRenderedBlocks()
         guard historyScrollAnchorID == nil else { return }
         // The revision is published before the new LazyVStack rows have been
-        // laid out. Wait one turn so an intentional follow-to-latest targets
-        // the new bottom marker instead of the previous page.
+        // laid out. Wait through two main-actor turns so the new bottom marker
+        // exists before an intentional follow-to-latest.
         Task { @MainActor in
             await Task.yield()
-            handleNewContent(using: proxy)
+            await Task.yield()
+            handleNewContent(using: proxy, shouldFollowLatest: shouldFollowLatest)
         }
     }
 
     private func scrollToLatest(using proxy: ScrollViewProxy, animated: Bool) {
         isNearLatest = true
-        isAtVeryBottom = true
         showReturnToLatest = false
         if animated, !reduceMotion {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -655,14 +648,32 @@ public struct AgentChatView: View {
                         .accessibilityLabel(attachmentFeedback)
                 }
 
-                VStack(spacing: 0) {
-                    // Row 1: Message placeholder + text input (single row, fixed height)
-                    ZStack(alignment: .topLeading) {
+                HStack(alignment: .center, spacing: 4) {
+                    // Keep every composer affordance in the same 44pt row as
+                    // the message field. Attachments scroll horizontally so
+                    // they never increase the composer height.
+                    attachmentControlsWithPlus
+
+                    if !localAttachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 3) {
+                                ForEach(localAttachments) { attachment in
+                                    attachmentChip(attachment)
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                        }
+                        .frame(minWidth: 0, maxWidth: 108, minHeight: 44, maxHeight: 44)
+                    }
+
+                    ZStack(alignment: .leading) {
                         Text("Message…")
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                            .multilineTextAlignment(.leading)
-                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                            .lineLimit(1)
+                            .padding(.leading, 7)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                            .opacity(draft.isEmpty ? 1 : 0)
                             .allowsHitTesting(false)
                             .accessibilityHidden(!draft.isEmpty)
 #if canImport(UIKit)
@@ -674,77 +685,48 @@ public struct AgentChatView: View {
                             ),
                             isDisabled: isUploadingAttachments || sendStatus == "sending"
                         )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 #else
                         TextField("", text: $draft, axis: .vertical)
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.text)
+                            .textFieldStyle(.plain)
                             .lineLimit(1)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                             .disabled(isUploadingAttachments || sendStatus == "sending")
                             .focused($composerFocused)
                             .accessibilityLabel("Agent message")
 #endif
                     }
-                    .frame(minHeight: 56, maxHeight: 56)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
 
-                    // Row 2: All actions in a single row (+ icon, attachments, model name, buttons)
-                    HStack(spacing: 6) {
-                        // Attachments chip scroll (if any) - compact size
-                        if !localAttachments.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 3) {
-                                    ForEach(localAttachments) { attachment in
-                                        attachmentChip(attachment)
-                                            .frame(height: 34)
-                                    }
-                                }
-                                .padding(.horizontal, 3)
-                            }
-                            .frame(height: 34)
-                        } else {
-                            // Empty spacer to maintain layout consistency
-                            EmptyView()
-                                .frame(height: 34)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        
-                        // + icon button (primary attachment control)
-                        attachmentControlsWithPlus
-                        
-                        // Model name / metadata (white/light color)
-                        if let metadata = agentComposerMetadata {
-                            Text(metadata)
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.text)  // White/bright color
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
-                        }
-                        
-                        Spacer(minLength: 0)
-                        
-                        // Send button (white/bright style)
-                        Button {
-                            sendComposerMessage()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(IOSTypography.button)
-                                .foregroundStyle(IOSTheme.background)  // White icon
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(IOSTheme.text)  // Dark background for contrast
-                                .cornerRadius(17)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
-                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.3)
-                        .accessibilityLabel("Send Agent message")
+                    if let metadata = agentComposerMetadata {
+                        Text(metadata)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 8)
+                            .frame(minWidth: 0, maxWidth: 108)
+                            .accessibilityLabel("Agent type and model: \(metadata)")
                     }
-                    .padding(.bottom, 4)
+
+                    Button {
+                        sendComposerMessage()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(IOSTypography.button)
+                            .foregroundStyle(IOSTheme.text)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
+                    .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
+                    .accessibilityLabel("Send Agent message")
                 }
+                .frame(minHeight: 44, maxHeight: 44)
+                .padding(.horizontal, 4)
                 .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
@@ -2010,11 +1992,6 @@ private struct AgentStructuredEventBlock: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
-                    if expanded {
-                        Circle()
-                            .fill(stateColor)
-                            .frame(width: 6, height: 6)
-                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2037,12 +2014,13 @@ private struct AgentStructuredEventBlock: View {
 
             if expanded || kind == "question" || kind == "permission" {
                 detail
-                    .padding(.leading, 20)
+                    .padding(.leading, 14)
                     .padding(.bottom, 4)
             }
         }
         .padding(.vertical, WarrenSpacing.xs)
-        .padding(.horizontal, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             IOSTheme.muted.opacity(kind == "question" || kind == "permission" ? 0.24 : 0.06),
             in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
@@ -2489,11 +2467,12 @@ private struct AgentSecondaryEventBlock: View {
                     .font(contentFont)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
-                    .padding(.leading, 18)
+                    .padding(.leading, 12)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(IOSTheme.separator.opacity(0.52))
@@ -2565,11 +2544,6 @@ private struct AgentActivityGroupBlock: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    if expanded {
-                        Circle()
-                            .fill(activityStatusColor)
-                            .frame(width: 6, height: 6)
-                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2629,12 +2603,13 @@ private struct AgentActivityGroupBlock: View {
                         .background(IOSTheme.muted.opacity(0.28), in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
                 }
-                .padding(.leading, 24)
+                .padding(.leading, 16)
                 .padding(.bottom, 9)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, 14)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             if expanded {
                 Rectangle()
@@ -2703,11 +2678,6 @@ private struct AgentReasoningEntry: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    if expanded {
-                        Circle()
-                            .fill(IOSTheme.tertiaryText)
-                            .frame(width: 5, height: 5)
-                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 11)
@@ -2735,10 +2705,11 @@ private struct AgentReasoningEntry: View {
                 AgentMarkdownText(value: content, font: IOSTypography.helper)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
-                    .padding(.leading, 18)
+                    .padding(.leading, 12)
             }
         }
-        .padding(.leading, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             if expanded {
                 Rectangle()
@@ -2830,11 +2801,12 @@ private struct AgentToolBlockView: View {
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
                 }
-                .padding(.leading, 19)
+                .padding(.leading, 12)
                 .padding(.bottom, 6)
             }
         }
-        .padding(.leading, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(toolStatusColor.opacity(0.64))
@@ -2905,12 +2877,13 @@ private struct AgentToolOutputBlock: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.leading, 19)
+                .padding(.leading, 12)
                 .padding(.bottom, 7)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, WarrenSpacing.compact)
+        .padding(.trailing, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(toolStatusColor.opacity(0.64))
