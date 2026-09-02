@@ -283,7 +283,7 @@ export function AgentView({
   const submit = async (sendNow = false) => {
     if (!ready) return;
     const value = draft.trim();
-    if (!value) return;
+    if (!value && attachments.length === 0) return;
     if (!canCompose || uploadingAttachments) return;
     if (attachments.length > 0 && (!canUpload || attachments.some(item => item.status === "failed"))) return;
     if (submissionInFlightRef.current) return;
@@ -589,7 +589,7 @@ export function AgentView({
                 />
               </label>
               {modelLabel && <code>{modelLabel}</code>}
-              <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
+              <button type="submit" className="agent-send" disabled={(!draft.trim() && attachments.length === 0) || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
                 <SendIcon />
               </button>
             </div>
@@ -610,7 +610,7 @@ export function AgentView({
               {canInterrupt && (
                 <>
                   <button type="button" className="agent-cancel-button" disabled={cancelPending} onClick={cancelTurn}>{cancelPending ? "Cancelling…" : "Cancel"}</button>
-                  {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments || submitStatus === "sending"} onClick={() => { void submit(true); }}>Send now</button>}
+                  {(draft.trim() || attachments.length > 0) && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments || submitStatus === "sending"} onClick={() => { void submit(true); }}>Send now</button>}
                 </>
               )}
             </div>

@@ -581,16 +581,10 @@ private struct SessionTabRail: View {
                     }
                     .font(IOSTypography.label)
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .padding(.horizontal, 13)
+                    .padding(.horizontal, 16)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
-                            .stroke(IOSTheme.ring.opacity(0.8), lineWidth: 1)
-                    }
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 8)
                 .disabled(pendingSessionID != nil || model.isMutating)
                 .accessibilityLabel("Switch session")
                 .accessibilityValue("\(sessions.count) sessions")

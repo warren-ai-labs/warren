@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -35,6 +36,10 @@ type agentUpload struct {
 	expiresAt    time.Time
 	chunks       map[uint64][]byte
 	state        string
+	// path is a Host-local, mode-0600 file that a legacy PTY provider can read
+	// after an attachment message is sent. The wire protocol still exposes only
+	// the opaque attachment ID and never this path.
+	path string
 }
 
 // AgentViewController is an optional provider-native bridge. Hosts that have
@@ -71,10 +76,30 @@ func (s *Service) AgentViewCapabilities() []string {
 		capabilities = append(capabilities,
 			api.CapabilityAgentInteractions,
 			api.CapabilityAgentInterrupt,
-			api.CapabilityAgentAttachments,
 		)
 	}
+	// Attachments can use a provider-native controller when one is installed,
+	// or the built-in PTY bridge below, which materializes each upload as a
+	// Host-local file and includes its path in the provider prompt.
+	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
+		capabilities = append(capabilities, api.CapabilityAgentAttachments)
+	}
 	return capabilities
+}
+
+func (s *Service) hasRuntimeAdapter() bool {
+	if s == nil {
+		return false
+	}
+	if nonNilInterface(s.Runtime) {
+		return true
+	}
+	for _, runtime := range s.Runtimes {
+		if nonNilInterface(runtime) {
+			return true
+		}
+	}
+	return false
 }
 
 func nonNilInterface(value any) bool {
@@ -434,10 +459,35 @@ func (s *Service) completeAgentAttachment(
 		s.agentViewMu.Unlock()
 		return api.AgentAttachmentResult{}, errors.New("attachment complete checksum mismatch")
 	}
+	if upload.path == "" {
+		path, pathErr := materializeAgentAttachment(upload.name, data)
+		if pathErr != nil {
+			s.agentViewMu.Unlock()
+			return api.AgentAttachmentResult{}, fmt.Errorf("materialize attachment: %w", pathErr)
+		}
+		upload.path = path
+	}
 	upload.state = "ready"
 	result := api.AgentAttachmentResult{Accepted: true, AttachmentID: upload.attachmentID, UploadID: request.UploadID, State: "ready", Received: int64(len(data))}
 	s.agentViewMu.Unlock()
 	return result, nil
+}
+
+// materializeAgentAttachment creates a private Host-local file for providers
+// that only expose a terminal/PTY input surface. The original file name is
+// retained so provider tools can infer the format, while the directory and
+// file permissions prevent other users from reading the upload by default.
+func materializeAgentAttachment(name string, data []byte) (string, error) {
+	directory, err := os.MkdirTemp("", "warren-agent-attachments-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		_ = os.RemoveAll(directory)
+		return "", err
+	}
+	return path, nil
 }
 
 func orderedUploadBytes(upload *agentUpload) ([]byte, error) {
@@ -480,9 +530,53 @@ func (s *Service) abortAgentAttachment(ctx context.Context, request api.AgentAtt
 		return api.AgentAttachmentResult{}, errors.New("attachment session mismatch")
 	}
 	upload.state = "aborted"
+	path := upload.path
 	delete(s.agentUploads, request.UploadID)
 	s.agentViewMu.Unlock()
+	if path != "" {
+		_ = os.RemoveAll(filepath.Dir(path))
+	}
 	return api.AgentAttachmentResult{Accepted: true, UploadID: request.UploadID, State: "aborted"}, nil
+}
+
+// reapAgentAttachments bounds the lifetime of Host-local upload files even
+// when a client abandons an upload without sending the explicit abort RPC.
+func (s *Service) reapAgentAttachments(now time.Time) {
+	s.ensureAgentViewState()
+	var paths []string
+	s.agentViewMu.Lock()
+	for uploadID, upload := range s.agentUploads {
+		if now.Before(upload.expiresAt) {
+			continue
+		}
+		if upload.path != "" {
+			paths = append(paths, filepath.Dir(upload.path))
+		}
+		delete(s.agentUploads, uploadID)
+	}
+	s.agentViewMu.Unlock()
+	for _, path := range paths {
+		_ = os.RemoveAll(path)
+	}
+}
+
+// cleanupAgentAttachments removes all materialized uploads during service
+// shutdown. The upload map is intentionally device-local and need not survive
+// a daemon restart.
+func (s *Service) cleanupAgentAttachments() {
+	s.ensureAgentViewState()
+	var paths []string
+	s.agentViewMu.Lock()
+	for uploadID, upload := range s.agentUploads {
+		if upload.path != "" {
+			paths = append(paths, filepath.Dir(upload.path))
+		}
+		delete(s.agentUploads, uploadID)
+	}
+	s.agentViewMu.Unlock()
+	for _, path := range paths {
+		_ = os.RemoveAll(path)
+	}
 }
 
 func (s *Service) attachmentReady(sessionID, attachmentID string) bool {
@@ -541,6 +635,102 @@ func (s *Service) attachmentReferenceReady(sessionID string, reference api.Agent
 	return errors.New("attachment is not ready")
 }
 
+type materializedAgentAttachment struct {
+	name string
+	mime string
+	size int64
+	path string
+}
+
+// materializedAgentAttachmentFor resolves an opaque wire reference to the
+// private file prepared at upload completion. It is the only place where the
+// Host turns an attachment ID back into bytes; callers never trust a client
+// supplied path.
+func (s *Service) materializedAgentAttachmentFor(sessionID string, reference api.AgentAttachmentRef) (materializedAgentAttachment, error) {
+	if err := s.attachmentReferenceReady(sessionID, reference); err != nil {
+		return materializedAgentAttachment{}, err
+	}
+	s.ensureAgentViewState()
+	s.agentViewMu.Lock()
+	var upload *agentUpload
+	for _, candidate := range s.agentUploads {
+		if candidate.sessionID == sessionID && candidate.attachmentID == strings.TrimSpace(reference.AttachmentID) {
+			upload = candidate
+			break
+		}
+	}
+	if upload == nil {
+		s.agentViewMu.Unlock()
+		return materializedAgentAttachment{}, errors.New("attachment is not ready")
+	}
+	if upload.path != "" {
+		result := materializedAgentAttachment{name: upload.name, mime: upload.mime, size: upload.size, path: upload.path}
+		s.agentViewMu.Unlock()
+		return result, nil
+	}
+	// This fallback keeps uploads completed by an older in-process caller
+	// usable after the bridge is enabled. New completions always set path.
+	data, err := orderedUploadBytes(upload)
+	if err != nil {
+		s.agentViewMu.Unlock()
+		return materializedAgentAttachment{}, err
+	}
+	name, mime, size := upload.name, upload.mime, upload.size
+	s.agentViewMu.Unlock()
+	path, err := materializeAgentAttachment(name, data)
+	if err != nil {
+		return materializedAgentAttachment{}, fmt.Errorf("materialize attachment: %w", err)
+	}
+	s.agentViewMu.Lock()
+	published := false
+	for _, candidate := range s.agentUploads {
+		if candidate == upload {
+			published = true
+			if candidate.path == "" {
+				candidate.path = path
+			} else {
+				path = candidate.path
+			}
+			break
+		}
+	}
+	s.agentViewMu.Unlock()
+	if !published {
+		_ = os.RemoveAll(filepath.Dir(path))
+		return materializedAgentAttachment{}, errors.New("attachment is no longer available")
+	}
+	return materializedAgentAttachment{name: name, mime: mime, size: size, path: path}, nil
+}
+
+func (s *Service) agentMessageTextWithAttachments(request api.AgentMessageSendRequest) (string, error) {
+	if len(request.Attachments) == 0 {
+		return request.Text, nil
+	}
+	var builder strings.Builder
+	builder.WriteString(request.Text)
+	builder.WriteString("\n\nAttached files are available on the Host:\n")
+	for _, reference := range request.Attachments {
+		attachment, err := s.materializedAgentAttachmentFor(request.Session, reference)
+		if err != nil {
+			return "", fmt.Errorf("attachment %s: %w", reference.AttachmentID, err)
+		}
+		builder.WriteString("- ")
+		builder.WriteString(attachment.name)
+		if attachment.mime != "" {
+			builder.WriteString(" (")
+			builder.WriteString(attachment.mime)
+			builder.WriteString(")")
+		}
+		if attachment.size >= 0 {
+			builder.WriteString(fmt.Sprintf(" [%d bytes]", attachment.size))
+		}
+		builder.WriteString(": ")
+		builder.WriteString(attachment.path)
+		builder.WriteByte('\n')
+	}
+	return builder.String(), nil
+}
+
 func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessageSendRequest) (api.AgentMessageSendResult, error) {
 	if err := ctx.Err(); err != nil {
 		return api.AgentMessageSendResult{}, err
@@ -548,8 +738,12 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 	request.Session = strings.TrimSpace(request.Session)
 	request.ClientMessageID = strings.TrimSpace(request.ClientMessageID)
 	request.Text = strings.TrimSpace(request.Text)
-	if request.Session == "" || request.ClientMessageID == "" || request.Text == "" {
-		return api.AgentMessageSendResult{}, errors.New("session, clientMessageId and text are required")
+	if request.Session == "" || request.ClientMessageID == "" ||
+		(request.Text == "" && len(request.Attachments) == 0) {
+		return api.AgentMessageSendResult{}, errors.New("session, clientMessageId and text or attachments are required")
+	}
+	if request.Text == "" {
+		request.Text = "Please inspect the attached file(s)."
 	}
 	if _, ok := s.Session(request.Session); !ok {
 		return api.AgentMessageSendResult{}, fmt.Errorf("session not found: %s", request.Session)
@@ -592,11 +786,6 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			return api.AgentMessageSendResult{}, fmt.Errorf("attachment %s: %w", attachment.AttachmentID, err)
 		}
 	}
-	if len(request.Attachments) > 0 && !nonNilInterface(s.AgentController) {
-		err := errors.New("agent attachment message transport is unavailable")
-		s.finishAgentAction(actionKey, call, nil, err)
-		return api.AgentMessageSendResult{}, err
-	}
 	if controller := s.AgentController; nonNilInterface(controller) {
 		if err := controller.SendMessage(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -613,7 +802,16 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			return api.AgentMessageSendResult{}, errors.New("agent message transport is unavailable")
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
-		err := sendAgentMessageInput(ctx, runtime, session.Runtime, request.Text)
+		text := request.Text
+		if len(request.Attachments) > 0 {
+			text, err = s.agentMessageTextWithAttachments(request)
+			if err != nil {
+				unlock()
+				s.finishAgentAction(actionKey, call, nil, err)
+				return api.AgentMessageSendResult{}, err
+			}
+		}
+		err = sendAgentMessageInput(ctx, runtime, session.Runtime, text)
 		unlock()
 		if err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -657,11 +855,18 @@ func sendAgentMessageInput(ctx context.Context, runtime Runtime, sessionID, text
 // send_now, types the replacement message after the turn is cancelled. It is
 // the PTY fallback for Hosts without a provider-native AgentController.
 func interruptAgentTurnInput(ctx context.Context, runtime Runtime, sessionID string, request api.AgentTurnInterruptRequest) error {
+	if request.Replacement == nil {
+		return interruptAgentTurnInputText(ctx, runtime, sessionID, "")
+	}
+	return interruptAgentTurnInputText(ctx, runtime, sessionID, request.Replacement.Text)
+}
+
+func interruptAgentTurnInputText(ctx context.Context, runtime Runtime, sessionID, replacementText string) error {
 	if err := runtime.Input(ctx, sessionID, []byte{0x03}); err != nil {
 		return err
 	}
-	if request.Replacement != nil {
-		return sendAgentMessageInput(ctx, runtime, sessionID, request.Replacement.Text)
+	if replacementText != "" {
+		return sendAgentMessageInput(ctx, runtime, sessionID, replacementText)
 	}
 	return nil
 }
@@ -761,6 +966,9 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 		}
 		request.Replacement.ClientMessageID = strings.TrimSpace(request.Replacement.ClientMessageID)
 		request.Replacement.Text = strings.TrimSpace(request.Replacement.Text)
+		if request.Replacement.Text == "" && len(request.Replacement.Attachments) > 0 {
+			request.Replacement.Text = "Please inspect the attached file(s)."
+		}
 	}
 	if _, ok := s.Session(request.Session); !ok {
 		return api.AgentTurnInterruptResult{}, fmt.Errorf("session not found: %s", request.Session)
@@ -859,7 +1067,18 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			return api.AgentTurnInterruptResult{}, err
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
-		err := interruptAgentTurnInput(ctx, runtime, session.Runtime, request)
+		var err error
+		if request.Replacement != nil && len(request.Replacement.Attachments) > 0 {
+			text, textErr := s.agentMessageTextWithAttachments(*request.Replacement)
+			if textErr != nil {
+				unlock()
+				s.finishAgentAction(actionKey, call, nil, textErr)
+				return api.AgentTurnInterruptResult{}, textErr
+			}
+			err = interruptAgentTurnInputText(ctx, runtime, session.Runtime, text)
+		} else {
+			err = interruptAgentTurnInput(ctx, runtime, session.Runtime, request)
+		}
 		unlock()
 		if err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)

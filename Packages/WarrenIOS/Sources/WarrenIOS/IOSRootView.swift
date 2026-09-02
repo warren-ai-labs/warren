@@ -1137,9 +1137,6 @@ struct IOSHostFooter: View {
                             .font(IOSTypography.status)
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(IOSTheme.tertiaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -1239,20 +1236,36 @@ private struct IOSEndpointPickerSheet: View {
                                             .foregroundStyle(IOSTheme.text)
                                             .lineLimit(1)
                                             .truncationMode(.middle)
-                                        Text(host.isRelay ? "Relay" : host.url)
+                                        Text(host.isRelay ? "Relay · \(host.routeID ?? "Direct route")" : host.url)
                                             .font(IOSTypography.metadata)
                                             .foregroundStyle(IOSTheme.secondaryText)
                                             .lineLimit(1)
                                             .truncationMode(.middle)
+                                        HStack(spacing: 6) {
+                                            if host.name == model.endpointMetadata.name {
+                                                Text(IOSCopy.connectionTitle(for: model.connectionState))
+                                                    .foregroundStyle(connectionColor)
+                                            } else {
+                                                Text("Tap to connect")
+                                                    .foregroundStyle(IOSTheme.tertiaryText)
+                                            }
+                                            Text("·")
+                                                .foregroundStyle(IOSTheme.tertiaryText)
+                                            Text(host.hasToken ? "Token saved" : "No token")
+                                                .foregroundStyle(IOSTheme.tertiaryText)
+                                        }
+                                        .font(IOSTypography.status)
+                                        .lineLimit(1)
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     if host.name == model.endpointMetadata.name {
-                                        Image(systemName: "checkmark.circle.fill")
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 13, weight: .semibold))
                                             .foregroundStyle(IOSTheme.green)
                                     }
                                 }
                                 .padding(.horizontal, 13)
-                                .frame(minHeight: 58)
+                                .frame(minHeight: 76)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1285,6 +1298,15 @@ private struct IOSEndpointPickerSheet: View {
             let rhsCurrent = rhs.name == model.endpointMetadata.name
             if lhsCurrent != rhsCurrent { return lhsCurrent }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private var connectionColor: Color {
+        switch model.connectionState {
+        case .connected: return IOSTheme.green
+        case .connecting, .reconnecting: return IOSTheme.amber
+        case .disconnected: return IOSTheme.red
+        case .stopped: return IOSTheme.secondaryText
         }
     }
 }
@@ -2353,9 +2375,6 @@ public struct IOSEndpointConfigurationView: View {
                             Text(IOSCopy.connectionTitle(for: model.connectionState))
                                 .font(IOSTypography.status)
                                 .foregroundStyle(connectionColor)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(IOSTheme.tertiaryText)
                         }
                         .padding(.horizontal, 13)
                         .frame(minHeight: 64)

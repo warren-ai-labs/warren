@@ -74,9 +74,10 @@ SessionView（某个 Session）
 ### 3.3 Host 底栏与 endpoint 页面
 
 - `IOSHostFooter`（`1120-1203`）：当前 Host 名称、Relay/Direct Host 副标题、连接点、
-  重连按钮、设置入口；点击 Host 名称打开 `IOSEndpointPickerSheet`。
-- `IOSEndpointPickerSheet`（`1208-1290`）：Host 列表、Relay/Direct 图标、当前 Host
-  选中标记和 Done。
+  重连按钮、设置入口；Host 名称本身就是切换入口，不再额外显示上下箭头。
+- `IOSEndpointPickerSheet`（`1208-1290`）：Host 列表、Relay/Direct 图标、地址或 Relay
+  route、当前连接状态、Token 是否保存、当前 Host 选中标记和 Done。这里是切换 Host
+  的信息面板，不是只显示名称的菜单。
 - `ScopeDetailView`（`1292-1435`）：Workspace/Terminal group 详情、Session 列表、
   管理菜单、删除反馈。
 - `IOSBackHeader`（`1436-1498`）：详情页和设置页共用的返回、标题、副标题及操作菜单栏。
@@ -104,7 +105,8 @@ SessionView（某个 Session）
 - `sessionProviderID`（`454-473`）与 `SessionProviderMark`（`474-523`）：根据 Session
   类型和最新事件选择 Claude/Codex/OpenCode/Pi/Shell 图标，并可叠加小型 Agent 活动标记。
 - `SessionTabRail`（`524-607`）：同一 Scope 内不超过两个 Session 时显示横向标签；超过两个
-  时显示 Session 数量和切换按钮。
+  时显示 Session 数量和切换按钮。整条 rail 全宽铺开，只保留底部分隔线，不使用左右边框、
+  圆角卡片或内嵌 bar。
 - `SessionSwitcherSheet`（`608-687`）：完整 Session 列表、当前选中标记和切换中状态。
 - `TerminalShortcutBar`（`688-780`）：Terminal 模式底部快捷键。第一行含键盘收起、Esc、
   Tab、Home/End、方向键、Ctrl、Alt、Copy/Paste；展开 Ctrl 后显示 Ctrl-C/D/A/E/U/K/L。
@@ -139,16 +141,25 @@ SessionView（某个 Session）
 
 相关位置：
 
-- `attachmentControlsWithPlus`（`778-793`）：加号入口直接返回 picker；iOS 使用 PhotosPicker，
-  其他平台使用 file importer，不能再把 picker 当成 Button action 内的无效表达式。
-- `filePickerButton` / `photoPickerButton`（`795-834`）：文件/照片选择器。
+- `attachmentControlsWithPlus`（`778-818`）：加号入口。iOS 在一个紧凑菜单中同时提供
+  PhotosPicker（照片）和 file importer（普通文件、iCloud Drive）；其他平台直接使用 file
+  importer。不能再把 picker 当成 Button action 内的无效表达式。
+- `filePickerButton` / `attachmentPlusLabel`（`820-846`）：文件选择器和共享的加号图标标签。
+- `loadPhotos` / `handleFileImporter`（约 `1036-1103`）：读取照片或安全作用域文件 URL，转成
+  短暂的本地附件数据；附件只在上传期间留在内存。
 - `attachmentChip`（`836-881`）：附件名称、上传进度、失败重试和删除附件。这里的
   `xmark.circle.fill` 是“删除附件”按钮，不能误认为失败红叉。
 - `agentComposerMetadata` / `agentTypeLabel`（`1105-1130`）：第二行的 provider + model
   文案，不是新的输入框。
-- `sendComposerMessage`（`926-1018`）：无附件直接发送；有附件先上传，再用 opaque reference
+- `sendComposerMessage`（`935-1032`）：无附件直接发送；有附件先上传，再用 opaque reference
   发送；失败显示反馈。
-- `canSend`（`1164-1167`）：发送按钮是否启用。
+- `canSend`（`1173-1176`）：发送按钮是否启用。
+
+附件发送的 View 只负责选择、读取、进度和 opaque reference。iOS 与 Web 都调用
+`agent.attachment.prepare/chunk/complete/abort`，完成后再调用 `agent.message.send`；
+Host 会把附件内容写入权限为 `0600` 的临时文件，并在没有 Provider-native bridge 时通过
+PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不会发送本地路径，也不会把
+文件内容写入 draft 或队列持久化。
 
 ### 5.3 队列、提示和辅助行
 
@@ -177,22 +188,24 @@ SessionView（某个 Session）
 
 ### 6.1 状态轨道
 
-`AgentStatusRail`（`1958-1995`）是所有折叠行共用的左侧状态轨道：圆角竖条、独立的左侧
-预留列、不可点击，不压在 chevron 或业务图标上。各组件的调用位置：
+`AgentStatusRail`（`1958-1995`）是顶层结构化事件和 ActivityGroup 共用的左侧状态轨道：
+圆角竖条、独立的左侧预留列、不可点击，不压在 chevron 或业务图标上。Tool/Thinking 子行
+不再调用它。各组件的调用位置：
 
 - `AgentStructuredEventBlock`（`2018-2463`）：Question/Permission/Plan/Todo/Activity/
   Plugin/Subagent/Attachment；展开或失败时绘制，失败使用红色轨道。
 - `AgentSecondaryEventBlock`（`2506-2572`）：System/metadata/notice 等次要信息，使用中性
   分隔轨道。
-- `AgentActivityGroupBlock`（`2607-2742`）：reasoning/tool 活动组；展开、运行或失败时绘制，
-  运行是琥珀色，失败是红色，完成是绿色。
-- `AgentReasoningEntry`（`2743-2809`）：活动组内的 Thinking 子折叠，展开时使用中性轨道。
+- `AgentActivityGroupBlock`（`2607-2742`）：reasoning/tool 活动组；展开、运行或失败时绘制
+  顶层状态轨道，轨道位于独立左侧预留列，不压住标题。
+- `AgentReasoningEntry`（`2743-2809`）：活动组内的 Thinking 子折叠；不再绘制绿色、红色
+  或中性竖线，标题与 Tool 子行使用同一层级缩进。
 - `AgentToolBlockView`（`2810-2901`）和 `AgentToolOutputBlock`（`2902-2976`）：工具调用及
-  输出的状态轨道；成功绿色、运行琥珀色、中断黄色、失败红色。
+  输出；不再绘制状态竖线，失败状态由最右侧无边框红色 `xmark` 表示。
 
-轨道与标题的间隔由各行的 `.padding(.leading, 8)` 和 `AgentStatusRail` 的 leading inset
-共同保证。若出现“竖线压住箭头/图标”，优先检查上述五个组件和 `AgentStatusRail`，不要在
-单个标题里临时插入圆点来补偿。
+顶层轨道与标题的间隔由独立左侧预留列和 detail indent 共同保证。Tool/Thinking 的标题、
+正文和输出共享 ActivityGroup detail 的左侧基线；若出现“竖线压住箭头/图标”，优先检查
+顶层 `AgentActivityGroupBlock` 的 rail 列，不要在子标题里临时插入圆点或竖线来补偿。
 
 ### 6.2 圆点、圆圈和叉号的区别
 
@@ -200,11 +213,11 @@ SessionView（某个 Session）
 | --- | --- | --- |
 | 条件圆点 / Plan 圆点 | `AgentStructuredEventBlock.detail` 的 Plan/Todo 分支，约 `2232-2246` | 已删除 `circle`、`circle.lefthalf.filled`、`checkmark.circle.fill` 状态图标；条目只显示文字和紧凑状态文案 |
 | 折叠标题状态圆点 | `AgentStructuredEventBlock`、`AgentActivityGroupBlock`、`AgentReasoningEntry` 标题 | 不再按 expanded 条件插入 Circle；标题的 chevron 起始位置保持不变 |
-| 工具状态圆点 | `AgentToolBlockView` / `AgentToolOutputBlock` 标题 | 不绘制小 Circle；状态由左侧轨道表示 |
-| 运行中的圆点 | `activityStatusMark`（约 `2690-2718`）、`AgentToolStatusMark`（约 `2977-3001`） | 折叠行不显示 trailing pulsing dot；保留轨道和 VoiceOver 语义 |
+| 工具状态圆点 | `AgentToolBlockView` / `AgentToolOutputBlock` 标题 | 不绘制小 Circle；失败使用最右侧无边框红色 `xmark`，完成仍可用绿色 checkmark |
+| 运行中的圆点 | `activityStatusMark`（约 `2690-2718`）、`AgentToolStatusMark`（约 `2977-3001`） | 折叠行不显示 trailing pulsing dot；ActivityGroup 仅保留顶层状态轨道，Tool/Thinking 子行保持紧凑 |
 | Question/Permission 选项圆圈 | `interactionOptionRow`，约 `2250-2264` | 这是可点击的单选/多选控件，不能按“条件圆点”删除；选中态仍用 `checkmark.circle.fill` |
 | 附件删除叉 | `attachmentChip`，约 `860-871` | 这是删除附件动作，不是失败状态，不能删除或替换为失败轨道 |
-| 失败红叉 | 旧实现位于 `activityStatusMark` / `AgentToolStatusMark` | 当前为 `EmptyView()`；失败只用红色状态轨道表示 |
+| 失败红叉 | `AgentToolStatusMark`（`AgentToolBlockView` / `AgentToolOutputBlock` 标题尾部） | `xmark` 无边框、固定在 trailing 位置；颜色为 `IOSTheme.red` |
 
 ### 6.3 结构化卡片和交互
 
@@ -216,8 +229,9 @@ SessionView（某个 Session）
 - `AgentSecondaryEventBlock` 用于可展开的系统/元数据预览。
 - `AgentCompactionMarker`（`2562-2595`）是时间线中的单行压缩标记，不属于可展开卡片。
 - `AgentActivityGroupBlock` 内部按 Thinking → Tools 顺序显示；`AgentReasoningEntry`、
-  `AgentToolBlockView`、`AgentToolOutputBlock` 是第二级折叠。
-- `AgentToolStatusMark` 仍为 VoiceOver 提供状态语义；视觉失败分支是 `EmptyView()`。
+  `AgentToolBlockView`、`AgentToolOutputBlock` 是第二级折叠。三者取消子级竖线，详情内容
+  共享同一左侧基线；顶层 ActivityGroup 状态轨道仍保留。
+- `AgentToolStatusMark` 仍为 VoiceOver 提供状态语义；失败视觉是最右侧无边框红色 `xmark`。
 
 ## 7. Markdown 渲染（`IOSMarkdown.swift`）
 
@@ -315,10 +329,10 @@ SessionView（某个 Session）
 | 用户说法 | 先查这里 | 备注 |
 | --- | --- | --- |
 | “条件圆点没删” | `AgentStructuredEventBlock` Plan/Todo 分支（约 `2232`） | 现在应没有状态 Circle；不要改 `interactionOptionRow` 的单选圆圈 |
-| “折叠前没有最左对齐” | `AgentStatusRail`（`1958`）及五个折叠 View 的 `.padding(.leading, 8)` | 检查 rail inset、标题 chevron 起点和嵌套 detail padding |
+| “折叠前没有最左对齐” | `AgentStatusRail`（`1958`）、`AgentActivityGroupBlock` 和 `SessionTabRail` | 先区分顶层状态轨道与 Session 全宽切换条；Tool/Thinking 子行不再自行添加 rail |
 | “展开后缩进太深” | `AgentStructuredEventBlock` detail（约 `2074`）、`AgentActivityGroupBlock` detail（约 `2650`）、reasoning/tool detail | 优先调固定 indent，不要插入状态圆点 |
-| “右侧红叉” | `activityStatusMark`、`AgentToolStatusMark` | 失败分支必须是 `EmptyView()`，红色只从 `AgentStatusRail` 来 |
-| “红/绿色竖线压住箭头” | `AgentStatusRail` + `AgentStructuredEventBlock` / `AgentActivityGroupBlock` / `AgentReasoningEntry` / `AgentToolBlockView` / `AgentToolOutputBlock` overlays | 轨道要在保留左列间距的位置，不能直接覆盖标题 HStack |
+| “右侧红叉” | `AgentToolStatusMark`（由 `AgentToolBlockView` / `AgentToolOutputBlock` 调用） | 失败显示无边框红色 `xmark`，用固定宽度 frame 放在最右侧；不要改成圆形按钮 |
+| “红/绿色竖线压住箭头” | `AgentStatusRail` + `AgentStructuredEventBlock` / `AgentActivityGroupBlock` overlays | Tool/Thinking 子行已经不画竖线；若仍重叠，先查顶层 ActivityGroup 的独立 rail 列与 detail indent |
 | “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`52-162`）与 `composer` 第一行（约 `670-707`） | 固定 44pt；UITextView 内部滚动；`layoutSubviews` 动态计算上下 inset，placeholder 与 caret 对齐 |
 | “Composer 应该两行” | `composer`（`644-777`） | 第一行 Message，第二行 +/附件/Model/发送箭头；不要把两行合并成 HStack |
 | “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `740-769`） | 当前是无背景的白色 `arrow.up`，44pt hit area |
@@ -333,9 +347,13 @@ SessionView（某个 Session）
 | “队列消息” | `IOSAgentQueueSheet`（`1169`）与 model 队列 API | 队列是本地 View 状态，不是 transcript event |
 | “历史加载/上拉” | `AgentHistoryLoadMoreRow`（`1464`）、顶部哨兵和 `requestOlderHistory` | 使用 anchor 保持原可视位置 |
 | “Session 顶栏/Terminal-Agent 切换” | `SessionHeader`、`IOSModeToggle`、`SessionView` | `IOSSessionDisplayMode` 是每个 Session 的本地偏好 |
+| “Session 切换条有左右边框” | `SessionTabRail` | 改为全宽 rail；删除 rounded rectangle stroke 和左右外边距，只保留底部分隔线 |
 | “Terminal 快捷键” | `TerminalShortcutBar`（`688`）与 `IOSKeyCap`（`681`） | 不要在 Agent Composer 中复用 Terminal 快捷键栏 |
 | “首页项目/Workspace 折叠” | `HostDashboardView`、`CollapsibleSectionHeader`、`WorkspaceRailRow` | 这是首页目录折叠，不是 Agent 时间线折叠 |
 | “Host 设置/扫码” | `IOSEndpointConfigurationView`、`IOSEndpointEditorView`、`IOSRelayPairingScannerView` | token 只显示存在性，不从 UI state 读取明文 |
+| “Host 切换按钮/箭头” | `IOSHostFooter`、`IOSEndpointConfigurationView` | Host 名称行可点击切换；不添加 `chevron.up.chevron.down` 之类提示图标 |
+| “Host 切换面板信息太少” | `IOSEndpointPickerSheet` | 检查类型、地址/route、连接状态、Token 状态和当前选中标记 |
+| “iOS/Web 附件发不出去” | iOS `IOSApplicationModel.uploadAgentAttachment` / `sendAgentMessage`、Web `uploadAgentAttachments` / `agent.message.send`、Host `Headless/internal/server/agent_view.go` | 先查 capability，再查 prepare/chunk/complete，最后查 Host 的临时文件 PTY bridge；不要把本地路径直接放进协议 |
 
 ## 12. UI 问题描述模板
 

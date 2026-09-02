@@ -777,13 +777,38 @@ public struct AgentChatView: View {
 
     @ViewBuilder
     private var attachmentControlsWithPlus: some View {
-        let attachmentsSupported = model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
 #if os(iOS)
-        // Return the picker itself. Wrapping it in a Button only evaluated the
-        // picker View as an unused expression, so tapping + never presented
-        // PhotosPicker on a real device.
-        if attachmentsSupported {
-            photoPickerButton
+        if model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) {
+            // Keep one compact plus control, but expose both Photos and Files.
+            // A PhotosPicker alone cannot attach PDFs, source files, or other
+            // documents, while the file importer also handles images selected
+            // from Files and iCloud Drive.
+            Menu {
+                PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
+                    Label("Choose Photos", systemImage: "photo")
+                }
+                Button {
+                    isFileImporterPresented = true
+                } label: {
+                    Label("Choose Files", systemImage: "doc")
+                }
+            } label: {
+                attachmentPlusLabel
+            }
+            .menuStyle(.automatic)
+            .disabled(isUploadingAttachments || sendStatus == "sending")
+            .accessibilityLabel("Choose photos or files")
+            .fileImporter(
+                isPresented: $isFileImporterPresented,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true,
+                onCompletion: handleFileImporter
+            )
+#if canImport(UIKit)
+            .onChange(of: photoItems) { _, items in
+                loadPhotos(items)
+            }
+#endif
         } else {
             filePickerButton
         }
@@ -797,10 +822,7 @@ public struct AgentChatView: View {
         Button {
             isFileImporterPresented = true
         } label: {
-            Image(systemName: "plus")
-                .font(IOSTypography.button)
-                .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 44, height: 44)
+            attachmentPlusLabel
         }
         .buttonStyle(.plain)
         .disabled(!model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) || isUploadingAttachments || sendStatus == "sending")
@@ -813,25 +835,12 @@ public struct AgentChatView: View {
         )
     }
 
-#if os(iOS)
-    @ViewBuilder
-    private var photoPickerButton: some View {
-        PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
-            Image(systemName: "plus")
-                .font(IOSTypography.button)
-                .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 44, height: 44)
-        }
-        .buttonStyle(.plain)
-        .disabled(!model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) || isUploadingAttachments || sendStatus == "sending")
-        .accessibilityLabel("Choose photos")
-#if canImport(UIKit)
-        .onChange(of: photoItems) { _, items in
-            loadPhotos(items)
-        }
-#endif
+    private var attachmentPlusLabel: some View {
+        Image(systemName: "plus")
+            .font(IOSTypography.button)
+            .foregroundStyle(IOSTheme.secondaryText)
+            .frame(width: 44, height: 44)
     }
-#endif
 
     private func attachmentChip(_ attachment: IOSAgentLocalAttachment) -> some View {
         HStack(spacing: 4) {
@@ -925,7 +934,7 @@ public struct AgentChatView: View {
 
     private func sendComposerMessage(sendNow: Bool = false) {
         let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty,
+        guard (!value.isEmpty || !localAttachments.isEmpty),
               !isUploadingAttachments,
               sendStatus != "sending" else { return }
         let selected = localAttachments
@@ -1162,7 +1171,8 @@ public struct AgentChatView: View {
     }
 
     private var canSend: Bool {
-        model.canSendAgent && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        model.canSendAgent
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !localAttachments.isEmpty)
     }
 }
 
@@ -2676,7 +2686,7 @@ private struct AgentActivityGroupBlock: View {
                                 AgentToolBlockView(tool: tool)
                             }
                         }
-                        .padding(.horizontal, 7)
+                        .padding(.horizontal, 0)
                         .padding(.vertical, 6)
                         .background(IOSTheme.muted.opacity(0.28), in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
@@ -2786,17 +2796,11 @@ private struct AgentReasoningEntry: View {
                 AgentMarkdownText(value: content, font: IOSTypography.helper)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
-                    .padding(.leading, 10)
+                    .padding(.leading, 0)
             }
         }
-        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .leading) {
-            if expanded {
-                AgentStatusRail(color: IOSTheme.separator, width: 1, opacity: 0.64, verticalInset: 2)
-            }
-        }
     }
 
     private var summary: String? {
@@ -2877,25 +2881,12 @@ private struct AgentToolBlockView: View {
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
                 }
-                .padding(.leading, 10)
+                .padding(.leading, 0)
                 .padding(.bottom, 6)
             }
         }
-        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .leading) {
-            AgentStatusRail(color: toolStatusColor, width: 2, opacity: 0.86, verticalInset: 2)
-        }
-    }
-
-    private var toolStatusColor: Color {
-        switch tool.status.lowercased() {
-        case "running", "working": return IOSTheme.amber
-        case "error", "failed": return IOSTheme.red
-        case "interrupted": return IOSTheme.yellow
-        default: return IOSTheme.green
-        }
     }
 }
 
@@ -2948,26 +2939,13 @@ private struct AgentToolOutputBlock: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.leading, 10)
+                .padding(.leading, 0)
                 .padding(.bottom, 7)
             }
         }
         .padding(.vertical, 2)
-        .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .leading) {
-            AgentStatusRail(color: toolStatusColor, width: 2, opacity: 0.86, verticalInset: 2)
-        }
-    }
-
-    private var toolStatusColor: Color {
-        switch (event.toolStatus ?? "success").lowercased() {
-        case "running", "working": return IOSTheme.amber
-        case "error", "failed": return IOSTheme.red
-        case "interrupted": return IOSTheme.yellow
-        default: return IOSTheme.green
-        }
     }
 }
 
@@ -2981,8 +2959,12 @@ private struct AgentToolStatusMark: View {
         switch status.lowercased() {
         case "running", "working":
             EmptyView()
-        case "error", "failed":
-            EmptyView()
+        case "error", "failed", "failure":
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(IOSTheme.red)
+                .frame(width: 20, height: 20, alignment: .center)
+                .accessibilityLabel("Tool failed")
         case "interrupted":
             Image(systemName: "pause.circle")
                 .font(IOSTypography.label)
@@ -3047,14 +3029,5 @@ private func toolStatusTitle(_ status: String) -> String {
     case "interrupted": return "Interrupted"
     case "running", "working": return "Running…"
     default: return "Completed"
-    }
-}
-
-private func toolStatusColor(_ status: String) -> Color {
-    switch status.lowercased() {
-    case "error", "failed": return IOSTheme.red
-    case "interrupted": return IOSTheme.yellow
-    case "running", "working": return IOSTheme.amber
-    default: return IOSTheme.green
     }
 }
