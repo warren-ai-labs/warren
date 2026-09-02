@@ -220,13 +220,13 @@ struct WarrenDesktopTabBar: View {
                             .disabled(pendingTabID != nil)
                             .opacity(pendingTabID == tab.id ? 0.72 : 1)
                             .overlay(alignment: .bottom) {
-                                // Keep the active state legible at a glance;
-                                // the overlay does not change the 36pt tab
-                                // contract or steal pointer events. The tab's
-                                // own button style supplies the focus ring.
+                                // Keep the pending state visible while the
+                                // selection itself remains free of a colored
+                                // underline. The tab surface already carries
+                                // the selected background and border.
                                 Rectangle()
-                                    .fill(pendingTabID == tab.id ? tokens.info : (isSelected ? tokens.highlight : .clear))
-                                    .frame(height: pendingTabID == tab.id || isSelected ? 2 : 0)
+                                    .fill(pendingTabID == tab.id ? tokens.info : .clear)
+                                    .frame(height: pendingTabID == tab.id ? 2 : 0)
                                     .allowsHitTesting(false)
                             }
                         }
@@ -237,12 +237,6 @@ struct WarrenDesktopTabBar: View {
                                 onSelect: onOpenEmbeddedEditor,
                                 onClose: onCloseEmbeddedEditor
                             )
-                            .overlay(alignment: .bottom) {
-                                Rectangle()
-                                    .fill(embeddedEditorSelected ? tokens.highlight : .clear)
-                                    .frame(height: embeddedEditorSelected ? 2 : 0)
-                                    .allowsHitTesting(false)
-                            }
                         }
                     }
                     .background {
