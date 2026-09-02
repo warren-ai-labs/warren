@@ -35,6 +35,15 @@ final class IOSPersistenceTests: XCTestCase {
         )
     }
 
+    func testAgentActivityPulseIsReservedForWorking() {
+        XCTAssertTrue(iosAgentActivityShouldPulse(.working))
+        XCTAssertFalse(iosAgentActivityShouldPulse(.ready))
+        XCTAssertFalse(iosAgentActivityShouldPulse(.blocked))
+        XCTAssertFalse(iosAgentActivityShouldPulse(.stalled))
+        XCTAssertFalse(iosAgentActivityShouldPulse(.failed))
+        XCTAssertFalse(iosAgentActivityShouldPulse(.exited))
+    }
+
     func testNavigationRoundTripDoesNotContainEndpointToken() throws {
         let defaults = UserDefaults(suiteName: "warren-ios-test-\(UUID())")!
         let store = IOSLocalStore(defaults: defaults, keychain: IOSKeychainStore(service: "warren-ios-test"))
@@ -543,6 +552,147 @@ final class IOSPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testRejectedSessionSwitchRestoresThePreviousSessionRoute() async throws {
+        let task = IOSScriptedWebSocketTask()
+        let firstID = "aaaaaaaa-1111-1111-1111-111111111111"
+        let secondID = "bbbbbbbb-2222-2222-2222-222222222222"
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + firstID + "\",\"title\":\"First\",\"kind\":\"shell\",\"lifecycle\":\"running\"},{\"id\":\"" + secondID + "\",\"title\":\"Second\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-switch-failure-\(UUID())")!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-switch-failure")
+            )
+        )
+        model.start()
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        model.selectSession(firstID)
+        let initial = await waitForSentMessages(task, count: 2)
+        let firstSubscribeID = try XCTUnwrap(
+            initial.first(where: { requestMethod($0) == "session.subscribe" }).flatMap { try? requestID(from: $0) }
+        )
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"" + firstSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"))
+        try await Task.sleep(for: .milliseconds(20))
+
+        model.selectSession(secondID)
+        var messages = await waitForSentMessages(task, count: 3)
+        let unsubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.unsubscribe" }))
+        let unsubscribeID = try requestID(from: unsubscribe)
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"" + unsubscribeID + "\",\"ok\":true,\"result\":{\"unsubscribed\":true}}"))
+        messages = await waitForSentMessages(task, count: 4)
+        let secondSubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.subscribe" && (try? requestID(from: $0)) != firstSubscribeID }))
+        let secondSubscribeID = try requestID(from: secondSubscribe)
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"" + secondSubscribeID + "\",\"ok\":false,\"error\":\"Session is unavailable\"}"))
+
+        for _ in 0..<400 {
+            if model.currentSessionID == firstID { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.currentSessionID, firstID)
+        XCTAssertEqual(model.navigation.sessionID, firstID)
+        model.stop()
+    }
+
+    @MainActor
+    func testLateSendNowSuccessSettlesTheQueueAfterSessionSwitch() async throws {
+        let task = IOSScriptedWebSocketTask()
+        let firstID = "cccccccc-1111-1111-1111-111111111111"
+        let secondID = "dddddddd-2222-2222-2222-222222222222"
+        await task.enqueue(.text(
+            "{\"t\":\"welcome\",\"version\":\"2.0\",\"capabilities\":[\"agent-interrupt-v1\"]}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":["
+                + "{\"id\":\"" + firstID + "\",\"title\":\"First\",\"kind\":\"codex\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"working\"},\"agentTurn\":{\"id\":1,\"status\":\"working\"}},"
+                + "{\"id\":\"" + secondID + "\",\"title\":\"Second\",\"kind\":\"codex\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-send-now-switch-\(UUID())")!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-send-now-switch")
+            )
+        )
+        model.start()
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        model.selectSession(firstID)
+        var messages = await waitForSentMessages(task, count: 2)
+        let subscribeID = try XCTUnwrap(
+            messages.last(where: { requestMethod($0) == "session.subscribe" }).flatMap { try? requestID(from: $0) }
+        )
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"attached\",\"session\":\"" + firstID + "\",\"epoch\":1,\"sequence\":0,\"reanchor\":true}"
+        ))
+        model.focusTerminal()
+        messages = await waitForSentMessages(task, count: 3)
+        let focusID = try XCTUnwrap(
+            messages.last(where: { requestMethod($0) == "session.focus" }).flatMap { try? requestID(from: $0) }
+        )
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + focusID + "\",\"ok\":true,\"result\":{\"focused\":true,\"resized\":false}}"
+        ))
+        for _ in 0..<400 {
+            if model.hasControlLease { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.hasControlLease)
+
+        XCTAssertTrue(model.sendAgentMessageNow("replace me"))
+        messages = await waitForSentMessages(task, count: 4)
+        let interrupt = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.turn.interrupt" }))
+        let interruptID = try requestID(from: interrupt)
+        let queuedID = try XCTUnwrap(model.agentQueueBySessionID[firstID]?.items.first?.id)
+
+        model.selectSession(secondID)
+        messages = await waitForSentMessages(task, count: 5)
+        let unsubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.unsubscribe" }))
+        let unsubscribeID = try requestID(from: unsubscribe)
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + unsubscribeID + "\",\"ok\":true,\"result\":{\"unsubscribed\":true}}"
+        ))
+        messages = await waitForSentMessages(task, count: 6)
+        let secondSubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.subscribe" }))
+        let secondSubscribeID = try requestID(from: secondSubscribe)
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + secondSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + interruptID + "\",\"ok\":true,\"result\":{\"accepted\":true,\"session\":\"" + firstID + "\",\"turn\":1,\"clientMessageId\":\"" + queuedID + "\"}}"
+        ))
+
+        for _ in 0..<400 {
+            if model.agentQueueBySessionID[firstID]?.items.contains(where: { $0.id == queuedID }) == false { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.agentQueueBySessionID[firstID]?.items.contains(where: { $0.id == queuedID }) ?? false)
+        model.stop()
+    }
+
+    @MainActor
     func testControlWaitsForOutputRegistrationBeforePromotingFocus() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -582,6 +732,13 @@ final class IOSPersistenceTests: XCTestCase {
         let focusMessages = await waitForSentMessages(task, count: 3)
         XCTAssertEqual(focusMessages.count, 3)
         XCTAssertEqual(requestMethod(focusMessages[2]), "session.focus")
+        // A rapid second tap must not enqueue another focus request whose late
+        // response could race the first lease transition.
+        model.focusTerminal()
+        try await Task.sleep(for: .milliseconds(20))
+        let sentAfterDuplicateTap = await task.sentMessages
+        let duplicateFocusMessages = sentAfterDuplicateTap.filter { requestMethod($0) == "session.focus" }
+        XCTAssertEqual(duplicateFocusMessages.count, 1)
 
         let focusID = try requestID(from: focusMessages[2])
         await task.enqueue(.text("{\"t\":\"response\",\"id\":\"" + focusID + "\",\"ok\":true,\"result\":{\"focused\":true,\"resized\":false}}"))

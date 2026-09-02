@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -94,3 +95,5 @@ enum WarrenUnixTextEditing {
         }
     }
 }
+
+#endif

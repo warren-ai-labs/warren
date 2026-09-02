@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The dark-only semantic color layer for the macOS client.
+/// The dark-only semantic color layer shared by the macOS and iOS clients.
 ///
 /// Values are copied from Superset's default Ember theme. Warren intentionally
 /// has no light appearance branch in the current product scope.
@@ -19,6 +19,8 @@ public struct WarrenColorTokens: Sendable {
     public let success: Color
     public let warning: Color
     public let info: Color
+    /// Link and interactive text color, distinct from status/info blue.
+    public let link: Color
     public let amber: Color
 
     /// Low-contrast chrome surface: `muted/35` over the Ember background.
@@ -51,6 +53,7 @@ public struct WarrenColorTokens: Sendable {
         success: Color,
         warning: Color,
         info: Color,
+        link: Color,
         amber: Color,
         chromeSurface: Color,
         sidebarSurface: Color,
@@ -73,6 +76,7 @@ public struct WarrenColorTokens: Sendable {
         self.success = success
         self.warning = warning
         self.info = info
+        self.link = link
         self.amber = amber
         self.chromeSurface = chromeSurface
         self.sidebarSurface = sidebarSurface
@@ -97,6 +101,7 @@ public struct WarrenColorTokens: Sendable {
         success: Color(red: 126 / 255, green: 198 / 255, blue: 153 / 255), // #7ec699
         warning: Color(red: 229 / 255, green: 192 / 255, blue: 123 / 255), // #e5c07b
         info: Color(red: 97 / 255, green: 175 / 255, blue: 239 / 255), // #61afef
+        link: Color(red: 126 / 255, green: 192 / 255, blue: 245 / 255), // #7ec0f5
         amber: Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255), // #f59e0b
         chromeOpacity: 0.35,
         sidebarOpacity: 0.35,
@@ -123,6 +128,7 @@ public struct WarrenColorTokens: Sendable {
         success: Color,
         warning: Color,
         info: Color,
+        link: Color,
         amber: Color,
         chromeOpacity: Double,
         sidebarOpacity: Double,
@@ -137,13 +143,16 @@ public struct WarrenColorTokens: Sendable {
             mutedForeground: mutedForeground,
             border: border,
             ring: ring,
-            focusRing: ring,
+            // Focus is an interaction signal, not a passive separator. Keep
+            // it on the same Ember accent as Web and the iOS composer.
+            focusRing: highlight,
             primary: primary,
             highlight: highlight,
             destructive: destructive,
             success: success,
             warning: warning,
             info: info,
+            link: link,
             amber: amber,
             // Superset blends muted/35 over the Ember background before
             // compositing. An opacity color would otherwise render black over

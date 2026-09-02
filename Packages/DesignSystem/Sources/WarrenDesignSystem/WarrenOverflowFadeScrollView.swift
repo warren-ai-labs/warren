@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -251,3 +252,5 @@ private final class WarrenScrollEdgeObserverView: NSView {
         observations.removeAll()
     }
 }
+
+#endif

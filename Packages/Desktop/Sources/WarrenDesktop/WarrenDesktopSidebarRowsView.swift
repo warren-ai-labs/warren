@@ -989,7 +989,9 @@ private struct WarrenDesktopActiveAgentRow: View {
     let onOpen: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
+    @State private var isHovered = false
 
     var body: some View {
         if isCollapsed {
@@ -1014,7 +1016,10 @@ private struct WarrenDesktopActiveAgentRow: View {
                 }
                 Text(context)
                     .font(WarrenTypography.navigationMeta)
-                    .foregroundStyle(tokens.mutedForeground)
+                    // Scope metadata recedes in the idle rail, then rises to
+                    // a readable secondary tier when the row is selected or
+                    // under the pointer. The session title remains primary.
+                    .foregroundStyle(tokens.mutedForeground.opacity(isSelected || isHovered ? 0.96 : 0.66))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -1051,6 +1056,11 @@ private struct WarrenDesktopActiveAgentRow: View {
         )))
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .padding(.trailing, WarrenSpacing.compact)
+        .onHover { isHovered = $0 }
+        .animation(
+            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+            value: isHovered
+        )
     }
 
     private var compactRow: some View {

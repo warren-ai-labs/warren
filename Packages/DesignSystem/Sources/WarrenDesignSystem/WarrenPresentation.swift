@@ -495,7 +495,9 @@ public struct WarrenTextInputDialog: View {
             .padding(WarrenSpacing.large)
             .frame(width: WarrenLayoutMetrics.compactDialogWidth)
         }
+#if os(macOS)
         .onExitCommand(perform: onCancel)
+#endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
     }
@@ -547,7 +549,9 @@ public struct WarrenMessageDialog: View {
             .padding(WarrenSpacing.large)
             .frame(width: WarrenLayoutMetrics.compactDialogWidth)
         }
+#if os(macOS)
         .onExitCommand(perform: onDismiss)
+#endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
     }

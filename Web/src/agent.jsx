@@ -16,6 +16,7 @@ import {
   validateAgentAttachment,
 } from "./agent.js";
 import { sessionDisplayTitle } from "./title.js";
+import { useFocusTrap } from "./components.jsx";
 
 // Keep the active-work cue light and human. The phrase is deliberately
 // provider-neutral so the composer never grows a second Session/Model rail.
@@ -49,6 +50,7 @@ export function AgentView({
   hasControl = true,
   hasMore = false,
   loadingMore = false,
+  historyError = "",
   onLoadMore = () => {},
   endpointIdentity = "default",
   capabilities = [],
@@ -79,9 +81,23 @@ export function AgentView({
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [submitStatus, setSubmitStatus] = useState("");
+  const [cancelPending, setCancelPending] = useState(false);
   const [draftWarning, setDraftWarning] = useState("");
   const [workingPhraseIndex, setWorkingPhraseIndex] = useState(0);
   const workingTurnKeyRef = useRef(null);
+  const sessionIdentity = `${endpointIdentity}:${session?.id || ""}`;
+  const sessionIdentityRef = useRef(sessionIdentity);
+  const uploadGenerationRef = useRef(0);
+  const submissionInFlightRef = useRef(false);
+  const submitStatusTimerRef = useRef(null);
+  // Render-time identity tracking closes the small gap before effects flush
+  // after a tab switch. An upload started for the previous session can then
+  // never mutate the new session's chips, draft, or error state.
+  if (sessionIdentityRef.current !== sessionIdentity) {
+    sessionIdentityRef.current = sessionIdentity;
+    uploadGenerationRef.current += 1;
+  }
   const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
@@ -111,15 +127,42 @@ export function AgentView({
     inputRef.current?.focus();
   };
 
+  // Let short drafts breathe while keeping long prompts inside the raised
+  // surface. Reset before measuring so deleting text shrinks the field again;
+  // once the cap is reached, the textarea—not the page—owns the scroll.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    const maxHeight = Number.parseFloat(window.getComputedStyle(input).maxHeight);
+    const measuredHeight = input.scrollHeight;
+    const nextHeight = Number.isFinite(maxHeight)
+      ? Math.min(measuredHeight, maxHeight)
+      : measuredHeight;
+    input.style.height = `${nextHeight}px`;
+    input.style.overflowY = measuredHeight > nextHeight ? "auto" : "hidden";
+  }, [draft]);
+
   useEffect(() => {
     setDraft(loadAgentDraft(localStorage, endpointIdentity, session?.id));
     setAttachments([]);
     setUploadingAttachments(false);
     setSubmitError("");
+    submissionInFlightRef.current = false;
+    if (submitStatusTimerRef.current !== null) {
+      clearTimeout(submitStatusTimerRef.current);
+      submitStatusTimerRef.current = null;
+    }
+    setSubmitStatus("");
+    setCancelPending(false);
     setDraftWarning("");
     setWorkingPhraseIndex(0);
     workingTurnKeyRef.current = null;
   }, [endpointIdentity, session?.id]);
+
+  useEffect(() => () => {
+    if (submitStatusTimerRef.current !== null) clearTimeout(submitStatusTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (workingTurnKeyRef.current === null) {
@@ -218,6 +261,9 @@ export function AgentView({
   const addAttachments = files => {
     const values = Array.from(files || []).filter(file => file && typeof file.name === "string");
     if (!values.length) return;
+    const invalid = values.find(file => !validateAgentAttachment(file).ok);
+    if (invalid) setSubmitError(validateAgentAttachment(invalid).error || "Attachment is not supported");
+    else setSubmitError("");
     setAttachments(previous => [
       ...previous,
       ...values.map(file => {
@@ -250,39 +296,110 @@ export function AgentView({
     if (!value) return;
     if (!canCompose || uploadingAttachments) return;
     if (attachments.length > 0 && (!canUpload || attachments.some(item => item.status === "failed"))) return;
+    if (submissionInFlightRef.current) return;
+    submissionInFlightRef.current = true;
+    if (submitStatusTimerRef.current !== null) clearTimeout(submitStatusTimerRef.current);
+    setSubmitStatus("sending");
+    const uploadGeneration = uploadGenerationRef.current;
+    const uploadSessionIdentity = sessionIdentity;
+    const isCurrentUpload = () => (
+      uploadGenerationRef.current === uploadGeneration
+      && sessionIdentityRef.current === uploadSessionIdentity
+    );
     setSubmitError("");
     setUploadingAttachments(attachments.length > 0);
     let refs = [];
+    const selectedAttachments = attachments.map((item, index) => ({ item, index }));
+    const pendingAttachments = selectedAttachments.filter(({ item }) => !(item.status === "ready" && item.reference));
+    // Keep references by the original chip index as uploads complete. The
+    // upload callback can report a later failure after earlier files have
+    // already finished; preserving those opaque references lets Retry resume
+    // the failed subset instead of re-sending bytes that the Host owns.
+    const completedReferencesByIndex = new Map();
     try {
-      refs = attachments.length > 0
+      const uploadedReferences = pendingAttachments.length > 0
         ? await onUploadAttachments(
-          attachments.map(item => item.file),
-          (index, progress, error = "") => {
+          pendingAttachments.map(({ item }) => item.file),
+          (index, progress, error = "", reference = null) => {
+            if (!isCurrentUpload()) return;
+            const originalIndex = pendingAttachments[index]?.index;
+            if (originalIndex === undefined) return;
+            if (reference) completedReferencesByIndex.set(originalIndex, reference);
             setAttachments(previous => previous.map((item, itemIndex) => (
-              itemIndex === index
-                ? { ...item, status: error ? "failed" : progress >= 1 ? "ready" : "uploading", progress, error }
+              itemIndex === originalIndex
+                ? {
+                  ...item,
+                  status: error ? "failed" : progress >= 1 ? "ready" : "uploading",
+                  progress,
+                  error,
+                  ...(reference ? { reference } : {}),
+                }
                 : item
             )));
           },
         )
         : [];
+      if (!isCurrentUpload()) {
+        submissionInFlightRef.current = false;
+        return;
+      }
+      let uploadedIndex = 0;
+      refs = selectedAttachments
+        .map(({ item }) => {
+          if (item.status === "ready" && item.reference) return item.reference;
+          const reference = uploadedReferences[uploadedIndex];
+          uploadedIndex += 1;
+          return reference;
+        })
+        .filter(Boolean);
+      if (refs.length !== selectedAttachments.length) {
+        throw new Error("Host returned invalid attachment references");
+      }
     } catch (error) {
+      if (!isCurrentUpload()) {
+        submissionInFlightRef.current = false;
+        return;
+      }
       const reason = String(error?.message || error || "Upload failed");
-      setAttachments(previous => previous.map(item => ({ ...item, status: "failed", error: reason })));
+      setAttachments(previous => previous.map((item, itemIndex) => (
+        item.status === "ready" && item.reference
+          ? item
+          : completedReferencesByIndex.has(itemIndex)
+            ? {
+              ...item,
+              status: "ready",
+              progress: 1,
+              error: "",
+              reference: completedReferencesByIndex.get(itemIndex),
+            }
+            : { ...item, status: "failed", error: item.error || reason }
+      )));
       setSubmitError(reason);
       setUploadingAttachments(false);
+      submissionInFlightRef.current = false;
+      setSubmitStatus("error");
       return;
     }
     try {
-      if (sendNow) await onSendNow(value, refs);
-      else onSend(value, refs);
+      const result = sendNow ? await onSendNow(value, refs) : await onSend(value, refs);
+      if (result === false) throw new Error("Send unavailable");
     } catch (error) {
+      if (!isCurrentUpload()) {
+        submissionInFlightRef.current = false;
+        return;
+      }
       // The atomic Send now request owns the replacement's local queue item.
       // Keep the draft/attachments visible here so a failed request can be
       // retried without silently discarding the user's input.
       const reason = String(error?.message || error || "Send failed");
       setSubmitError(reason);
       setUploadingAttachments(false);
+      submissionInFlightRef.current = false;
+      setSubmitStatus("error");
+      return;
+    }
+    if (!isCurrentUpload()) {
+      submissionInFlightRef.current = false;
       return;
     }
     setDraft("");
@@ -291,6 +408,32 @@ export function AgentView({
     setAttachments([]);
     inputRef.current?.focus();
     setUploadingAttachments(false);
+    submissionInFlightRef.current = false;
+    setSubmitStatus("sent");
+    submitStatusTimerRef.current = setTimeout(() => {
+      submitStatusTimerRef.current = null;
+      setSubmitStatus("");
+    }, 1400);
+  };
+
+  const cancelTurn = () => {
+    if (cancelPending) return;
+    setCancelPending(true);
+    let settled = false;
+    const release = () => {
+      if (settled) return;
+      settled = true;
+      setCancelPending(false);
+    };
+    try {
+      const result = onCancel();
+      if (result && typeof result.then === "function") {
+        Promise.resolve(result).finally(release);
+      }
+    } catch {
+      release();
+    }
+    setTimeout(release, 1200);
   };
 
   return (
@@ -308,15 +451,24 @@ export function AgentView({
       }}
     >
       <div ref={listRef} className="agent-events" aria-label="Agent conversation">
-        {hasMore && (
+        {(hasMore || historyError) && (
           <button
             ref={loadMoreRef}
             type="button"
             className="agent-load-more"
             onClick={loadEarlier}
             disabled={loadingMore}
+            aria-label={loadingMore
+              ? "Loading earlier messages"
+              : historyError
+                ? "Retry loading earlier messages"
+                : "Load earlier messages"}
           >
-            {loadingMore ? "Loading…" : "Load earlier messages"}
+            {loadingMore
+              ? "Loading…"
+              : historyError
+                ? `Couldn’t load earlier messages. Try again${historyError ? ` (${historyError})` : ""}`
+                : "Load earlier messages"}
           </button>
         )}
         {blocks.length === 0 ? (
@@ -343,7 +495,7 @@ export function AgentView({
           ))
         )}
       </div>
-      {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} />}
+      {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} onFocusComposer={() => inputRef.current?.focus()} />}
       {showWorking && (
         <div className="agent-working" role="status" aria-live="polite">
           <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
@@ -352,6 +504,13 @@ export function AgentView({
       )}
       {(actionError || submitError) && (
         <div className="agent-action-error" role="alert">{actionError || submitError}</div>
+      )}
+      {submitStatus && (
+        <div className={`agent-submit-status ${submitStatus}`} role="status" aria-live="polite">
+          {submitStatus === "sending"
+            ? (uploadingAttachments ? "Uploading…" : "Sending…")
+            : submitStatus === "sent" ? "Sent" : "Send failed — retry"}
+        </div>
       )}
       {draftWarning && (
         <div className="agent-draft-warning" role="status">{draftWarning}</div>
@@ -424,7 +583,7 @@ export function AgentView({
                 autoComplete="off"
                 spellCheck="false"
                 readOnly={!ready || !canSendForStatus(agentStatus)}
-                disabled={uploadingAttachments}
+                disabled={uploadingAttachments || submitStatus === "sending"}
               />
             </div>
             <div className="agent-input-controls" aria-label="Agent details">
@@ -438,11 +597,11 @@ export function AgentView({
                     event.target.value = "";
                   }}
                   aria-label="Attach files"
-                  disabled={!canUpload || uploadingAttachments}
+                  disabled={!canUpload || uploadingAttachments || submitStatus === "sending"}
                 />
               </label>
               {modelLabel && <code>{modelLabel}</code>}
-              <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments} aria-label="Send">
+              <button type="submit" className="agent-send" disabled={!draft.trim() || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
                 <SendIcon />
               </button>
             </div>
@@ -456,14 +615,14 @@ export function AgentView({
                 </span>
               )}
               {queueItems.length > 0 && (
-                <button type="button" className="agent-queue-button" onClick={() => setShowQueue(true)}>
+                <button type="button" className="agent-queue-button" onClick={() => setShowQueue(previous => !previous)}>
                   Queue {queueItems.length}
                 </button>
               )}
               {canInterrupt && (
                 <>
-                  <button type="button" className="agent-cancel-button" onClick={onCancel}>Cancel</button>
-                  {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments} onClick={() => { void submit(true); }}>Send now</button>}
+                  <button type="button" className="agent-cancel-button" disabled={cancelPending} onClick={cancelTurn}>{cancelPending ? "Cancelling…" : "Cancel"}</button>
+                  {draft.trim() && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments || submitStatus === "sending"} onClick={() => { void submit(true); }}>Send now</button>}
                 </>
               )}
             </div>
@@ -482,7 +641,7 @@ export function AgentView({
   );
 }
 
-function AgentAttention({ attention, onOpenTerminal }) {
+function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
   const kind = attention.kind || "warning";
   const reason = String(attention.reason || "").trim().toLowerCase();
   const labels = {
@@ -508,6 +667,11 @@ function AgentAttention({ attention, onOpenTerminal }) {
         <strong>Needs attention</strong>
         <span>{reasonLabel}</span>
       </span>
+      {kind === "input" && onFocusComposer && (
+        <button type="button" className="agent-attention-action" onClick={onFocusComposer}>
+          Reply
+        </button>
+      )}
       {kind === "approval" && onOpenTerminal && (
         <button type="button" className="agent-attention-action" onClick={onOpenTerminal}>
           Terminal
@@ -901,6 +1065,43 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
   const [editingText, setEditingText] = useState("");
   const [deleteID, setDeleteID] = useState(null);
   const [draggingID, setDraggingID] = useState(null);
+  const closeButtonRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const previousFocusRef = useRef(null);
+  const panelRef = useRef(null);
+  useFocusTrap(true, panelRef);
+
+  useEffect(() => {
+    const current = document.activeElement;
+    previousFocusRef.current = typeof HTMLElement !== "undefined"
+      && current instanceof HTMLElement
+      && current !== document.body
+      ? current
+      : null;
+    closeButtonRef.current?.focus();
+    const handleKeyDown = event => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCloseRef.current();
+    };
+    const handlePointerDown = event => {
+      if (event.target instanceof Element && event.target.closest(".agent-queue-button")) return;
+      if (!panelRef.current?.contains(event.target)) onCloseRef.current();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      const target = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (target?.isConnected) queueMicrotask(() => {
+        if (target.isConnected) target.focus({ preventScroll: true });
+      });
+    };
+  }, []);
 
   const beginEdit = item => {
     setEditingID(item.id);
@@ -916,8 +1117,8 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
   };
 
   return (
-    <div className="agent-queue-panel" role="dialog" aria-modal="true" aria-label="Queued messages">
-      <div className="agent-queue-panel-head"><strong>Queued messages</strong><button type="button" onClick={onClose} aria-label="Close queue">×</button></div>
+    <div ref={panelRef} className="agent-queue-panel" role="dialog" aria-modal="true" aria-label="Queued messages">
+      <div className="agent-queue-panel-head"><strong>Queued messages</strong><button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close queue">×</button></div>
       {items.length === 0 ? <p>No queued messages.</p> : items.map(item => (
         <div
           className={`agent-queue-item ${item.status || "queued"}`}
