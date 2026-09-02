@@ -1952,9 +1952,9 @@ func isAgentSession(session api.Session) bool {
 	case "codex", "claude", "opencode", "pi", "qoder":
 		return true
 	case "shell", "custom":
-		// A shell overlay is Agent-capable only after Warren's Codex/Claude
-		// hook has supplied a binding. Other presets, including Trae and Qoder, remain
-		// ordinary PTY sessions until they receive an explicit integration.
+		// A shell overlay is Agent-capable only after Warren's managed hook
+		// has supplied a binding. Trae has no transcript integration, so it
+		// remains an ordinary PTY session until one is added.
 		return session.AgentSessionID != ""
 	default:
 		return false
@@ -2127,20 +2127,20 @@ var agentCommandPromptFlags = map[string]map[string]bool{
 	"claude":   {"--prompt": true},
 	"opencode": {"--prompt": true},
 	"pi":       {},
-	"qoder":    {}, // TODO: Add specific flags if needed
+	"qoder":    {},
 }
 
 var agentCommandNonInteractiveFlags = map[string]map[string]bool{
 	"claude":   {"-p": true, "--print": true},
 	"opencode": {},
 	"pi":       {"-p": true, "--print": true, "--mode": true},
-	"qoder":    {}, // TODO: Add specific flags if needed
+	"qoder":    {"-p": true, "--print": true},
 }
 
 var agentCommandSessionReuseFlags = map[string]map[string]bool{
 	"opencode": {"--continue": true, "-c": true, "--session": true, "-s": true, "--fork": true},
 	"pi":       {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
-	"qoder":    {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
+	"qoder":    {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--fork-session": true, "--no-session": true, "--no-session-persistence": true},
 }
 
 var agentCommandShellOperator = map[string]bool{
@@ -2192,10 +2192,19 @@ var agentCommandValueFlags = map[string]map[string]bool{
 		"--tui-mode": true,
 	},
 	"qoder": {
-		"--model": true, "--provider": true, "--system-prompt": true,
-		"--api-key": true, "--api-url": true, "--temperature": true,
-		"--top-p": true, "--top-k": true, "--max-tokens": true,
-		"--reasoning-effort": true,
+		"-m": true, "--model": true, "--reasoning-effort": true,
+		"--thinking": true, "--thinking-budget": true,
+		"--context-window": true, "--prompt-interactive": true,
+		"-w": true, "--cwd": true, "--config-dir": true,
+		"--permission-mode": true, "--allowed-mcp-server-names": true,
+		"--tools": true, "--allowed-tools": true, "--disallowed-tools": true,
+		"--attachment": true, "--plugin-dir": true, "--add-dir": true,
+		"-n": true, "--name": true, "--remote": true, "--teleport": true,
+		"--mcp-config": true, "--setting-sources": true, "--settings": true,
+		"--output-style": true, "--max-output-tokens": true,
+		"--max-model-request-retries": true, "--agent": true, "--agents": true,
+		"--system-prompt": true, "--append-system-prompt": true,
+		"--input-format": true, "--output-format": true,
 	},
 }
 
