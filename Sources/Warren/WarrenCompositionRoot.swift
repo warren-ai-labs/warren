@@ -55,6 +55,8 @@ struct WarrenCompositionRoot: View {
     private var opencodeCommand = "opencode"
     @AppStorage(WarrenPreferenceKey.presetCommandPi)
     private var piCommand = "pi"
+    @AppStorage(WarrenPreferenceKey.presetCommandQoder)
+    private var qoderCommand = "qoder"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -517,6 +519,7 @@ struct WarrenCompositionRoot: View {
         case "codex": codexCommand
         case "opencode": opencodeCommand
         case "pi": piCommand
+        case "qoder": qoderCommand
         case "trae": traeCommand
         default: ""
         }

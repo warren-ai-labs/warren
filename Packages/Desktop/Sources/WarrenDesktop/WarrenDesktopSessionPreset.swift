@@ -79,6 +79,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "qoder",
+            title: "Qoder",
+            subtitle: "Launch the qoder CLI in this project",
+            symbolName: "sparkle",
+            createButtonTitle: "Start Qoder",
+            request: .qoder,
+            isPinned: true
+        ),
+        Self(
             id: "trae",
             title: "Trae Agent",
             subtitle: "Launch ByteDance's Trae Agent CLI in this project",
@@ -191,6 +200,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "codex": "Codex"
         case "opencode": "OpenCode"
         case "pi": "Pi"
+        case "qoder": "Qoder"
         case "trae": "Trae"
         default: title
         }
