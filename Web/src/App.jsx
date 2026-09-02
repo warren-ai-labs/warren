@@ -97,6 +97,7 @@ import {
   TerminalSearch,
   TextInputDialog,
   TopBar,
+  TransientFeedback,
   WorktreeImportDialog,
 } from "./components.jsx";
 import { GitPanel } from "./gitpanel.jsx";
@@ -125,6 +126,10 @@ const storageKeys = {
 
 // How often the open git panel re-fetches remote refs while it stays visible.
 const GIT_PANEL_POLL_MS = 5 * 60_000;
+// A request can outlive a healthy WebSocket when the Host is busy or has
+// stopped processing control messages. Keep every UI pending state finite so
+// callers receive an actionable failure instead of a permanent spinner.
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 const defaultFontSize = matchMedia("(max-width: 767px)").matches ? 12 : 13;
@@ -176,6 +181,15 @@ const previewWorkspace = {
   path: "/Users/me/Workspace/warren",
 };
 
+function clearPendingRequest(pending, id) {
+  if (!id) return;
+  const handler = pending.get(id);
+  if (handler?.timer !== undefined && handler?.timer !== null) {
+    clearTimeout(handler.timer);
+  }
+  pending.delete(id);
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
   const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem(storageKeys.activeWorkspace));
@@ -188,6 +202,7 @@ export default function App() {
   // neutral overlay remains in place until the snapshot and its live tail have
   // rendered completely.
   const [terminalReadySession, setTerminalReadySession] = useState(null);
+  const [hasNewTerminalOutput, setHasNewTerminalOutput] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState(() => loadSet(storageKeys.expandedTasks));
   const [expandedProjects, setExpandedProjects] = useState(() => loadSet(storageKeys.expandedProjects));
   const [tasksCollapsed, setTasksCollapsed] = useState(() => {
@@ -211,6 +226,10 @@ export default function App() {
     loadAgentCompletionSoundEnabled()
   ));
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
+  const [feedback, setFeedback] = useState(null);
+  const [pendingSessionID, setPendingSessionID] = useState(null);
+  const [creatingSessionKind, setCreatingSessionKind] = useState(null);
+  const [creatingWorkspaceIDs, setCreatingWorkspaceIDs] = useState(() => new Set());
   const [focusedSessionID, setFocusedSessionID] = useState(null);
   const [emptyOverride, setEmptyOverride] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -223,6 +242,8 @@ export default function App() {
   const [gitRefreshing, setGitRefreshing] = useState(false);
   const [gitError, setGitError] = useState("");
   const gitLoadingRef = useRef(null);
+  const gitLoadGenerationRef = useRef(0);
+  const gitWorkspaceGenerationRef = useRef(0);
   const gitNeedsReloadRef = useRef(false);
   const [gitAction, setGitAction] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -244,6 +265,8 @@ export default function App() {
   const [worktreeImportDialog, setWorktreeImportDialog] = useState(null);
   const [renameDialog, setRenameDialog] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState(null);
+  const [renamePending, setRenamePending] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
 
   const connectionRef = useRef(null);
   const mainRef = useRef(null);
@@ -275,6 +298,25 @@ export default function App() {
   const messageHandlerRef = useRef(() => {});
   const connectionStateHandlerRef = useRef(() => {});
   const maintenanceTimeoutRef = useRef(null);
+  const feedbackTimerRef = useRef(null);
+  const pendingSessionRef = useRef(null);
+  const pendingSessionFeedbackRef = useRef(false);
+  const creatingSessionKindRef = useRef(null);
+  const renamePendingRef = useRef(false);
+  const deletePendingRef = useRef(false);
+  const renameOperationRef = useRef(null);
+  const deleteOperationRef = useRef(null);
+  const gitActionRef = useRef(null);
+  const focusRequestGenerationRef = useRef(0);
+  const agentQueueGenerationRef = useRef(0);
+  const agentMessageRequestRef = useRef(new Map());
+  const agentHistoryRequestRef = useRef(new Map());
+  const agentHistoryRequestSequenceRef = useRef(0);
+  const agentInterruptGenerationRef = useRef(0);
+  const worktreeImportInFlightRef = useRef(false);
+  const worktreeLoadRequestRef = useRef(null);
+  const worktreeImportRequestRef = useRef(null);
+  const connectionOnlineRef = useRef(false);
   const appStateRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
   const relayRefreshInFlightRef = useRef(false);
@@ -347,6 +389,43 @@ export default function App() {
     });
   }
 
+  const announceFeedback = useCallback((message, kind = "success", duration = 1800) => {
+    const value = String(message || "").trim();
+    if (!value) return;
+    if (feedbackTimerRef.current !== null) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    setFeedback({ id: `${Date.now()}-${Math.random()}`, message: value, kind });
+    if (duration > 0) {
+      feedbackTimerRef.current = setTimeout(() => {
+        feedbackTimerRef.current = null;
+        setFeedback(null);
+      }, duration);
+    }
+  }, []);
+
+  const clearPendingSession = useCallback(() => {
+    pendingSessionRef.current = null;
+    pendingSessionFeedbackRef.current = false;
+    setPendingSessionID(null);
+    setFeedback(previous => previous?.kind === "pending" ? null : previous);
+  }, []);
+
+  useEffect(() => () => {
+    if (feedbackTimerRef.current !== null) clearTimeout(feedbackTimerRef.current);
+  }, []);
+
+  const markWorkspaceCreation = useCallback((workspaceID, active) => {
+    if (!workspaceID) return;
+    setCreatingWorkspaceIDs(previous => {
+      const next = new Set(previous);
+      if (active) next.add(workspaceID);
+      else next.delete(workspaceID);
+      return next;
+    });
+  }, []);
+
   const clearMaintenanceTimeout = useCallback(() => {
     if (maintenanceTimeoutRef.current !== null) {
       clearTimeout(maintenanceTimeoutRef.current);
@@ -402,7 +481,13 @@ export default function App() {
     const id = connectionRef.current?.request(method, params);
     if (!id) return false;
     if (onResult || onError) {
-      pendingRequestsRef.current.set(id, { onResult, onError });
+      const timer = setTimeout(() => {
+        const pending = pendingRequestsRef.current.get(id);
+        if (!pending) return;
+        pendingRequestsRef.current.delete(id);
+        pending.onError?.(`${method} timed out; retry.`);
+      }, REQUEST_TIMEOUT_MS);
+      pendingRequestsRef.current.set(id, { onResult, onError, timer });
     }
     return true;
   }, []);
@@ -417,6 +502,11 @@ export default function App() {
     if (!sessionID || !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
       throw new Error("This Host does not support attachments");
     }
+    const ensureCurrentSession = () => {
+      if (appStateRef.current.activeSession !== sessionID) {
+        throw new Error("Session changed; attachment upload canceled.");
+      }
+    };
     const references = [];
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
@@ -425,9 +515,11 @@ export default function App() {
       let uploadID = "";
       try {
         const data = await file.arrayBuffer();
+        ensureCurrentSession();
         const digest = globalThis.crypto?.subtle
           ? await globalThis.crypto.subtle.digest("SHA-256", data)
           : null;
+        ensureCurrentSession();
         const sha256 = digest
           ? [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("")
           : "";
@@ -438,12 +530,14 @@ export default function App() {
           size: file.size,
           ...(sha256 ? { sha256 } : {}),
         });
+        ensureCurrentSession();
         const attachmentID = String(prepared?.attachmentId || "").trim();
         uploadID = String(prepared?.uploadId || "").trim();
         const chunkSize = Number(prepared?.chunkSize) > 0 ? Number(prepared.chunkSize) : 256 * 1024;
         if (!attachmentID || !uploadID) throw new Error("Host returned an invalid attachment upload");
         let sentBytes = 0;
         for (let sequence = 0; sentBytes < data.byteLength || (data.byteLength === 0 && sequence === 0); sequence += 1) {
+          ensureCurrentSession();
           const chunk = new Uint8Array(data, sentBytes, Math.min(chunkSize, data.byteLength - sentBytes));
           const chunkDigest = globalThis.crypto?.subtle
             ? await globalThis.crypto.subtle.digest("SHA-256", chunk)
@@ -459,6 +553,7 @@ export default function App() {
             ...(chunkSHA ? { sha256: chunkSHA } : {}),
             data: encodeAgentAttachmentChunk(chunk),
           });
+          ensureCurrentSession();
           if (!chunkResult?.accepted) {
             throw new Error(chunkResult?.error || "Host rejected an attachment chunk");
           }
@@ -472,13 +567,14 @@ export default function App() {
           length: data.byteLength,
           ...(sha256 ? { sha256 } : {}),
         });
+        ensureCurrentSession();
         if (!completed?.accepted || String(completed.attachmentId || attachmentID).trim() !== attachmentID) {
           throw new Error(completed?.error || "Host rejected attachment completion");
         }
         const reference = agentAttachmentReference({ attachmentId: attachmentID }, file);
         if (!reference) throw new Error("Host returned an invalid attachment reference");
         references.push(reference);
-        onProgress(index, 1);
+        onProgress(index, 1, "", reference);
       } catch (error) {
         if (uploadID) {
           try { await requestAgent("agent.attachment.abort", { session: sessionID, uploadId: uploadID }); } catch { /* best effort */ }
@@ -521,25 +617,31 @@ export default function App() {
   const loadGitPanel = useCallback((force = false, requestedWorkspaceID = selectedWorkspaceID) => {
     const workspaceID = requestedWorkspaceID;
     if (!workspaceID || gitLoadingRef.current === workspaceID) return;
+    const generation = ++gitLoadGenerationRef.current;
     gitLoadingRef.current = workspaceID;
     setGitRefreshing(true);
     setGitError("");
-    setGitAction("");
+    // A background refresh must not erase the pending label for an explicit
+    // Git mutation. The action ref is the duplicate-submission guard and is
+    // intentionally authoritative while the request is in flight.
+    if (!gitActionRef.current) setGitAction("");
     const finish = () => {
-      if (gitLoadingRef.current === workspaceID) {
+      if (gitLoadingRef.current === workspaceID && gitLoadGenerationRef.current === generation) {
         gitLoadingRef.current = null;
         setGitRefreshing(false);
       }
     };
     const sent = request("git.panel", { workspace: workspaceID, fetch: true, force }, result => {
-      if (appStateRef.current.activeWorkspace !== workspaceID) {
+      if (appStateRef.current.activeWorkspace !== workspaceID
+        || gitLoadGenerationRef.current !== generation) {
         finish();
         return;
       }
       setGitPanel(result);
       finish();
     }, error => {
-      if (appStateRef.current.activeWorkspace !== workspaceID) {
+      if (appStateRef.current.activeWorkspace !== workspaceID
+        || gitLoadGenerationRef.current !== generation) {
         finish();
         return;
       }
@@ -554,48 +656,132 @@ export default function App() {
   }, [request, selectedWorkspaceID]);
 
   useEffect(() => {
+    // A workspace can be left and re-entered before a Git request settles.
+    // Bump the scope generation so that an old response is never mistaken for
+    // the result of the newly mounted panel.
+    gitWorkspaceGenerationRef.current += 1;
+    gitLoadGenerationRef.current += 1;
+    gitLoadingRef.current = null;
+    setGitRefreshing(false);
+    const action = gitActionRef.current;
+    if (action && action.workspaceID !== selectedWorkspaceID) {
+      // A mutation may finish after the user changes workspaces. Drop only
+      // its visual gate; the request callback still carries the original
+      // workspace and is ignored for the newly selected panel.
+      gitActionRef.current = null;
+      setGitAction("");
+    }
+  }, [selectedWorkspaceID]);
+
+  useEffect(() => {
     if (!gitOpen) return;
     const timer = setInterval(() => loadGitPanel(), GIT_PANEL_POLL_MS);
     return () => clearInterval(timer);
   }, [gitOpen, loadGitPanel]);
 
-  const runGitAction = useCallback((method, params) => {
-    setGitAction(method);
-    setGitError("");
-    const sent = request(method, params, () => {
+  const runGitAction = useCallback((method, params, options = {}) => {
+    const workspaceID = params?.workspace || appStateRef.current.activeWorkspace || selectedWorkspaceID;
+    if (!workspaceID) return false;
+    const startsInCurrentWorkspace = appStateRef.current.activeWorkspace === workspaceID;
+    const showVisualState = options.visual !== false && startsInCurrentWorkspace;
+    if (showVisualState && gitActionRef.current?.workspaceID === workspaceID) return false;
+    const workspaceGeneration = gitWorkspaceGenerationRef.current;
+    const token = { method, workspaceID, workspaceGeneration };
+    const isCurrentWorkspace = () => appStateRef.current.activeWorkspace === workspaceID;
+    const isCurrentOperation = () => isCurrentWorkspace()
+      && gitWorkspaceGenerationRef.current === workspaceGeneration;
+    if (showVisualState) {
+      gitActionRef.current = token;
+      setGitAction(method);
+      setGitError("");
+    }
+    const finish = () => {
+      if (gitActionRef.current !== token) return;
+      gitActionRef.current = null;
       setGitAction("");
-      loadGitPanel();
+    };
+    const sent = request(method, { ...params, workspace: workspaceID }, () => {
+      if (!isCurrentOperation()) {
+        finish();
+        return;
+      }
+      finish();
+      announceFeedback(`${gitActionLabel(method)} complete`, "success");
+      loadGitPanel(false, workspaceID);
     }, error => {
-      setGitAction("");
+      if (!isCurrentOperation()) {
+        finish();
+        return;
+      }
+      finish();
       setGitError(error);
+      announceFeedback(error || `${gitActionLabel(method)} failed`, "error");
     });
     if (!sent) {
-      setGitAction("");
-      setGitError("Not connected");
+      finish();
+      if (isCurrentOperation()) {
+        setGitError("Not connected");
+        announceFeedback("Git action unavailable while disconnected", "error");
+      }
     }
-  }, [request, loadGitPanel]);
+    return sent;
+  }, [announceFeedback, loadGitPanel, request, selectedWorkspaceID]);
 
   const runGitCommit = useCallback(message => {
-    setGitAction("git.commit");
-    setGitError("");
-    const sent = request("git.commit", { workspace: selectedWorkspaceID, message }, () => {
+    const workspaceID = selectedWorkspaceID || appStateRef.current.activeWorkspace;
+    if (!workspaceID) return false;
+    if (gitActionRef.current?.workspaceID === workspaceID) return false;
+    const workspaceGeneration = gitWorkspaceGenerationRef.current;
+    const token = { method: "git.commit", workspaceID, workspaceGeneration };
+    gitActionRef.current = token;
+    const isCurrentWorkspace = () => appStateRef.current.activeWorkspace === workspaceID;
+    const isCurrentOperation = () => isCurrentWorkspace()
+      && gitWorkspaceGenerationRef.current === workspaceGeneration;
+    if (isCurrentWorkspace()) {
+      setGitAction("git.commit");
+      setGitError("");
+    }
+    const finish = () => {
+      if (gitActionRef.current !== token) return;
+      gitActionRef.current = null;
       setGitAction("");
-      loadGitPanel();
-      runGitAction("git.push", { workspace: selectedWorkspaceID });
+    };
+    const sent = request("git.commit", { workspace: workspaceID, message }, () => {
+      if (!isCurrentOperation()) {
+        finish();
+        // Preserve the requested Commit & Push sequence without allowing the
+        // background push to claim the newly selected workspace's UI state.
+        runGitAction("git.push", { workspace: workspaceID }, { visual: false });
+        return;
+      }
+      finish();
+      announceFeedback("Commit complete", "success");
+      loadGitPanel(false, workspaceID);
+      runGitAction("git.push", { workspace: workspaceID });
     }, error => {
-      setGitAction("");
+      if (!isCurrentOperation()) {
+        finish();
+        return;
+      }
+      finish();
       setGitError(error);
+      announceFeedback(error || "Commit failed", "error");
     });
     if (!sent) {
-      setGitAction("");
-      setGitError("Not connected");
+      finish();
+      if (isCurrentOperation()) {
+        setGitError("Not connected");
+        announceFeedback("Commit unavailable while disconnected", "error");
+      }
     }
-  }, [request, loadGitPanel, runGitAction, selectedWorkspaceID]);
+    return sent;
+  }, [announceFeedback, loadGitPanel, request, runGitAction, selectedWorkspaceID]);
 
   const [fileView, setFileView] = useState(null);
   const [fileDiff, setFileDiff] = useState({ loading: false, diff: "", content: "", error: "" });
   const fileViewKeyRef = useRef(null);
   const fileViewRef = useRef(null);
+  const fileDiffRequestRef = useRef(null);
   const [gitPanelSavedUI, setGitPanelSavedUI] = useState({});
   const gitPanelUIStateRef = useRef({});
   const [fileDiffViewTab, setFileDiffViewTabState] = useState("diff");
@@ -605,6 +791,7 @@ export default function App() {
   const setCurrentFileView = useCallback(value => {
     if (!value) {
       fileViewKeyRef.current = null;
+      fileDiffRequestRef.current = null;
       fileDiffNeedsReloadRef.current = false;
     }
     fileViewRef.current = value;
@@ -635,13 +822,15 @@ export default function App() {
 
   const openFileView = useCallback((change, commit = "", workspaceID = selectedWorkspaceID) => {
     const key = commit ? `${workspaceID}:${commit}:${change.path}` : `${workspaceID}:${change.staged ? "s" : "u"}:${change.path}`;
+    const requestToken = { key, workspaceID };
+    fileDiffRequestRef.current = requestToken;
     fileViewKeyRef.current = key;
     setCurrentFileView({ key, path: change.path, staged: change.staged, commit });
     setFileDiff({ loading: true, diff: "", content: "", error: "" });
     const params = { path: change.path, staged: change.staged };
     if (commit) params.commit = commit;
     const sent = request("git.diff", { workspace: workspaceID, ...params }, result => {
-      if (fileViewKeyRef.current !== key) return;
+      if (fileViewKeyRef.current !== key || fileDiffRequestRef.current !== requestToken) return;
       fileDiffNeedsReloadRef.current = false;
       const truncatedParts = [
         result?.diffTruncated ? "diff" : "",
@@ -658,10 +847,10 @@ export default function App() {
         notice,
       });
     }, diffError => {
-      if (fileViewKeyRef.current !== key) return;
+      if (fileViewKeyRef.current !== key || fileDiffRequestRef.current !== requestToken) return;
       setFileDiff({ loading: false, diff: "", content: "", error: diffError });
     });
-    if (!sent && fileViewKeyRef.current === key) {
+    if (!sent && fileViewKeyRef.current === key && fileDiffRequestRef.current === requestToken) {
       gitNeedsReloadRef.current = true;
       fileDiffNeedsReloadRef.current = true;
       setFileDiff({ loading: false, diff: "", content: "", error: "Not connected; the diff will retry after reconnecting." });
@@ -711,21 +900,42 @@ export default function App() {
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
     const params = { session: sessionID, limit: "200", priority: "conversation" };
     if (before > 0) params.before = String(before);
+    const token = {
+      id: ++agentHistoryRequestSequenceRef.current,
+      sessionID,
+      before,
+    };
+    agentHistoryRequestRef.current.set(sessionID, token);
     setAgentStateBySession(previous => {
       const current = previous[sessionID] || {};
       return {
         ...previous,
-        [sessionID]: { ...current, historyLoading: true },
+        [sessionID]: { ...current, historyLoading: true, historyError: "" },
       };
     });
     if (!request("agent.history", params, result => {
+        if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
         const events = Array.isArray(result?.events) ? result.events : [];
         const cursor = Number(result?.cursor) || 0;
         const hasMore = Boolean(result?.hasMore);
         const epoch = result?.epoch;
         setAgentStateBySession(previous => {
+          if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
           const current = previous[sessionID] || {};
-          const sameEpoch = !epoch || current.epoch === epoch;
+          const epochNumber = Number(epoch);
+          const currentEpochNumber = Number(current.epoch);
+          const staleEpoch = epoch && current.epoch
+            && String(epoch) !== String(current.epoch)
+            && (!Number.isFinite(epochNumber)
+              || !Number.isFinite(currentEpochNumber)
+              || epochNumber < currentEpochNumber);
+          if (staleEpoch) {
+            return {
+              ...previous,
+              [sessionID]: { ...current, historyLoading: false },
+            };
+          }
+          const sameEpoch = !epoch || !current.epoch || String(current.epoch) === String(epoch);
           return {
             ...previous,
             [sessionID]: {
@@ -744,27 +954,40 @@ export default function App() {
               historyHasMore: hasMore,
               historyLoading: false,
               historyLoaded: true,
+              historyError: "",
             },
           };
         });
-      }, () => {
-        // A failed history request must not leave the loader spinning; the
-        // effect retries after the next state change or reconnect.
+      }, error => {
+        if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
+        // A failed history request must not leave the loader spinning. Keep an
+        // actionable retry affordance in the conversation surface instead of
+        // silently dropping the user's only way to load older messages.
         setAgentStateBySession(previous => {
+          if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
           const current = previous[sessionID] || {};
           return {
             ...previous,
-            [sessionID]: { ...current, historyLoading: false },
+            [sessionID]: {
+              ...current,
+              historyLoading: false,
+              historyError: String(error || "Unable to load Agent history. Try again."),
+            },
           };
         });
       })) {
       // Not connected yet; clear the loading flag so the effect can retry
       // once the transport is back.
       setAgentStateBySession(previous => {
+        if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
         const current = previous[sessionID] || {};
         return {
           ...previous,
-          [sessionID]: { ...current, historyLoading: false },
+          [sessionID]: {
+            ...current,
+            historyLoading: false,
+            historyError: "The daemon is not connected. Reconnect and try again.",
+          },
         };
       });
     }
@@ -795,7 +1018,13 @@ export default function App() {
       recoveryTimeoutRef.current = null;
     }
     setTerminalReadySession(sessionID);
-  }, []);
+    if (pendingSessionRef.current === sessionID) {
+      pendingSessionRef.current = null;
+      setPendingSessionID(null);
+      if (pendingSessionFeedbackRef.current) announceFeedback("Session ready", "success");
+      pendingSessionFeedbackRef.current = false;
+    }
+  }, [announceFeedback]);
 
   const clearRecoveryTimeout = useCallback(() => {
     if (recoveryTimeoutRef.current !== null) {
@@ -818,8 +1047,12 @@ export default function App() {
   const cancelSubscription = useCallback((sendUnsubscribe = true) => {
     const previous = subscriptionRef.current;
     const previousSessionID = previous.sessionID;
-    if (previous.requestID) pendingRequestsRef.current.delete(previous.requestID);
-    if (previous.cancelRequestID) pendingRequestsRef.current.delete(previous.cancelRequestID);
+    if (previous.requestID) clearPendingRequest(pendingRequestsRef.current, previous.requestID);
+    if (previous.cancelRequestID) clearPendingRequest(pendingRequestsRef.current, previous.cancelRequestID);
+    focusRequestGenerationRef.current += 1;
+    agentQueueGenerationRef.current += 1;
+    agentInterruptGenerationRef.current += 1;
+    agentInterruptInFlightRef.current.clear();
     subscriptionRef.current = {
       sessionID: null,
       status: "idle",
@@ -854,8 +1087,8 @@ export default function App() {
       cancelRequestID: null,
     };
     subscriptionRef.current = state;
-    if (previous.requestID) pendingRequestsRef.current.delete(previous.requestID);
-    if (previous.cancelRequestID) pendingRequestsRef.current.delete(previous.cancelRequestID);
+    if (previous.requestID) clearPendingRequest(pendingRequestsRef.current, previous.requestID);
+    if (previous.cancelRequestID) clearPendingRequest(pendingRequestsRef.current, previous.cancelRequestID);
     clearRecoveryState();
 
     const sendSubscribe = () => {
@@ -884,10 +1117,22 @@ export default function App() {
         clearRecoveryTimeout();
         setConnectionStatus({ message: detail, online: false });
         setEmptyOverride({ loading: false, message: detail });
+        if (pendingSessionRef.current === sessionID) {
+          pendingSessionRef.current = null;
+          setPendingSessionID(null);
+          pendingSessionFeedbackRef.current = false;
+          announceFeedback(detail || "Session unavailable", "error");
+        }
       });
       state.requestID = sent || null;
       if (!sent) {
         state.status = "failed";
+        if (pendingSessionRef.current === sessionID) {
+          pendingSessionRef.current = null;
+          setPendingSessionID(null);
+          pendingSessionFeedbackRef.current = false;
+          announceFeedback("Session switch unavailable", "error");
+        }
         connectionRef.current?.reconnectNow();
         return false;
       }
@@ -896,6 +1141,12 @@ export default function App() {
         if (subscriptionRef.current !== state || state.status === "synced") return;
         state.status = "failed";
         setConnectionStatus({ message: "Terminal recovery timed out", online: false });
+        if (pendingSessionRef.current === sessionID) {
+          pendingSessionRef.current = null;
+          setPendingSessionID(null);
+          pendingSessionFeedbackRef.current = false;
+          announceFeedback("Session recovery timed out", "error");
+        }
         connectionRef.current?.reset();
       }, terminalRecoveryTimeoutMs);
       return true;
@@ -916,7 +1167,7 @@ export default function App() {
       return true;
     }
     return sendSubscribe();
-  }, [clearRecoveryState, clearRecoveryTimeout, markAttachReady, request]);
+  }, [announceFeedback, clearRecoveryState, clearRecoveryTimeout, markAttachReady, request]);
 
   const sendInput = useCallback(data => {
     const state = appStateRef.current;
@@ -933,7 +1184,7 @@ export default function App() {
     return true;
   }, []);
 
-  const sendAgentInput = useCallback(text => {
+  const sendAgentInput = useCallback(async text => {
     // The agent process is a TUI: the only input channel is the PTY. Codex
     // reads a literal CR as text (a newline inside the input box), not as a
     // submit key, so the message is written first and the kitty-protocol
@@ -942,16 +1193,24 @@ export default function App() {
     // dropping the message before the Enter key.
     const state = appStateRef.current;
     const sessionID = state.activeSession;
-    if (!sessionID) return;
-    const sent = sendInput(text.replace(/\n/g, "\r"));
-    if (!sent) return false;
-    setTimeout(() => {
-      if (appStateRef.current.activeSession === sessionID) {
-        sendInput("\x1b[13u");
-      }
-    }, 80);
-    return true;
-  }, [sendInput]);
+    if (!sessionID || state.attachedSession !== sessionID) return false;
+    const generation = agentQueueGenerationRef.current;
+    const connection = connectionRef.current;
+    if (!connection?.sendBinary(text.replace(/\n/g, "\r"))) {
+      connection?.reconnectNow();
+      return false;
+    }
+    await new Promise(resolve => setTimeout(resolve, 80));
+    if (appStateRef.current.activeSession !== sessionID
+      || appStateRef.current.attachedSession !== sessionID
+      || agentQueueGenerationRef.current !== generation
+      || connectionRef.current !== connection) {
+      return false;
+    }
+    const entered = connection.sendBinary("\x1b[13u");
+    if (!entered) connection.reconnectNow();
+    return entered;
+  }, []);
 
   const publishAgentQueue = useCallback((sessionID, queue) => {
     const items = queue.items.map(item => ({ ...item, attachments: [...(item.attachments || [])] }));
@@ -963,23 +1222,72 @@ export default function App() {
     // Session owns the PTY/control lease, so a ready event from an old tab
     // must never drain another Session's local messages.
     if (appStateRef.current.activeSession !== sessionID
+      || appStateRef.current.attachedSession !== sessionID
       || focusedSessionRef.current !== sessionID) return;
     const state = agentStateBySession[sessionID];
     const activity = String(state?.status?.activity || "").toLowerCase();
     const inputAttention = state?.status?.attention?.kind === "input";
     if (activity !== "ready" && !(activity === "blocked" && inputAttention)) return;
-    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
-    if (!queue || queue.items.some(item => item.status === "sending")) return;
+    const queueKey = agentQueueKey(webSocketURL(), sessionID);
+    const queue = agentQueueRef.current[queueKey];
+    if (!queue) return;
+    const inFlight = agentMessageRequestRef.current.get(queueKey);
+    if (queue.items.some(item => item.status === "sending")) {
+      // A focus/session generation change makes the old request's delivery
+      // ambiguous. Re-queue it before trying again; the stable client ID lets
+      // the Host deduplicate a late success.
+      if (!inFlight || inFlight.generation !== agentQueueGenerationRef.current) {
+        queue.items
+          .filter(item => item.status === "sending")
+          .forEach(item => queue.markQueued(item.id));
+        if (inFlight) agentMessageRequestRef.current.delete(queueKey);
+        publishAgentQueue(sessionID, queue);
+      }
+      return;
+    }
     const item = queue.items.find(value => value.status === "queued");
     if (!item) return;
     queue.markSending(item.id);
     publishAgentQueue(sessionID, queue);
+    const requestToken = {
+      itemID: item.id,
+      sessionID,
+      generation: agentQueueGenerationRef.current,
+      endpoint: webSocketURL(),
+    };
+    agentMessageRequestRef.current.set(queueKey, requestToken);
+    const isCurrentRequest = () => (
+      agentMessageRequestRef.current.get(queueKey) === requestToken
+      && requestToken.generation === agentQueueGenerationRef.current
+      && appStateRef.current.activeSession === sessionID
+      && focusedSessionRef.current === sessionID
+    );
     const delivered = () => {
+      if (agentMessageRequestRef.current.get(queueKey) !== requestToken) return;
+      if (!isCurrentRequest()) {
+        if (queue.items.some(value => value.id === item.id && value.status === "sending")) {
+          queue.markQueued(item.id);
+          publishAgentQueue(sessionID, queue);
+        }
+        agentMessageRequestRef.current.delete(queueKey);
+        return;
+      }
+      agentMessageRequestRef.current.delete(queueKey);
       queue.deliver(item.id);
       publishAgentQueue(sessionID, queue);
       drainAgentQueue(sessionID);
     };
     const failed = detail => {
+      if (agentMessageRequestRef.current.get(queueKey) !== requestToken) return;
+      if (!isCurrentRequest()) {
+        if (queue.items.some(value => value.id === item.id && value.status === "sending")) {
+          queue.markQueued(item.id);
+          publishAgentQueue(sessionID, queue);
+        }
+        agentMessageRequestRef.current.delete(queueKey);
+        return;
+      }
+      agentMessageRequestRef.current.delete(queueKey);
       const stillFocused = appStateRef.current.activeSession === sessionID
         && focusedSessionRef.current === sessionID;
       if (stillFocused) queue.markFailed(item.id, detail);
@@ -1002,8 +1310,10 @@ export default function App() {
       );
       if (!sent) failed("Connection unavailable");
     } else {
-      if (sendAgentInput(item.text)) delivered();
-      else failed("Connection unavailable");
+      void sendAgentInput(item.text).then(sent => {
+        if (sent) delivered();
+        else failed("Agent input was interrupted; retry.");
+      });
     }
   }, [agentStateBySession, publishAgentQueue, request, sendAgentInput]);
 
@@ -1018,13 +1328,14 @@ export default function App() {
 
   const sendAgentMessageFromView = useCallback((text, attachments = []) => {
     const sessionID = appStateRef.current.activeSession;
-    if (!sessionID) return;
+    if (!sessionID) return false;
     // Every composer submission gets a stable local ID first. The drain then
     // selects structured `agent.message.send` or the legacy PTY fallback
     // according to the negotiated capabilities, avoiding a second send path
     // that could race the queue or lose idempotency.
     queueAgentMessage(sessionID, text, attachments);
     drainAgentQueue(sessionID);
+    return true;
   }, [drainAgentQueue, queueAgentMessage]);
 
   const editAgentQueueItem = useCallback((sessionID, itemID, text, attachments) => {
@@ -1090,19 +1401,32 @@ export default function App() {
     const turn = activeAgentTurn(sessionID);
     if (!turn || agentInterruptInFlightRef.current.has(sessionID)) return;
     agentInterruptInFlightRef.current.add(sessionID);
+    const requestGeneration = agentInterruptGenerationRef.current;
     setAgentActionError("");
     const sent = request(
       "agent.turn.interrupt",
       { session: sessionID, turn, reason: "cancel" },
-      () => agentInterruptInFlightRef.current.delete(sessionID),
+      () => {
+        if (agentInterruptGenerationRef.current === requestGeneration) {
+          agentInterruptInFlightRef.current.delete(sessionID);
+        }
+      },
       error => {
-        agentInterruptInFlightRef.current.delete(sessionID);
-        setAgentActionError(String(error || "Cancel failed"));
+        if (agentInterruptGenerationRef.current === requestGeneration) {
+          agentInterruptInFlightRef.current.delete(sessionID);
+        }
+        if (appStateRef.current.activeSession === sessionID) {
+          setAgentActionError(String(error || "Cancel failed"));
+        }
       },
     );
     if (!sent) {
-      agentInterruptInFlightRef.current.delete(sessionID);
-      setAgentActionError("Connection unavailable");
+      if (agentInterruptGenerationRef.current === requestGeneration) {
+        agentInterruptInFlightRef.current.delete(sessionID);
+      }
+      if (appStateRef.current.activeSession === sessionID) {
+        setAgentActionError("Connection unavailable");
+      }
     }
   }, [activeAgentTurn, request]);
 
@@ -1119,22 +1443,28 @@ export default function App() {
       return Promise.reject(new Error("The active Agent turn is unavailable"));
     }
     const item = queueAgentMessage(sessionID, value, attachments);
-    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    const queueKey = agentQueueKey(webSocketURL(), sessionID);
+    const queue = agentQueueRef.current[queueKey];
+    const requestGeneration = agentInterruptGenerationRef.current;
     queue.markSending(item.id);
     publishAgentQueue(sessionID, queue);
     agentInterruptInFlightRef.current.add(sessionID);
     setAgentActionError("");
     return new Promise((resolve, reject) => {
       const finish = (result, error = "") => {
-        agentInterruptInFlightRef.current.delete(sessionID);
+        const currentInterrupt = requestGeneration === agentInterruptGenerationRef.current;
+        if (currentInterrupt) agentInterruptInFlightRef.current.delete(sessionID);
         const stillFocused = appStateRef.current.activeSession === sessionID
-          && focusedSessionRef.current === sessionID;
+          && focusedSessionRef.current === sessionID
+          && currentInterrupt;
         if (error || !result?.accepted) {
           if (stillFocused) queue.markFailed(item.id, error || "Host did not accept Send now");
           else queue.markQueued(item.id);
           publishAgentQueue(sessionID, queue);
           const detail = error || "Host did not accept Send now";
-          setAgentActionError(detail);
+          if (appStateRef.current.activeSession === sessionID) {
+            setAgentActionError(detail);
+          }
           reject(new Error(detail));
           return;
         }
@@ -1170,7 +1500,9 @@ export default function App() {
     return new Promise((resolve, reject) => {
       const failed = detail => {
         const error = String(detail || "Interaction response failed");
-        setAgentActionError(error);
+        if (appStateRef.current.activeSession === sessionID) {
+          setAgentActionError(error);
+        }
         reject(new Error(error));
       };
       const sent = request(
@@ -1301,6 +1633,7 @@ export default function App() {
     const state = appStateRef.current;
     const sessionID = state.activeSession;
     if (!sessionID || state.attachedSession !== sessionID) return false;
+    const generation = ++focusRequestGenerationRef.current;
     // A passive Web subscription deliberately does not claim control during
     // background/hidden-page attach. Carry the session id so the Host can
     // promote that already-registered subscription when the page becomes
@@ -1314,7 +1647,8 @@ export default function App() {
     }
     const sent = request("session.focus", params, result => {
       if (appStateRef.current.activeSession !== sessionID
-        || appStateRef.current.attachedSession !== sessionID) return;
+        || appStateRef.current.attachedSession !== sessionID
+        || focusRequestGenerationRef.current !== generation) return;
       if (focused) {
         focusedSessionRef.current = result?.focused ? sessionID : null;
         setFocusedSessionID(result?.focused ? sessionID : null);
@@ -1322,6 +1656,12 @@ export default function App() {
         focusedSessionRef.current = null;
         setFocusedSessionID(null);
       }
+    }, () => {
+      if (appStateRef.current.activeSession !== sessionID
+        || appStateRef.current.attachedSession !== sessionID
+        || focusRequestGenerationRef.current !== generation) return;
+      focusedSessionRef.current = null;
+      setFocusedSessionID(null);
     });
     if (!sent) return false;
     focusedSessionRef.current = focused ? sessionID : null;
@@ -1357,6 +1697,7 @@ export default function App() {
   const attachSession = useCallback((sessionID, force = false, autoFocus = true, explicit = true) => {
     if (!sessionID) return;
     const state = appStateRef.current;
+    if (!force && pendingSessionRef.current === sessionID) return;
     const workspaceID = state.catalog.sessions.get(sessionID)?.workspace;
     if (workspaceID) recordNavigation(state.catalog, workspaceID, sessionID);
     autoFocusOnAttachRef.current = autoFocus;
@@ -1376,9 +1717,20 @@ export default function App() {
       }
       return;
     }
+    pendingSessionRef.current = sessionID;
+    setPendingSessionID(sessionID);
+    setHasNewTerminalOutput(false);
+    pendingSessionFeedbackRef.current = explicit;
+    if (explicit) announceFeedback("Switching session…", "pending", 0);
     const changed = sessionID !== state.activeSession;
     state.activeSession = sessionID;
     state.attachedSession = null;
+    focusRequestGenerationRef.current += 1;
+    if (changed) {
+      agentQueueGenerationRef.current += 1;
+      agentInterruptGenerationRef.current += 1;
+      agentInterruptInFlightRef.current.clear();
+    }
     setTerminalReadySession(null);
     snapshotPendingRef.current = true;
     recoveryApplyingRef.current = false;
@@ -1399,7 +1751,7 @@ export default function App() {
       setAgentViewOverride(null);
     }
     beginSubscription(sessionID, terminalRef.current);
-  }, [beginSubscription, clearTerminalSearch, recordNavigation, refreshTerminal]);
+  }, [announceFeedback, beginSubscription, clearTerminalSearch, recordNavigation, refreshTerminal]);
 
   const createSession = useCallback((kind, targetWorkspaceID = null) => {
     const workspaceID = targetWorkspaceID
@@ -1408,20 +1760,36 @@ export default function App() {
     if (!reserveWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID)) {
       return false;
     }
+    const preset = orderedPresets.find(value => value.kind === kind) || orderedPresets[0];
+    const creationToken = { workspaceID, kind: preset.kind };
+    markWorkspaceCreation(workspaceID, true);
     const finish = () => {
       releaseWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID);
+      markWorkspaceCreation(workspaceID, false);
+      if (creatingSessionKindRef.current === creationToken) {
+        creatingSessionKindRef.current = null;
+        setCreatingSessionKind(null);
+      }
     };
+    if (appStateRef.current.activeWorkspace === workspaceID) {
+      creatingSessionKindRef.current = creationToken;
+      setCreatingSessionKind(preset.kind);
+    }
     // The preset title is presentation copy for the button and the starting
     // message; it must not become the session's user-set custom title, which
     // would suppress automatic AI title generation. The Host derives the
     // default display title from the kind when no explicit title is given.
-    const preset = orderedPresets.find(value => value.kind === kind) || orderedPresets[0];
     const sent = request("session.create", {
       workspace: workspaceID,
       kind: preset.kind,
       command: presetCommands[preset.kind] || "",
     }, result => {
       finish();
+      const isCurrentWorkspace = appStateRef.current.activeWorkspace === workspaceID;
+      if (isCurrentWorkspace) {
+        setSessionSheetOpen(false);
+        announceFeedback(`${preset.title} session created`, "success");
+      }
       const sessionID = result?.id;
       if (sessionID && shouldAttachCreatedSession(
         appStateRef.current.activeWorkspace,
@@ -1431,8 +1799,10 @@ export default function App() {
       }
     }, detail => {
       finish();
-      setConnectionStatus({ message: detail, online: false });
-      if (appStateRef.current.activeWorkspace === workspaceID) {
+      const isCurrentWorkspace = appStateRef.current.activeWorkspace === workspaceID;
+      if (isCurrentWorkspace) {
+        setConnectionStatus({ message: detail, online: false });
+        announceFeedback(detail || `Unable to create ${preset.title} session`, "error");
         setEmptyOverride({ loading: false, message: detail });
       }
     });
@@ -1444,13 +1814,20 @@ export default function App() {
     }
     if (!sent) {
       finish();
+      if (appStateRef.current.activeWorkspace === workspaceID) {
+        announceFeedback("Session creation unavailable while disconnected", "error");
+      }
       connectionRef.current?.reconnectNow();
     }
     return sent;
-  }, [attachSession, orderedPresets, presetCommands, request, selectedWorkspaceID]);
+  }, [announceFeedback, attachSession, markWorkspaceCreation, orderedPresets, presetCommands, request, selectedWorkspaceID]);
 
   const chooseWorkspace = useCallback((workspaceID, preferredSessionID = null, automaticEntry = true) => {
     const state = appStateRef.current;
+    // A workspace gesture supersedes an in-flight tab handoff. Clear its
+    // visual gate before rendering the new workspace so a stale tab ID cannot
+    // disable the next workspace's controls.
+    clearPendingSession();
     const previousWorkspaceID = state.activeWorkspace;
     if (previousWorkspaceID && previousWorkspaceID !== workspaceID) {
       persistCurrentGitUI(previousWorkspaceID);
@@ -1472,6 +1849,10 @@ export default function App() {
     setFocusedSessionID(null);
     setActiveWorkspace(workspaceID);
     if (previousWorkspaceID !== workspaceID) {
+      if (creatingSessionKindRef.current?.workspaceID === previousWorkspaceID) {
+        creatingSessionKindRef.current = null;
+        setCreatingSessionKind(null);
+      }
       restoreGitUIForWorkspace(workspaceID);
     }
     setActiveSession(null);
@@ -1502,10 +1883,9 @@ export default function App() {
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, autoStartAI, cancelSubscription, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
+  }, [attachSession, autoStartAI, cancelSubscription, clearPendingSession, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
 
   const chooseSessionPreset = useCallback(kind => {
-    setSessionSheetOpen(false);
     createSession(kind);
   }, [createSession]);
 
@@ -1551,6 +1931,8 @@ export default function App() {
   const acceptRoster = useCallback(message => {
     clearMaintenanceTimeout();
     connectionRef.current?.markStable();
+    if (!connectionOnlineRef.current) announceFeedback("Connected", "success");
+    connectionOnlineRef.current = true;
     loadRemoteSettings();
     const nextCatalog = buildCatalog(rosterFromMessage(message));
     const state = appStateRef.current;
@@ -1638,7 +2020,7 @@ export default function App() {
     for (const sessionID of completedSessions) {
       agentCompletionEventsRef.current.emit({ sessionID });
     }
-  }, [attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [announceFeedback, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -1717,7 +2099,7 @@ export default function App() {
       break;
     case "response": {
       const handler = pendingRequestsRef.current.get(message.id);
-      pendingRequestsRef.current.delete(message.id);
+      clearPendingRequest(pendingRequestsRef.current, message.id);
       if (!message.ok) {
         const detail = message.error || "Request failed";
         if (handler?.onError) {
@@ -1888,6 +2270,7 @@ export default function App() {
               historyHasMore: false,
               historyLoading: false,
               historyLoaded: false,
+              historyError: "",
             },
           };
         }
@@ -1919,6 +2302,7 @@ export default function App() {
             historyHasMore: sameEpoch ? Boolean(current?.historyHasMore) : false,
             historyLoading: sameEpoch ? Boolean(current?.historyLoading) : false,
             historyLoaded: sameEpoch ? Boolean(current?.historyLoaded) : false,
+            historyError: sameEpoch ? current?.historyError || "" : "",
           },
         };
       });
@@ -2002,6 +2386,9 @@ export default function App() {
         const detail = connectionErrorDetail(message);
         setConnectionStatus({ message: detail, online: false });
         setEmptyOverride({ loading: false, message: detail });
+        connectionOnlineRef.current = false;
+        clearPendingSession();
+        announceFeedback(detail || "Connection failed", "error");
         if (detail === "unauthorized") {
           // Relay access capabilities are intentionally short lived. Rotate
           // through the HttpOnly refresh cookie once before treating an
@@ -2037,9 +2424,11 @@ export default function App() {
     }
   }, [
     acceptRoster,
+    announceFeedback,
     attachSession,
     cancelSubscription,
     clearMaintenanceTimeout,
+    clearPendingSession,
     clearTerminalSearch,
     fitTerminal,
     markAttachReady,
@@ -2059,6 +2448,9 @@ export default function App() {
       agentCapabilitiesRef.current = new Set();
       setAgentCapabilitiesState([]);
       setConnectionStatus({ message: "Connecting…", online: false });
+      clearPendingSession();
+      if (connectionOnlineRef.current) announceFeedback("Reconnecting…", "pending");
+      connectionOnlineRef.current = false;
       return;
     }
     if (state === "open") {
@@ -2067,12 +2459,16 @@ export default function App() {
     }
     cancelSubscription(false);
     rejectPendingRequests(pendingRequestsRef.current, "Connection lost; reconnect and retry.");
+    clearPendingSession();
     // A reconnect's first roster is a baseline. Do not ring for work that
     // finished while this browser was disconnected.
     agentTurnCompletionTrackerRef.current?.reset();
     gitNeedsReloadRef.current = true;
     if (fileViewRef.current) fileDiffNeedsReloadRef.current = true;
     creatingSessionWorkspaceIDsRef.current.clear();
+    setCreatingWorkspaceIDs(new Set());
+    creatingSessionKindRef.current = null;
+    setCreatingSessionKind(null);
     appStateRef.current.attachedSession = null;
     focusedSessionRef.current = null;
     setFocusedSessionID(null);
@@ -2086,7 +2482,9 @@ export default function App() {
     stagedRecoveryOutputRef.current = [];
     recoveryAnchorRef.current = null;
     setConnectionStatus({ message: "Reconnecting…", online: false });
-  }, [cancelSubscription, clearMaintenanceTimeout]);
+    if (connectionOnlineRef.current) announceFeedback("Reconnecting…", "pending");
+    connectionOnlineRef.current = false;
+  }, [announceFeedback, cancelSubscription, clearMaintenanceTimeout, clearPendingSession]);
 
   messageHandlerRef.current = acceptMessage;
   connectionStateHandlerRef.current = acceptConnectionState;
@@ -2183,7 +2581,12 @@ export default function App() {
         terminal.write(bytes);
         // Keep a terminal that is already pinned to the bottom glued to new
         // output; a user who scrolled up keeps their place.
-        if (followsOutput) terminal.scrollToBottom();
+        if (followsOutput) {
+          terminal.scrollToBottom();
+          setHasNewTerminalOutput(false);
+        } else {
+          setHasNewTerminalOutput(true);
+        }
       },
       // Match the daemon's output ring retention so a dropped batch can
       // always be replayed from its anchor instead of forcing a reanchor.
@@ -2238,7 +2641,12 @@ export default function App() {
         inHistory ? 250 : 1200
       );
     };
-    const scrollSubscription = terminal.onScroll(scheduleWebGLForScroll);
+    const onTerminalScroll = () => {
+      scheduleWebGLForScroll();
+      const buffer = terminal.buffer.active;
+      if (buffer.viewportY >= buffer.baseY) setHasNewTerminalOutput(false);
+    };
+    const scrollSubscription = terminal.onScroll(onTerminalScroll);
     // xterm opens at its fallback 80x24 grid. Fit once synchronously and once
     // on the next frame so the first focus claim carries the real viewport,
     // even when fonts/layout settle after the DOM mount.
@@ -2408,6 +2816,13 @@ export default function App() {
   useEffect(() => {
     if (activeWorkspace !== selectedWorkspaceID) setActiveWorkspace(selectedWorkspaceID);
   }, [activeWorkspace, selectedWorkspaceID]);
+
+  useEffect(() => {
+    // A new Session starts with a clean output affordance. If output arrives
+    // while the user is already in its terminal, the renderer callback below
+    // decides whether the prompt is needed from the actual viewport position.
+    setHasNewTerminalOutput(false);
+  }, [activeSession]);
 
   useEffect(() => {
     if (!selectedWorkspace || projectDragRef.current) return;
@@ -2619,6 +3034,27 @@ export default function App() {
 
   const showContextMenu = useCallback((event, items) => {
     event.preventDefault();
+    // Context-menu events do not consistently move focus (notably on
+    // trackpads and touch adapters). Claim the invoking control before the
+    // menu mounts so its focus is restored after Escape, outside-click, or an
+    // action closes the surface.
+    const focusableSelector = [
+      "button:not(:disabled)",
+      "a[href]",
+      "input:not(:disabled)",
+      "select:not(:disabled)",
+      "textarea:not(:disabled)",
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(",");
+    const nearestFocusable = node => {
+      if (!(node instanceof HTMLElement)) return null;
+      if (node.matches(focusableSelector)) return node;
+      return node.closest(focusableSelector) || node.querySelector(focusableSelector);
+    };
+    const target = nearestFocusable(event.target)
+      || nearestFocusable(event.currentTarget)
+      || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    target?.focus({ preventScroll: true });
     setContextMenu({ x: event.clientX, y: event.clientY, items });
   }, []);
 
@@ -2683,31 +3119,52 @@ export default function App() {
 
   const confirmRename = useCallback(value => {
     const dialog = renameDialog;
-    if (!dialog) return;
+    if (!dialog || renamePendingRef.current) return false;
     const trimmed = value.trim();
-    if (!trimmed) return;
-    const showError = detail => {
-      setConnectionStatus({ message: detail, online: false });
-      setEmptyOverride({ loading: false, message: detail });
+    if (!trimmed) return false;
+    const operation = { kind: dialog.kind, id: dialog.id || "" };
+    renameOperationRef.current = operation;
+    renamePendingRef.current = true;
+    setRenamePending(true);
+    const label = dialog.kind === "session" ? "Session" : dialog.kind === "workspace" ? "Workspace" : dialog.kind === "project" ? "Project" : "Task";
+    const succeed = () => {
+      if (renameOperationRef.current !== operation) return;
+      renameOperationRef.current = null;
+      renamePendingRef.current = false;
+      setRenamePending(false);
+      setRenameDialog(null);
+      announceFeedback(`${label} renamed`, "success");
     };
+    const showError = detail => {
+      if (renameOperationRef.current !== operation) return;
+      renameOperationRef.current = null;
+      renamePendingRef.current = false;
+      setRenamePending(false);
+      setConnectionStatus({ message: detail, online: false });
+      setRenameDialog(current => current ? { ...current, error: detail || `Unable to rename ${label.toLowerCase()}.` } : current);
+      announceFeedback(detail || `Unable to rename ${label.toLowerCase()}.`, "error");
+    };
+    let sent = false;
     if (dialog.kind === "task-create") {
-      request("task.create", { name: trimmed }, task => {
+      sent = request("task.create", { name: trimmed }, task => {
         if (task?.id) {
           setTasksCollapsed(false);
           setExpandedTasks(previous => new Set([...previous, task.id]));
         }
+        succeed();
       }, showError);
     } else if (dialog.kind === "task") {
-      request("task.rename", { id: dialog.id, name: trimmed }, null, showError);
+      sent = request("task.rename", { id: dialog.id, name: trimmed }, succeed, showError);
     } else if (dialog.kind === "project") {
-      request("project.rename", { id: dialog.id, name: trimmed }, null, showError);
+      sent = request("project.rename", { id: dialog.id, name: trimmed }, succeed, showError);
     } else if (dialog.kind === "workspace") {
-      request("workspace.rename", { id: dialog.id, name: trimmed }, null, showError);
+      sent = request("workspace.rename", { id: dialog.id, name: trimmed }, succeed, showError);
     } else if (dialog.kind === "session") {
-      request("session.rename", { id: dialog.id, title: trimmed }, null, showError);
+      sent = request("session.rename", { id: dialog.id, title: trimmed }, succeed, showError);
     }
-    setRenameDialog(null);
-  }, [renameDialog, request]);
+    if (!sent) showError("Not connected");
+    return sent;
+  }, [announceFeedback, renameDialog, request]);
 
   const toggleTaskPin = useCallback(task => {
     request("task.pin", { id: task.id, pinned: !task.pinned }, null, detail => {
@@ -2728,6 +3185,9 @@ export default function App() {
   }, [request]);
 
   const openWorktreeImport = useCallback(project => {
+    if (worktreeImportInFlightRef.current) return;
+    const token = { projectID: project.id, sequence: Date.now() };
+    worktreeLoadRequestRef.current = token;
     setWorktreeImportDialog({
       project,
       candidates: [],
@@ -2736,21 +3196,38 @@ export default function App() {
       error: "",
     });
     const sent = request("project.worktrees", { project: project.id }, result => {
+      if (worktreeLoadRequestRef.current !== token) return;
+      worktreeLoadRequestRef.current = null;
       const candidates = Array.isArray(result) ? result : [];
       setWorktreeImportDialog(current => current?.project.id === project.id
         ? { ...current, candidates, loading: false, error: "" }
         : current);
     }, detail => {
+      if (worktreeLoadRequestRef.current !== token) return;
+      worktreeLoadRequestRef.current = null;
       setWorktreeImportDialog(current => current?.project.id === project.id
         ? { ...current, loading: false, error: detail || "Unable to read Git worktrees." }
         : current);
     });
     if (!sent) {
+      if (worktreeLoadRequestRef.current === token) worktreeLoadRequestRef.current = null;
       setWorktreeImportDialog(current => current?.project.id === project.id
         ? { ...current, loading: false, error: "The daemon is not connected. Reconnect and try again." }
         : current);
     }
   }, [request]);
+
+  const closeWorktreeImport = useCallback(() => {
+    worktreeLoadRequestRef.current = null;
+    // Closing the dialog does not cancel a Host-side import. Keep the
+    // duplicate-submission gate until that request settles, otherwise a quick
+    // reopen can submit the same paths twice while the first import is still
+    // being processed.
+    if (!worktreeImportInFlightRef.current) {
+      worktreeImportRequestRef.current = null;
+    }
+    setWorktreeImportDialog(null);
+  }, []);
 
   const toggleWorktreeCandidate = useCallback(path => {
     setWorktreeImportDialog(current => {
@@ -2766,22 +3243,34 @@ export default function App() {
 
   const importSelectedWorktrees = useCallback(() => {
     const current = worktreeImportDialog;
-    if (!current || !current.selectedPaths.length) return;
+    if (!current || !current.selectedPaths.length || worktreeImportInFlightRef.current) return;
+    worktreeImportInFlightRef.current = true;
+    const token = { projectID: current.project.id, sequence: Date.now() };
+    worktreeImportRequestRef.current = token;
+    worktreeLoadRequestRef.current = null;
     setWorktreeImportDialog(previous => previous ? { ...previous, loading: true, error: "" } : previous);
     const sent = request("project.worktrees.import", {
       project: current.project.id,
       paths: current.selectedPaths,
     }, () => {
-      setWorktreeImportDialog(null);
+      if (worktreeImportRequestRef.current !== token) return;
+      worktreeImportRequestRef.current = null;
+      worktreeImportInFlightRef.current = false;
+      setWorktreeImportDialog(previous => previous?.project.id === current.project.id ? null : previous);
     }, detail => {
-      setWorktreeImportDialog(previous => previous
-        ? { ...previous, loading: false, error: detail || "Unable to import selected worktrees." }
-        : previous);
+      if (worktreeImportRequestRef.current !== token) return;
+      worktreeImportRequestRef.current = null;
+      worktreeImportInFlightRef.current = false;
+      setWorktreeImportDialog(previous => previous?.project.id === current.project.id
+          ? { ...previous, loading: false, error: detail || "Unable to import selected worktrees." }
+          : previous);
     });
     if (!sent) {
-      setWorktreeImportDialog(previous => previous
-        ? { ...previous, loading: false, error: "The daemon is not connected. Reconnect and try again." }
-        : previous);
+      if (worktreeImportRequestRef.current === token) worktreeImportRequestRef.current = null;
+      worktreeImportInFlightRef.current = false;
+      setWorktreeImportDialog(previous => previous?.project.id === current.project.id
+          ? { ...previous, loading: false, error: "The daemon is not connected. Reconnect and try again." }
+          : previous);
     }
   }, [request, worktreeImportDialog]);
 
@@ -2847,20 +3336,42 @@ export default function App() {
 
   const confirmDelete = useCallback(() => {
     const dialog = deleteDialog;
-    if (!dialog) return;
-    setDeleteDialog(null);
+    if (!dialog || deletePendingRef.current) return false;
+    const operation = { kind: dialog.kind, id: dialog.id || "" };
+    deleteOperationRef.current = operation;
+    deletePendingRef.current = true;
+    setDeletePending(true);
+    const label = dialog.kind === "session" ? "Session" : dialog.kind === "task" ? "Task" : "Item";
+    const succeed = () => {
+      if (deleteOperationRef.current !== operation) return;
+      deleteOperationRef.current = null;
+      deletePendingRef.current = false;
+      setDeletePending(false);
+      setDeleteDialog(null);
+      announceFeedback(`${label} deleted`, "success");
+    };
+    const failed = detail => {
+      if (deleteOperationRef.current !== operation) return;
+      deleteOperationRef.current = null;
+      deletePendingRef.current = false;
+      setDeletePending(false);
+      const message = detail || `Unable to delete ${label.toLowerCase()}.`;
+      setConnectionStatus({ message, online: false });
+      setDeleteDialog(current => current ? { ...current, error: message } : current);
+      announceFeedback(message, "error");
+    };
     if (dialog.kind === "task") {
-      request("task.remove", { id: dialog.id }, null, detail => {
-        setConnectionStatus({ message: detail, online: false });
-        setEmptyOverride({ loading: false, message: detail });
-      });
-      return;
+      const sent = request("task.remove", { id: dialog.id }, succeed, failed);
+      if (!sent) failed("Not connected");
+      return sent;
     }
     // Capture the endpoint identity at mutation start. A delayed response
     // from an old Host must clear only that Host's local queue and draft.
     const endpointIdentity = webSocketURL();
     const queueKey = agentQueueKey(endpointIdentity, dialog.id);
-    request("session.delete", { id: dialog.id }, () => {
+    const sent = request("session.delete", { id: dialog.id }, () => {
+      if (deleteOperationRef.current !== operation) return;
+      agentMessageRequestRef.current.delete(queueKey);
       delete agentQueueRef.current[queueKey];
       setAgentQueueBySession(previous => {
         if (!(dialog.id in previous)) return previous;
@@ -2875,6 +3386,7 @@ export default function App() {
       // last agent screen.
       const current = appStateRef.current;
       if (current.activeSession === dialog.id || current.attachedSession === dialog.id) {
+        cancelSubscription();
         current.activeSession = null;
         current.attachedSession = null;
         setActiveSession(null);
@@ -2888,8 +3400,11 @@ export default function App() {
         pendingAtomicStateRef.current = null;
         stagedRecoveryOutputRef.current = [];
       }
-    });
-  }, [cancelSubscription, deleteDialog, request]);
+      succeed();
+    }, failed);
+    if (!sent) failed("Not connected");
+    return sent;
+  }, [announceFeedback, cancelSubscription, deleteDialog, request]);
 
   const sessionContextMenu = useCallback((event, session) => {
     showContextMenu(event, sessionMenuItems(session, {
@@ -3110,13 +3625,14 @@ export default function App() {
   useEffect(() => {
     if (!agentViewActive || !selectedSession) return;
     const state = agentStateBySession[selectedSession.id];
-    if (!state?.historyLoaded && !state?.historyLoading) {
+    if (!state?.historyLoaded && !state?.historyLoading && !state?.historyError) {
       loadAgentHistory(selectedSession.id);
     }
   }, [agentViewActive, selectedSession, agentStateBySession, loadAgentHistory]);
 
   return (
     <>
+      <TransientFeedback feedback={feedback} />
       <h1 className="visually-hidden">Warren</h1>
       <div className={`app${drawerOpen ? " drawer-open" : ""}${gitOpen && !isMobile ? " git-panel-open" : ""}`} hidden={settingsOpen}>
         <a className="skip-link" href="#main">Skip to content</a>
@@ -3145,12 +3661,15 @@ export default function App() {
           onMoveWorkspace={moveWorkspace}
           onBeginProjectDrag={beginProjectDrag}
           onEndProjectDrag={endProjectDrag}
+          creatingWorkspaceIDs={creatingWorkspaceIDs}
+          creatingSession={Boolean(creatingSessionKind)}
         />
         <button type="button" className="backdrop" aria-label="Close navigation" onClick={() => setDrawerOpen(false)} />
         <main id="main" className="main" ref={mainRef} tabIndex={-1}>
           {isMobile ? (
             <MobileShell
               workspace={selectedWorkspace}
+              projectName={selectedWorkspace ? catalog.projectsByID.get(selectedWorkspace.project)?.name || "" : ""}
               tabs={tabs}
               activeSession={activeSession}
               connection={connectionStatus}
@@ -3163,6 +3682,8 @@ export default function App() {
               onNewSession={() => setSessionSheetOpen(true)}
               onOpenSessionMenu={openSessionMenu}
               onSessionContextMenu={sessionContextMenu}
+              pendingSessionID={pendingSessionID}
+              creatingSession={Boolean(creatingSessionKind)}
             />
           ) : (
             <>
@@ -3177,8 +3698,10 @@ export default function App() {
                 onToggleGit={() => setGitOpenState(open => !open)}
                 gitActive={gitOpen}
                 onTabContextMenu={sessionContextMenu}
+                pendingSessionID={pendingSessionID}
+                creatingSession={Boolean(creatingSessionKind)}
               />
-              <PresetBar presets={visiblePresets} onCreateSession={createSession} />
+              <PresetBar presets={visiblePresets} onCreateSession={createSession} creatingKind={creatingSessionKind} />
               <div className="pane-title">
                 <span
                   title={paneTitle}
@@ -3259,6 +3782,7 @@ export default function App() {
                 onQueueRetry={itemID => retryAgentQueueItem(selectedSession.id, itemID)}
                 hasMore={Boolean(agentStateBySession[selectedSession.id]?.historyHasMore)}
                 loadingMore={Boolean(agentStateBySession[selectedSession.id]?.historyLoading)}
+                historyError={agentStateBySession[selectedSession.id]?.historyError || ""}
                 onLoadMore={() => {
                   const state = agentStateBySession[selectedSession.id];
                   loadAgentHistory(selectedSession.id, state?.historyCursor || 0);
@@ -3276,6 +3800,25 @@ export default function App() {
               onPrevious={() => stepTerminalSearch("previous")}
               onClose={closeTerminalSearch}
             />
+            {!agentViewActive
+              && hasNewTerminalOutput
+              && terminalReadySession === activeSession
+              && !(gitOpen && fileView)
+              && (
+              <button
+                type="button"
+                className="terminal-new-output"
+                aria-label="Jump to latest output"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation();
+                  terminalRef.current?.scrollToBottom();
+                  setHasNewTerminalOutput(false);
+                }}
+              >
+                ↓ New output
+              </button>
+            )}
             {!(gitOpen && fileView) && (
             <EmptyTerminal
               activeWorkspace={selectedWorkspaceID}
@@ -3357,11 +3900,12 @@ export default function App() {
           presets={visiblePresets}
           onChoose={chooseSessionPreset}
           onClose={() => setSessionSheetOpen(false)}
+          pendingKind={creatingSessionKind}
         />
       )}
       <WorktreeImportDialog
         dialog={worktreeImportDialog}
-        onClose={() => setWorktreeImportDialog(null)}
+        onClose={closeWorktreeImport}
         onToggle={toggleWorktreeCandidate}
         onImport={importSelectedWorktrees}
       />
@@ -3372,7 +3916,9 @@ export default function App() {
           fieldLabel={renameDialog.fieldLabel}
           initialValue={renameDialog.initialValue}
           confirmLabel={renameDialog.confirmLabel}
-          onCancel={() => setRenameDialog(null)}
+          error={renameDialog.error || ""}
+          pending={renamePending}
+          onCancel={() => { if (!renamePendingRef.current) setRenameDialog(null); }}
           onConfirm={confirmRename}
         />
       )}
@@ -3381,7 +3927,9 @@ export default function App() {
           title={deleteDialog.title}
           message={deleteDialog.message}
           confirmLabel={deleteDialog.confirmLabel}
-          onCancel={() => setDeleteDialog(null)}
+          error={deleteDialog.error || ""}
+          pending={deletePending}
+          onCancel={() => { if (!deletePendingRef.current) setDeleteDialog(null); }}
           onConfirm={confirmDelete}
         />
       )}
@@ -3453,4 +4001,14 @@ function shortSessionID(id) {
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function gitActionLabel(method) {
+  return {
+    "git.pull": "Pull",
+    "git.push": "Push",
+    "git.checkout": "Branch switch",
+    "git.commit": "Commit",
+    "git.pr.create": "Pull request",
+  }[method] || "Git action";
 }

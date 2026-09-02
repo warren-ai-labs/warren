@@ -1,8 +1,5 @@
 .DS_Store
 .build/
-# Root-level Go build outputs (accidentally committed in qoder work)
-/warren
-/warren-headless
 .swiftpm/
 *.xcodeproj/xcuserdata/
 Packages/WarrenIOS/WarrenIOS.xcodeproj/

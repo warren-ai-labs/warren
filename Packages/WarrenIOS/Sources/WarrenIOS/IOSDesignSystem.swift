@@ -1,4 +1,5 @@
 import SwiftUI
+import WarrenDesignSystem
 import WarrenTransport
 
 /// Functional interface copy is kept as localization keys instead of
@@ -23,40 +24,48 @@ public enum IOSCopy {
 /// Web client. Cards are reserved for focused tasks (settings and sheets),
 /// while navigation is expressed by rails, whitespace, and quiet separators.
 public enum IOSTheme {
-    // Web/src/style.css — Ember primitives.
-    public static let background = Color(red: 21 / 255, green: 17 / 255, blue: 16 / 255)
-    public static let chrome = Color(red: 28 / 255, green: 25 / 255, blue: 24 / 255)
-    public static let raised = Color(red: 32 / 255, green: 30 / 255, blue: 28 / 255)
-    public static let input = Color(red: 24 / 255, green: 22 / 255, blue: 21 / 255)
-    public static let muted = Color(red: 42 / 255, green: 40 / 255, blue: 39 / 255)
-    public static let ring = Color(red: 58 / 255, green: 56 / 255, blue: 55 / 255)
-    public static let strongBorder = Color(red: 75 / 255, green: 75 / 255, blue: 75 / 255)
-    public static let text = Color(red: 234 / 255, green: 232 / 255, blue: 230 / 255)
-    public static let secondaryText = Color(red: 168 / 255, green: 165 / 255, blue: 163 / 255)
-    public static let tertiaryText = Color(red: 113 / 255, green: 113 / 255, blue: 122 / 255)
-    public static let accent = Color(red: 224 / 255, green: 120 / 255, blue: 80 / 255)
-    public static let accentSubtle = Color(red: 224 / 255, green: 120 / 255, blue: 80 / 255).opacity(0.14)
-    public static let amber = Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
-    public static let green = Color(red: 126 / 255, green: 198 / 255, blue: 153 / 255)
-    public static let yellow = Color(red: 229 / 255, green: 192 / 255, blue: 123 / 255)
-    public static let red = Color(red: 220 / 255, green: 107 / 255, blue: 107 / 255)
-    public static let blue = Color(red: 126 / 255, green: 192 / 255, blue: 245 / 255)
+    // Keep iOS on the same semantic palette as Web/Desktop. The Dynamic Type
+    // hierarchy below remains platform-native, while every color and
+    // geometry primitive comes from WarrenDesignSystem.
+    private static let tokens = WarrenColorTokens.dark
+    public static let background = tokens.background
+    public static let chrome = tokens.chromeSurface
+    public static let raised = tokens.popoverSurface
+    public static let input = tokens.inputSurface
+    public static let muted = tokens.muted
+    public static let ring = tokens.ring
+    public static let focusRing = tokens.focusRing
+    public static let strongBorder = tokens.ring
+    public static let text = tokens.foreground
+    public static let secondaryText = tokens.mutedForeground
+    public static let tertiaryText = tokens.mutedForeground.opacity(0.68)
+    public static let accent = tokens.highlight
+    public static let accentSubtle = tokens.highlight.opacity(0.14)
+    public static let amber = tokens.amber
+    public static let green = tokens.success
+    public static let yellow = tokens.warning
+    public static let red = tokens.destructive
+    public static let info = tokens.info
+    public static let link = tokens.link
+    /// Backward-compatible name for the status/info color. New views should
+    /// use `info` for status and `link` for interactive text.
+    public static let blue = tokens.info
     /// Conversation prose gets a slightly warm, softened white so it reads
     /// as content rather than competing with the surrounding chrome.
-    public static let agentText = Color(red: 231 / 255, green: 228 / 255, blue: 224 / 255)
-    public static let separator = muted
+    public static let agentText = tokens.foreground.opacity(0.97)
+    public static let separator = tokens.chromeDivider
 
     // Geometry follows the compact Web/Paseo rhythm rather than a stock
     // Form/List rhythm. Touch targets remain at least 44pt where interactive.
-    public static let pagePadding: CGFloat = 16
-    public static let compactPadding: CGFloat = 12
-    public static let headerHeight: CGFloat = 64
-    public static let toolbarHeight: CGFloat = 48
-    public static let rowHeight: CGFloat = 48
-    public static let workspaceRowHeight: CGFloat = 58
-    public static let controlHeight: CGFloat = 36
-    public static let radius: CGFloat = 10
-    public static let smallRadius: CGFloat = 6
+    public static let pagePadding = WarrenSpacing.standard
+    public static let compactPadding = WarrenSpacing.medium
+    public static let headerHeight = WarrenLayoutMetrics.topBarHeight + WarrenSpacing.standard
+    public static let toolbarHeight = WarrenLayoutMetrics.mobileActionRowHeight
+    public static let rowHeight = WarrenLayoutMetrics.mobileActionRowHeight
+    public static let workspaceRowHeight = WarrenLayoutMetrics.mobileActionRowHeight + WarrenSpacing.compact
+    public static let controlHeight = WarrenLayoutMetrics.mobileActionRowHeight
+    public static let radius = WarrenRadius.base
+    public static let smallRadius = WarrenRadius.medium
 
     public static func statusColor(_ activity: WarrenRemoteAgentActivity) -> Color {
         switch activity {
@@ -187,6 +196,15 @@ public extension View {
         environment(\.layoutDirection, .leftToRight)
             .multilineTextAlignment(.leading)
     }
+
+    /// Native sheets keep their system gesture and dismissal behavior, while
+    /// sharing one detent/indicator/safe-area contract across dashboard,
+    /// session, and Agent surfaces.
+    func iosSheetPresentation(_ detents: PresentationDetent...) -> some View {
+        presentationDetents(Set(detents))
+            .presentationDragIndicator(.visible)
+            .safeAreaPadding(.bottom, WarrenSpacing.small)
+    }
 }
 
 public struct IOSStatusDot: View {
@@ -264,7 +282,7 @@ public struct IOSAgentActivityMark: View {
         let color = IOSTheme.statusColor(
             WarrenRemoteAgentStatus(activity: activity, attention: attention)
         )
-        // A 20 Hz cadence keeps the Web-like pulse visible while avoiding a
+        // A 20 Hz cadence keeps the working cue visible while avoiding a
         // 30 Hz invalidation for every Agent row during list scrolling.
         TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: reduceMotion || !shouldPulse)) { timeline in
             let pulsePhase = animationPhase(at: timeline.date, duration: 1.25)
@@ -286,10 +304,7 @@ public struct IOSAgentActivityMark: View {
     }
 
     private var shouldPulse: Bool {
-        switch activity {
-        case .ready, .exited, .unknown: return attention != nil
-        case .working, .blocked, .stalled, .failed: return true
-        }
+        iosAgentActivityShouldPulse(activity)
     }
 
     private func animationPhase(at date: Date, duration: TimeInterval) -> Double {
@@ -329,6 +344,13 @@ public struct IOSAgentActivityMark: View {
         case .unknown: return "Agent status unknown"
         }
     }
+}
+
+/// Working is the sole animated Agent state. Blocked, attention, and failed
+/// states stay static so the accompanying explanation remains easy to scan.
+@inline(__always)
+func iosAgentActivityShouldPulse(_ activity: WarrenRemoteAgentActivity) -> Bool {
+    activity == .working
 }
 
 /// A compact status label with a moving highlight for active work. It is used
@@ -407,7 +429,7 @@ public struct IOSIconButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 17, weight: .regular))
+                .font(IOSTypography.button)
                 .foregroundStyle(IOSTheme.secondaryText)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -430,9 +452,9 @@ public struct IOSKeyboardDismissButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: "keyboard.chevron.compact.down")
-                .font(.system(size: 15, weight: .medium))
+                .font(IOSTypography.button)
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 36, height: 32)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -602,6 +624,8 @@ private struct WarrenMarkStroke: Shape {
 
 public struct IOSModeToggle: View {
     @Binding private var selection: IOSSessionDisplayMode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focusedMode: String?
 
     public init(selection: Binding<IOSSessionDisplayMode>) {
         _selection = selection
@@ -612,11 +636,11 @@ public struct IOSModeToggle: View {
             modeButton(.terminal, symbol: "terminal", accessibilityLabel: "Terminal")
             modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: "Agent chat")
         }
-        .animation(.easeInOut(duration: 0.18), value: selection)
-        .padding(2)
-        .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
+        .padding(WarrenSpacing.xxs)
+        .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
                 .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 1)
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -631,12 +655,20 @@ public struct IOSModeToggle: View {
             selection = mode
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
+                .font(IOSTypography.button)
                 .foregroundStyle(selection == mode ? IOSTheme.text : IOSTheme.secondaryText)
-                .frame(width: 34, height: 30)
-                .background(selection == mode ? IOSTheme.muted : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .frame(width: 44, height: 44)
+                .background(selection == mode ? IOSTheme.muted : .clear, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                        .stroke(
+                            focusedMode == mode.rawValue ? IOSTheme.focusRing : .clear,
+                            lineWidth: focusedMode == mode.rawValue ? 2 : 0
+                        )
+                }
         }
         .buttonStyle(.plain)
+        .focused($focusedMode, equals: mode.rawValue)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(selection == mode ? .isSelected : [])
     }
@@ -672,15 +704,15 @@ public struct IOSKeyCap: View {
                     Text(title)
                 }
             }
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(IOSTypography.label)
             .foregroundStyle(isEnabled ? IOSTheme.text : IOSTheme.secondaryText.opacity(0.42))
-            .frame(minWidth: 38, minHeight: 32)
+            .frame(minWidth: 44, minHeight: 44)
             .background(
                 isSelected ? IOSTheme.accentSubtle : IOSTheme.input,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                     .stroke(isSelected ? IOSTheme.accent.opacity(0.72) : IOSTheme.ring.opacity(isEnabled ? 0.72 : 0.32), lineWidth: 1)
             }
         }

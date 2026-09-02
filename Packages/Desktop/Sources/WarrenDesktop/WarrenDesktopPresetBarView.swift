@@ -8,6 +8,20 @@ public enum WarrenDesktopWorkspaceContentMode: String, Hashable, Sendable {
     case editor
 }
 
+enum WarrenDesktopPresetLaunchFeedback {
+    static func isDisabled(
+        hasScope: Bool,
+        isBusy: Bool,
+        isPending: Bool
+    ) -> Bool {
+        !hasScope || isBusy || isPending
+    }
+
+    static func label(isPending: Bool) -> String {
+        isPending ? "Starting…" : "Ready"
+    }
+}
+
 /// Pinned command launchers between the workspace tabs and pane toolbar.
 ///
 /// Superset calls this its PresetsBar. Warren keeps its executable built-ins
@@ -20,6 +34,9 @@ struct WarrenDesktopPresetBar: View {
     let onLaunch: (TerminalSessionLaunchRequest) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var focusedPresetID: String?
+    @State private var pendingPresetID: String?
+    @State private var pendingResetGeneration = 0
     @AppStorage(WarrenPreferenceKey.presetCommandShell)
     private var shellCommand = ""
     @AppStorage(WarrenPreferenceKey.presetCommandClaude)
@@ -50,7 +67,20 @@ struct WarrenDesktopPresetBar: View {
                     hidden: hiddenPresets
                 )) { preset in
                     Button {
+                        guard pendingPresetID == nil, !isBusy else { return }
+                        pendingPresetID = preset.id
+                        pendingResetGeneration &+= 1
+                        let generation = pendingResetGeneration
                         onLaunch(preset.resolvedRequest(commandOverride: command(for: preset.id)))
+                        // A disconnected client can reject the launch before
+                        // the parent publishes its busy state. Clear only
+                        // that orphaned visual pending state so the preset
+                        // bar cannot remain disabled forever.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                            if pendingResetGeneration == generation {
+                                pendingPresetID = nil
+                            }
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             WarrenDesktopPresetIcon(preset: preset)
@@ -64,11 +94,18 @@ struct WarrenDesktopPresetBar: View {
                         .frame(height: 20)
                         .contentShape(.rect)
                     }
-                    .buttonStyle(WarrenPresetButtonStyle())
+                    .buttonStyle(WarrenPresetButtonStyle(isFocused: focusedPresetID == preset.id))
+                    .focused($focusedPresetID, equals: preset.id)
                     .foregroundStyle(tokens.mutedForeground)
-                    .disabled(workspace == nil && terminalGroup == nil || isBusy)
+                    .disabled(WarrenDesktopPresetLaunchFeedback.isDisabled(
+                        hasScope: workspace != nil || terminalGroup != nil,
+                        isBusy: isBusy,
+                        isPending: pendingPresetID != nil
+                    ))
+                    .opacity(pendingPresetID == preset.id ? 0.68 : 1)
+                    .accessibilityValue(WarrenDesktopPresetLaunchFeedback.label(isPending: pendingPresetID == preset.id))
                     .accessibilityLabel("Start \(preset.title)")
-                    .accessibilityHint("Create a session in \(workspace?.name ?? terminalGroup?.name ?? "the selected terminal group")")
+                    .accessibilityHint("Create a session in \(scopeLabel)")
                 }
 
                 if isBusy {
@@ -91,6 +128,18 @@ struct WarrenDesktopPresetBar: View {
                 .fill(tokens.chromeDivider)
                 .frame(height: WarrenSpacing.hairline)
         }
+        .onChange(of: isBusy) { busy in
+            pendingResetGeneration &+= 1
+            if !busy { pendingPresetID = nil }
+        }
+        .onChange(of: workspace?.id) { _ in
+            pendingResetGeneration &+= 1
+            pendingPresetID = nil
+        }
+        .onChange(of: terminalGroup?.id) { _ in
+            pendingResetGeneration &+= 1
+            pendingPresetID = nil
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Command presets")
     }
@@ -105,6 +154,10 @@ struct WarrenDesktopPresetBar: View {
         case "trae": traeCommand
         default: ""
         }
+    }
+
+    private var scopeLabel: String {
+        workspace?.name ?? terminalGroup?.name ?? "the selected terminal group"
     }
 }
 
