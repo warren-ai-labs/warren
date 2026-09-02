@@ -656,14 +656,13 @@ public struct AgentChatView: View {
                 }
 
                 VStack(spacing: 0) {
-                    // Row 1: Message placeholder + text input
+                    // Row 1: Message placeholder + text input (single row, fixed height)
                     ZStack(alignment: .topLeading) {
                         Text("Message…")
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 11)
-                            .opacity(draft.isEmpty ? 1 : 0)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
                             .allowsHitTesting(false)
                             .accessibilityHidden(!draft.isEmpty)
 #if canImport(UIKit)
@@ -685,120 +684,66 @@ public struct AgentChatView: View {
                             .accessibilityLabel("Agent message")
 #endif
                     }
-                    .frame(minHeight: 50, maxHeight: 50)
+                    .frame(minHeight: 56, maxHeight: 56)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
 
-                    // Row 2: + icon, attachments, metadata, buttons
-                    HStack(spacing: 4) {
-                        // Attachments chip scroll (if any)
+                    // Row 2: All actions in a single row (+ icon, attachments, model name, buttons)
+                    HStack(spacing: 6) {
+                        // Attachments chip scroll (if any) - compact size
                         if !localAttachments.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 3) {
                                     ForEach(localAttachments) { attachment in
                                         attachmentChip(attachment)
-                                            .scaleEffect(0.95)
+                                            .frame(height: 34)
                                     }
                                 }
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 3)
                             }
-                            .frame(height: 38)
+                            .frame(height: 34)
+                        } else {
+                            // Empty spacer to maintain layout consistency
+                            EmptyView()
+                                .frame(height: 34)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         
-                        // + icon button
+                        // + icon button (primary attachment control)
                         attachmentControlsWithPlus
                         
-                        // Model name / metadata
+                        // Model name / metadata (white/light color)
                         if let metadata = agentComposerMetadata {
                             Text(metadata)
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.tertiaryText)
+                                .font(IOSDesignSystem.IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.text)  // White/bright color
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                                .padding(.horizontal, 8)
+                                .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
-                                .background(IOSTheme.muted.opacity(0.3), in: Capsule())
+                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
                         }
                         
-                        Spacer(minLength: 4)
+                        Spacer(minLength: 0)
                         
-                        // Queued messages button
-                        if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
-                            Button {
-                                isQueueSheetPresented = true
-                            } label: {
-                                Text("Queued \(queued)")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.amber)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(IOSTheme.muted.opacity(0.2), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Show \(queued) queued messages")
-                        }
-                        
-                        // Cancel / Send now buttons
-                        if model.canInterruptAgentTurn {
-                            if cancelPending {
-                                Text("Cancelling…")
-                                    .font(IOSTypography.status)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(IOSTheme.red.opacity(0.1), in: Capsule())
-                            } else {
-                                Button {
-                                    cancelAgentTurn()
-                                } label: {
-                                    Image(systemName: "stop.fill")
-                                        .font(IOSTypography.button)
-                                        .foregroundStyle(IOSTheme.red)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(IOSTheme.muted.opacity(0.15), in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Cancel Agent turn")
-                                
-                                if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    Button {
-                                        sendComposerMessage(sendNow: true)
-                                    } label: {
-                                        Text("Send now")
-                                            .font(IOSTypography.button)
-                                            .foregroundStyle(IOSTheme.amber)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                            .background(IOSTheme.muted.opacity(0.15), in: Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(isUploadingAttachments || sendStatus == "sending" || cancelPending)
-                                    .accessibilityLabel("Send message now and interrupt Agent turn")
-                                }
-                            }
-                        }
-                        
-                        // Send button - should be WHITE background
+                        // Send button (white/bright style)
                         Button {
                             sendComposerMessage()
                         } label: {
                             Image(systemName: "arrow.up")
-                                .font(IOSTypography.button)
-                                .foregroundStyle(IOSTheme.background)  // White text/icon
-                                .padding(.horizontal, 14)
+                                .font(IOSDesignSystem.IOSTypography.button)
+                                .foregroundStyle(IOSTheme.background)  // White icon
+                                .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(IOSTheme.text)  // Dark background
-                                .cornerRadius(18)
+                                .background(IOSTheme.text)  // Dark background for contrast
+                                .cornerRadius(17)
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
-                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.4)
+                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.3)
                         .accessibilityLabel("Send Agent message")
                     }
-                    .frame(maxHeight: 38)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
+                    .padding(.bottom, 4)
                 }
                 .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
                 .overlay {
@@ -808,7 +753,6 @@ public struct AgentChatView: View {
                             lineWidth: composerFocused ? 1.5 : 1
                         )
                 }
-                .padding(.bottom, 2)
                 if !sendStatus.isEmpty {
                     Text(sendStatusLabel)
                         .font(IOSTypography.status)
