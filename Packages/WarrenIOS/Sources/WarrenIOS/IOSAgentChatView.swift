@@ -630,18 +630,6 @@ public struct AgentChatView: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
-                if !localAttachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 5) {
-                            ForEach(localAttachments) { attachment in
-                                attachmentChip(attachment)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                    }
-                    .frame(minHeight: 44)
-                    .padding(.top, 6)
-                }
                 if !attachmentFeedback.isEmpty {
                     Text(attachmentFeedback)
                         .font(IOSTypography.status)
@@ -651,139 +639,155 @@ public struct AgentChatView: View {
                         .accessibilityLabel(attachmentFeedback)
                 }
 
-                HStack(alignment: .bottom, spacing: 5) {
-                    attachmentControls
-                    ZStack(alignment: .topLeading) {
-                        Text("Message…")
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 5)
-                            .opacity(draft.isEmpty ? 1 : 0)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(!draft.isEmpty)
+                VStack(spacing: 0) {
+                    // Row 1: Input field and send button
+                    HStack(alignment: .bottom, spacing: 5) {
+                        ZStack(alignment: .topLeading) {
+                            Text("Message…")
+                                .font(IOSTypography.input)
+                                .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 5)
+                                .opacity(draft.isEmpty ? 1 : 0)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(!draft.isEmpty)
 #if canImport(UIKit)
                             AgentComposerInput(
-                            text: $draft,
-                            isFocused: Binding(
-                                get: { composerFocused },
-                                set: { composerFocused = $0 }
-                            ),
+                                text: $draft,
+                                isFocused: Binding(
+                                    get: { composerFocused },
+                                    set: { composerFocused = $0 }
+                                ),
                                 isDisabled: isUploadingAttachments || sendStatus == "sending"
-                        )
-                            .frame(minHeight: 44, maxHeight: 96)
+                            )
+                            .frame(minHeight: 44, maxHeight: 120)
 #else
-                        TextField("", text: $draft, axis: .vertical)
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(1...3)
-                            .frame(minHeight: 44, maxHeight: 96)
-                            .padding(.horizontal, 2)
-                            .padding(.vertical, 0)
-                            .textFieldStyle(.plain)
-                            .focused($composerFocused)
-                            .accessibilityLabel("Agent message")
-                            .disabled(isUploadingAttachments || sendStatus == "sending")
+                            TextField("", text: $draft, axis: .vertical)
+                                .font(IOSTypography.input)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1...4)
+                                .frame(minHeight: 44, maxHeight: 120)
+                                .padding(.horizontal, 2)
+                                .padding(.vertical, 0)
+                                .textFieldStyle(.plain)
+                                .focused($composerFocused)
+                                .accessibilityLabel("Agent message")
+                                .disabled(isUploadingAttachments || sendStatus == "sending")
 #endif
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            sendComposerMessage()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(IOSTypography.button)
+                                .foregroundStyle(IOSTheme.background)
+                                .frame(width: 30, height: 30)
+                                .background(IOSTheme.text, in: Circle())
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
+                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
+                        .accessibilityLabel("Send Agent message")
+                        .padding(.trailing, 4)
+                        .padding(.bottom, 2)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Button {
-                        sendComposerMessage()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(IOSTypography.button)
-                            .foregroundStyle(IOSTheme.background)
-                            .frame(width: 30, height: 30)
-                            .background(IOSTheme.text, in: Circle())
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
-                    .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
-                    .accessibilityLabel("Send Agent message")
-                    .padding(.bottom, 2)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 6)
 
-                HStack(spacing: 8) {
-                    if let metadata = agentComposerMetadata {
-                        Text(metadata)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Agent type and model: \(metadata)")
-                    }
-                    if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
-                        Button {
-                            isQueueSheetPresented = true
-                        } label: {
-                            Text("Queued \(queued)")
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.amber)
-                                .frame(minWidth: 44, minHeight: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Show \(queued) queued messages")
-                    }
-                    if model.canInterruptAgentTurn {
-                        Button {
-                            cancelAgentTurn()
-                        } label: {
-                            if cancelPending {
-                                Text("Cancelling…")
-                                    .font(IOSTypography.status)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                                    .frame(minWidth: 44, minHeight: 44)
-                            } else {
-                                Image(systemName: "stop.fill")
-                                    .font(IOSTypography.button)
-                                    .foregroundStyle(IOSTheme.red)
-                                    .frame(width: 44, height: 44)
+                    // Row 2: + button and metadata
+                    HStack(spacing: 8) {
+                        if !localAttachments.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 5) {
+                                    ForEach(localAttachments) { attachment in
+                                        attachmentChip(attachment)
+                                    }
+                                }
+                                .padding(.horizontal, 8)
                             }
+                            .frame(minHeight: 44)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(cancelPending)
-                        .accessibilityLabel("Cancel Agent turn")
-                        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        attachmentControlsWithPlus
+                        if let metadata = agentComposerMetadata {
+                            Text(metadata)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Agent type and model: \(metadata)")
+                        }
+                        if let queued = model.agentQueuedMessageCountBySessionID[sessionID], queued > 0 {
                             Button {
-                                sendComposerMessage(sendNow: true)
+                                isQueueSheetPresented = true
                             } label: {
-                                Text("Send now")
-                                    .font(IOSTypography.button)
+                                Text("Queued \(queued)")
+                                    .font(IOSTypography.metadata)
                                     .foregroundStyle(IOSTheme.amber)
                                     .frame(minWidth: 44, minHeight: 44)
                             }
                             .buttonStyle(.plain)
-                            .disabled(isUploadingAttachments || sendStatus == "sending" || cancelPending)
-                            .accessibilityLabel("Send message now and interrupt Agent turn")
+                            .accessibilityLabel("Show \(queued) queued messages")
+                        }
+                        if model.canInterruptAgentTurn {
+                            Button {
+                                cancelAgentTurn()
+                            } label: {
+                                if cancelPending {
+                                    Text("Cancelling…")
+                                        .font(IOSTypography.status)
+                                        .foregroundStyle(IOSTheme.secondaryText)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                } else {
+                                    Image(systemName: "stop.fill")
+                                        .font(IOSTypography.button)
+                                        .foregroundStyle(IOSTheme.red)
+                                        .frame(width: 44, height: 44)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(cancelPending)
+                            .accessibilityLabel("Cancel Agent turn")
+                            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Button {
+                                    sendComposerMessage(sendNow: true)
+                                } label: {
+                                    Text("Send now")
+                                        .font(IOSTypography.button)
+                                        .foregroundStyle(IOSTheme.amber)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isUploadingAttachments || sendStatus == "sending" || cancelPending)
+                                .accessibilityLabel("Send message now and interrupt Agent turn")
+                            }
                         }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 5)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 5)
-            }
-            .padding(.horizontal, 4)
-            .padding(.top, 1)
-            .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
-                    .stroke(
-                        composerFocused ? IOSTheme.focusRing : IOSTheme.ring.opacity(0.92),
-                        lineWidth: composerFocused ? 1.5 : 1
-                    )
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 2)
-            if !sendStatus.isEmpty {
-                Text(sendStatusLabel)
-                    .font(IOSTypography.status)
-                    .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
-                    .padding(.horizontal, 13)
-                    .padding(.top, 4)
-                    .accessibilityLabel(sendStatusLabel)
+                .padding(.horizontal, 4)
+                .padding(.top, 1)
+                .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
+                        .stroke(
+                            composerFocused ? IOSTheme.focusRing : IOSTheme.ring.opacity(0.92),
+                            lineWidth: composerFocused ? 1.5 : 1
+                        )
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+                if !sendStatus.isEmpty {
+                    Text(sendStatusLabel)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
+                        .padding(.horizontal, 13)
+                        .padding(.top, 4)
+                        .accessibilityLabel(sendStatusLabel)
+                }
             }
         }
         .padding(.top, 3)
@@ -791,43 +795,47 @@ public struct AgentChatView: View {
     }
 
     @ViewBuilder
-    private var attachmentControls: some View {
+    private var attachmentControlsWithPlus: some View {
         let attachmentsSupported = model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
-        HStack(spacing: 2) {
-#if os(iOS)
-            PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
-                Image(systemName: "photo")
-                    .font(IOSTypography.button)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 44, height: 44)
+        Button {
+            #if os(iOS)
+            if attachmentsSupported {
+                photoPickerButton
+            } else {
+                filePickerButton
             }
-            .buttonStyle(.plain)
-            .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
-            .accessibilityLabel("Choose photos")
-#endif
-            Button {
-                isFileImporterPresented = true
-            } label: {
-                Image(systemName: "paperclip")
-                    .font(IOSTypography.button)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-            .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
-            .accessibilityLabel("Choose a file")
+            #else
+            filePickerButton
+            #endif
+        } label: {
+            Image(systemName: "plus")
+                .font(IOSTypography.button)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .frame(width: 44, height: 44)
         }
-        .opacity(attachmentsSupported && !isUploadingAttachments ? 1 : 0.42)
-        .accessibilityValue(
-            !attachmentsSupported
-                ? "Unavailable on this Host"
-                : (isUploadingAttachments ? "Unavailable while uploading" : "Available")
-        )
-#if os(iOS)
+        .buttonStyle(.plain)
+        .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
+        .accessibilityLabel("Add attachments")
+#if canImport(UIKit)
         .onChange(of: photoItems) { _, items in
             loadPhotos(items)
         }
 #endif
+    }
+
+    @ViewBuilder
+    private var filePickerButton: some View {
+        Button {
+            isFileImporterPresented = true
+        } label: {
+            Image(systemName: "plus")
+                .font(IOSTypography.button)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) || isUploadingAttachments || sendStatus == "sending")
+        .accessibilityLabel("Choose a file")
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: [.item],
@@ -835,6 +843,21 @@ public struct AgentChatView: View {
             onCompletion: handleFileImporter
         )
     }
+
+    @ViewBuilder
+#if os(iOS)
+    private var photoPickerButton: some View {
+        PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
+            Image(systemName: "plus")
+                .font(IOSTypography.button)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) || isUploadingAttachments || sendStatus == "sending")
+        .accessibilityLabel("Choose photos")
+    }
+#endif
 
     private func attachmentChip(_ attachment: IOSAgentLocalAttachment) -> some View {
         HStack(spacing: 4) {
@@ -2014,9 +2037,11 @@ private struct AgentStructuredEventBlock: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(stateColor)
-                        .frame(width: 6, height: 6)
+                    if expanded {
+                        Circle()
+                            .fill(stateColor)
+                            .frame(width: 6, height: 6)
+                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2050,10 +2075,12 @@ private struct AgentStructuredEventBlock: View {
             in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
         )
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(stateColor)
-                .frame(width: 2)
-                .padding(.vertical, WarrenSpacing.xs)
+            if expanded {
+                Rectangle()
+                    .fill(stateColor)
+                    .frame(width: 2)
+                    .padding(.vertical, WarrenSpacing.xs)
+            }
         }
         .accessibilityElement(children: .contain)
         .onChange(of: state) { _, nextState in
@@ -2565,9 +2592,11 @@ private struct AgentActivityGroupBlock: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(activityStatusColor)
-                        .frame(width: 6, height: 6)
+                    if expanded {
+                        Circle()
+                            .fill(activityStatusColor)
+                            .frame(width: 6, height: 6)
+                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2634,11 +2663,13 @@ private struct AgentActivityGroupBlock: View {
         .padding(.vertical, 2)
         .padding(.leading, 14)
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(activityStatusColor.opacity(0.70))
-                .frame(width: 1)
-                .padding(.vertical, 4)
-                .padding(.leading, 6)
+            if expanded {
+                Rectangle()
+                    .fill(activityStatusColor.opacity(0.70))
+                    .frame(width: 1)
+                    .padding(.vertical, 4)
+                    .padding(.leading, 6)
+            }
         }
     }
 
@@ -2699,9 +2730,11 @@ private struct AgentReasoningEntry: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Circle()
-                        .fill(IOSTheme.tertiaryText)
-                        .frame(width: 5, height: 5)
+                    if expanded {
+                        Circle()
+                            .fill(IOSTheme.tertiaryText)
+                            .frame(width: 5, height: 5)
+                    }
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 11)
@@ -2734,10 +2767,12 @@ private struct AgentReasoningEntry: View {
         }
         .padding(.leading, WarrenSpacing.compact)
         .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.64))
-                .frame(width: 1)
-                .padding(.vertical, 2)
+            if expanded {
+                Rectangle()
+                    .fill(IOSTheme.separator.opacity(0.64))
+                    .frame(width: 1)
+                    .padding(.vertical, 2)
+            }
         }
     }
 

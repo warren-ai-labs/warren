@@ -626,24 +626,28 @@ public struct IOSModeToggle: View {
     @Binding private var selection: IOSSessionDisplayMode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedMode: String?
+    private let isAgentSession: Bool
 
-    public init(selection: Binding<IOSSessionDisplayMode>) {
+    public init(selection: Binding<IOSSessionDisplayMode>, isAgentSession: Bool = true) {
         _selection = selection
+        self.isAgentSession = isAgentSession
     }
 
     public var body: some View {
-        HStack(spacing: 1) {
-            modeButton(.terminal, symbol: "terminal", accessibilityLabel: "Terminal")
-            modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: "Agent chat")
+        if isAgentSession {
+            HStack(spacing: 1) {
+                modeButton(.terminal, symbol: "terminal", accessibilityLabel: "Terminal")
+                modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: "Agent chat")
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
+            .padding(WarrenSpacing.xxs)
+            .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                    .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
-        .padding(WarrenSpacing.xxs)
-        .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
-                .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 1)
-        }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func modeButton(

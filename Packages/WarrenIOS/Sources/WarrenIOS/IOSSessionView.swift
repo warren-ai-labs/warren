@@ -375,7 +375,7 @@ private struct SessionHeader: View {
             IOSModeToggle(selection: Binding(
                 get: { model.displayMode },
                 set: { model.setDisplayMode($0) }
-            ))
+            ), isAgentSession: session?.isAgentBacked ?? false)
             Menu {
                 if hasSiblings {
                     Button("Switch session", systemImage: "rectangle.stack") { openSwitcher() }
