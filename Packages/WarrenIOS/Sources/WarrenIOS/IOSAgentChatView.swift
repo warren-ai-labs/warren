@@ -844,8 +844,8 @@ public struct AgentChatView: View {
         )
     }
 
-    @ViewBuilder
 #if os(iOS)
+    @ViewBuilder
     private var photoPickerButton: some View {
         PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
             Image(systemName: "plus")
