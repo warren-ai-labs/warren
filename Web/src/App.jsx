@@ -1439,7 +1439,7 @@ export default function App() {
     }
     const turn = activeAgentTurn(sessionID);
     const value = String(text || "").trim();
-    if (!turn || !value || agentInterruptInFlightRef.current.has(sessionID)) {
+    if (!turn || (!value && attachments.length === 0) || agentInterruptInFlightRef.current.has(sessionID)) {
       return Promise.reject(new Error("The active Agent turn is unavailable"));
     }
     const item = queueAgentMessage(sessionID, value, attachments);

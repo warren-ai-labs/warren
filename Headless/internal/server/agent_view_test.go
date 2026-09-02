@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -222,6 +223,103 @@ func TestAgentViewAttachmentLifecycleValidatesChunksAndPrepareHash(t *testing.T)
 		Session: sessionID, UploadID: value.UploadID, Length: int64(len(data)),
 	}); err != nil || !completed.Accepted || completed.State != "ready" {
 		t.Fatalf("valid completion = %#v, err=%v", completed, err)
+	}
+}
+
+func TestAgentViewAttachmentMessageUsesLegacyPTYBridge(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "agent-view-pty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "agent-view-session"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: sessionID, Kind: "codex", Runtime: "runtime", Lifecycle: "running",
+			Title: "Codex", CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	t.Cleanup(service.cleanupAgentAttachments)
+
+	data := []byte("attachment body")
+	digest := sha256.Sum256(data)
+	hash := hex.EncodeToString(digest[:])
+	prepared, err := service.prepareAgentAttachment(context.Background(), sessionID, api.AgentAttachmentPrepareRequest{
+		Session: sessionID, Name: "notes.txt", MIME: "text/plain", Size: int64(len(data)), SHA256: hash,
+	})
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if _, err := service.putAgentAttachmentChunk(context.Background(), api.AgentAttachmentChunkRequest{
+		Session: sessionID, UploadID: prepared.UploadID, Sequence: 0,
+		Length: len(data), SHA256: hash, Data: base64.StdEncoding.EncodeToString(data),
+	}); err != nil {
+		t.Fatalf("chunk failed: %v", err)
+	}
+	if _, err := service.completeAgentAttachment(context.Background(), api.AgentAttachmentCompleteRequest{
+		Session: sessionID, UploadID: prepared.UploadID, Length: int64(len(data)), SHA256: hash,
+	}); err != nil {
+		t.Fatalf("complete failed: %v", err)
+	}
+	result, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "message-1", Text: "Review this file",
+		Attachments: []api.AgentAttachmentRef{{
+			AttachmentID: prepared.AttachmentID, Name: "notes.txt", MIME: "text/plain", Size: int64(len(data)),
+		}},
+	})
+	if err != nil || !result.Accepted {
+		t.Fatalf("send result = %#v, err=%v", result, err)
+	}
+	captured, err := runtime.Capture(context.Background(), "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(captured, []byte("Review this file")) || !bytes.Contains(captured, []byte("notes.txt")) {
+		t.Fatalf("PTY input = %q, want message and attachment name", captured)
+	}
+	materialized, err := service.materializedAgentAttachmentFor(sessionID, api.AgentAttachmentRef{AttachmentID: prepared.AttachmentID})
+	if err != nil {
+		t.Fatalf("resolve materialized attachment: %v", err)
+	}
+	if got, err := os.ReadFile(materialized.path); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("materialized file = %q, err=%v, want %q", got, err, data)
+	}
+
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 4, Status: api.AgentTurnStarted}}, false)
+	if _, err := service.interruptAgentTurn(context.Background(), api.AgentTurnInterruptRequest{
+		Session: sessionID,
+		Turn:    4,
+		Reason:  "send_now",
+		Replacement: &api.AgentMessageSendRequest{
+			Session:         sessionID,
+			ClientMessageID: "message-2",
+			Attachments:     []api.AgentAttachmentRef{{AttachmentID: prepared.AttachmentID}},
+		},
+	}); err != nil {
+		t.Fatalf("attachment-only send now failed: %v", err)
+	}
+	captured, err = runtime.Capture(context.Background(), "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(captured, []byte("Please inspect the attached file(s).")) ||
+		!bytes.Contains(captured, []byte(materialized.path)) {
+		t.Fatalf("attachment-only Send now input = %q, want default prompt and Host path", captured)
+	}
+}
+
+func TestAgentViewCapabilitiesExposeAttachmentsForPTYRuntime(t *testing.T) {
+	service := &Service{Runtime: newMemoryRuntime(t)}
+	capabilities := service.AgentViewCapabilities()
+	if !api.SupportsCapability(capabilities, api.CapabilityAgentAttachments) {
+		t.Fatalf("capabilities = %q, want %q", capabilities, api.CapabilityAgentAttachments)
 	}
 }
 

@@ -1082,7 +1082,7 @@ public final class IOSApplicationModel: ObservableObject {
     @discardableResult
     public func sendAgentMessage(_ text: String, attachments: [WarrenRemoteAgentAttachmentRef] = []) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty,
+        guard (!value.isEmpty || !attachments.isEmpty),
               hasControlLease,
               let sessionID = currentSessionID,
               let status = agentStatus(for: sessionID) else { return false }
@@ -1341,7 +1341,7 @@ public final class IOSApplicationModel: ObservableObject {
     @discardableResult
     public func sendAgentMessageNow(_ text: String, attachments: [WarrenRemoteAgentAttachmentRef] = []) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty,
+        guard (!value.isEmpty || !attachments.isEmpty),
               supportsAgentCapability(WarrenRemoteAgentCapability.interrupt),
               let sessionID = currentSessionID,
               hasControlLease,

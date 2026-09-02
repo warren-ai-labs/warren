@@ -479,6 +479,7 @@ func (s *Service) Shutdown() {
 	if s.lifecycleCancel != nil {
 		s.lifecycleCancel()
 	}
+	s.cleanupAgentAttachments()
 	s.outputMu.Lock()
 	outputs := make([]*outputSession, 0, len(s.outputs))
 	for _, outputSession := range s.outputs {
@@ -551,6 +552,7 @@ func (s *Service) lifecycleLoop(ctx context.Context) {
 		case <-ticker.C:
 			s.reconcile(ctx)
 		case <-reaper.C:
+			s.reapAgentAttachments(time.Now())
 			s.reapOrphans(ctx)
 		}
 	}
