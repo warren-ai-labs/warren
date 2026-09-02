@@ -125,6 +125,8 @@ struct WarrenDesktopSettingsView: View {
     private var opencodeCommand = "opencode"
     @AppStorage(WarrenPreferenceKey.presetCommandPi)
     private var piCommand = "pi"
+    @AppStorage(WarrenPreferenceKey.presetCommandQoder)
+    private var qoderCommand = "qoder"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -777,7 +779,7 @@ struct WarrenDesktopSettingsView: View {
         case .pi:
             settingsInputField("Pi", text: $piCommand, placeholder: "pi")
         case .qoder:
-            EmptyView()
+            settingsInputField("Qoder", text: $qoderCommand, placeholder: "qoder")
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:
