@@ -3542,7 +3542,9 @@ func (s *Service) readPeerCursorOutput(
 // stopPeerCursorOutput removes a direct subscription before stopping its
 // reader. Teardown paths do not wait because they may be called synchronously
 // from that reader's outbound-overflow path; replacement recovery waits so no
-// stale frame can enqueue after the next snapshot.
+// stale frame can enqueue after the next snapshot. The wait is bounded so a
+// stale peer reader that does not observe Close promptly cannot stall a
+// rapid tab switch (see stopCursorOutputWithin).
 func (s *Service) stopPeerCursorOutput(peer *wsPeer, sessionID string, wait bool) {
 	s.outputMu.Lock()
 	streams := s.peerOutputs[peer]
@@ -3560,7 +3562,11 @@ func (s *Service) stopPeerCursorOutput(peer *wsPeer, sessionID string, wait bool
 	stream.cancel()
 	_ = stream.reader.Close()
 	if wait {
-		<-stream.done
+		select {
+		case <-stream.done:
+		case <-time.After(2 * time.Second):
+			s.logWarn("stopPeerCursorOutput join timed out", "session", sessionID, "timeoutMs", int64(2000))
+		}
 	}
 }
 
@@ -3568,7 +3574,18 @@ func (s *Service) stopPeerCursorOutput(peer *wsPeer, sessionID string, wait bool
 // runs before an attach obtains the broadcast lock: a reader can be waiting to
 // publish output under that lock, and reversing the order would deadlock the
 // checkpoint boundary.
+//
+// The join is bounded: a ghostline reader can be blocked inside a remote Read
+// that does not observe Close promptly (for example when the ghostline server
+// stops answering output-read RPCs). Without a bound, a rapid workspace/tab
+// switch would hang the new subscribe behind the stale reader forever, leaving
+// the target pane black. On timeout we record a warning and proceed; the stale
+// reader is closed and will be replaced by ensureCursorOutput on resume.
 func (s *Service) stopCursorOutput(outputSession *outputSession) {
+	s.stopCursorOutputWithin(outputSession, 2*time.Second, "subscribe/attach")
+}
+
+func (s *Service) stopCursorOutputWithin(outputSession *outputSession, timeout time.Duration, caller string) {
 	if outputSession == nil {
 		return
 	}
@@ -3583,8 +3600,13 @@ func (s *Service) stopCursorOutput(outputSession *outputSession) {
 		_ = reader.Close()
 	}
 	outputSession.mu.Unlock()
-	if done != nil {
-		<-done
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		s.logWarn("stopCursorOutput join timed out", "caller", caller, "timeoutMs", timeout.Milliseconds())
 	}
 }
 
