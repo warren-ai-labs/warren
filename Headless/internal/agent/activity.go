@@ -92,7 +92,7 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 
 func observeStopReason(reason string) (completed, failed bool) {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "end_turn", "stop", "length", "content-filter", "content_filter", "max_tokens", "other":
+	case "end_turn", "stop", "stop_sequence", "length", "content-filter", "content_filter", "max_tokens", "other":
 		return true, false
 	case "error":
 		return false, true

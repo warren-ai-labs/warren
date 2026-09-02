@@ -1,11 +1,12 @@
 package agent
 
-// Qoder integration. Qoder stores conversations in a JSONL format under
-// ~/.qoder (honoring QODER_HOME). Warren launches qoder without injecting a
-// session id: the Warren-managed extension reports the conversation on session
-// creation, and the daemon tails the resolved JSONL with the ordinary watcher.
-// There is no SQLite store; the provider's own JSONL is already the normalized
-// append-only transcript.
+// Qoder integration. Qoder stores each conversation as a plain JSONL file
+// under <config>/projects/<cwd-slug>/<session-id>.jsonl (config honoring
+// QODER_HOME and QODER_CONFIG_DIR just like the CLI itself). Warren launches
+// qoder with an injected --session-id and the Warren-managed hook reports the
+// transcript path on SessionStart, so the daemon tails the resolved JSONL with
+// the ordinary watcher. There is no SQLite store and no private cache: the
+// provider's own JSONL is already the normalized append-only transcript.
 
 import (
 	"bufio"
@@ -23,19 +24,22 @@ import (
 
 const qoderProvider = "qoder"
 
-// qoderSessionReuseFlags are Qoder options that reuse an existing conversation.
-// Warren binds the session qoder creates on session_start, so a user command
-// that resumes or selects an existing session would detach the Agent tab from
-// that conversation.
+// qoderSessionReuseFlags are Qoder options that reuse an existing conversation
+// or otherwise detach the transcript Warren tails. Warren binds the session
+// qoder creates on session_start, so a user command that resumes, forks, or
+// selects an existing session would detach the Agent tab from that
+// conversation; --no-session-persistence leaves no transcript to tail.
 var qoderSessionReuseFlags = map[string]bool{
-	"--continue":   true,
-	"-c":           true,
-	"--resume":     true,
-	"-r":           true,
-	"--session":    true,
-	"--session-id": true,
-	"--fork":       true,
-	"--no-session": true,
+	"--continue":               true,
+	"-c":                       true,
+	"--resume":                 true,
+	"-r":                       true,
+	"--session":                true,
+	"--session-id":             true,
+	"--fork":                   true,
+	"--fork-session":           true,
+	"--no-session":             true,
+	"--no-session-persistence": true,
 }
 
 // ValidateQoderCommand keeps every session.create caller from selecting a Qoder
@@ -200,33 +204,64 @@ func QoderConfigDir() string {
 	return QoderHome()
 }
 
-// QoderSessionsRoot returns the directory Qoder stores session files in,
-// honoring QODER_SESSION_DIR if set.
-func QoderSessionsRoot() string {
+// QoderProjectsRoot returns the directory Qoder stores project transcripts
+// under: <root>/projects/<cwd-slug>/<session-id>.jsonl. The projects root is
+// always the real-home ~/.qoder/projects: Qoder keeps the settings file under
+// the config dir (honoring QODER_HOME/QODER_CONFIG_DIR) but writes session
+// transcripts under the user's actual .qoder directory regardless of those
+// overrides. QODER_SESSION_DIR is honored only as a test/override seam and is
+// not read by the CLI itself.
+func QoderProjectsRoot() string {
 	if value := os.Getenv("QODER_SESSION_DIR"); value != "" {
 		return filepath.Clean(value)
 	}
-	return filepath.Join(QoderHome(), "sessions")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".qoder", "projects")
+	}
+	return filepath.Join(home, ".qoder", "projects")
 }
 
-// QoderSessionFileName returns the deterministic suffix Qoder's session files end
-// with: Qoder writes <timestamp>_<session-id>.jsonl.
-func QoderSessionFileName(sessionID string) string {
-	return "_" + sessionID + ".jsonl"
+// qoderCwdSlug mirrors Qoder's project bucket naming: the absolute working
+// directory with every path separator replaced by a dash (including the
+// leading one), e.g. /Users/me/proj -> -Users-me-proj.
+func qoderCwdSlug(cwd string) string {
+	absolute, err := filepath.Abs(cwd)
+	if err != nil {
+		absolute = cwd
+	}
+	return strings.ReplaceAll(filepath.Clean(absolute), string(filepath.Separator), "-")
+}
+
+// QoderTranscriptPath returns the deterministic transcript path Qoder writes
+// for a session id started in cwd. The session-id flag is the primary anchor,
+// so the path is only valid when the caller injected it at launch.
+func QoderTranscriptPath(cwd, sessionID string) string {
+	return filepath.Join(QoderProjectsRoot(), qoderCwdSlug(cwd), sessionID+".jsonl")
 }
 
 // FindQoderTranscript locates the JSONL transcript for a Warren session by its
-// injected Qoder session id. The scan is scoped to the exact filename suffix so
-// a stale or manually-created Qoder session can never be adopted. The header is
-// verified as a second guard so a future Qoder layout change degrades to a
-// retry instead of tailing the wrong conversation.
-func FindQoderTranscript(sessionID string) string {
-	root := QoderSessionsRoot()
+// injected Qoder session id. When the working directory is known the exact
+// bucket is checked first (Qoder writes there deterministically); when it is
+// empty, or the file is not there yet, a scan over every project bucket finds
+// <session-id>.jsonl regardless of where the CLI actually started. The
+// filename alone is scoped to the injected id, and the transcript is verified
+// to mention that session id so a stale or manually-created file is never
+// adopted.
+func FindQoderTranscript(sessionID, cwd string) string {
+	root := QoderProjectsRoot()
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	if cwd != "" {
+		if path := QoderTranscriptPath(cwd, sessionID); qoderTranscriptMatches(path, sessionID) {
+			return path
+		}
+	}
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() {
 		return ""
 	}
-	suffix := QoderSessionFileName(sessionID)
 	var newest string
 	var newestMod time.Time
 	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -239,14 +274,14 @@ func FindQoderTranscript(sessionID string) string {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		if !strings.HasSuffix(entry.Name(), suffix) {
+		if entry.Name() != sessionID+".jsonl" {
+			return nil
+		}
+		if !qoderTranscriptMatches(path, sessionID) {
 			return nil
 		}
 		fileInfo, err := entry.Info()
 		if err != nil || !fileInfo.Mode().IsRegular() {
-			return nil
-		}
-		if !qoderTranscriptHeaderMatches(path, sessionID) {
 			return nil
 		}
 		if newest == "" || fileInfo.ModTime().After(newestMod) {
@@ -258,26 +293,32 @@ func FindQoderTranscript(sessionID string) string {
 	return newest
 }
 
-// qoderTranscriptHeaderMatches checks the session header line id field. A
-// missing or malformed header is treated as no match so the finder never
-// binds Warren to a file that Qoder cannot be reading itself.
-func qoderTranscriptHeaderMatches(path, sessionID string) bool {
+// qoderTranscriptMatches verifies the transcript really belongs to sessionID.
+// Qoder writes the session id on the first metadata records as well as on
+// every message record, so the check scans the first bounded chunk instead of
+// assuming a fixed header shape. A missing or malformed file is no match so
+// the finder never binds Warren to a file Qoder cannot be reading itself.
+func qoderTranscriptMatches(path, sessionID string) bool {
 	file, err := openRegularFile(path)
 	if err != nil {
 		return false
 	}
 	defer file.Close()
-	line, err := readBoundedLine(bufio.NewReader(file), 1024*1024)
-	if err != nil && len(line) == 0 {
-		return false
+	reader := bufio.NewReader(file)
+	needle := []byte(`"sessionId":"` + sessionID + `"`)
+	for lines := 0; lines < 64; lines++ {
+		line, readErr := readBoundedLine(reader, 1024*1024)
+		if len(line) == 0 {
+			break
+		}
+		if bytes.Contains(line, needle) {
+			return true
+		}
+		if readErr != nil {
+			break
+		}
 	}
-	var header struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(bytes.TrimSpace(line), &header) != nil || header.ID == "" {
-		return false
-	}
-	return header.ID == sessionID
+	return false
 }
 
 // InjectQoderSessionID makes Qoder's transcript path deterministic for a
@@ -302,16 +343,21 @@ func InjectQoderSessionID(command, warrenSessionID string) string {
 	return result
 }
 
-// EnsureQoderBindHook installs the Warren binding hook into Qoder's hooks
-// configuration. On session.start the hook writes the binding file so the daemon
-// can resolve the Warren session ID and transcript location without guessing.
+// EnsureQoderBindHook installs the Warren binding hook into Qoder's user
+// settings file (<configDir>/settings.json), preserving every existing key and
+// hook entry. Qoder loads user-level hooks from the `hooks` object of its
+// settings.json (SessionStart/SessionEnd events with a `command` hook), so a
+// standalone hooks.json next to the config directory is never executed. On
+// SessionStart the hook writes the binding file so the daemon can resolve the
+// Warren session ID and transcript location without guessing.
 func EnsureQoderBindHook(qoderConfigDir string) (changed bool, err error) {
-	return ensureQoderHooks(filepath.Join(qoderConfigDir, "hooks.json"), "qoder")
+	return ensureQoderSettingsHook(filepath.Join(qoderConfigDir, "settings.json"), "qoder")
 }
 
-// ensureQoderHooks merges the Warren-managed hook command into Qoder's hooks
-// configuration. The marker in the command makes repeated installs idempotent.
-func ensureQoderHooks(hooksPath, provider string) (changed bool, err error) {
+// ensureQoderSettingsHook merges the Warren-managed hook command into the
+// `hooks` object of Qoder's settings.json. The marker in the command makes
+// repeated installs idempotent; user entries are never touched.
+func ensureQoderSettingsHook(settingsPath, provider string) (changed bool, err error) {
 	scriptPath := filepath.Join(configDir(), "hooks", "qoder-bind.sh")
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
 		return false, fmt.Errorf("create hooks directory: %w", err)
@@ -321,9 +367,9 @@ func ensureQoderHooks(hooksPath, provider string) (changed bool, err error) {
 	}
 
 	document := map[string]any{}
-	if data, err := os.ReadFile(hooksPath); err == nil {
+	if data, err := os.ReadFile(settingsPath); err == nil {
 		if err := json.Unmarshal(data, &document); err != nil {
-			return false, fmt.Errorf("parse existing hooks file %s: %w", hooksPath, err)
+			return false, fmt.Errorf("parse existing settings file %s: %w", settingsPath, err)
 		}
 	}
 	hooks, _ := document["hooks"].(map[string]any)
@@ -341,34 +387,46 @@ func ensureQoderHooks(hooksPath, provider string) (changed bool, err error) {
 	if !changed {
 		return false, nil
 	}
-	return true, writeHooksJSON(hooksPath, document)
+	return true, writeHooksJSON(settingsPath, document)
 }
 
-// Record one JSONL line emitted by Qoder.
+// qoderRecord is one JSONL line in a Qoder session file.
 type qoderRecord struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id"`
-	ParentID  string          `json:"parentId,omitempty"`
-	Timestamp string          `json:"timestamp"`
-	Message   json.RawMessage `json:"message,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	CustomType string         `json:"customType,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	Type        string          `json:"type"`
+	UUID        string          `json:"uuid"`
+	ParentID    string          `json:"parentUuid"`
+	Timestamp   string          `json:"timestamp"`
+	SessionID   string          `json:"sessionId"`
+	Cwd         string          `json:"cwd"`
+	IsSidechain bool            `json:"isSidechain"`
+	Message     json.RawMessage `json:"message"`
+	// Error records carry the failure at the record level (the message
+	// content is the human-readable fallback text).
+	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
+	Error             string `json:"error"`
 }
 
+// qoderMessage is the message payload of a user/assistant record.
 type qoderMessage struct {
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
 	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	Provider   string          `json:"provider,omitempty"`
-	Model      string          `json:"model,omitempty"`
-	StopReason string          `json:"stopReason,omitempty"`
-	ErrorMessage string        `json:"errorMessage,omitempty"`
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
-	IsError    bool            `json:"isError,omitempty"`
-	Command    string          `json:"command,omitempty"`
-	Output     string          `json:"output,omitempty"`
-	ExitCode   int             `json:"exitCode,omitempty"`
+	Model      string          `json:"model"`
+	StopReason string          `json:"stop_reason"`
+	Content    json.RawMessage `json:"content"`
+}
+
+// qoderContentBlock is one element of a Qoder message content array.
+type qoderContentBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // parseQoder projects one Qoder record onto the normalized agent event stream
@@ -379,94 +437,199 @@ func (p *parser) parseQoder(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
-	provider := qoderProvider
-
 	switch record.Type {
-	case "session", "model_change", "thinking_level_change":
+	case "workspace-directories", "runtime-config", "active-leaf", "ai-title",
+		"last-prompt", "file-history-snapshot", "model_change", "thinking_level_change":
+		// Metadata records do not participate in the visible conversation.
+		return nil
+	case "attachment":
+		// Startup scaffolding (skill listings, reminders). Claude projects
+		// these as system_instructions when they are real injected context;
+		// Qoder's attachment type is covered by the transcript's own user
+		// turns, so keep the timeline clean and skip them.
 		return nil
 	}
 
 	var message qoderMessage
-	if json.Unmarshal(record.Content, &message) != nil {
+	if json.Unmarshal(record.Message, &message) != nil {
 		return nil
 	}
-
 	switch message.Role {
 	case "user":
-		content := p.content(message.Content)
-		if content == "" {
-			return nil
-		}
-		return []api.AgentEvent{{
-			Provider:  provider,
-			ID:        record.ID,
-			Type:      "user",
-			Content:   p.clip(content),
-			Timestamp: timestamp,
-		}}
+		return p.parseQoderUser(record, message, timestamp)
 	case "assistant":
 		return p.parseQoderAssistant(record, message, timestamp)
-	case "toolResult":
-		return p.parseQoderToolResult(record, message, timestamp)
 	default:
 		return nil
 	}
 }
 
-func (p *parser) parseQoderAssistant(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
+// parseQoderUser projects a user-role record. Plain-text content is a real
+// user turn; a content array of tool_result blocks carries tool outputs whose
+// originating tool call was recorded by the matching assistant record.
+func (p *parser) parseQoderUser(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
+	var blocks []qoderContentBlock
+	if json.Unmarshal(message.Content, &blocks) == nil && len(blocks) > 0 {
+		return p.parseQoderToolResults(record, blocks, timestamp)
+	}
 	content := p.content(message.Content)
 	if content == "" {
 		return nil
 	}
-	events := []api.AgentEvent{{
-		Provider:   qoderProvider,
-		ID:         record.ID,
-		Type:       "assistant",
-		Content:    content,
-		StopReason: qoderStopReason(message.StopReason),
-		Timestamp:  timestamp,
+	return []api.AgentEvent{{
+		Provider:  qoderProvider,
+		ID:        record.UUID,
+		Type:      "user",
+		Content:   p.clip(content),
+		Sidechain: record.IsSidechain,
+		Timestamp: timestamp,
 	}}
-	if message.StopReason == "error" && message.ErrorMessage != "" {
-		events = append(events, api.AgentEvent{
-			Provider:  qoderProvider,
-			ID:        record.ID,
-			Type:      "error",
-			Content:   p.clip(message.ErrorMessage),
-			Error:     p.clip(message.ErrorMessage),
-			Timestamp: timestamp,
-		})
+}
+
+// parseQoderToolResults projects each tool_result block in a user message
+// content array. Qoder writes tool results as an array with one element per
+// finished tool call.
+func (p *parser) parseQoderToolResults(record qoderRecord, blocks []qoderContentBlock, timestamp time.Time) []api.AgentEvent {
+	events := make([]api.AgentEvent, 0, len(blocks))
+	for _, block := range blocks {
+		if block.Type != "tool_result" {
+			continue
+		}
+		output := p.content(block.Content)
+		if strings.TrimSpace(output) == "" {
+			continue
+		}
+		status := "success"
+		if block.IsError {
+			status = "error"
+		}
+		event := api.AgentEvent{
+			Provider:   qoderProvider,
+			ID:         record.UUID,
+			Type:       "tool_output",
+			CallID:     block.ToolUseID,
+			ToolName:   p.qoderCallTool[block.ToolUseID],
+			ToolStatus: status,
+			Output:     output,
+			Sidechain:  record.IsSidechain,
+			Timestamp:  timestamp,
+		}
+		if status == "error" {
+			event.Error = output
+		}
+		events = append(events, event)
 	}
 	return events
 }
 
-func (p *parser) parseQoderToolResult(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
-	output := strings.TrimSpace(message.Output)
-	if output == "" {
+// parseQoderAssistant projects an assistant record. Qoder writes each content
+// block (thinking / text / tool_use) as its own record, so every record maps
+// to at most one normalized event. The stop reason on the final record of a
+// turn (end_turn, stop, length, ...) marks the boundary; tool_use is not
+// terminal.
+func (p *parser) parseQoderAssistant(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
+	var blocks []qoderContentBlock
+	if json.Unmarshal(message.Content, &blocks) != nil || len(blocks) == 0 {
 		return nil
 	}
-	status := "success"
-	if message.IsError || message.ExitCode != 0 {
-		status = "error"
+	stopReason := qoderStopReason(message.StopReason)
+	// An API error assistant record carries the failure details at the record
+	// level; project it as an error event so the UI shows the failure instead
+	// of a bare text bubble.
+	if record.IsAPIErrorMessage {
+		content := p.clip(firstNonEmpty(messageText(blocks), record.Error, p.content(message.Content)))
+		if content == "" {
+			return nil
+		}
+		event := api.AgentEvent{
+			Provider:  qoderProvider,
+			ID:        record.UUID,
+			Type:      "error",
+			Content:   content,
+			Error:     content,
+			Sidechain: record.IsSidechain,
+			Timestamp: timestamp,
+		}
+		if stopReason != "" {
+			event.StopReason = stopReason
+		}
+		return []api.AgentEvent{event}
 	}
 	event := api.AgentEvent{
 		Provider:   qoderProvider,
-		ID:         record.ID,
-		Type:       "tool_output",
-		CallID:     message.ToolCallID,
-		ToolName:   message.ToolName,
-		ToolStatus: status,
-		Output:     output,
+		ID:         record.UUID,
+		Model:      message.Model,
+		StopReason: stopReason,
+		Sidechain:  record.IsSidechain,
 		Timestamp:  timestamp,
 	}
-	if status == "error" {
-		event.Error = output
+	switch blocks[0].Type {
+	case "text":
+		text := p.clip(blocks[0].Text)
+		if text == "" {
+			return nil
+		}
+		event.Type = "assistant"
+		event.Content = text
+	case "thinking":
+		thinking := p.clip(blocks[0].Thinking)
+		if thinking == "" {
+			return nil
+		}
+		event.Type = "reasoning"
+		event.Content = thinking
+	case "tool_use":
+		toolName := canonicalToolName(qoderProvider, blocks[0].Name)
+		callID := blocks[0].ID
+		if callID == "" {
+			callID = record.UUID
+		}
+		if toolName == "" {
+			toolName = "tool"
+		}
+		event.Type = "tool_call"
+		event.ToolName = toolName
+		event.CallID = callID
+		event.ToolInput = rawToAny(blocks[0].Input, p.contentLimit)
+		if callID != "" {
+			p.qoderCallTool[callID] = toolName
+		}
+		if input, ok := event.ToolInput.(map[string]any); ok {
+			if path, ok := input["path"].(string); ok && path != "" {
+				event.Files = []string{path}
+			}
+			if path, ok := input["file_path"].(string); ok && path != "" {
+				event.Files = []string{path}
+			}
+			if patch, ok := input["patch"].(string); ok && toolName == "apply_patch" {
+				event.Files = patchFiles(patch)
+			}
+		}
+	default:
+		// Unknown block: keep whatever text it carries so the UI never drops
+		// a rendered part silently.
+		content := p.clip(firstNonEmpty(blocks[0].Text, blocks[0].Thinking, p.content(blocks[0].Content)))
+		if content == "" {
+			return nil
+		}
+		event.Type = "unknown"
+		event.Content = content
 	}
 	return []api.AgentEvent{event}
 }
 
+func messageText(blocks []qoderContentBlock) string {
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			return block.Text
+		}
+	}
+	return ""
+}
+
 func qoderStopReason(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "stop", "length", "max_tokens", "error", "content_filter":
+	case "end_turn", "stop", "length", "max_tokens", "stop_sequence", "content_filter", "error":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
