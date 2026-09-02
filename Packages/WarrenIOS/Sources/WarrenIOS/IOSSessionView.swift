@@ -359,6 +359,7 @@ private func sessionProviderID(
     case "claude", "claude-code": return "claude"
     case "codex": return "codex"
     case "opencode", "open-code": return "opencode"
+    case "pi": return "pi"
     default: return "shell"
     }
 }
@@ -407,6 +408,7 @@ private struct SessionProviderMark: View {
         case "claude": return "Claude session"
         case "codex": return "Codex session"
         case "opencode": return "OpenCode session"
+        case "pi": return "Pi session"
         default: return "Shell session"
         }
     }

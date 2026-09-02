@@ -1327,6 +1327,7 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	var body struct {
 		OK                  bool   `json:"ok"`
+		Ready               bool   `json:"ready"`
 		Version             string `json:"version"`
 		Build               string `json:"build"`
 		Revision            string `json:"revision"`
@@ -1334,12 +1335,64 @@ func TestHealthEndpoint(t *testing.T) {
 		GhostlineVersion    string `json:"ghostlineVersion"`
 		GhostlineRPCVersion string `json:"ghostlineRPCVersion"`
 		GhostlineTagVersion string `json:"ghostlineTagVersion"`
+		Status              struct {
+			Store                   string      `json:"store"`
+			Migrations              string      `json:"migrations"`
+			GhostlineSkippedSessions int         `json:"ghostlineSkippedSessions"`
+			Relay                   api.RelayHealth `json:"relay"`
+		} `json:"status"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode health body: %v", err)
 	}
-	if !body.OK || body.Version != api.Version || body.Build != "abc1234" || body.Revision != "abc1234def5678" || !body.Dirty || body.GhostlineVersion != "0.6.0" || body.GhostlineRPCVersion != "0.6.0" || body.GhostlineTagVersion != "v0.6.1" {
+	if !body.OK {
+		t.Fatalf("expected ok=true, got %+v", body)
+	}
+	if !body.Ready {
+		t.Fatalf("expected ready=true with healthy subsystems, got %+v", body)
+	}
+	if body.Version != api.Version || body.Build != "abc1234" || body.Revision != "abc1234def5678" || !body.Dirty || body.GhostlineVersion != "0.6.0" || body.GhostlineRPCVersion != "0.6.0" || body.GhostlineTagVersion != "v0.6.1" {
 		t.Fatalf("health body = %+v", body)
+	}
+	if body.Status.Store != api.HealthReady {
+		t.Fatalf("expected status.store=ready, got %q", body.Status.Store)
+	}
+	if body.Status.Migrations != api.HealthCleared {
+		t.Fatalf("expected status.migrations=cleared, got %q", body.Status.Migrations)
+	}
+	if body.Status.Relay.State != api.HealthUnconfigured {
+		t.Fatalf("expected status.relay.state=unconfigured, got %+v", body.Status.Relay)
+	}
+}
+
+func TestHealthEndpointRelayDegraded(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest("GET", "http://localhost/healthz", nil)
+	response := httptest.NewRecorder()
+	directory := t.TempDir()
+	state, _ := store.Open(filepath.Join(directory, "state.json"), "test")
+	handler := NewHTTPServer(&Service{Store: state, Runtime: &memoryRuntime{sessions: map[string][]byte{}}}, "secret", slog.Default())
+	handler.RelayState = func() api.RelayHealth {
+		return api.RelayHealth{Configured: true, Connected: false, State: api.HealthError, LastError: "dial timeout"}
+	}
+	handler.Handler().ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatalf("health returned %d", response.Code)
+	}
+	var body struct {
+		Ready  bool `json:"ready"`
+		Status struct {
+			Relay api.RelayHealth `json:"relay"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if body.Ready {
+		t.Fatalf("expected ready=false when relay is in error state, got true")
+	}
+	if body.Status.Relay.State != api.HealthError || body.Status.Relay.LastError != "dial timeout" || !body.Status.Relay.Configured {
+		t.Fatalf("relay status not surfaced: %+v", body.Status.Relay)
 	}
 }
 

@@ -799,7 +799,7 @@ func TestValidateAgentCreateRequiresExplicitPromptMode(t *testing.T) {
 func TestAgentCreateProviderValidationHappensBeforeConnect(t *testing.T) {
 	err := run([]string{"agent", "create", "workspace-1", "--provider", "shell", "--no-prompt"})
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex, claude, or opencode") {
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex, claude, opencode, or pi") {
 		t.Fatalf("invalid provider error = %v, want local provider validation", err)
 	}
 }

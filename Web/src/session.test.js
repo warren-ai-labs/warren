@@ -44,9 +44,9 @@ test("automatic AI entry is opt-in, empty-only and follows preset order", () => 
 test("persisted preset order is normalized", () => {
   assert.deepEqual(
     normalizeSessionPresetOrder(["codex", "shell", "codex", "future"]),
-    ["codex", "shell", "claude", "opencode", "trae"],
+    ["codex", "shell", "claude", "opencode", "pi", "trae"],
   );
-  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex", "opencode", "trae"]);
+  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex", "opencode", "pi", "trae"]);
 });
 
 test("loading preset order repairs persisted data", () => {
@@ -56,24 +56,24 @@ test("loading preset order repairs persisted data", () => {
     setItem(_key, value) { this.value = value; },
   };
 
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude", "opencode", "trae"]);
-  assert.equal(storage.value, '["codex","shell","claude","opencode","trae"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude", "opencode", "pi", "trae"]);
+  assert.equal(storage.value, '["codex","shell","claude","opencode","pi","trae"]');
 
   storage.value = "invalid-json";
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex", "opencode", "trae"]);
-  assert.equal(storage.value, '["shell","claude","codex","opencode","trae"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex", "opencode", "pi", "trae"]);
+  assert.equal(storage.value, '["shell","claude","codex","opencode","pi","trae"]');
 });
 
 test("preset order controls presentation", () => {
   const presets = orderedSessionPresets(["shell", "codex", "claude"]);
 
-  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude", "opencode", "trae"]);
+  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude", "opencode", "pi", "trae"]);
 });
 
 test("preset order moves within bounds", () => {
-  const order = ["shell", "claude", "codex", "opencode", "trae"];
+  const order = ["shell", "claude", "codex", "opencode", "pi", "trae"];
 
-  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude", "opencode", "trae"]);
+  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude", "opencode", "pi", "trae"]);
   assert.deepEqual(moveSessionPreset(order, "shell", -1), order);
   assert.deepEqual(moveSessionPreset(order, "trae", 1), order);
 });
@@ -89,7 +89,7 @@ test("Trae is hidden by default and visibility only accepts known presets", () =
   assert.deepEqual(normalizeHiddenSessionPresetKinds(["future", "codex", "codex"]), ["codex"]);
   assert.deepEqual(
     visibleSessionPresets(orderedSessionPresets(null), ["trae"]).map(preset => preset.kind),
-    ["shell", "claude", "codex", "opencode"],
+    ["shell", "claude", "codex", "opencode", "pi"],
   );
 });
 
@@ -106,11 +106,12 @@ test("Trae remains a shell preset when it is visible", () => {
   );
 });
 
-test("Codex, Claude, and OpenCode, plus bound shell overlays, are Agents", () => {
+test("Codex, Claude, OpenCode, Pi, and bound shell overlays are Agents", () => {
   assert.equal(isAgentSession(null), false);
   assert.equal(isAgentSession({ kind: "codex" }), true);
   assert.equal(isAgentSession({ kind: "claude" }), true);
   assert.equal(isAgentSession({ kind: "opencode" }), true);
+  assert.equal(isAgentSession({ kind: "pi" }), true);
   assert.equal(isAgentSession({ kind: "shell", agentSessionId: "thread-shell" }), true);
   assert.equal(isAgentSession({ kind: "custom", agentSessionId: "thread-custom" }), true);
   assert.equal(isAgentSession({ kind: "trae", agentSessionId: "stale" }), false);

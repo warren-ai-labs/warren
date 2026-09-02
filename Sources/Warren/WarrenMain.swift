@@ -39,6 +39,11 @@ private enum WarrenWindowGeometry {
     /// shape. 8pt stays clear of the 12pt traffic lights, which sit only 8pt
     /// from the top edge of the sidebar header.
     static let cornerRadius: CGFloat = 8
+    /// Stable autosave name so AppKit persists the main window's frame across
+    /// launches under `NSWindow Frame WarrenMainWindow`. Without this, a window
+    /// dragged to an external display resets to the hard-coded contentRect on
+    /// next launch and the autosaved position is lost.
+    static let frameAutosaveName = "WarrenMainWindow"
 }
 
 private extension NSWindow {
@@ -97,6 +102,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var cliInstallTask: Task<Void, Never>?
     private var updateNotificationObserver: NSObjectProtocol?
     private var endpointCapabilitiesObserver: NSObjectProtocol?
+    private var screenChangeObserver: NSObjectProtocol?
     private weak var copyLocalWebURLMenuItem: NSMenuItem?
     private weak var copyLocalWebURLSeparator: NSMenuItem?
 
@@ -131,6 +137,15 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.installAvailableUpdate()
+            }
+        }
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.recoverOrphanWindowIfNeeded()
             }
         }
         installCLIIfNeededInBackground()
@@ -172,6 +187,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
         if let endpointCapabilitiesObserver {
             NotificationCenter.default.removeObserver(endpointCapabilitiesObserver)
+        }
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
         }
     }
 
@@ -329,7 +347,15 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         // Keep the window reference valid if AppKit ever closes it while the
         // process is still alive, so a later reopen can bring it back.
         window.isReleasedWhenClosed = false
-        window.center()
+        // Register the autosave name before any frame is committed. AppKit
+        // restores the saved frame on the first order-to-screen call, which
+        // would otherwise be overridden by an unconditional center().
+        window.setFrameAutosaveName(WarrenWindowGeometry.frameAutosaveName)
+        if UserDefaults.standard.string(
+            forKey: "NSWindow Frame \(WarrenWindowGeometry.frameAutosaveName)"
+        ) == nil {
+            window.center()
+        }
         return window
     }
 
@@ -347,6 +373,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     /// windowless process that later launches can only activate.
     private func presentMainWindowIfNeeded() {
         if let window, window.isVisible {
+            ensureWindowIsOnVisibleScreen(window)
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             return
@@ -354,9 +381,41 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         if window == nil {
             window = makeMainWindow()
         }
+        if let window {
+            ensureWindowIsOnVisibleScreen(window)
+        }
         window?.makeKeyAndOrderFront(nil)
         window?.makeKey()
         window?.orderFrontRegardless()
+    }
+
+    /// If the window is no longer on any currently-attached screen, recenter
+    /// it on the main screen. Catches the "dock click makes the window
+    /// disappear" case where AppKit auto-restored a frame from a screen that
+    /// was later unplugged.
+    private func ensureWindowIsOnVisibleScreen(_ window: NSWindow) {
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        guard !visibleFrames.isEmpty else { return }
+        let intersectsAny = visibleFrames.contains { window.frame.intersects($0) }
+        if intersectsAny { return }
+        if let main = NSScreen.main {
+            window.setFrame(
+                NSRect(
+                    x: main.visibleFrame.midX - window.frame.width / 2,
+                    y: main.visibleFrame.midY - window.frame.height / 2,
+                    width: min(window.frame.width, main.visibleFrame.width),
+                    height: min(window.frame.height, main.visibleFrame.height)
+                ),
+                display: true
+            )
+        }
+    }
+
+    /// Pull-back for `didChangeScreenParametersNotification`. Also called from
+    /// the lifecycle hooks via `presentMainWindowIfNeeded`; idempotent.
+    private func recoverOrphanWindowIfNeeded() {
+        guard let window, window.isVisible else { return }
+        ensureWindowIsOnVisibleScreen(window)
     }
 
     func applicationShouldHandleReopen(
@@ -727,4 +786,29 @@ enum WarrenEmbeddedEditorFocus {
 private final class WarrenWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// Clamp drag/resize/setFrame: results to the destination screen's
+    /// visibleFrame so the title bar (and at least a thin strip of the
+    /// window) always stays grabbable. This is the primary defense against
+    /// the multi-monitor case where a window dragged to a smaller screen
+    /// would otherwise land fully off-screen.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        let target = screen ?? self.screen ?? NSScreen.main
+        guard let visible = target?.visibleFrame else { return frameRect }
+        var constrained = frameRect
+        let minVisibleStrip: CGFloat = 28
+        if constrained.maxX <= visible.minX + 1 {
+            constrained.origin.x = visible.minX
+        } else if constrained.minX >= visible.maxX - 1 {
+            constrained.origin.x = visible.maxX - constrained.width
+        }
+        if constrained.maxY <= visible.minY + 1 {
+            constrained.origin.y = visible.minY
+        } else if constrained.minY >= visible.maxY - minVisibleStrip {
+            constrained.origin.y = visible.maxY - minVisibleStrip
+        }
+        constrained.size.width = min(constrained.size.width, visible.width)
+        constrained.size.height = min(constrained.size.height, visible.height)
+        return constrained
+    }
 }

@@ -104,7 +104,11 @@ var webStaticResources = map[string]string{
 	"preset-claude.svg":      "image/svg+xml",
 	"preset-codex-white.svg": "image/svg+xml",
 	"preset-codex.svg":       "image/svg+xml",
+	"preset-opencode.svg":    "image/svg+xml",
+	"preset-pi.svg":          "image/svg+xml",
+	"preset-qoder.svg":       "image/svg+xml",
 	"preset-shell.svg":       "image/svg+xml",
+	"preset-trae.svg":        "image/svg+xml",
 }
 
 func NewServer(config Config) (*Server, error) {

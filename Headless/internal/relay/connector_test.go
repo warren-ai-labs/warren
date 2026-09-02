@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -64,4 +65,49 @@ func max(left, right int) int {
 		return left
 	}
 	return right
+}
+
+func TestConnectorStateSnapshot(t *testing.T) {
+	t.Parallel()
+	connector, err := New(Config{URL: "wss://relay.invalid", HostID: "h", Secret: "s"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	running, connected, currentState, lastError := connector.State()
+	if running || connected || currentState != "" || lastError != "" {
+		t.Fatalf("fresh connector has unexpected state: running=%v connected=%v state=%q err=%q", running, connected, currentState, lastError)
+	}
+	connector.recordError(errors.New("dial refused"))
+	_, _, _, lastError = connector.State()
+	if lastError != "dial refused" {
+		t.Fatalf("recordError not surfaced: got %q", lastError)
+	}
+	connector.recordError(nil)
+	_, _, _, lastError = connector.State()
+	if lastError != "" {
+		t.Fatalf("recordError(nil) did not clear: got %q", lastError)
+	}
+}
+
+func TestConnectorStateCallback(t *testing.T) {
+	t.Parallel()
+	var observed []string
+	connector, err := New(Config{
+		URL:     "wss://relay.invalid",
+		HostID:  "h",
+		Secret:  "s",
+		OnState: func(s string) { observed = append(observed, s) },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	connector.state("connecting")
+	connector.state("open")
+	if len(observed) != 2 || observed[0] != "connecting" || observed[1] != "open" {
+		t.Fatalf("OnState invocations: %v", observed)
+	}
+	_, _, currentState, _ := connector.State()
+	if currentState != "open" {
+		t.Fatalf("last state not retained: %q", currentState)
+	}
 }

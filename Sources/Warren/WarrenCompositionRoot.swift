@@ -53,6 +53,8 @@ struct WarrenCompositionRoot: View {
     private var codexCommand = "codex --dangerously-bypass-hook-trust"
     @AppStorage(WarrenPreferenceKey.presetCommandOpenCode)
     private var opencodeCommand = "opencode"
+    @AppStorage(WarrenPreferenceKey.presetCommandPi)
+    private var piCommand = "pi"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -237,14 +239,6 @@ struct WarrenCompositionRoot: View {
             allowsMultipleSelection: false,
             onCompletion: importProject
         )
-        .sheet(isPresented: $isSSHHostPickerPresented) {
-            WarrenSSHHostPicker(
-                hosts: [],
-                loadOnAppear: true,
-                onConfigure: configureSSHHost,
-                onDismiss: { isSSHHostPickerPresented = false }
-            )
-        }
         .modifier(WarrenProjectFileDialogLabels())
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copyLocalURL)) { _ in
             guard selectedEndpointCapabilities.canCopyLocalWebURL else { return }
@@ -349,7 +343,19 @@ struct WarrenCompositionRoot: View {
 
     @ViewBuilder
     private var appPresentationLayer: some View {
-        if let preview = supersetImportPreview {
+        if isSSHHostPickerPresented {
+            WarrenSheetSurface {
+                WarrenSSHHostPicker(
+                    hosts: [],
+                    loadOnAppear: true,
+                    onConfigure: configureSSHHost,
+                    onDismiss: { isSSHHostPickerPresented = false }
+                )
+            }
+            .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.sheet) }
+            .onDisappear { presentation.dismissTop() }
+        } else if let preview = supersetImportPreview {
             WarrenSheetSurface {
                 WarrenSupersetImportView(
                     preview: preview,
@@ -510,6 +516,7 @@ struct WarrenCompositionRoot: View {
         case "claude": claudeCommand
         case "codex": codexCommand
         case "opencode": opencodeCommand
+        case "pi": piCommand
         case "trae": traeCommand
         default: ""
         }

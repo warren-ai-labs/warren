@@ -1,0 +1,423 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warren.local/protocol/warren.schema.json",
+  "title": "Warren Protocol",
+  "description": "Single source of truth for the Warren wire protocol. Bindings: Headless/internal/output, Headless/internal/api, Headless/internal/server, RelayService/internal/controlplane, Packages/Transport, Packages/Protocol, Web/src/wire.js. The canonical client/server version is 2.0; binary DENB envelopes remain at wire version 1. Treat this document as authoritative — drift between this file and the bindings is a bug to file against whichever binding diverged first.",
+  "type": "object",
+  "required": [
+    "logicalVersion",
+    "binaryEnvelope",
+    "jsonControl",
+    "capabilities",
+    "terminalStateFormats",
+    "rpcMethods",
+    "serverEvents",
+    "relayStream",
+    "httpRoutes"
+  ],
+  "properties": {
+    "logicalVersion": {
+      "type": "string",
+      "const": "2.0",
+      "description": "Header version reported in the welcome message and used to gate capability negotiation. The v1 client surface is intentionally rejected at auth time."
+    },
+    "binaryEnvelope": {
+      "type": "object",
+      "description": "Binary DENB frame used for terminal I/O. Stays on wire version 1 while the logical control protocol moves forward. One DENB frame carries one PTY output chunk, one client input chunk, or one opaque atomic terminal-state snapshot.",
+      "required": ["magic", "wireVersion", "directions", "kinds", "limits", "layout"],
+      "properties": {
+        "magic": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 4,
+          "maxItems": 4,
+          "const": [68, 69, 78, 66],
+          "description": "ASCII 'D','E','N','B'. Same magic in Go, Swift, and TS."
+        },
+        "wireVersion": {
+          "type": "integer",
+          "const": 1,
+          "description": "Independent of the logical protocol version. Bumping this is a hard break — new clients must reject frames from old hosts and vice versa."
+        },
+        "directions": {
+          "type": "object",
+          "required": ["clientToHost", "hostToClient"],
+          "properties": {
+            "clientToHost": { "type": "integer", "const": 1 },
+            "hostToClient": { "type": "integer", "const": 2 }
+          }
+        },
+        "kinds": {
+          "type": "object",
+          "required": ["input", "output", "atomicState"],
+          "properties": {
+            "input": { "type": "integer", "const": 1 },
+            "output": { "type": "integer", "const": 2 },
+            "atomicState": {
+              "type": "integer",
+              "const": 3,
+              "description": "Opaque terminal-state snapshot (e.g. ghostline-vt-replay-v1). Kept as a separate kind so clients can never feed snapshot bytes through their VT output parser."
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["maxHeader", "maxPayload", "maxAtomicStatePayload"],
+          "properties": {
+            "maxHeader": { "type": "integer", "const": 16384 },
+            "maxPayload": { "type": "integer", "const": 8388608 },
+            "maxAtomicStatePayload": { "type": "integer", "const": 67108864 }
+          }
+        },
+        "layout": {
+          "type": "object",
+          "description": "Frame layout, big-endian throughout. headerLength covers only the JSON header; payloadLength covers the binary payload. Length fields are u32 BE.",
+          "required": ["prefixLength", "offsets"],
+          "properties": {
+            "prefixLength": { "type": "integer", "const": 15 },
+            "offsets": {
+              "type": "object",
+              "properties": {
+                "magic": { "type": "integer", "const": 0 },
+                "version": { "type": "integer", "const": 4 },
+                "direction": { "type": "integer", "const": 5 },
+                "kind": { "type": "integer", "const": 6 },
+                "headerLength": { "type": "integer", "const": 7 },
+                "payloadLength": { "type": "integer", "const": 11 },
+                "headerStart": { "type": "integer", "const": 15 }
+              }
+            }
+          }
+        },
+        "headers": {
+          "type": "object",
+          "description": "JSON header structure for each kind. Decoders must validate that header.payloadLength equals the trailing payload length and reject any mismatch.",
+          "properties": {
+            "input": {
+              "type": "object",
+              "required": ["version", "sessionID", "attachmentID", "payloadLength"],
+              "properties": {
+                "version": { "type": "string", "description": "Defaults to '2.0' when absent on the wire." },
+                "sessionID": { "type": "string" },
+                "attachmentID": { "type": "string" },
+                "sequence": { "type": "integer", "minimum": 0 },
+                "payloadLength": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "output": {
+              "type": "object",
+              "required": ["sessionID", "epoch", "sequence", "payloadLength"],
+              "properties": {
+                "sessionID": { "type": "string" },
+                "epoch": { "type": "integer", "minimum": 0 },
+                "sequence": { "type": "integer", "minimum": 0 },
+                "payloadLength": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "atomicState": {
+              "type": "object",
+              "required": ["sessionID", "epoch", "sequence", "format", "payloadLength"],
+              "properties": {
+                "sessionID": { "type": "string" },
+                "epoch": { "type": "integer", "minimum": 0 },
+                "sequence": { "type": "integer", "minimum": 0 },
+                "format": { "type": "string", "description": "TerminalStateFormat identifier (see terminalStateFormats)." },
+                "payloadLength": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "jsonControl": {
+      "type": "object",
+      "description": "JSON control envelopes carried as WebSocket text frames alongside the binary DENB stream. Every envelope has a 't' (type) discriminator; the shape of the remaining fields depends on the type.",
+      "required": ["envelope", "response"],
+      "properties": {
+        "envelope": {
+          "type": "object",
+          "description": "Client-to-server envelope. Carries the request id used to match the response.",
+          "required": ["t", "method"],
+          "properties": {
+            "t": { "type": "string", "const": "request" },
+            "id": { "type": "string" },
+            "token": { "type": "string", "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself." },
+            "version": { "type": "string", "const": "2.0" },
+            "capabilities": { "type": "array", "items": { "type": "string" } },
+            "terminalStateFormats": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Opaque terminal-state formats the client can install atomically. The Host picks one and stores it on the peer; mismatched formats terminate the connection."
+            },
+            "method": { "type": "string" },
+            "params": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "response": {
+          "type": "object",
+          "description": "Server-to-client response. Discriminated by t; ok=true carries result, ok=false carries error.",
+          "required": ["t", "ok"],
+          "properties": {
+            "t": { "type": "string" },
+            "id": { "type": "string" },
+            "ok": { "type": "boolean" },
+            "result": { "type": "object", "additionalProperties": true },
+            "error": { "type": "string" }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "Capability identifiers negotiated at welcome time. Order matters — the host returns the intersection in the order the client sent them.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "roster-delta",
+          "agent-timeline-v1",
+          "agent-interactions-v1",
+          "agent-interrupt-v1",
+          "agent-attachments-v1"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "terminalStateFormats": {
+      "type": "array",
+      "description": "Opaque terminal-state encodings the client can install atomically. The Host selects one and reports it back via the attached event.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "ghostline-vt-replay-v1"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "rpcMethods": {
+      "type": "array",
+      "description": "Catalog of JSON-RPC methods handled on the main WebSocket connection. Each entry lists the canonical name, the params it accepts, and a result reference. Result shapes are described by api/types.go structs in Go bindings.",
+      "items": {
+        "type": "object",
+        "required": ["method", "paramsRef", "resultRef"],
+        "properties": {
+          "method": { "type": "string" },
+          "paramsRef": { "type": "string", "description": "Pointer to the Go struct field shape (or 'free' if the params map is unconstrained)." },
+          "resultRef": { "type": "string", "description": "Pointer to the api/types.go struct (e.g. 'api.State', 'api.AgentHistoryResult')." }
+        }
+      },
+      "examples": [
+        { "method": "roster", "paramsRef": "free", "resultRef": "api.State (via makeRoster)" },
+        { "method": "agent.history", "paramsRef": "{session?: string, workspace?: string, project?: string, command?: string, kind?: string, title?: string}", "resultRef": "api.AgentHistoryResult" },
+        { "method": "agent.transcript", "paramsRef": "{session?: string}", "resultRef": "[]api.AgentTranscriptChunk" },
+        { "method": "agent.snapshot", "paramsRef": "{session?: string}", "resultRef": "api.AgentSnapshotResult" },
+        { "method": "agent.turn.events", "paramsRef": "{session?: string}", "resultRef": "api.AgentEvent[]" },
+        { "method": "agent.interaction.respond", "paramsRef": "{session?: string, kind?: string, title?: string, data?: string}", "resultRef": "void" },
+        { "method": "agent.turn.interrupt", "paramsRef": "{session?: string}", "resultRef": "void" },
+        { "method": "agent.message.send", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
+        { "method": "agent.attachment.prepare", "paramsRef": "{session?: string, ...}", "resultRef": "api.AttachmentHandle" },
+        { "method": "agent.attachment.chunk", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
+        { "method": "agent.attachment.complete", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
+        { "method": "agent.attachment.abort", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
+        { "method": "agent.subscribe", "paramsRef": "{session?: string, ...}", "resultRef": "api.AgentSubscriptionResult" },
+        { "method": "relay.pairing", "paramsRef": "free", "resultRef": "{pairingCode, expiresAt}" },
+        { "method": "settings.get", "paramsRef": "free", "resultRef": "api.Settings" },
+        { "method": "relay.reset", "paramsRef": "free", "resultRef": "void" },
+        { "method": "settings.testOpenAI", "paramsRef": "free", "resultRef": "void" },
+        { "method": "settings.put", "paramsRef": "{...settings}", "resultRef": "api.Settings" },
+        { "method": "project.add", "paramsRef": "{...}", "resultRef": "api.Project" },
+        { "method": "task.create", "paramsRef": "{...}", "resultRef": "api.Task" },
+        { "method": "task.remove", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "task.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
+        { "method": "task.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
+        { "method": "task.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
+        { "method": "task.attach", "paramsRef": "{id: string, workspace: string}", "resultRef": "void" },
+        { "method": "task.detach", "paramsRef": "{id: string, workspace: string}", "resultRef": "void" },
+        { "method": "project.worktrees", "paramsRef": "{project: string}", "resultRef": "[]api.WorktreeCandidate" },
+        { "method": "project.worktrees.import", "paramsRef": "{...}", "resultRef": "api.Workspace" },
+        { "method": "project.autoImportGitWorktrees", "paramsRef": "{project: string}", "resultRef": "api.Workspace[]" },
+        { "method": "project.setupScript", "paramsRef": "{...}", "resultRef": "void" },
+        { "method": "project.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
+        { "method": "project.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
+        { "method": "project.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
+        { "method": "project.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
+        { "method": "workspace.create", "paramsRef": "{...}", "resultRef": "api.WorkspaceCreateResult" },
+        { "method": "workspace.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
+        { "method": "workspace.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
+        { "method": "workspace.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
+        { "method": "workspace.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
+        { "method": "terminal-group.create", "paramsRef": "{...}", "resultRef": "api.TerminalGroup" },
+        { "method": "terminal-group.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
+        { "method": "terminal-group.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
+        { "method": "terminal-group.home", "paramsRef": "{id: string, path: string}", "resultRef": "void" },
+        { "method": "terminal-group.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
+        { "method": "session.create", "paramsRef": "{...}", "resultRef": "api.Session" },
+        { "method": "session.delete", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "session.delete.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionDeletePreflight" },
+        { "method": "session.current", "paramsRef": "free", "resultRef": "api.Session | null" },
+        { "method": "session.rename", "paramsRef": "{id: string, title: string}", "resultRef": "void" },
+        { "method": "session.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
+        { "method": "session.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
+        { "method": "session.move.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionMovePreflight" },
+        { "method": "session.undo", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "session.attach", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
+        { "method": "session.detach", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
+        { "method": "session.unsubscribe", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "session.focus", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
+        { "method": "session.input", "paramsRef": "{id: string, data: string}", "resultRef": "void" },
+        { "method": "session.resize", "paramsRef": "{id: string, cols: int, rows: int}", "resultRef": "void" },
+        { "method": "git.panel", "paramsRef": "{workspace: string}", "resultRef": "api.GitPanel" },
+        { "method": "git.diff", "paramsRef": "{workspace: string, path: string}", "resultRef": "api.GitDiff" },
+        { "method": "git.checkout", "paramsRef": "{workspace: string, branch: string}", "resultRef": "void" },
+        { "method": "git.pull", "paramsRef": "{workspace: string}", "resultRef": "api.GitCommandResult" },
+        { "method": "git.push", "paramsRef": "{workspace: string}", "resultRef": "api.GitCommandResult" },
+        { "method": "git.commit", "paramsRef": "{workspace: string, ...}", "resultRef": "api.GitCommandResult" },
+        { "method": "git.pr.create", "paramsRef": "{workspace: string, ...}", "resultRef": "api.GitCommandResult" }
+      ]
+    },
+    "serverEvents": {
+      "type": "array",
+      "description": "Server-pushed event types. Events do not include a request id. Some carry session-level state (attached/synced/exited); others are connection-level (welcome/maintenance).",
+      "items": {
+        "type": "string",
+        "enum": [
+          "welcome",
+          "maintenance",
+          "auth",
+          "error",
+          "roster",
+          "roster.delta",
+          "attached",
+          "synced",
+          "exited",
+          "agent",
+          "agent.status",
+          "agent.turn"
+        ]
+      },
+      "uniqueItems": true,
+      "eventDetails": {
+        "welcome": {
+          "fields": { "t": "welcome", "version": "2.0", "host": "api.Host", "capabilities": "string[]" },
+          "notes": "First event after upgrade. Carries the negotiated capabilities; client should ignore unrequested ones."
+        },
+        "maintenance": {
+          "fields": { "t": "maintenance", "message": "string", "kind": "string" },
+          "notes": "Sent when the host enters or leaves a maintenance window. Clients should pause long-running work."
+        },
+        "auth": {
+          "fields": { "t": "auth", "ok": "bool", "error": "string?" },
+          "notes": "Response to the auth envelope; usually sent as the response type, not as a push."
+        },
+        "error": {
+          "fields": { "t": "error", "id": "string?", "ok": false, "error": "string" },
+          "notes": "Generic error envelope. id is empty when the error is not tied to a request."
+        },
+        "roster": {
+          "fields": { "t": "roster", "host": "api.Host", "tasks": "api.Task[]", "projects": "api.Project[]", "workspaces": "api.Workspace[]", "terminalGroups": "api.TerminalGroup[]", "sessions": "api.Session[]", "version": "string" },
+          "notes": "Full roster snapshot. Sent on welcome and on full re-sync."
+        },
+        "roster.delta": {
+          "fields": { "t": "roster.delta", "version": "string", "tasks": "api.Task[]?", "projects": "api.Project[]?", "workspaces": "api.Workspace[]?", "terminalGroups": "api.TerminalGroup[]?", "sessions": "api.Session[]?" },
+          "notes": "Requires capability 'roster-delta'. Absent collections mean no change."
+        },
+        "attached": {
+          "fields": { "t": "attached", "session": "string" },
+          "notes": "Host acknowledges a session.attach or session.subscribe."
+        },
+        "synced": {
+          "fields": { "t": "synced", "session": "string", "epoch": "uint64", "sequence": "uint64" },
+          "notes": "Replay catch-up is complete; the next binary frame will be the live stream at (epoch, sequence)."
+        },
+        "exited": {
+          "fields": { "t": "exited", "session": "string" },
+          "notes": "Session has exited and the binary stream for it is closed."
+        },
+        "agent": {
+          "fields": { "t": "agent", "session": "string", "role": "string", "content": "string", "kind": "user|assistant|tool_call|plan|question|response" },
+          "notes": "Streamed agent message part. role='user'/'assistant'/'tool'; kind refines the role's shape."
+        },
+        "agent.status": {
+          "fields": { "t": "agent.status", "session": "string", "status": "api.AgentStatus" },
+          "notes": "Lifecycle event (idle, running, awaiting-input, error, etc.)."
+        },
+        "agent.turn": {
+          "fields": { "t": "agent.turn", "session": "string", "turn": "api.AgentTurn" },
+          "notes": "Whole-turn completion marker. Carries usage and final state."
+        }
+      }
+    },
+    "relayStream": {
+      "type": "object",
+      "description": "BRLY/2 frame format used by the Relay control plane. Distinct wire from the main Host protocol; clients do not decode these directly.",
+      "required": ["magic", "wireVersion", "headerSize", "frames", "streamClasses", "limits"],
+      "properties": {
+        "magic": { "type": "string", "const": "BRLY" },
+        "wireVersion": { "type": "integer", "const": 2 },
+        "headerSize": { "type": "integer", "const": 22 },
+        "frames": {
+          "type": "object",
+          "properties": {
+            "open": { "type": "integer", "const": 1 },
+            "close": { "type": "integer", "const": 2 },
+            "text": { "type": "integer", "const": 3 },
+            "binary": { "type": "integer", "const": 4 },
+            "httpHeaders": { "type": "integer", "const": 5 },
+            "data": { "type": "integer", "const": 6 },
+            "end": { "type": "integer", "const": 7 },
+            "windowUpdate": { "type": "integer", "const": 8 },
+            "error": { "type": "integer", "const": 9 }
+          }
+        },
+        "streamClasses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["control", "http", "upgrade"]
+          },
+          "uniqueItems": true,
+          "description": "Stream class discriminator on the OPEN metadata. 'control' is the duplex host↔relay control channel; 'http' carries proxied HTTP/1.1; 'upgrade' carries the relayed WebSocket upgrade (which is where the inner Host WS lives)."
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxMessageBytes": { "type": "integer", "const": 8388608 },
+            "initialStreamWindow": { "type": "integer", "const": 16777216 },
+            "maxHostStreams": { "type": "integer", "const": 128 },
+            "maxPublicStreams": { "type": "integer", "const": 64 }
+          }
+        }
+      }
+    },
+    "httpRoutes": {
+      "type": "array",
+      "description": "HTTP routes exposed by the Host. WebSocket upgrades live under /v1/ws; the public Relay-facing endpoints cover health, settings, public access, and Relay enrollment/pairing.",
+      "items": {
+        "type": "object",
+        "required": ["method", "path"],
+        "properties": {
+          "method": { "type": "string" },
+          "path": { "type": "string" },
+          "purpose": { "type": "string" }
+        }
+      },
+      "examples": [
+        { "method": "GET", "path": "/healthz", "purpose": "Typed subsystem health (see Headless/internal/api/health.go)." },
+        { "method": "GET", "path": "/v1/state", "purpose": "Lightweight state read; not the same as the roster WS push." },
+        { "method": "GET", "path": "/v1/ws", "purpose": "Main WebSocket upgrade; the full RPC surface lives here." },
+        { "method": "GET", "path": "/v1/settings", "purpose": "Read settings (token, model, etc)." },
+        { "method": "PUT", "path": "/v1/settings", "purpose": "Update settings." },
+        { "method": "POST", "path": "/v1/relay/enroll", "purpose": "Redeem a Relay enrollment ticket and bind this Host to its Relay key." },
+        { "method": "POST", "path": "/v1/relay/pairing", "purpose": "Issue a short-lived pairing code for a Web client." },
+        { "method": "POST", "path": "/v1/maintenance", "purpose": "Toggle maintenance mode." },
+        { "method": "POST", "path": "/v1/runtime/refresh", "purpose": "Recompute runtime sizes for terminal sessions." },
+        { "method": "GET", "path": "/v1/public-access", "purpose": "Read public-access status." },
+        { "method": "POST", "path": "/v1/public-access/enable", "purpose": "Enable public access for one workspace." },
+        { "method": "POST", "path": "/v1/public-access/test", "purpose": "Test connectivity for the public-access tunnel." },
+        { "method": "POST", "path": "/v1/public-access/disable", "purpose": "Disable public access for one workspace." },
+        { "method": "POST", "path": "/v1/public-access/reset", "purpose": "Rotate the public-access token." },
+        { "method": "POST", "path": "/v1/public-access/restart", "purpose": "Restart the public-access tunnel." }
+      ]
+    }
+  }
+}

@@ -894,6 +894,7 @@ public struct AgentChatView: View {
         case "codex": return "Codex"
         case "claude", "claude-code": return "Claude"
         case "opencode", "open-code": return "OpenCode"
+        case "pi": return "Pi"
         default: return raw.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
@@ -1478,21 +1479,11 @@ private extension WarrenRemoteAgentEvent {
 
     var isCompactionEvent: Bool {
         let type = normalizedType.replacingOccurrences(of: "-", with: "_")
-        switch type {
-        case "compact", "compacted", "compaction", "compacting",
-             "context_compaction", "context_compacted", "context_compacting":
-            return true
-        default:
-            break
-        }
-
-        // Codex currently reports compaction as a generic system event. Keep
-        // the detection narrow so unrelated system notices remain unchanged.
-        guard type == "system" else { return false }
-        let text = [content, output, error]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .joined(separator: " ")
-        return text.contains("history compact") || text.contains("context compact")
+        return type == "compaction"
+            || type == "compact"
+            || type == "compacted"
+            || type == "context_compaction"
+            || type == "context_compacted"
     }
 
     var isCompactionInProgress: Bool {
@@ -1506,23 +1497,12 @@ private extension WarrenRemoteAgentEvent {
 
     var isHiddenFromMobile: Bool {
         let type = normalizedType.replacingOccurrences(of: "-", with: "_")
-        let text = [content, output, error]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .joined(separator: " ")
-        // Codex emits a `usage` event with the literal "Token usage" body;
-        // older providers have also used a generic assistant/system event for
-        // the same line. It is bookkeeping, not conversation, so keep every
-        // such line out of the mobile timeline.
-        if text == "token usage" || text.hasPrefix("token usage") {
-            return true
-        }
-        if usage != nil
-            && content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-            && output?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-            && error?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            return true
-        }
-        return type == "usage"
+        // Hidden events are those that don't contribute to conversation or activity state:
+        // compaction (UI manages separately), usage/token stats, and system_instructions.
+        return type == "compaction"
+            || type == "compact"
+            || type == "compacted"
+            || type == "usage"
             || type == "token_usage"
             || type == "token_count"
             || type.hasSuffix("_usage")
@@ -2615,15 +2595,19 @@ private extension WarrenRemoteAgentEvent {
 
 private func displayToolName(_ name: String?) -> String {
     switch name {
-    case "Bash", "shell": return "Shell"
-    case "Edit": return "Edit file"
-    case "Read": return "Read file"
-    case "Grep": return "Search files"
-    case "Glob": return "Find files"
-    case "WebSearch", "web_search": return "Web search"
-    case "ApplyPatch", "apply_patch": return "Apply patch"
-    case "Task": return "Subagent"
-    case "Write": return "Write file"
+    case "shell": return "Shell"
+    case "edit": return "Edit file"
+    case "read": return "Read file"
+    case "grep": return "Search files"
+    case "glob": return "Find files"
+    case "web_search": return "Web search"
+    case "fetch": return "Web fetch"
+    case "subagent": return "Subagent"
+    case "apply_patch": return "Apply patch"
+    case "write": return "Write file"
+    case "question": return "Ask user"
+    case "permission": return "Permission"
+    case "reasoning": return "Thinking"
     default: return name?.isEmpty == false ? name! : "Tool"
     }
 }

@@ -3,6 +3,7 @@ export const defaultPresetCommands = {
   claude: "claude",
   codex: "codex --dangerously-bypass-hook-trust",
   opencode: "opencode",
+  pi: "pi",
   trae: "trae-cli interactive",
 };
 
@@ -11,6 +12,7 @@ export const sessionPresets = [
   { kind: "claude", label: "Claude", title: "Claude Code", isAgent: true },
   { kind: "codex", label: "Codex", title: "Codex", isAgent: true },
   { kind: "opencode", label: "OpenCode", title: "OpenCode", isAgent: true },
+  { kind: "pi", label: "Pi", title: "Pi", isAgent: true },
   // Trae is currently only a launch preset for an interactive shell. It does
   // not have Warren transcript/activity/send integration yet.
   { kind: "trae", label: "Trae", title: "Trae", isAgent: false },
@@ -104,6 +106,7 @@ export function isAgentSession(session = {}) {
   return kind === "codex"
     || kind === "claude"
     || kind === "opencode"
+    || kind === "pi"
     || ((kind === "shell" || kind === "custom") && Boolean(session.agentSessionId));
 }
 

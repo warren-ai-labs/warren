@@ -60,7 +60,7 @@ func TestReadNewNormalizesCodexTranscript(t *testing.T) {
 	if got, want := strings.Join(kinds, ","), "assistant,tool_call,tool_output,user"; got != want {
 		t.Fatalf("event kinds = %q, want %q", got, want)
 	}
-	if events[0].Content != "Hello" || events[1].ToolName != "Bash" || events[2].Output != "file.txt\n" {
+	if events[0].Content != "Hello" || events[1].ToolName != "shell" || events[2].Output != "file.txt\n" {
 		t.Fatalf("normalized events = %#v", events)
 	}
 }
@@ -233,24 +233,31 @@ func TestCodexApprovedPrefixNoticeIsHidden(t *testing.T) {
 	}
 }
 
-func TestClaudeHookAttachmentBecomesSystem(t *testing.T) {
+func TestClaudeHookAttachmentIsSuppressed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session-hooks.jsonl")
 	writeLines(t, path,
 		`{"type":"attachment","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","attachment":{"type":"hook_success","hookName":"SessionStart:startup","hookEvent":"SessionStart","content":"","stdout":"done"}}`,
-		`{"type":"attachment","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","attachment":{"type":"skill_listing","content":"- skill: demo"}}`,
 	)
 	events, _, err := readNew(path, 0, newParser("claude"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("events = %#v", events)
+	if len(events) != 0 {
+		t.Fatalf("hook attachment produced events = %#v, want none", events)
 	}
-	if events[0].Type != "system" || !strings.HasPrefix(events[0].Content, "Hook: SessionStart:startup") {
-		t.Fatalf("hook attachment = %#v", events[0])
+}
+
+func TestClaudeSkillListingStaysAsSystemInstructions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-skill-listing.jsonl")
+	writeLines(t, path,
+		`{"type":"attachment","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","attachment":{"type":"skill_listing","content":"- skill: demo"}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if events[1].Type != "system_instructions" {
-		t.Fatalf("skill listing = %#v", events[1])
+	if len(events) != 1 || events[0].Type != "system_instructions" || events[0].Content != "- skill: demo" {
+		t.Fatalf("skill listing = %#v", events)
 	}
 }
 
@@ -273,7 +280,7 @@ func TestReadNewNormalizesClaudeTranscript(t *testing.T) {
 	if got, want := strings.Join(kinds, ","), "user,assistant,tool_call"; got != want {
 		t.Fatalf("event kinds = %q, want %q", got, want)
 	}
-	if events[0].Content != "Hello" || events[1].Content != "Hi" || events[2].ToolName != "Bash" {
+	if events[0].Content != "Hello" || events[1].Content != "Hi" || events[2].ToolName != "shell" {
 		t.Fatalf("normalized events = %#v", events)
 	}
 }
@@ -493,7 +500,7 @@ func TestCodexToolOutputAttributionAndStatus(t *testing.T) {
 	}
 	call := events[0]
 	output := events[1]
-	if call.ToolName != "Bash" || output.ToolName != "Bash" || output.CallID != "call-1" {
+	if call.ToolName != "shell" || output.ToolName != "shell" || output.CallID != "call-1" {
 		t.Fatalf("tool attribution = %#v / %#v", call, output)
 	}
 	if output.ToolStatus != "error" || output.Error != "command failed" || output.Output != "boom" {
@@ -547,10 +554,10 @@ func TestClaudeToolResultErrorAndFiles(t *testing.T) {
 	}
 }
 
-func TestClaudeAssistantCarriesModelUsageAndSidechain(t *testing.T) {
+func TestClaudeAssistantCarriesModelUsage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude-assistant.jsonl")
 	writeLines(t, path,
-		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","isSidechain":true,"message":{"id":"msg_1","model":"claude-opus-4-7","role":"assistant","content":[{"type":"text","text":"subagent says hi"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50}}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","isSidechain":false,"message":{"id":"msg_1","model":"claude-opus-4-7","role":"assistant","content":[{"type":"text","text":"top-level reply"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50}}}`,
 	)
 	parser := newParser("claude")
 	events, _, err := readNew(path, 0, parser)
@@ -561,7 +568,7 @@ func TestClaudeAssistantCarriesModelUsageAndSidechain(t *testing.T) {
 		t.Fatalf("events = %#v, want 1", events)
 	}
 	event := events[0]
-	if event.Type != "assistant" || !event.Sidechain || event.Model != "claude-opus-4-7" ||
+	if event.Type != "assistant" || event.Sidechain || event.Model != "claude-opus-4-7" ||
 		event.StopReason != "end_turn" || event.Usage == nil ||
 		event.Usage.InputTokens != 100 || event.Usage.OutputTokens != 50 {
 		t.Fatalf("assistant event = %#v", event)
@@ -583,11 +590,11 @@ func TestClaudeApiErrorBecomesErrorEvent(t *testing.T) {
 	}
 }
 
-func TestClaudeUserInterruptReturnsReady(t *testing.T) {
+func TestClaudeUserInterruptSetsStopReason(t *testing.T) {
 	parser := newParser("claude")
 	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:00Z","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`))
-	if len(events) != 1 || events[0].Type != "system" {
-		t.Fatalf("interrupt event = %#v", events)
+	if len(events) != 1 || events[0].Type != "system" || events[0].StopReason != "interrupted" {
+		t.Fatalf("interrupt event = %#v, want Type=system StopReason=interrupted", events)
 	}
 	if got := parser.Activity(); got != api.AgentActivityReady {
 		t.Fatalf("activity after Claude interrupt = %q, want ready", got)
@@ -733,5 +740,425 @@ func TestClaudeEditToolCarriesFilePath(t *testing.T) {
 	}
 	if len(events) != 1 || len(events[0].Files) != 1 || events[0].Files[0] != "/work/warren/main.go" {
 		t.Fatalf("edit files = %#v", events)
+	}
+}
+
+func TestCanonicalToolName(t *testing.T) {
+	cases := []struct {
+		provider string
+		raw      string
+		want     string
+	}{
+		{"claude", "Bash", "shell"},
+		{"claude", "Read", "read"},
+		{"claude", "Edit", "edit"},
+		{"claude", "Write", "write"},
+		{"claude", "Grep", "grep"},
+		{"claude", "Glob", "glob"},
+		{"claude", "WebSearch", "web_search"},
+		{"claude", "WebFetch", "fetch"},
+		{"claude", "Task", "subagent"},
+		{"claude", "AskUserQuestion", "ask_user_question"},
+		{"claude", "PermissionRequest", "permission_request"},
+		{"codex", "local_shell_call", "shell"},
+		{"codex", "web_search_call", "web_search"},
+		{"codex", "apply_patch", "apply_patch"},
+		{"codex", "read_file", "read"},
+		{"opencode", "bash", "shell"},
+		{"opencode", "edit", "edit"},
+		{"opencode", "task", "subagent"},
+		{"opencode", "web_search", "web_search"},
+		// unknown names are passed through lowercased
+		{"claude", "SomeUnknownTool", "someunknowntool"},
+		{"codex", "CustomFutureTool", "customfuturetool"},
+		// empty / whitespace
+		{"claude", "", ""},
+		{"claude", "   ", ""},
+	}
+	for _, test := range cases {
+		if got := canonicalToolName(test.provider, test.raw); got != test.want {
+			t.Errorf("canonicalToolName(%q, %q) = %q, want %q", test.provider, test.raw, got, test.want)
+		}
+	}
+}
+
+func TestEventIsRenderable(t *testing.T) {
+	cases := []struct {
+		name  string
+		event api.AgentEvent
+		want  bool
+	}{
+		{"empty", api.AgentEvent{}, false},
+		{"system with content", api.AgentEvent{Type: "system", Content: "hello"}, true},
+		{"tool output with output", api.AgentEvent{Type: "tool_output", Output: "result"}, true},
+		{"error with error", api.AgentEvent{Type: "error", Error: "boom"}, true},
+		{"usage with payload", api.AgentEvent{Type: "usage", Usage: &api.AgentUsage{InputTokens: 1}}, true},
+		{"tool call with input", api.AgentEvent{Type: "tool_call", ToolName: "shell", ToolInput: map[string]any{"cmd": "ls"}}, true},
+		{"tool call with name only", api.AgentEvent{Type: "tool_call", ToolName: "shell"}, true},
+		{"tool output bare", api.AgentEvent{Type: "tool_output"}, true},
+		{"question structured", api.AgentEvent{Type: "question", Payload: map[string]any{"x": 1}}, true},
+		{"compaction bare", api.AgentEvent{Type: "compaction"}, true},
+		{"subagent bare", api.AgentEvent{Type: "subagent"}, true},
+		{"attachment with content", api.AgentEvent{Type: "attachment", Content: "x"}, true},
+		{"attachment empty", api.AgentEvent{Type: "attachment"}, false},
+		{"system_instructions bare", api.AgentEvent{Type: "system_instructions"}, false},
+		{"unknown bare", api.AgentEvent{Type: "unknown"}, false},
+		{"whitespace only", api.AgentEvent{Type: "system", Content: "   \n\t  "}, false},
+	}
+	for _, test := range cases {
+		if got := eventIsRenderable(test.event); got != test.want {
+			t.Errorf("%s: eventIsRenderable(%#v) = %v, want %v", test.name, test.event, got, test.want)
+		}
+	}
+}
+
+func TestClaudeEmptyAttachmentIsSuppressed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-empty-attach.jsonl")
+	writeLines(t, path,
+		`{"type":"attachment","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","attachment":{"type":"file","content":""}}`,
+		`{"type":"attachment","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","attachment":{"type":"file","content":"   "}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("empty attachments produced events = %#v, want none", events)
+	}
+}
+
+func TestClaudeNonEmptyAttachmentPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-attach.jsonl")
+	writeLines(t, path,
+		`{"type":"attachment","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","attachment":{"type":"file","content":"aGVsbG8gd29ybGQ="}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "attachment" || events[0].Content != "aGVsbG8gd29ybGQ=" {
+		t.Fatalf("attachment = %#v", events)
+	}
+}
+
+func TestClaudeToolOutputCarriesToolName(t *testing.T) {
+	// Claude tool_result blocks don't carry the originating tool name. The
+	// parser must look it up via the assistant tool_use block's callID so a
+	// standalone tool_output card (one whose activity group has flushed) can
+	// still display "Shell" rather than "Tool".
+	parser := newParser("claude")
+	parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}`))
+	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file.txt"}]}}`))
+	if len(events) != 1 || events[0].Type != "tool_output" || events[0].ToolName != "shell" {
+		t.Fatalf("tool output = %#v, want ToolName=shell", events)
+	}
+}
+
+func TestCodexCompactedEventPromotedToCompaction(t *testing.T) {
+	parser := newParser("codex")
+	events := parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"compacted","payload":{}}`))
+	if len(events) != 1 || events[0].Type != "compaction" {
+		t.Fatalf("compacted event = %#v, want Type=compaction", events)
+	}
+}
+
+func TestClaudeAskUserQuestionProjectsToRFC0010Question(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","header":"DB","options":[{"label":"Postgres","description":"sql"},{"label":"MySQL","description":"sql too"}],"multiSelect":false}]}}]}}`))
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("events = %#v, want single question event", events)
+	}
+	if events[0].Payload == nil {
+		t.Fatal("question event has no payload")
+	}
+	if events[0].Payload["requestId"] != "toolu_q1" {
+		t.Errorf("requestId = %v, want toolu_q1", events[0].Payload["requestId"])
+	}
+	if events[0].Payload["title"] != "Question" {
+		t.Errorf("title = %v, want Question", events[0].Payload["title"])
+	}
+	if events[0].Payload["state"] != "pending" {
+		t.Errorf("state = %v, want pending", events[0].Payload["state"])
+	}
+	if events[0].Payload["questions"] == nil {
+		t.Error("payload.questions missing")
+	}
+	if questions, ok := events[0].Payload["questions"].([]any); !ok || len(questions) != 1 {
+		t.Fatalf("payload.questions = %v, want exactly one question", events[0].Payload["questions"])
+	} else {
+		q0, ok := questions[0].(map[string]any)
+		if !ok {
+			t.Fatalf("payload.questions[0] is not an object: %T", questions[0])
+		}
+		if q0["id"] != "q0" {
+			t.Errorf("questions[0].id = %v, want q0", q0["id"])
+		}
+		if q0["prompt"] != "Which database?" {
+			t.Errorf("questions[0].prompt = %v, want Which database?", q0["prompt"])
+		}
+		if q0["selection"] != "single" {
+			t.Errorf("questions[0].selection = %v, want single", q0["selection"])
+		}
+		options, ok := q0["options"].([]any)
+		if !ok || len(options) != 2 {
+			t.Fatalf("questions[0].options = %v, want two options", q0["options"])
+		}
+		first, ok := options[0].(map[string]any)
+		if !ok {
+			t.Fatalf("options[0] is not an object: %T", options[0])
+		}
+		if first["id"] != "Postgres" || first["label"] != "Postgres" || first["description"] != "sql" {
+			t.Errorf("options[0] = %v, want id/label Postgres and description sql", first)
+		}
+	}
+}
+
+func TestClaudeAskUserQuestionMultiSelect(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q2","name":"AskUserQuestion","input":{"questions":[{"question":"Pick many","options":[{"label":"A"},{"label":"B"}],"multiSelect":true}]}}]}}`))
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("events = %#v, want single question event", events)
+	}
+	questions, ok := events[0].Payload["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("payload.questions = %v, want one question", events[0].Payload["questions"])
+	}
+	q0, ok := questions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("questions[0] is not an object: %T", questions[0])
+	}
+	if q0["selection"] != "multiple" {
+		t.Errorf("selection = %v, want multiple", q0["selection"])
+	}
+	if q0["prompt"] != "Pick many" {
+		t.Errorf("prompt = %v, want Pick many", q0["prompt"])
+	}
+}
+
+func TestClaudePermissionRequestProjectsToRFC0010Permission(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_p1","name":"PermissionRequest","input":{"tool":"Bash","behavior":"allow","updated_input":{"command":"ls"}}}]}}`))
+	if len(events) != 1 || events[0].Type != "permission" {
+		t.Fatalf("events = %#v, want single permission event", events)
+	}
+	if events[0].Payload == nil {
+		t.Fatal("permission event has no payload")
+	}
+	if events[0].Payload["requestId"] != "toolu_p1" {
+		t.Errorf("requestId = %v, want toolu_p1", events[0].Payload["requestId"])
+	}
+	if events[0].Payload["action"] != "Bash" {
+		t.Errorf("action = %v, want Bash", events[0].Payload["action"])
+	}
+	if events[0].Payload["description"] != "Claude requests permission to run Bash" {
+		t.Errorf("description = %v, want a sanitized tool summary", events[0].Payload["description"])
+	}
+	options, ok := events[0].Payload["options"].([]any)
+	if !ok || len(options) == 0 {
+		t.Fatalf("payload.options = %v, want decision options", events[0].Payload["options"])
+	}
+	if first, ok := options[0].(map[string]any); !ok || first["id"] != "allow" {
+		t.Errorf("options[0] = %v, want allow decision", options[0])
+	}
+	if events[0].Payload["state"] != "pending" {
+		t.Errorf("state = %v, want pending", events[0].Payload["state"])
+	}
+}
+
+func TestClaudeQuestionResolvesOnAnswer(t *testing.T) {
+	parser := newParser("claude")
+	pending := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","options":[{"label":"Postgres"}]}]}}]}}`))
+	if len(pending) != 1 || pending[0].Type != "question" || pending[0].Payload["state"] != "pending" {
+		t.Fatalf("pending = %#v, want single pending question", pending)
+	}
+	resolved := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_q1","content":"Postgres"}]}}`))
+	if len(resolved) != 1 || resolved[0].Type != "question" {
+		t.Fatalf("resolved = %#v, want single resolved question", resolved)
+	}
+	if resolved[0].ID != "toolu_q1" {
+		t.Errorf("resolved id = %v, want toolu_q1", resolved[0].ID)
+	}
+	if resolved[0].Payload["state"] != "resolved" {
+		t.Errorf("resolved state = %v, want resolved", resolved[0].Payload["state"])
+	}
+	if resolved[0].Payload["requestId"] != "toolu_q1" {
+		t.Errorf("resolved requestId = %v, want toolu_q1", resolved[0].Payload["requestId"])
+	}
+}
+
+func TestClaudePermissionRejectedOnError(t *testing.T) {
+	parser := newParser("claude")
+	parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_p1","name":"PermissionRequest","input":{"tool":"Bash","behavior":"allow"}}]}}`))
+	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_p1","content":"denied","is_error":true}]}}`))
+	if len(events) != 1 || events[0].Type != "permission" {
+		t.Fatalf("events = %#v, want single permission event", events)
+	}
+	if events[0].Payload["state"] != "cancelled" {
+		t.Errorf("state = %v, want cancelled", events[0].Payload["state"])
+	}
+}
+
+func TestClaudeTodoWriteProjectsToTodo(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_t1","name":"TodoWrite","input":{"todos":[{"content":"Investigate","status":"in_progress","activeForm":"Investigating"},{"content":"Fix","status":"pending","activeForm":"Fixing"}]}}]}}`))
+	if len(events) != 1 || events[0].Type != "todo" {
+		t.Fatalf("events = %#v, want single todo event", events)
+	}
+	if events[0].ID != "claude-todos" {
+		t.Errorf("id = %v, want claude-todos", events[0].ID)
+	}
+	if events[0].Payload["todoId"] != "claude-todos" {
+		t.Errorf("todoId = %v, want claude-todos", events[0].Payload["todoId"])
+	}
+	if events[0].Payload["state"] != "in_progress" {
+		t.Errorf("state = %v, want in_progress", events[0].Payload["state"])
+	}
+	items, ok := events[0].Payload["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("items = %v, want two items", events[0].Payload["items"])
+	}
+	first, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("items[0] is not an object: %T", items[0])
+	}
+	if first["label"] != "Investigate" || first["state"] != "in_progress" {
+		t.Errorf("items[0] = %v, want label Investigate state in_progress", first)
+	}
+}
+
+func TestClaudeTodoWriteToolResultIsSuppressed(t *testing.T) {
+	parser := newParser("claude")
+	parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_t1","name":"TodoWrite","input":{"todos":[{"content":"Investigate","status":"in_progress"}]}}]}}`))
+	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_t1","content":"success"}]}}`))
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no events for TodoWrite result", events)
+	}
+}
+
+func TestClaudeSidechainAssistantProjectsToSubagent(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"assistant","uuid":"sub-1","timestamp":"2026-08-16T10:00:00Z","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"subagent finished"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}`))
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want 2 (subagent + tool_call)", events)
+	}
+	if events[0].Type != "subagent" {
+		t.Fatalf("first event = %#v, want Type=subagent", events[0])
+	}
+	if events[0].Payload["subagentId"] != "sub-1" {
+		t.Errorf("subagentId = %v, want sub-1", events[0].Payload["subagentId"])
+	}
+	if events[0].Payload["summary"] != "subagent finished" {
+		t.Errorf("summary = %v, want subagent finished", events[0].Payload["summary"])
+	}
+	if events[0].Payload["label"] != "Subagent" {
+		t.Errorf("label = %v, want Subagent", events[0].Payload["label"])
+	}
+	if events[0].Payload["state"] != "completed" {
+		t.Errorf("state = %v, want completed", events[0].Payload["state"])
+	}
+	if events[1].Type != "tool_call" || events[1].ToolName != "shell" {
+		t.Fatalf("second event = %#v, want tool_call shell", events[1])
+	}
+}
+
+// TestAgentEventProtocolAcrossProviders is the cross-provider regression
+// check that the parser contract is uniform: every event the UI sees must
+// use a canonical Type, every tool_call / tool_output must carry the same
+// canonical ToolName, and no protocol-noise event (hooks, empty cards,
+// usage placeholders) ever leaks into the stream.
+func TestAgentEventProtocolAcrossProviders(t *testing.T) {
+	allowedTypes := map[string]struct{}{
+		"user": {}, "assistant": {}, "reasoning": {},
+		"tool_call": {}, "tool_output": {},
+		"error": {}, "compaction": {}, "usage": {},
+		"system": {}, "system_instructions": {},
+		"question": {}, "permission": {}, "plan": {}, "todo": {},
+		"activity": {}, "plugin": {}, "subagent": {}, "attachment": {},
+	}
+
+	type fixture struct {
+		name     string
+		provider string
+		lines    []string
+	}
+	fixtures := []fixture{
+		{
+			name:     "claude turn",
+			provider: "claude",
+			lines: []string{
+				`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"user","content":"hi"}}`,
+				`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}`,
+				`{"type":"user","uuid":"u2","timestamp":"2026-08-16T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file.txt"}]}}`,
+				`{"type":"attachment","uuid":"a2","timestamp":"2026-08-16T10:00:03Z","attachment":{"type":"hook_success","hookName":"x"}}`,
+				`{"type":"attachment","uuid":"a3","timestamp":"2026-08-16T10:00:04Z","attachment":{"type":"file","content":""}}`,
+			},
+		},
+		{
+			name:     "codex turn",
+			provider: "codex",
+			lines: []string{
+				`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}`,
+				`{"timestamp":"2026-08-16T10:00:01Z","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"Bash","arguments":"{\"command\":\"ls\"}"}}`,
+				`{"timestamp":"2026-08-16T10:00:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"file.txt"}}`,
+				`{"timestamp":"2026-08-16T10:00:03Z","type":"compacted","payload":{}}`,
+				`{"timestamp":"2026-08-16T10:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}`,
+			},
+		},
+		{
+			name:     "opencode turn",
+			provider: "opencode",
+			lines: []string{
+				`{"messageID":"m1","role":"user","parts":[{"id":"p1","type":"text","text":"hi"}]}`,
+				`{"messageID":"m2","role":"assistant","modelID":"claude","parts":[{"id":"p2","type":"text","text":"hello"},{"id":"p3","type":"tool","callID":"c1","tool":"bash","state":{"status":"running","input":{"command":"ls"}}}]}`,
+			},
+		},
+	}
+
+	for _, fx := range fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), fx.provider+".jsonl")
+			writeLines(t, path, fx.lines...)
+			events, _, err := readNew(path, 0, newParser(fx.provider))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Every Type must be in the canonical vocabulary.
+			for _, event := range events {
+				if _, ok := allowedTypes[event.Type]; !ok {
+					t.Errorf("event Type %q is not in canonical vocabulary", event.Type)
+				}
+			}
+			// tool_call and tool_output sharing a callID must share a
+			// canonical ToolName. Codex/claude: matched by codexCallTool /
+			// claudeCallTool. opencode: same callID in the same envelope.
+			seen := map[string]string{}
+			for _, event := range events {
+				if event.CallID == "" {
+					continue
+				}
+				if event.Type == "tool_call" || event.Type == "tool_output" {
+					if other, exists := seen[event.CallID]; exists && other != event.ToolName {
+						t.Errorf("call %q: tool_call ToolName=%q, tool_output ToolName=%q", event.CallID, other, event.ToolName)
+					}
+					seen[event.CallID] = event.ToolName
+				}
+			}
+			// No empty-content event except the structured kinds that don't
+			// need text.
+			for _, event := range events {
+				if strings.TrimSpace(event.Content) == "" &&
+					strings.TrimSpace(event.Output) == "" &&
+					strings.TrimSpace(event.Error) == "" &&
+					event.Usage == nil &&
+					event.ToolInput == nil &&
+					event.Type != "tool_call" && event.Type != "tool_output" &&
+					event.Type != "question" && event.Type != "permission" &&
+					event.Type != "plan" && event.Type != "todo" &&
+					event.Type != "activity" && event.Type != "plugin" &&
+					event.Type != "subagent" && event.Type != "compaction" {
+					t.Errorf("event %s/%s slipped through with no payload: %#v", event.Provider, event.Type, event)
+				}
+			}
+		})
 	}
 }

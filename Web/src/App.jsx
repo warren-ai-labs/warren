@@ -1411,12 +1411,15 @@ export default function App() {
     const finish = () => {
       releaseWorkspaceSession(creatingSessionWorkspaceIDsRef.current, workspaceID);
     };
+    // The preset title is presentation copy for the button and the starting
+    // message; it must not become the session's user-set custom title, which
+    // would suppress automatic AI title generation. The Host derives the
+    // default display title from the kind when no explicit title is given.
     const preset = orderedPresets.find(value => value.kind === kind) || orderedPresets[0];
     const sent = request("session.create", {
       workspace: workspaceID,
       kind: preset.kind,
       command: presetCommands[preset.kind] || "",
-      title: preset.title,
     }, result => {
       finish();
       const sessionID = result?.id;

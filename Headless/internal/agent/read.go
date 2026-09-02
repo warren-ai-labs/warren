@@ -71,13 +71,14 @@ func ProjectEvents(events []api.AgentEvent, options ReadOptions) ([]api.AgentEve
 	return result, nil
 }
 
-// ReadTranscript parses one Codex, Claude, or OpenCode JSONL transcript into the same
-// normalized events used by Warren's live agent view. The file is consumed
-// line by line, so the reader never loads the whole transcript into memory.
+// ReadTranscript parses one Codex, Claude, OpenCode, or Pi JSONL transcript
+// into the same normalized events used by Warren's live agent view. The file
+// is consumed line by line, so the reader never loads the whole transcript
+// into memory.
 func ReadTranscript(ctx context.Context, provider, path string, options ReadOptions) ([]api.AgentEvent, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider != "codex" && provider != "claude" && provider != "opencode" {
-		return nil, fmt.Errorf("unsupported agent provider %q (want codex, claude, or opencode)", provider)
+	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" {
+		return nil, fmt.Errorf("unsupported agent provider %q (want codex, claude, opencode, or pi)", provider)
 	}
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("agent transcript path is required")

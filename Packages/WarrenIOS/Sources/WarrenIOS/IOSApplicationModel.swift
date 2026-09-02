@@ -2150,42 +2150,23 @@ public final class IOSApplicationModel: ObservableObject {
         for event in incoming {
             let key = "\(eventEpoch):\(event.sequence)"
             let normalizedType = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let normalizedProvider = event.provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let isOpenCodeContentEvent = normalizedProvider == "opencode"
-                && !event.id.isEmpty
-                && (normalizedType == "user"
-                    || normalizedType == "assistant"
-                    || normalizedType == "reasoning"
-                    || normalizedType.contains("thinking")
-                    || normalizedType.contains("reason"))
-            if isOpenCodeContentEvent,
-               let index = events.lastIndex(where: {
-                   $0.id == event.id && $0.type == event.type && $0.provider == event.provider
-               }) {
-                // A paged Host history response contains one complete,
-                // non-delta value at the part's first sequence. That sequence
-                // may already be in the live tail's deduplication set even
-                // when the tail only had an earlier partial value; let the
-                // complete replay replace it. Exact live replays remain
-                // sequence-deduplicated before they can be appended twice.
-                if keys.contains(key), event.contentDelta {
-                    continue
-                }
+            // Fold any provider's content-delta events by (type,id) key so streaming replies do not
+            // produce a bubble per database poll. Seed events have contentDelta=false; later updates
+            // carry contentDelta=true and append to the accumulated content.
+            if let index = events.lastIndex(where: {
+                $0.id == event.id && $0.type == event.type && $0.contentDelta
+            }) {
                 let existing = events[index]
+                // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
+                if keys.contains(key) { continue }
                 let merged = WarrenRemoteAgentEvent(
-                    // Keep the first sequence as the stable position of a
-                    // mutable OpenCode part. The Host's conversation history
-                    // projection uses the same rule, so live deltas and a
-                    // later paged replay have identical ordering.
                     sequence: existing.sequence,
                     turn: event.turn ?? existing.turn,
                     id: event.id,
                     provider: event.provider.isEmpty ? existing.provider : event.provider,
                     type: event.type,
                     role: event.role ?? existing.role,
-                    content: event.contentDelta
-                        ? (existing.content ?? "") + (event.content ?? "")
-                        : (event.content?.isEmpty == false ? event.content : existing.content),
+                    content: (existing.content ?? "") + (event.content ?? ""),
                     contentDelta: false,
                     model: event.model ?? existing.model,
                     stopReason: event.stopReason ?? existing.stopReason,
@@ -2207,21 +2188,6 @@ public final class IOSApplicationModel: ObservableObject {
                 didChange = true
                 continue
             }
-            if keys.contains(key) { continue }
-            if isOpenCodeContentEvent {
-                // The first observed delta can arrive before its non-delta
-                // seed when attaching to a busy OpenCode session. Retain it
-                // as a normal event; a later history page will fill in the
-                // complete part through the replacement path above.
-                events.append(event)
-            } else if prepend {
-                events.insert(event, at: 0)
-            } else {
-                events.append(event)
-            }
-            keys.insert(key)
-            didChange = true
-        }
         events.sort { $0.sequence < $1.sequence }
         agentState.agentEventsBySessionID[sessionID] = events
         agentEventKeysBySessionID[sessionID] = keys

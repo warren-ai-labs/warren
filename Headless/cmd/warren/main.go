@@ -992,8 +992,8 @@ func resourceCommand(args []string) error {
 	}
 	if resource == "session" && (action == "create" || action == "add") {
 		kind := strings.ToLower(strings.TrimSpace(stringValue(params, "kind")))
-		if kind == "codex" || kind == "claude" || kind == "opencode" {
-			return newUsageError("session create cannot create Codex, Claude, or OpenCode agents; use agent create", actionUsageText(commandName, action))
+		if kind == "codex" || kind == "claude" || kind == "opencode" || kind == "pi" || kind == "qoder" {
+			return newUsageError("session create cannot create Codex, Claude, OpenCode, Pi, or Qoder agents; use agent create", actionUsageText(commandName, action))
 		}
 	}
 	var resolvedCurrentID string
@@ -1599,8 +1599,8 @@ func agentCreateCommand(args []string) error {
 		return newUsageError("workspace and --group are mutually exclusive", agentCreateUsageText())
 	}
 	provider := strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
-	if provider != "codex" && provider != "claude" && provider != "opencode" {
-		return newUsageError("--provider must be codex, claude, or opencode", agentCreateUsageText())
+	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" {
+		return newUsageError("--provider must be codex, claude, opencode, pi, or qoder", agentCreateUsageText())
 	}
 	command := strings.TrimSpace(stringValue(params, "command"))
 	if command == "" {
@@ -1738,7 +1738,7 @@ func agentCurrentCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("current session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
+		return fmt.Errorf("current session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
 	}
 	return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
 }
@@ -1803,7 +1803,7 @@ func agentSendCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
 	if err != nil {
@@ -1872,7 +1872,7 @@ func agentReadCommand(args []string) error {
 	}
 	session := subscription.Session
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
 	}
 	return agentReadSession(ctx, c, session, params)
 }
@@ -1913,7 +1913,7 @@ func agentAttachCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
 	}
 	return sessionTerminalRead(ctx, c, map[string]any{"timeout": ""}, true)
 }
@@ -1949,11 +1949,11 @@ const (
 
 func isAgentSession(session api.Session) bool {
 	switch strings.ToLower(strings.TrimSpace(session.Kind)) {
-	case "codex", "claude", "opencode":
+	case "codex", "claude", "opencode", "pi", "qoder":
 		return true
 	case "shell", "custom":
 		// A shell overlay is Agent-capable only after Warren's Codex/Claude
-		// hook has supplied a binding. Other presets, including Trae, remain
+		// hook has supplied a binding. Other presets, including Trae and Qoder, remain
 		// ordinary PTY sessions until they receive an explicit integration.
 		return session.AgentSessionID != ""
 	default:
@@ -2035,6 +2035,12 @@ func validateAgentCommand(command, provider string) error {
 	}
 	if len(tokens) == 0 {
 		return errors.New("--command must not be empty")
+	}
+	// Validate provider-specific command constraints
+	if provider == "qoder" {
+		if err := agent.ValidateQoderCommand(command); err != nil {
+			return err
+		}
 	}
 	for _, token := range tokens {
 		if agentCommandShellOperator[token] {
@@ -2120,15 +2126,21 @@ var agentCommandPromptFlags = map[string]map[string]bool{
 	"codex":    {"--prompt": true},
 	"claude":   {"--prompt": true},
 	"opencode": {"--prompt": true},
+	"pi":       {},
+	"qoder":    {}, // TODO: Add specific flags if needed
 }
 
 var agentCommandNonInteractiveFlags = map[string]map[string]bool{
 	"claude":   {"-p": true, "--print": true},
 	"opencode": {},
+	"pi":       {"-p": true, "--print": true, "--mode": true},
+	"qoder":    {}, // TODO: Add specific flags if needed
 }
 
 var agentCommandSessionReuseFlags = map[string]map[string]bool{
 	"opencode": {"--continue": true, "-c": true, "--session": true, "-s": true, "--fork": true},
+	"pi":       {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
+	"qoder":    {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
 }
 
 var agentCommandShellOperator = map[string]bool{
@@ -2168,6 +2180,22 @@ var agentCommandValueFlags = map[string]map[string]bool{
 		"--config": true, "--cwd": true, "--port": true, "--hostname": true,
 		"--log-level": true, "--file": true, "--prompt": true,
 		"--replay-limit": true, "--mdns-domain": true, "--cors": true,
+	},
+	"pi": {
+		"--provider": true, "--model": true, "--api-key": true,
+		"--system-prompt": true, "--append-system-prompt": true,
+		"--mode": true, "--session": true, "--session-id": true,
+		"--session-dir": true, "--fork": true, "--name": true, "-n": true,
+		"--models": true, "--tools": true, "-t": true, "--exclude-tools": true,
+		"--thinking": true, "--extension": true, "-e": true, "--skill": true,
+		"--prompt-template": true, "--theme": true, "--export": true,
+		"--tui-mode": true,
+	},
+	"qoder": {
+		"--model": true, "--provider": true, "--system-prompt": true,
+		"--api-key": true, "--api-url": true, "--temperature": true,
+		"--top-p": true, "--top-k": true, "--max-tokens": true,
+		"--reasoning-effort": true,
 	},
 }
 
@@ -2328,7 +2356,7 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, or OpenCode agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
 	if err != nil {
@@ -3855,7 +3883,7 @@ Examples:
 
 func agentUsageText() string {
 	return `Usage:
-  warren agent create [WORKSPACE_ID] --provider codex|claude|opencode [--command CMD] [--prompt TEXT | --no-prompt]
+  warren agent create [WORKSPACE_ID] --provider codex|claude|opencode|pi|qoder [--command CMD] [--prompt TEXT | --no-prompt]
   warren agent list [--all | --ended] [--limit N]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
@@ -3874,13 +3902,13 @@ Run 'warren agent <command> --help' for command-specific help.
 func agentCreateUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID]
-      --provider codex|claude|opencode
+      --provider codex|claude|opencode|pi|qoder
       [--command CMD]
       [--prompt TEXT | --no-prompt]
       [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]
 
-Create an Agent backed by a Codex, Claude, or OpenCode session. --prompt is
-passed with the provider's startup syntax (positional for Codex/Claude and
+Create an Agent backed by a Codex, Claude, OpenCode, Pi, or Qoder session. --prompt is
+passed with the provider's startup syntax (positional for Codex/Claude/Pi/Qoder and
 --prompt for OpenCode). Use --no-prompt to create an idle Agent explicitly.
 --command defaults to the provider executable and may name an alias or wrapper
 command with options, but must not include a positional prompt or prompt option.
@@ -4033,7 +4061,7 @@ func resourceUsageText(commandName string) string {
   warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
 
-Session is a generic PTY resource. Use agent create for Codex, Claude, or OpenCode;
+Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode, or Pi;
 Trae is only a shell preset and has no Agent transcript/activity semantics.
 `
 	}

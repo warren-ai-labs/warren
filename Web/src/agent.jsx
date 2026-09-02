@@ -473,7 +473,9 @@ export function AgentView({
         <div className="agent-starting">
           {session?.kind === "opencode"
             ? "OpenCode is starting — enter the first prompt in Terminal, then send messages from here."
-            : "Agent is starting — finish first-time setup in Terminal, then send messages from here."}
+            : session?.kind === "pi"
+              ? "Pi is starting — enter the first prompt in Terminal, then send messages from here."
+              : "Agent is starting — finish first-time setup in Terminal, then send messages from here."}
         </div>
       )}
     </div>
@@ -485,19 +487,19 @@ function AgentAttention({ attention, onOpenTerminal }) {
   const reason = String(attention.reason || "").trim().toLowerCase();
   const labels = {
     input: ["text-bubble", "Question · Reply in the composer to continue."],
-    approval: ["shield-check", "Permission · Review the request in Terminal."],
-    warning: ["triangle-exclamation", "Check the Agent in Terminal."],
+    approval: ["shield-check", "Permission · Review the request here."],
+    warning: ["triangle-exclamation", "Check the Agent view."],
   };
   const [icon, fallback] = labels[kind] || labels.warning;
   const reasonLabel = {
     question: "Question · Reply in the composer to continue.",
-    permission: "Permission · Review the request in Terminal.",
-    approval: "Permission · Review the request in Terminal.",
-    stalled: "No progress detected · Check the Agent in Terminal.",
-    no_progress: "No progress detected · Check the Agent in Terminal.",
-    no_progress_detected: "No progress detected · Check the Agent in Terminal.",
-    unexpectedabort: "Unexpected interruption · Check the Agent in Terminal.",
-    unexpected_abort: "Unexpected interruption · Check the Agent in Terminal.",
+    permission: "Permission · Review the request here.",
+    approval: "Permission · Review the request here.",
+    stalled: "No progress detected · Check the Agent view.",
+    no_progress: "No progress detected · Check the Agent view.",
+    no_progress_detected: "No progress detected · Check the Agent view.",
+    unexpectedabort: "Unexpected interruption · Check the Agent view.",
+    unexpected_abort: "Unexpected interruption · Check the Agent view.",
   }[reason] || fallback;
   return (
     <div className={`agent-attention ${kind}`} role="status">
@@ -519,8 +521,7 @@ function canSendForStatus(status) {
   if (!status) return true;
   const activity = String(status.activity || "").toLowerCase();
   if (["failed", "stalled", "exited", "unknown"].includes(activity)) return false;
-  // An input/question attention is intentionally answerable in the composer;
-  // approval and warning attention must be reviewed in the Terminal.
+  // An input/question attention is intentionally answerable in the composer.
   return !status.attention || status.attention.kind === "input";
 }
 
@@ -570,10 +571,10 @@ function agentTurnKey(turn, events) {
 
 function agentInputDisabledReason({ ready, hasControl, status }) {
   if (!ready) return "Agent is starting in Terminal.";
-  if (!hasControl) return "Terminal control is held by another client.";
+  if (!hasControl) return "";
   const activity = String(status?.activity || "").toLowerCase();
-  if (status?.attention?.kind === "approval") return "Approval is required in Terminal.";
-  if (status?.attention && status.attention.kind !== "input") return "Check the Agent in Terminal.";
+  if (status?.attention?.kind === "approval") return "Permission required — review the request.";
+  if (status?.attention && status.attention.kind !== "input") return "Agent needs your attention.";
   switch (activity) {
   case "stalled": return "Agent is stalled.";
   case "failed": return "Agent failed.";
@@ -590,12 +591,14 @@ function agentModel(session, events = []) {
 
 function isHiddenAgentEvent(event) {
   const type = String(event?.type || "").toLowerCase().replaceAll("-", "_");
-  return type === "usage"
+  return type === "compaction"
+    || type === "compact"
+    || type === "compacted"
+    || type === "usage"
     || type === "token_usage"
     || type === "token_count"
     || type.endsWith("_usage")
-    || type === "system_instructions"
-    || (event?.usage && String(event?.content || "").trim().toLowerCase() === "token usage");
+    || type === "system_instructions";
 }
 
 function isUserAgentEvent(event) {
@@ -1024,12 +1027,10 @@ function ToolCard({ block, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const summary = toolDisplay(call, status);
   const isWebSearch = call.toolName === "web_search";
-  const isShell = call.toolName === "Bash" || call.toolName === "shell";
+  const isShell = call.toolName === "shell";
   const shellCommand = isShell ? call.toolInput?.command : null;
   const isCommand = Boolean(
     shellCommand
-    || call.toolName === "exec"
-    || call.toolName === "Exec"
     || call.toolInput?.cmd
     || call.toolInput?.command,
   );
@@ -1120,32 +1121,34 @@ function statusText(status) {
   }
 }
 
-// A message was cut short by a user interruption. OpenCode reports this on the
-// assistant event's stopReason; Claude Code emits a sentinel user message that
-// begins with "[Request interrupted".
+// A message was cut short by a user interruption. All providers surface
+// this through event.stopReason; the parser normalizes provider-specific
+// sentinels (e.g. Claude's "[Request interrupted..." user message) into
+// the same shape.
 function isInterrupted(event) {
-  if (!event) return false;
-  if (event.stopReason === "interrupted") return true;
-  const content = event.content || "";
-  return /^\[Request interrupted/i.test(content.trim());
+  return Boolean(event) && event.stopReason === "interrupted";
 }
 
+// displayToolName maps a canonical tool name (already normalized by the
+// parser) to a human-friendly label. The parser canonicalizes every
+// provider's vocabulary into the same set of keys, so this map does not
+// need per-provider entries.
 function displayToolName(name) {
-  const names = {
-    Bash: "Shell",
+  const labels = {
     shell: "Shell",
-    Edit: "Edit file",
-    Read: "Read file",
-    Grep: "Search files",
-    Glob: "Find files",
-    WebSearch: "Web search",
+    edit: "Edit file",
+    write: "Write file",
+    read: "Read file",
+    grep: "Search files",
+    glob: "Find files",
     web_search: "Web search",
-    ApplyPatch: "Apply patch",
+    fetch: "Web fetch",
+    subagent: "Subagent",
+    ask_user_question: "Question",
+    permission_request: "Permission",
     apply_patch: "Apply patch",
-    Task: "Subagent",
-    Write: "Write file",
   };
-  return names[name] || name || "Tool";
+  return labels[name] || name || "Tool";
 }
 
 function CopyIcon() {

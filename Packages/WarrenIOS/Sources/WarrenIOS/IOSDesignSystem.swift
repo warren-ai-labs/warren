@@ -234,6 +234,8 @@ public struct IOSPresetIcon: View {
         case "claude", "claude-code": return "preset-claude"
         case "codex": return "preset-codex-white"
         case "opencode", "open-code": return "preset-opencode"
+        case "pi": return "preset-pi"
+        case "qoder": return "preset-qoder"
         default: return "preset-shell"
         }
     }

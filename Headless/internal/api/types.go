@@ -1,8 +1,14 @@
 package api
 
-import "time"
+import (
+	"time"
 
-const Version = "2.0"
+	"github.com/abcdlsj/warren/Headless/internal/protocol"
+)
+
+// Version is the logical protocol version. Sourced from
+// protocol/warren.schema.json via internal/protocol; do not edit here.
+const Version = protocol.LogicalVersion
 
 type Host struct {
 	ID      string `json:"id"`

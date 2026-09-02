@@ -26,6 +26,7 @@ const kindLabels = {
   claude: "claude",
   codex: "codex",
   opencode: "opencode",
+  pi: "pi",
   trae: "trae",
   custom: "Custom",
 };
@@ -138,9 +139,10 @@ function tabPurpose(session = {}) {
   const kind = String(session.kind || "").trim().toLowerCase();
   const process = String(session.process || "").trim();
 
-  // Integrated Codex/Claude sessions keep their stable launch kind even when
-  // the foreground process is a shell or another implementation detail.
-  if (kind === "claude" || kind === "codex" || kind === "opencode") {
+  // Integrated Codex/Claude/OpenCode/Pi sessions keep their stable launch
+  // kind even when the foreground process is a shell or another
+  // implementation detail.
+  if (kind === "claude" || kind === "codex" || kind === "opencode" || kind === "pi") {
     return kindLabels[kind];
   }
   if (process && !shellProcessNames.has(process)) return process;

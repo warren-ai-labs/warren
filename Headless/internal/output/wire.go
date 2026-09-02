@@ -5,30 +5,36 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+
+	"github.com/abcdlsj/warren/Headless/internal/protocol"
 )
 
 // Binary envelope wire format. This is intentionally the same DENB envelope
 // used by the Swift transport: magic "DENB", version 1, direction byte, kind
 // byte, header length (u32 BE), payload length (u32 BE), JSON header, payload.
+//
+// The constants live in protocol/warren.schema.json and are generated into
+// internal/protocol/wire.go. The aliases below preserve the existing
+// output.* API for callers in this module.
 var (
-	BinaryMagic = []byte{0x44, 0x45, 0x4E, 0x42}
-	Version     = byte(1)
+	BinaryMagic = protocol.BinaryMagic
+	Version     = protocol.BinaryWireVersion
 )
 
 const (
-	DirectionClientToHost = byte(1)
-	DirectionHostToClient = byte(2)
+	DirectionClientToHost = protocol.DirectionClientToHost
+	DirectionHostToClient = protocol.DirectionHostToClient
 
-	KindInput  = byte(1)
-	KindOutput = byte(2)
+	KindInput = protocol.KindInput
+	KindOutput = protocol.KindOutput
 	// KindAtomicState carries one opaque terminal-emulator snapshot. It is a
 	// distinct kind so clients can never feed snapshot bytes through their VT
 	// output parser by mistake.
-	KindAtomicState = byte(3)
+	KindAtomicState = protocol.KindAtomicState
 
-	MaxHeader             = 16 * 1024
-	MaxPayload            = 8 * 1024 * 1024
-	MaxAtomicStatePayload = 64 * 1024 * 1024
+	MaxHeader             = protocol.MaxHeader
+	MaxPayload            = protocol.MaxPayload
+	MaxAtomicStatePayload = protocol.MaxAtomicStatePayload
 )
 
 var binaryPrefixLength = len(BinaryMagic) + 1 + 1 + 1 + 4 + 4

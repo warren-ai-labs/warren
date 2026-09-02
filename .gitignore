@@ -1,5 +1,8 @@
 .DS_Store
 .build/
+# Root-level Go build outputs (accidentally committed in qoder work)
+/warren
+/warren-headless
 .swiftpm/
 *.xcodeproj/xcuserdata/
 Packages/WarrenIOS/WarrenIOS.xcodeproj/
@@ -13,6 +16,7 @@ Warren-*.zip
 Frameworks/
 # Local-only release tooling and runbooks
 .local/
+.qoder/
 __pycache__/
 *.pyc
 .envrc

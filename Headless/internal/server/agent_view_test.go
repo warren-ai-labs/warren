@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -70,6 +71,44 @@ func newAgentViewTestService(t *testing.T, controller AgentViewController) *Serv
 	service.lazyInit()
 	service.agents[sessionID] = &agentSession{}
 	return service
+}
+
+func TestInterruptAgentTurnInputSendsInterruptAndReplacement(t *testing.T) {
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	request := api.AgentTurnInterruptRequest{
+		Session:     "sess",
+		Turn:        1,
+		Reason:      "send_now",
+		Replacement: &api.AgentMessageSendRequest{Session: "sess", ClientMessageID: "m1", Text: "rewrite it"},
+	}
+	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := runtime.Capture(context.Background(), "sess")
+	if !bytes.Contains(data, []byte{0x03}) {
+		t.Errorf("input = %q, want interrupt byte 0x03", data)
+	}
+	if !bytes.Contains(data, []byte("rewrite it")) {
+		t.Errorf("input = %q, want replacement text", data)
+	}
+}
+
+func TestInterruptAgentTurnInputCancelOnly(t *testing.T) {
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	request := api.AgentTurnInterruptRequest{Session: "sess", Turn: 1, Reason: "cancel"}
+	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := runtime.Capture(context.Background(), "sess")
+	if !bytes.Contains(data, []byte{0x03}) {
+		t.Errorf("input = %q, want interrupt byte 0x03", data)
+	}
 }
 
 func TestAgentViewActionsAreIdempotentAndRejectConflictingIdentities(t *testing.T) {
