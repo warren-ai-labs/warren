@@ -225,3 +225,78 @@ func waitForSessionTitle(t *testing.T, state *store.Store, sessionID string) str
 	t.Fatalf("session %s did not receive a generated title", sessionID)
 	return ""
 }
+
+func TestSessionTitleFromQoderExchange(t *testing.T) {
+	var requests atomic.Int32
+	requestBody := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode title request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(body.Messages) > 0 {
+			requestBody <- body.Messages[0].Content
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"Fix login styling"}}]}`))
+	}))
+	defer server.Close()
+
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session-qoder-title"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID:        sessionID,
+			Title:     "Qoder",
+			Kind:      "qoder",
+			Runtime:   "runtime-title",
+			Lifecycle: "running",
+			CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		Store: state,
+		Settings: settings.Settings{
+			OpenAIBaseURL:      server.URL + "/v1",
+			OpenAIModel:        "title-model",
+			OpenAIKey:          "test-key",
+			OpenAITitleEnabled: true,
+		},
+	}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	// A qoder turn: user text, thinking/reasoning, tool calls, then a final
+	// assistant text carrying the terminal end_turn stop reason.
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "qoder", Type: "user", Content: "Fix the login button styling"},
+		{Provider: "qoder", Type: "reasoning", Content: "I should find the login view"},
+		{Provider: "qoder", Type: "tool_call", Content: "", ToolName: "read"},
+		{Provider: "qoder", Type: "tool_output", Output: "file contents"},
+		{Provider: "qoder", Type: "assistant", Content: "The button now uses the accent color", StopReason: "end_turn"},
+	}, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	if got := waitForSessionTitle(t, state, sessionID); got != "Fix login styling" {
+		t.Fatalf("generated title = %q, want Fix login styling", got)
+	}
+	body := <-requestBody
+	if !strings.Contains(body, "Fix the login button styling") || !strings.Contains(body, "The button now uses the accent color") {
+		t.Fatalf("title prompt omitted the qoder exchange: %q", body)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("title requests = %d, want one", requests.Load())
+	}
+}

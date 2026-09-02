@@ -100,9 +100,9 @@ export function firstAIPreset(presets = sessionPresets) {
   return presets.find(preset => preset.isAgent) || null;
 }
 
-// A shell can host a Codex/Claude overlay discovered through Warren's hook,
-// but arbitrary presets (including Trae) are not Agents until they provide a
-// dedicated integration.
+// A shell can host a Codex/Claude/OpenCode/Pi/Qoder overlay discovered
+// through Warren's managed hook, but arbitrary presets (including Trae) are
+// not Agents until they provide a dedicated integration.
 export function isAgentSession(session = {}) {
   const kind = String(session?.kind || "").trim().toLowerCase();
   return kind === "codex"

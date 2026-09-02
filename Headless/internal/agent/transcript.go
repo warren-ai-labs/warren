@@ -72,6 +72,10 @@ func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, aft
 		// boundTranscript; this fallback deliberately returns nothing
 		// instead of adopting an unrelated conversation.
 		return "", nil
+	case "qoder":
+		// Qoder resolves through the injected --session-id binding; the
+		// generic finder has no identity to search with.
+		return "", nil
 	default:
 		return "", nil
 	}
@@ -542,6 +546,10 @@ type parser struct {
 	// user-role tool_result blocks do not carry the originating tool name,
 	// so the parser records it when the matching tool_use block arrives.
 	claudeCallTool map[string]string
+	// qoderCallTool mirrors claudeCallTool for Qoder transcripts. Qoder tool
+	// results carry only the tool_use_id, so the tool name is recorded when
+	// the matching assistant tool_use block arrives.
+	qoderCallTool map[string]string
 	// claudeInteractions tracks the kind of a pending Claude structured
 	// interaction (question or permission) by its tool_use id, so the answer
 	// tool_result can close the card as resolved instead of leaking a bare
@@ -560,6 +568,7 @@ func newParserWithContentLimit(provider string, contentLimit int) *parser {
 		tracker:            *NewActivityTracker(),
 		codexCallTool:      map[string]string{},
 		claudeCallTool:     map[string]string{},
+		qoderCallTool:      map[string]string{},
 		claudeInteractions: map[string]string{},
 		opencodeMessages:   map[string]openCodeMessageSnapshot{},
 	}
@@ -615,6 +624,8 @@ func (p *parser) parseLine(line []byte) []api.AgentEvent {
 		return p.parseOpenCode(line)
 	case "pi":
 		return p.parsePi(line)
+	case "qoder":
+		return p.parseQoder(line)
 	default:
 		return nil
 	}

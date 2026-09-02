@@ -814,7 +814,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
-		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" {
+		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 		if turn := s.agentTurn(session.ID); turn.ID > 0 {
@@ -3508,7 +3508,7 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 // running sessions. A deep Store snapshot is intentionally expensive, so the
 // lifecycle loop must not take one for every session it inspects.
 func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
-	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi"
+	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
 		return nil, nil
@@ -3600,6 +3600,22 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 					}
 				}
 			}
+		} else if session.Kind == "qoder" {
+			// Warren injects a deterministic --session-id at launch, so the
+			// SessionStart hook payload (session_id/transcript_path) and the
+			// deterministic file path both anchor the same conversation. The
+			// hook report wins when present; otherwise fall back to the
+			// injected-id scan under ~/.qoder/projects.
+			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil && binding.Provider == "qoder" && binding.SessionID != "" {
+				agentSessionID = binding.SessionID
+				transcriptPath = binding.TranscriptPath
+				if transcriptPath == "" || !regularFileExists(transcriptPath) {
+					transcriptPath = agent.FindQoderTranscript(binding.SessionID, workspacePath)
+				}
+			} else {
+				agentSessionID = session.AgentSessionID
+				transcriptPath = agent.FindQoderTranscript(session.AgentSessionID, workspacePath)
+			}
 		} else {
 			transcriptPath = s.boundTranscript(session, workspacePath)
 			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
@@ -3642,7 +3658,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		}
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
-		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi") {
+		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi" && binding.Provider != "qoder") {
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
@@ -3702,6 +3718,20 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
 					transcriptPath = binding.TranscriptPath
 				}
+			}
+			if transcriptPath == "" {
+				return nil, nil
+			}
+		} else if binding.Provider == "qoder" {
+			// Qoder shell overlay: the hook writes {provider:"qoder",
+			// sessionId, transcriptPath} on SessionStart. Resolve by the
+			// reported transcript first; the injected-id scan under
+			// ~/.qoder/projects is a second anchor while the file flushes.
+			provider = binding.Provider
+			agentSessionID = binding.SessionID
+			transcriptPath = binding.TranscriptPath
+			if transcriptPath == "" || !regularFileExists(transcriptPath) {
+				transcriptPath = agent.FindQoderTranscript(binding.SessionID, workspacePath)
 			}
 			if transcriptPath == "" {
 				return nil, nil
@@ -3879,7 +3909,7 @@ func (s *Service) clearShellAgent(session api.Session) {
 }
 
 func (s *Service) clearShellAgentWithState(session api.Session, state *api.State) {
-	if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" {
+	if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" {
 		return
 	}
 	s.agentsMu.Lock()
@@ -4516,7 +4546,7 @@ func (s *Service) agentTranscriptChunk(
 	if !ok {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session not found: %s", sessionID)
 	}
-	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.Kind != "pi" && session.AgentSessionID == "" {
+	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.Kind != "pi" && session.Kind != "qoder" && session.AgentSessionID == "" {
 		return api.AgentTranscriptChunk{}, fmt.Errorf("session is not bound to an agent: %s", sessionID)
 	}
 	if session.TranscriptPath == "" && session.Lifecycle == "running" {
@@ -4671,7 +4701,7 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 		// a transcript binding. Allow the initial subscription so agent send can
 		// deliver that prompt and let reconciliation attach the watcher later.
 		if sessionExists && session.Lifecycle == "running" &&
-			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi") {
+			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder") {
 			return nil
 		}
 		return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
@@ -4690,7 +4720,7 @@ func (s *Service) applyAgentState(session api.Session) {
 			kind = binding.Provider
 		}
 	}
-	if kind != "codex" && kind != "claude" && kind != "opencode" {
+	if kind != "codex" && kind != "claude" && kind != "opencode" && kind != "qoder" {
 		return
 	}
 	state, err := agent.ReadAgentState(agent.StatePath(session.ID))
@@ -5662,6 +5692,17 @@ func expandHome(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// regularFileExists reports whether path names an existing regular file. It
+// mirrors the transcript guards in the agent package so binding fallbacks only
+// adopt files the provider is actually writing.
+func regularFileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func normalizeTerminalGroupHome(home string) (string, error) {
