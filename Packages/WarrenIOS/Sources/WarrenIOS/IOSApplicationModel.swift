@@ -2474,7 +2474,6 @@ public final class IOSApplicationModel: ObservableObject {
         var didChange = false
         for event in incoming {
             let key = "\(eventEpoch):\(event.sequence)"
-            let normalizedType = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             // Fold any provider's content-delta events by (type,id) key so streaming replies do not
             // produce a bubble per database poll. Seed events have contentDelta=false; later updates
             // carry contentDelta=true and append to the accumulated content.
@@ -2513,6 +2512,15 @@ public final class IOSApplicationModel: ObservableObject {
                 didChange = true
                 continue
             }
+            if keys.contains(key) { continue }
+            if prepend {
+                events.insert(event, at: 0)
+            } else {
+                events.append(event)
+            }
+            keys.insert(key)
+            didChange = true
+        }
         events.sort { $0.sequence < $1.sequence }
         agentState.agentEventsBySessionID[sessionID] = events
         agentEventKeysBySessionID[sessionID] = keys
