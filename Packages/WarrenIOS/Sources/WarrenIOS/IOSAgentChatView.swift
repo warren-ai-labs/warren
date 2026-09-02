@@ -1,4 +1,5 @@
 import SwiftUI
+import WarrenDesignSystem
 import WarrenTransport
 
 #if os(iOS)
@@ -33,6 +34,7 @@ private final class AgentComposerTextView: UITextView {
 private struct AgentComposerInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    let isDisabled: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, isFocused: $isFocused)
@@ -41,7 +43,7 @@ private struct AgentComposerInput: UIViewRepresentable {
     func makeUIView(context: Context) -> AgentComposerTextView {
         let view = AgentComposerTextView(frame: .zero)
         let font = UIFont.preferredFont(forTextStyle: .subheadline)
-        let textColor = UIColor(red: 234 / 255, green: 232 / 255, blue: 230 / 255, alpha: 1)
+        let textColor = UIColor(IOSTheme.text)
 
         view.delegate = context.coordinator
         view.font = font
@@ -52,11 +54,15 @@ private struct AgentComposerInput: UIViewRepresentable {
             .foregroundColor: textColor,
         ]
         view.backgroundColor = .clear
+        view.isEditable = !isDisabled
         view.adjustsFontForContentSizeCategory = true
-        view.isScrollEnabled = false
+        // Keep the composer bounded while letting long drafts and large
+        // Dynamic Type scroll inside the field instead of being clipped.
+        view.isScrollEnabled = true
+        view.showsVerticalScrollIndicator = false
         view.textContainer.lineFragmentPadding = 0
         view.textContainerInset = UIEdgeInsets(top: 5, left: 7, bottom: 5, right: 2)
-        view.textContainer.maximumNumberOfLines = 3
+        view.textContainer.maximumNumberOfLines = 0
         view.textContainer.lineBreakMode = .byWordWrapping
         view.autocorrectionType = .default
         view.autocapitalizationType = .sentences
@@ -75,6 +81,7 @@ private struct AgentComposerInput: UIViewRepresentable {
         if view.text != text {
             view.text = text
         }
+        view.isEditable = !isDisabled
 
         // UIKit owns the responder while the text view is editing. Do not
         // resign from updateUIView: SwiftUI can briefly deliver a stale
@@ -158,6 +165,7 @@ public struct AgentChatView: View {
     @ObservedObject private var model: IOSApplicationModel
     @ObservedObject private var agentState: IOSAgentLiveState
     private let sessionID: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = ""
     @State private var renderedBlocks: [AgentDisplayBlock] = []
     @State private var didEstablishInitialScroll = false
@@ -166,10 +174,17 @@ public struct AgentChatView: View {
     @State private var isNearLatest = true
     @State private var showReturnToLatest = false
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
+    @State private var draftSessionID: String?
     @State private var localAttachments: [IOSAgentLocalAttachment] = []
     @State private var isUploadingAttachments = false
+    @State private var attachmentUploadGeneration = 0
     @State private var isFileImporterPresented = false
     @State private var isQueueSheetPresented = false
+    @State private var sendStatus = ""
+    @State private var attachmentFeedback = ""
+    @State private var attachmentFeedbackGeneration = 0
+    @State private var sendStatusGeneration = 0
+    @State private var cancelPending = false
 #if os(iOS)
     @State private var photoItems: [PhotosPickerItem] = []
 #endif
@@ -220,6 +235,13 @@ public struct AgentChatView: View {
                             if model.historyLoadingBySessionID.contains(sessionID) {
                                 AgentHistoryLoadMoreRow(isLoading: true, action: {})
                                     .transition(.opacity)
+                            } else if let historyError = model.agentHistoryError(for: sessionID), !historyError.isEmpty {
+                                AgentHistoryLoadMoreRow(
+                                    isLoading: false,
+                                    error: historyError,
+                                    action: { requestOlderHistory(blocks: blocks, force: true) }
+                                )
+                                .transition(.opacity)
                             } else if model.agentHistoryLoaded(for: sessionID),
                                       model.agentHistoryHasMore(for: sessionID) {
                                 AgentHistoryLoadMoreRow(isLoading: false) {
@@ -337,7 +359,7 @@ public struct AgentChatView: View {
                             Task { @MainActor in
                                 await Task.yield()
                                 guard !composerFocused else { return }
-                                withAnimation(.easeInOut(duration: 0.30)) {
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                                     proxy.scrollTo("agent-bottom", anchor: .bottom)
                                 }
                             }
@@ -365,7 +387,7 @@ public struct AgentChatView: View {
                             scrollToLatest(using: proxy, animated: true)
                         } label: {
                             Image(systemName: "arrow.down")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(IOSTypography.label)
                                 .foregroundStyle(IOSTheme.secondaryText)
                                 .frame(width: 27, height: 27)
                                 .background(IOSTheme.chrome.opacity(0.96), in: Circle())
@@ -373,6 +395,9 @@ public struct AgentChatView: View {
                                     Circle()
                                         .stroke(IOSTheme.ring.opacity(0.90), lineWidth: 1)
                                 }
+                                // Keep the glyph compact while giving the
+                                // floating affordance the full iOS hit area.
+                                .frame(width: 44, height: 44)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Return to latest message")
@@ -391,15 +416,19 @@ public struct AgentChatView: View {
             if model.displayMode == .agent {
                 VStack(alignment: .leading, spacing: 0) {
                     if let attention = model.agentAttention(for: sessionID) {
-                        AgentAttentionBanner(attention: attention) {
-                            model.setDisplayMode(.terminal)
-                            model.focusTerminal()
-                        }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        AgentAttentionBanner(
+                            attention: attention,
+                            openTerminal: {
+                                model.setDisplayMode(.terminal)
+                                model.focusTerminal()
+                            },
+                            focusComposer: { composerFocused = true }
+                        )
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     }
                     if shouldShowWorking {
                         AgentWorkingFooter(phrase: workingPhrase)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     }
                     if let actionError = model.agentActionError, !actionError.isEmpty {
                         Text(actionError)
@@ -411,11 +440,12 @@ public struct AgentChatView: View {
                     }
                     composer
                 }
-                .animation(.easeInOut(duration: 0.22), value: shouldShowWorking)
-                .animation(.easeInOut(duration: 0.22), value: model.agentAttention(for: sessionID))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: shouldShowWorking)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
             }
         }
         .onAppear {
+            draftSessionID = sessionID
             draft = model.agentDraft(for: sessionID)
             refreshRenderedBlocks()
             if !model.agentHistoryLoaded(for: sessionID) {
@@ -423,31 +453,65 @@ public struct AgentChatView: View {
             }
         }
         .onChange(of: draft) { _, value in
-            model.updateAgentDraft(value, for: sessionID)
+            model.updateAgentDraft(value, for: draftSessionID ?? sessionID)
         }
         .onDisappear {
-            model.flushAgentDraft(draft, for: sessionID)
+            // Invalidate any in-flight Host upload before this view can be
+            // reused for another Session. The task may still finish, but its
+            // progress and completion are no longer allowed to touch state.
+            attachmentUploadGeneration &+= 1
+            sendStatusGeneration &+= 1
+            attachmentFeedbackGeneration &+= 1
+            model.flushAgentDraft(draft, for: draftSessionID ?? sessionID)
         }
         .onChange(of: model.currentSessionID) { _, selectedSessionID in
-            guard selectedSessionID == sessionID else { return }
+            attachmentUploadGeneration &+= 1
+            guard let selectedSessionID, selectedSessionID != draftSessionID else { return }
+            if let previousSessionID = draftSessionID {
+                model.flushAgentDraft(draft, for: previousSessionID)
+            }
+            draftSessionID = selectedSessionID
+            draft = model.agentDraft(for: selectedSessionID)
+            localAttachments.removeAll()
+            isUploadingAttachments = false
+            isFileImporterPresented = false
+            isQueueSheetPresented = false
+            sendStatus = ""
+            attachmentFeedback = ""
+            sendStatusGeneration &+= 1
+            attachmentFeedbackGeneration &+= 1
+            cancelPending = false
+            refreshRenderedBlocks(for: selectedSessionID)
             didTriggerHistoryPull = false
             historyScrollAnchorID = nil
             showReturnToLatest = false
             isNearLatest = true
             workingPhrase = AgentWorkingPhrases.defaultPhrase
-            guard !model.agentHistoryLoaded(for: sessionID) else { return }
+            guard !model.agentHistoryLoaded(for: selectedSessionID) else { return }
             model.loadOlderAgentHistory()
         }
         .sheet(isPresented: $isQueueSheetPresented) {
             IOSAgentQueueSheet(model: model, sessionID: sessionID)
+                .iosSheetPresentation(.medium, .large)
         }
         .onChange(of: workingTurnKey) { _, _ in
             workingPhrase = AgentWorkingPhrases.next(after: workingPhrase)
         }
+        .onChange(of: model.canInterruptAgentTurn) { _, canInterrupt in
+            if !canInterrupt { cancelPending = false }
+        }
+        .onChange(of: model.agentActionError) { _, error in
+            guard let error, !error.isEmpty else { return }
+            if sendStatus == "sending" {
+                sendStatus = "failed"
+            }
+            cancelPending = false
+        }
     }
 
-    private func refreshRenderedBlocks() {
-        renderedBlocks = agentDisplayBlocks(from: agentState.agentEventsBySessionID[sessionID] ?? [])
+    private func refreshRenderedBlocks(for requestedSessionID: String? = nil) {
+        let targetSessionID = requestedSessionID ?? sessionID
+        renderedBlocks = agentDisplayBlocks(from: agentState.agentEventsBySessionID[targetSessionID] ?? [])
     }
 
     private func userEventKey(for block: AgentDisplayBlock) -> String? {
@@ -474,7 +538,8 @@ public struct AgentChatView: View {
         blocks: [AgentDisplayBlock],
         force: Bool = false
     ) {
-        guard model.agentHistoryLoaded(for: sessionID),
+        let retryingAfterError = model.agentHistoryError(for: sessionID) != nil
+        guard (model.agentHistoryLoaded(for: sessionID) || retryingAfterError),
               model.agentHistoryHasMore(for: sessionID),
               !model.historyLoadingBySessionID.contains(sessionID),
               force || !didTriggerHistoryPull else { return }
@@ -511,8 +576,8 @@ public struct AgentChatView: View {
     private func scrollToLatest(using proxy: ScrollViewProxy, animated: Bool) {
         isNearLatest = true
         showReturnToLatest = false
-        if animated {
-            withAnimation(.easeInOut(duration: 0.22)) {
+        if animated, !reduceMotion {
+            withAnimation(.easeInOut(duration: 0.18)) {
                 proxy.scrollTo("agent-bottom", anchor: .bottom)
             }
         } else {
@@ -574,8 +639,16 @@ public struct AgentChatView: View {
                         }
                         .padding(.horizontal, 8)
                     }
-                    .frame(height: 30)
+                    .frame(minHeight: 44)
                     .padding(.top, 6)
+                }
+                if !attachmentFeedback.isEmpty {
+                    Text(attachmentFeedback)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .padding(.horizontal, 13)
+                        .padding(.top, 4)
+                        .accessibilityLabel(attachmentFeedback)
                 }
 
                 HStack(alignment: .bottom, spacing: 5) {
@@ -590,25 +663,27 @@ public struct AgentChatView: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(!draft.isEmpty)
 #if canImport(UIKit)
-                        AgentComposerInput(
+                            AgentComposerInput(
                             text: $draft,
                             isFocused: Binding(
                                 get: { composerFocused },
                                 set: { composerFocused = $0 }
-                            )
+                            ),
+                                isDisabled: isUploadingAttachments || sendStatus == "sending"
                         )
-                            .frame(minHeight: 30, maxHeight: 46)
+                            .frame(minHeight: 44, maxHeight: 96)
 #else
                         TextField("", text: $draft, axis: .vertical)
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.text)
                             .lineLimit(1...3)
-                            .frame(minHeight: 30, maxHeight: 46)
+                            .frame(minHeight: 44, maxHeight: 96)
                             .padding(.horizontal, 2)
                             .padding(.vertical, 0)
                             .textFieldStyle(.plain)
                             .focused($composerFocused)
                             .accessibilityLabel("Agent message")
+                            .disabled(isUploadingAttachments || sendStatus == "sending")
 #endif
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -616,15 +691,15 @@ public struct AgentChatView: View {
                         sendComposerMessage()
                     } label: {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(IOSTypography.button)
                             .foregroundStyle(IOSTheme.background)
-                            .frame(width: 26, height: 26)
+                            .frame(width: 30, height: 30)
                             .background(IOSTheme.text, in: Circle())
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .opacity(canSend ? 1 : 0.32)
+                    .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
+                    .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
                     .accessibilityLabel("Send Agent message")
                     .padding(.bottom, 2)
                 }
@@ -648,32 +723,41 @@ public struct AgentChatView: View {
                             Text("Queued \(queued)")
                                 .font(IOSTypography.metadata)
                                 .foregroundStyle(IOSTheme.amber)
+                                .frame(minWidth: 44, minHeight: 44)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Show \(queued) queued messages")
                     }
                     if model.canInterruptAgentTurn {
                         Button {
-                            model.cancelAgentTurn()
+                            cancelAgentTurn()
                         } label: {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(IOSTheme.red)
-                                .frame(width: 28, height: 28)
+                            if cancelPending {
+                                Text("Cancelling…")
+                                    .font(IOSTypography.status)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .frame(minWidth: 44, minHeight: 44)
+                            } else {
+                                Image(systemName: "stop.fill")
+                                    .font(IOSTypography.button)
+                                    .foregroundStyle(IOSTheme.red)
+                                    .frame(width: 44, height: 44)
+                            }
                         }
                         .buttonStyle(.plain)
+                        .disabled(cancelPending)
                         .accessibilityLabel("Cancel Agent turn")
                         if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Button {
                                 sendComposerMessage(sendNow: true)
                             } label: {
                                 Text("Send now")
-                                    .font(IOSTypography.metadata)
+                                    .font(IOSTypography.button)
                                     .foregroundStyle(IOSTheme.amber)
-                                    .frame(minHeight: 28)
+                                    .frame(minWidth: 44, minHeight: 44)
                             }
                             .buttonStyle(.plain)
-                            .disabled(isUploadingAttachments)
+                            .disabled(isUploadingAttachments || sendStatus == "sending" || cancelPending)
                             .accessibilityLabel("Send message now and interrupt Agent turn")
                         }
                     }
@@ -683,13 +767,24 @@ public struct AgentChatView: View {
             }
             .padding(.horizontal, 4)
             .padding(.top, 1)
-            .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(IOSTheme.ring.opacity(0.92), lineWidth: 1)
+                RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
+                    .stroke(
+                        composerFocused ? IOSTheme.focusRing : IOSTheme.ring.opacity(0.92),
+                        lineWidth: composerFocused ? 1.5 : 1
+                    )
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 2)
+            if !sendStatus.isEmpty {
+                Text(sendStatusLabel)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
+                    .padding(.horizontal, 13)
+                    .padding(.top, 4)
+                    .accessibilityLabel(sendStatusLabel)
+            }
         }
         .padding(.top, 3)
         .background(IOSTheme.background)
@@ -702,28 +797,32 @@ public struct AgentChatView: View {
 #if os(iOS)
             PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
                 Image(systemName: "photo")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(IOSTypography.button)
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
-            .disabled(!attachmentsSupported)
+            .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
             .accessibilityLabel("Choose photos")
 #endif
             Button {
                 isFileImporterPresented = true
             } label: {
                 Image(systemName: "paperclip")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(IOSTypography.button)
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
-            .disabled(!attachmentsSupported)
+            .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
             .accessibilityLabel("Choose a file")
         }
-        .opacity(attachmentsSupported ? 1 : 0.42)
-        .accessibilityValue(attachmentsSupported ? "Available" : "Unavailable on this Host")
+        .opacity(attachmentsSupported && !isUploadingAttachments ? 1 : 0.42)
+        .accessibilityValue(
+            !attachmentsSupported
+                ? "Unavailable on this Host"
+                : (isUploadingAttachments ? "Unavailable while uploading" : "Available")
+        )
 #if os(iOS)
         .onChange(of: photoItems) { _, items in
             loadPhotos(items)
@@ -756,6 +855,7 @@ public struct AgentChatView: View {
                 Button("Retry") { retryAttachment(attachment.id) }
                     .font(IOSTypography.metadata)
                     .foregroundStyle(IOSTheme.red)
+                    .frame(minWidth: 44, minHeight: 44)
             case .aborted:
                 Text("Aborted")
                     .foregroundStyle(IOSTheme.secondaryText)
@@ -764,38 +864,106 @@ public struct AgentChatView: View {
                 localAttachments.removeAll { $0.id == attachment.id }
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
+                    .font(IOSTypography.label)
                     .foregroundStyle(IOSTheme.tertiaryText)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            .disabled(isUploadingAttachments)
+            .opacity(isUploadingAttachments ? 0.52 : 1)
             .accessibilityLabel("Remove \(attachment.name)")
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
-        .background(IOSTheme.muted.opacity(0.6), in: Capsule())
-        .accessibilityElement(children: .combine)
+        .frame(minHeight: 44)
+        // The inset keeps the visual pill compact while its layout frame
+        // remains large enough for both Retry and Remove on iPhone.
+        .background(IOSTheme.muted.opacity(0.6), in: Capsule().inset(by: 6))
+        .accessibilityElement(children: .contain)
         .accessibilityValue(attachment.state.rawValue)
+    }
+
+    private var sendStatusLabel: String {
+        switch sendStatus {
+        case "sending": return "Sending…"
+        case "sent": return "Sent"
+        case "failed": return "Send failed — retry"
+        default: return ""
+        }
+    }
+
+    private func showTransientFeedback(_ value: String, duration: TimeInterval = 1.6) {
+        attachmentFeedbackGeneration &+= 1
+        let generation = attachmentFeedbackGeneration
+        attachmentFeedback = value
+        guard duration > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard attachmentFeedbackGeneration == generation else { return }
+            attachmentFeedback = ""
+        }
+    }
+
+    private func showSendStatus(_ value: String, duration: TimeInterval? = 1.6) {
+        sendStatusGeneration &+= 1
+        let generation = sendStatusGeneration
+        sendStatus = value
+        guard let duration else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard sendStatusGeneration == generation else { return }
+            sendStatus = ""
+        }
+    }
+
+    private func cancelAgentTurn() {
+        guard !cancelPending else { return }
+        guard model.cancelAgentTurn() else {
+            showSendStatus("failed", duration: 1.6)
+            return
+        }
+        cancelPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            cancelPending = false
+        }
     }
 
     private func sendComposerMessage(sendNow: Bool = false) {
         let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, !isUploadingAttachments else { return }
+        guard !value.isEmpty,
+              !isUploadingAttachments,
+              sendStatus != "sending" else { return }
         let selected = localAttachments
         guard selected.allSatisfy({ $0.state == .selected || $0.state == .ready }) else { return }
+        showSendStatus("sending", duration: nil)
         guard !selected.isEmpty else {
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value)
                 : model.sendAgentMessage(value)
-            guard accepted else { return }
+            guard accepted else {
+                showSendStatus("failed")
+                return
+            }
             draft = ""
             model.clearAgentDraft(for: sessionID)
+            showSendStatus("sent")
             return
         }
         isUploadingAttachments = true
+        let uploadGeneration = attachmentUploadGeneration
+        let uploadSessionID = sessionID
         Task { @MainActor in
             var references: [WarrenRemoteAgentAttachmentRef] = []
             for attachment in selected {
+                guard attachmentUploadGeneration == uploadGeneration,
+                      model.currentSessionID == uploadSessionID else { return }
                 guard let index = localAttachments.firstIndex(where: { $0.id == attachment.id }) else { continue }
+                if attachment.state == .ready, let reference = attachment.reference {
+                    // A partial upload can leave earlier attachments ready
+                    // while a later one fails. Reuse their opaque Host
+                    // references on retry instead of sending the same bytes
+                    // again.
+                    references.append(reference)
+                    continue
+                }
                 localAttachments[index].state = .uploading
                 localAttachments[index].failureReason = nil
                 do {
@@ -805,31 +973,50 @@ public struct AgentChatView: View {
                         mime: attachment.mime,
                         sessionID: sessionID
                     ) { progress in
+                        guard self.attachmentUploadGeneration == uploadGeneration,
+                              self.model.currentSessionID == uploadSessionID else { return }
                         guard let progressIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) else { return }
                         localAttachments[progressIndex].progress = progress
                     }
+                    guard attachmentUploadGeneration == uploadGeneration,
+                          model.currentSessionID == uploadSessionID else { return }
                     references.append(reference)
                     if let readyIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) {
                         localAttachments[readyIndex].state = .ready
                         localAttachments[readyIndex].reference = reference
                     }
                 } catch {
+                    guard attachmentUploadGeneration == uploadGeneration,
+                          model.currentSessionID == uploadSessionID else { return }
                     if let failedIndex = localAttachments.firstIndex(where: { $0.id == attachment.id }) {
                         localAttachments[failedIndex].state = .failed
                         localAttachments[failedIndex].failureReason = error.localizedDescription
                     }
                     isUploadingAttachments = false
+                    showSendStatus("failed")
                     return
                 }
             }
+            guard attachmentUploadGeneration == uploadGeneration,
+                  model.currentSessionID == uploadSessionID else { return }
             isUploadingAttachments = false
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value, attachments: references)
                 : model.sendAgentMessage(value, attachments: references)
-            guard accepted else { return }
-            draft = ""
-            model.clearAgentDraft(for: sessionID)
+            guard accepted else {
+                showSendStatus("failed")
+                return
+            }
+            // Uploading runs asynchronously and the text view remains useful
+            // while the bytes are in flight. Only clear the draft when it is
+            // still the text that was submitted; preserve newer typing so a
+            // successful upload can never discard the next message.
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == value {
+                draft = ""
+                model.clearAgentDraft(for: sessionID)
+            }
             localAttachments.removeAll()
+            showSendStatus("sent")
         }
     }
 
@@ -842,27 +1029,70 @@ public struct AgentChatView: View {
 
 #if os(iOS)
     private func loadPhotos(_ items: [PhotosPickerItem]) {
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty, !isUploadingAttachments else { return }
         photoItems = []
+        let loadGeneration = attachmentUploadGeneration
+        let loadSessionID = sessionID
         Task { @MainActor in
+            var added = 0
+            var failed = 0
             for item in items {
-                guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else { continue }
+                let data: Data?
+                do {
+                    data = try await item.loadTransferable(type: Data.self)
+                } catch {
+                    failed += 1
+                    continue
+                }
+                guard let data, !data.isEmpty else {
+                    failed += 1
+                    continue
+                }
+                guard attachmentUploadGeneration == loadGeneration,
+                      model.currentSessionID == loadSessionID else { return }
                 let type = item.supportedContentTypes.first?.preferredMIMEType ?? "image/*"
                 localAttachments.append(IOSAgentLocalAttachment(name: "Photo", mime: type, data: data))
+                added += 1
+            }
+            guard attachmentUploadGeneration == loadGeneration,
+                  model.currentSessionID == loadSessionID else { return }
+            if failed > 0 {
+                showTransientFeedback(
+                    added > 0 ? "Some photos could not be attached." : "Unable to attach photo. Try again."
+                )
+            } else if added > 0 {
+                showTransientFeedback(added == 1 ? "Photo attached" : "Photos attached")
             }
         }
     }
 #endif
 
     private func handleFileImporter(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result else { return }
+        guard !isUploadingAttachments else { return }
+        guard case .success(let urls) = result else {
+            showTransientFeedback("Unable to read attachment. Try again.")
+            return
+        }
+        var added = 0
+        var failed = 0
         for url in urls {
             let secured = url.startAccessingSecurityScopedResource()
             defer { if secured { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                failed += 1
+                continue
+            }
             let mime = (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
                 ?? "application/octet-stream"
             localAttachments.append(IOSAgentLocalAttachment(name: url.lastPathComponent, mime: mime, data: data))
+            added += 1
+        }
+        if failed > 0 {
+            showTransientFeedback(
+                added > 0 ? "Some attachments could not be read." : "Unable to read attachment. Try again."
+            )
+        } else if added > 0 {
+            showTransientFeedback(added == 1 ? "Attachment added" : "Attachments added")
         }
     }
 
@@ -963,13 +1193,16 @@ private struct IOSAgentQueueSheet: View {
                             if editingID == item.id {
                                 TextField("Queued message", text: $editingText, axis: .vertical)
                                     .textFieldStyle(.roundedBorder)
+                                    .frame(minHeight: 44)
                                 HStack {
                                     Button("Save") {
                                         guard !editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                                         _ = model.editQueuedAgentMessage(sessionID: sessionID, itemID: item.id, text: editingText, attachments: item.attachments)
                                         editingID = nil
                                     }
+                                    .frame(minWidth: 44, minHeight: 44)
                                     Button("Cancel") { editingID = nil }
+                                        .frame(minWidth: 44, minHeight: 44)
                                 }
                             } else {
                                 Text(item.text)
@@ -990,6 +1223,7 @@ private struct IOSAgentQueueSheet: View {
                             HStack(spacing: 12) {
                                 if item.status == .failed {
                                     Button("Retry") { _ = model.retryQueuedAgentMessage(sessionID: sessionID, itemID: item.id) }
+                                        .frame(minWidth: 44, minHeight: 44)
                                 }
                                 if item.status != .sending && editingID != item.id {
                                     Button {
@@ -997,16 +1231,19 @@ private struct IOSAgentQueueSheet: View {
                                         editingText = item.text
                                     } label: {
                                         Image(systemName: "pencil")
+                                            .frame(width: 44, height: 44)
                                     }
                                     .accessibilityLabel("Edit queued message")
                                     Button("Move to front") { _ = model.moveQueuedAgentMessageToFront(sessionID: sessionID, itemID: item.id) }
+                                        .frame(minWidth: 44, minHeight: 44)
                                     Button("Delete", role: .destructive) { deleteID = item.id }
+                                        .frame(minWidth: 44, minHeight: 44)
                                 } else if item.status == .sending {
                                     Text("Sending…")
                                         .foregroundStyle(IOSTheme.secondaryText)
                                 }
                             }
-                            .font(IOSTypography.metadata)
+                            .font(IOSTypography.label)
                         }
                         .padding(.vertical, 4)
                         .confirmationDialog("Delete queued message?", isPresented: Binding(
@@ -1089,11 +1326,12 @@ private struct AgentMarkdownText: View {
 private struct AgentAttentionBanner: View {
     let attention: WarrenRemoteAgentAttention
     let openTerminal: () -> Void
+    let focusComposer: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 9) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
+                .font(IOSTypography.label)
                 .foregroundStyle(color)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
@@ -1108,7 +1346,18 @@ private struct AgentAttentionBanner: View {
                 }
             }
             Spacer(minLength: 4)
-            if attention.kind == .approval {
+            if attention.kind == .input {
+                Button(action: focusComposer) {
+                    Label("Reply", systemImage: "arrow.turn.down.left")
+                        .font(IOSTypography.label)
+                        .foregroundStyle(IOSTheme.text)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 9)
+                .frame(minHeight: 44)
+                .background(IOSTheme.accentSubtle, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
+                .accessibilityLabel("Reply to Agent question")
+            } else if attention.kind == .approval {
                 Button(action: openTerminal) {
                     Label("Terminal", systemImage: "terminal")
                         .font(IOSTypography.label)
@@ -1116,8 +1365,8 @@ private struct AgentAttentionBanner: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 9)
-                .frame(minHeight: 32)
-                .background(IOSTheme.accentSubtle, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .frame(minHeight: 44)
+                .background(IOSTheme.accentSubtle, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
                 .accessibilityLabel("Open Terminal to approve")
             }
         }
@@ -1160,7 +1409,7 @@ private struct AgentAttentionBanner: View {
 
     private var color: Color {
         switch attention.kind {
-        case .input: return IOSTheme.blue
+        case .input: return IOSTheme.info
         case .approval: return IOSTheme.amber
         case .warning, .unknown: return IOSTheme.yellow
         }
@@ -1217,7 +1466,14 @@ private enum AgentWorkingPhrases {
 
 private struct AgentHistoryLoadMoreRow: View {
     let isLoading: Bool
+    var error: String?
     let action: () -> Void
+
+    init(isLoading: Bool, error: String? = nil, action: @escaping () -> Void) {
+        self.isLoading = isLoading
+        self.error = error
+        self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
@@ -1226,22 +1482,35 @@ private struct AgentHistoryLoadMoreRow: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(IOSTheme.tertiaryText)
+                } else if error != nil {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(IOSTypography.label)
+                        .foregroundStyle(IOSTheme.red)
                 } else {
                     Image(systemName: "arrow.up.circle")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(IOSTypography.label)
                         .foregroundStyle(IOSTheme.tertiaryText)
                 }
-                Text("LOAD EARLIER")
+                Text(isLoading
+                    ? "LOADING EARLIER…"
+                    : error == nil
+                        ? "LOAD EARLIER"
+                        : "COULDN’T LOAD EARLIER · TRY AGAIN")
                     .font(IOSTypography.status)
                     .tracking(0.7)
-                    .foregroundStyle(IOSTheme.tertiaryText)
+                    .foregroundStyle(error == nil ? IOSTheme.tertiaryText : IOSTheme.red)
             }
-            .frame(maxWidth: .infinity, minHeight: 34)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isLoading)
-        .accessibilityLabel(isLoading ? "Loading earlier messages" : "Load earlier messages")
+        .accessibilityLabel(isLoading
+            ? "Loading earlier messages"
+            : error == nil
+                ? "Load earlier messages"
+                : "Earlier messages failed to load. Try again")
+        .accessibilityHint(error == nil || isLoading ? "" : error ?? "")
     }
 }
 
@@ -1583,10 +1852,10 @@ private struct AgentEventBlock: View {
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
                         .background(IOSTheme.muted.opacity(0.82), in: UnevenRoundedRectangle(
-                            topLeadingRadius: 16,
-                            bottomLeadingRadius: 16,
-                            bottomTrailingRadius: 16,
-                            topTrailingRadius: 5
+                            topLeadingRadius: WarrenRadius.sheet,
+                            bottomLeadingRadius: WarrenRadius.sheet,
+                            bottomTrailingRadius: WarrenRadius.sheet,
+                            topTrailingRadius: WarrenRadius.xs
                         ))
                     AgentMessageActions(
                         event: event,
@@ -1700,11 +1969,11 @@ private struct AgentMessageActions: View {
                     onEditResend(text)
                 } label: {
                     Image(systemName: "pencil")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(IOSTypography.label)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Edit and resend message")
-                .frame(width: 28, height: 28)
+                .frame(width: 44, height: 44)
             }
             .foregroundStyle(IOSTheme.tertiaryText)
             .frame(maxWidth: .infinity, alignment: alignment)
@@ -1717,6 +1986,7 @@ private struct AgentStructuredEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
     let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var selectedOption: String?
     @State private var selectedOptions: [String: Set<String>] = [:]
@@ -1741,14 +2011,17 @@ private struct AgentStructuredEventBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
+                    Circle()
+                        .fill(stateColor)
+                        .frame(width: 6, height: 6)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 12)
                     Image(systemName: symbol)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(IOSTypography.label)
                     Text(title)
                         .font(IOSTypography.label)
                         .foregroundStyle(IOSTheme.text)
@@ -1758,7 +2031,7 @@ private struct AgentStructuredEventBlock: View {
                         .font(IOSTypography.metadata)
                         .foregroundStyle(stateColor)
                 }
-                .frame(minHeight: 30)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
@@ -1770,9 +2043,18 @@ private struct AgentStructuredEventBlock: View {
                     .padding(.bottom, 4)
             }
         }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 7)
-        .background(IOSTheme.muted.opacity(kind == "question" || kind == "permission" ? 0.34 : 0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(.vertical, WarrenSpacing.xs)
+        .padding(.horizontal, WarrenSpacing.compact)
+        .background(
+            IOSTheme.muted.opacity(kind == "question" || kind == "permission" ? 0.24 : 0.06),
+            in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+        )
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(stateColor)
+                .frame(width: 2)
+                .padding(.vertical, WarrenSpacing.xs)
+        }
         .accessibilityElement(children: .contain)
         .onChange(of: state) { _, nextState in
             // A Host event is the source of truth for the final interaction
@@ -1832,6 +2114,7 @@ private struct AgentStructuredEventBlock: View {
                             )
                             .textFieldStyle(.roundedBorder)
                             .font(IOSTypography.status)
+                            .frame(minHeight: 44)
                             .disabled(!canInteract || submitting || state != "pending")
                             .accessibilityLabel("Custom answer for \(question.prompt)")
                         }
@@ -1851,8 +2134,10 @@ private struct AgentStructuredEventBlock: View {
                 if canInteract {
                     HStack(spacing: 10) {
                         Button("Submit") { submitQuestion(requestID: requestID) }
+                            .frame(minWidth: 44, minHeight: 44)
                             .disabled(submitting || state != "pending" || !questionsAreValid)
                         Button("Cancel", role: .cancel) { cancelInteraction(requestID: requestID, kind: kind) }
+                            .frame(minWidth: 44, minHeight: 44)
                             .disabled(submitting || state != "pending")
                     }
                     .font(IOSTypography.label)
@@ -1900,6 +2185,7 @@ private struct AgentStructuredEventBlock: View {
                     Button("Cancel", role: .cancel) {
                         cancelInteraction(requestID: requestID, kind: kind)
                     }
+                    .frame(minWidth: 44, minHeight: 44)
                     .font(IOSTypography.label)
                     .disabled(submitting || state != "pending")
                 }
@@ -1949,6 +2235,7 @@ private struct AgentStructuredEventBlock: View {
             }
             Spacer(minLength: 0)
         }
+        .frame(minHeight: 44, alignment: .leading)
     }
 
     private var title: String {
@@ -2160,21 +2447,25 @@ private struct AgentSecondaryEventBlock: View {
     let symbol: String
     let content: String
     let contentFont: Font
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                     expanded.toggle()
                 }
             } label: {
                 HStack(spacing: 7) {
+                    Circle()
+                        .fill(IOSTheme.tertiaryText)
+                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 11)
                     Image(systemName: symbol)
-                        .font(.system(size: 11, weight: .regular))
+                        .font(IOSTypography.label)
                     Text(title)
                         .font(IOSTypography.label)
                         .foregroundStyle(IOSTheme.secondaryText)
@@ -2187,7 +2478,7 @@ private struct AgentSecondaryEventBlock: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .frame(minHeight: 28)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
@@ -2202,6 +2493,13 @@ private struct AgentSecondaryEventBlock: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, WarrenSpacing.compact)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(IOSTheme.separator.opacity(0.52))
+                .frame(width: 1)
+                .padding(.vertical, 2)
+        }
     }
 
     private var preview: String? {
@@ -2225,7 +2523,7 @@ private struct AgentCompactionMarker: View {
                 .frame(height: 1)
             HStack(spacing: 5) {
                 Image(systemName: event.isCompactionInProgress ? "arrow.triangle.2.circlepath" : "scissors")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(IOSTypography.label)
                 Text(label)
                     .font(IOSTypography.metadata)
                     .lineLimit(1)
@@ -2251,6 +2549,7 @@ private struct AgentCompactionMarker: View {
 
 private struct AgentActivityGroupBlock: View {
     let activity: AgentActivityGroup
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
     init(activity: AgentActivityGroup) {
@@ -2261,16 +2560,19 @@ private struct AgentActivityGroupBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                     expanded.toggle()
                 }
             } label: {
                 HStack(spacing: 8) {
+                    Circle()
+                        .fill(activityStatusColor)
+                        .frame(width: 6, height: 6)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 12)
                     Image(systemName: activity.toolCount > 0 ? "terminal" : "brain.head.profile")
-                        .font(.system(size: 13, weight: .regular))
+                        .font(IOSTypography.label)
                     Text(activity.title)
                         .font(IOSTypography.label)
                         .foregroundStyle(IOSTheme.text)
@@ -2286,7 +2588,7 @@ private struct AgentActivityGroupBlock: View {
                     activityStatusMark
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 32)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(activity.title)
@@ -2325,17 +2627,19 @@ private struct AgentActivityGroupBlock: View {
                         .background(IOSTheme.muted.opacity(0.28), in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
                 }
-                .padding(.leading, 32)
+                .padding(.leading, 24)
                 .padding(.bottom, 9)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(IOSTheme.separator)
-                        .frame(width: 1)
-                        .padding(.leading, 19)
-                }
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, 14)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(activityStatusColor.opacity(0.70))
+                .frame(width: 1)
+                .padding(.vertical, 4)
+                .padding(.leading, 6)
+        }
     }
 
     @ViewBuilder
@@ -2347,19 +2651,28 @@ private struct AgentActivityGroupBlock: View {
             IOSAgentActivityMark(activity: .working, slotSize: 18)
         case .failed:
             Image(systemName: "xmark.circle")
-                .font(.system(size: 12, weight: .medium))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.red)
                 .accessibilityLabel("Activity failed")
         case .interrupted:
             Image(systemName: "pause.circle")
-                .font(.system(size: 12, weight: .medium))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.yellow)
                 .accessibilityLabel("Activity interrupted")
         case .completed:
             Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .semibold))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.green.opacity(0.86))
                 .accessibilityLabel("Activity completed")
+        }
+    }
+
+    private var activityStatusColor: Color {
+        switch activity.status {
+        case .running: return IOSTheme.amber
+        case .failed: return IOSTheme.red
+        case .interrupted: return IOSTheme.yellow
+        case .completed: return IOSTheme.green
         }
     }
 }
@@ -2370,6 +2683,7 @@ private struct AgentActivityGroupBlock: View {
 private struct AgentReasoningEntry: View {
     let event: WarrenRemoteAgentEvent
     let step: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
     init(event: WarrenRemoteAgentEvent, step: Int? = nil) {
@@ -2380,16 +2694,19 @@ private struct AgentReasoningEntry: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Button {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                     expanded.toggle()
                 }
             } label: {
                 HStack(spacing: 7) {
+                    Circle()
+                        .fill(IOSTheme.tertiaryText)
+                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 11)
                     Image(systemName: "brain.head.profile")
-                        .font(.system(size: 11, weight: .regular))
+                        .font(IOSTypography.label)
                     Text(step.map { "Step \($0)" } ?? "Thinking")
                         .font(IOSTypography.label)
                     if !expanded, let summary {
@@ -2402,7 +2719,7 @@ private struct AgentReasoningEntry: View {
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 28)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Thinking")
@@ -2414,6 +2731,13 @@ private struct AgentReasoningEntry: View {
                     .textSelection(.enabled)
                     .padding(.leading, 18)
             }
+        }
+        .padding(.leading, WarrenSpacing.compact)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(IOSTheme.separator.opacity(0.64))
+                .frame(width: 1)
+                .padding(.vertical, 2)
         }
     }
 
@@ -2427,6 +2751,7 @@ private struct AgentReasoningEntry: View {
 
 private struct AgentToolBlockView: View {
     let tool: AgentToolBlock
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
     init(tool: AgentToolBlock) {
@@ -2437,13 +2762,16 @@ private struct AgentToolBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                     expanded.toggle()
                 }
             } label: {
                 HStack(spacing: 7) {
+                    Circle()
+                        .fill(toolStatusColor)
+                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 12)
                     Text(displayToolName(tool.call.toolName))
                         .font(IOSTypography.label)
@@ -2460,7 +2788,7 @@ private struct AgentToolBlockView: View {
                     AgentToolStatusMark(status: tool.status)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 30)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(tool.call.toolName))
@@ -2498,11 +2826,28 @@ private struct AgentToolBlockView: View {
                 .padding(.bottom, 6)
             }
         }
+        .padding(.leading, WarrenSpacing.compact)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(toolStatusColor.opacity(0.64))
+                .frame(width: 1)
+                .padding(.vertical, 2)
+        }
+    }
+
+    private var toolStatusColor: Color {
+        switch tool.status.lowercased() {
+        case "running", "working": return IOSTheme.amber
+        case "error", "failed": return IOSTheme.red
+        case "interrupted": return IOSTheme.yellow
+        default: return IOSTheme.green
+        }
     }
 }
 
 private struct AgentToolOutputBlock: View {
     let event: WarrenRemoteAgentEvent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
     init(event: WarrenRemoteAgentEvent) {
@@ -2514,13 +2859,16 @@ private struct AgentToolOutputBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                     expanded.toggle()
                 }
             } label: {
                 HStack(spacing: 7) {
+                    Circle()
+                        .fill(toolStatusColor)
+                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(IOSTypography.label)
                         .frame(width: 12)
                     Text(displayToolName(event.toolName))
                         .font(IOSTypography.label)
@@ -2529,7 +2877,7 @@ private struct AgentToolOutputBlock: View {
                     AgentToolStatusMark(status: event.toolStatus ?? "success")
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 30)
+                .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(event.toolName))
@@ -2554,6 +2902,22 @@ private struct AgentToolOutputBlock: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, WarrenSpacing.compact)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(toolStatusColor.opacity(0.64))
+                .frame(width: 1)
+                .padding(.vertical, 2)
+        }
+    }
+
+    private var toolStatusColor: Color {
+        switch (event.toolStatus ?? "success").lowercased() {
+        case "running", "working": return IOSTheme.amber
+        case "error", "failed": return IOSTheme.red
+        case "interrupted": return IOSTheme.yellow
+        default: return IOSTheme.green
+        }
     }
 }
 
@@ -2570,17 +2934,17 @@ private struct AgentToolStatusMark: View {
                 .accessibilityLabel("Tool running")
         case "error", "failed":
             Image(systemName: "xmark.circle")
-                .font(.system(size: 12, weight: .medium))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.red)
                 .accessibilityLabel("Tool failed")
         case "interrupted":
             Image(systemName: "pause.circle")
-                .font(.system(size: 12, weight: .medium))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.yellow)
                 .accessibilityLabel("Tool interrupted")
         default:
             Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .semibold))
+                .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.green.opacity(0.86))
                 .accessibilityLabel("Tool completed")
         }

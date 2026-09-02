@@ -15,6 +15,7 @@ let package = Package(
         .executable(name: "WarrenIOSApp", targets: ["WarrenIOSApp"]),
     ],
     dependencies: [
+        .package(path: "../DesignSystem"),
         .package(path: "../Domain"),
         .package(path: "../Transport"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.0.0"),
@@ -23,6 +24,7 @@ let package = Package(
         .target(
             name: "WarrenIOS",
             dependencies: [
+                .product(name: "WarrenDesignSystem", package: "DesignSystem"),
                 .product(name: "WarrenDomain", package: "Domain"),
                 .product(name: "WarrenTransport", package: "Transport"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),

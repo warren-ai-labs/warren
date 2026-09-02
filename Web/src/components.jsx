@@ -122,6 +122,105 @@ function useBuildVariant() {
   return isBuild;
 }
 
+// App-owned overlays move focus into their first meaningful control. Keep the
+// invoking control as the focus owner when the overlay goes away so Escape,
+// Cancel, and a completed action never strand keyboard users at document.body.
+function useFocusRestore(active) {
+  const previousFocusRef = useRef(null);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const current = document.activeElement;
+    previousFocusRef.current = typeof HTMLElement !== "undefined"
+      && current instanceof HTMLElement
+      && current !== document.body
+      ? current
+      : null;
+    return () => {
+      const target = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (!target?.isConnected) return;
+      queueMicrotask(() => {
+        if (!target.isConnected) return;
+        // A menu action can mount the next app-owned surface in the same
+        // render. Let that surface own focus instead of racing it from the
+        // closing overlay's cleanup task.
+        const nextSurface = document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]');
+        if (nextSurface && !nextSurface.contains(target)) return;
+        const active = document.activeElement;
+        if (active && active !== document.body && active !== target) return;
+        target.focus({ preventScroll: true });
+      });
+    };
+  }, [active]);
+}
+
+// Keep keyboard focus inside an app-owned dialog, sheet, or menu while it is
+// open. Native browser focus can otherwise move behind the scrim after the
+// initial focus lands, which is especially disorienting on compact screens.
+export function useFocusTrap(active, containerRef) {
+  useEffect(() => {
+    if (!active) return undefined;
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const selector = [
+      'a[href]',
+      'area[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(",");
+    const focusable = () => Array.from(container.querySelectorAll(selector))
+      .filter(element => !element.hasAttribute("aria-hidden"));
+    const handleKeyDown = event => {
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const current = document.activeElement;
+      if (!container.contains(current)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && current === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && current === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [active, containerRef]);
+}
+
+// Fixed app-owned surfaces must own scrolling while they are visible. A shared
+// counter keeps nested overlays from restoring the body's previous style while
+// another surface still owns the lock.
+let bodyScrollLockCount = 0;
+let bodyScrollLockPreviousOverflow = null;
+
+function useBodyScrollLock(active) {
+  useEffect(() => {
+    if (!active) return undefined;
+    if (bodyScrollLockCount === 0) {
+      bodyScrollLockPreviousOverflow = document.body.style.overflow;
+    }
+    bodyScrollLockCount += 1;
+    document.body.style.overflow = "hidden";
+    return () => {
+      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+      if (bodyScrollLockCount === 0) {
+        document.body.style.overflow = bodyScrollLockPreviousOverflow || "";
+        bodyScrollLockPreviousOverflow = null;
+      }
+    };
+  }, [active]);
+}
+
 function statusActivity(status) {
   return status?.activity || "";
 }
@@ -138,7 +237,9 @@ export function ActivityDot({ status }) {
   const label = statusLabel(status);
   if (!label) return null;
   const attention = activity !== "failed" && status?.attention ? " attention" : "";
-  const pulse = activity === "ready" || activity === "exited" ? (attention ? " pulse" : "") : " pulse";
+  // Working is the only state that moves. Attention, blocked, and failed
+  // states stay still so an actionable explanation is easier to read.
+  const pulse = activity === "working" ? " pulse" : "";
   return <span className={`activity ${activity}${attention}${pulse}`} title={label} aria-label={label} />;
 }
 
@@ -194,6 +295,8 @@ export function Sidebar({
   onMoveWorkspace,
   onBeginProjectDrag,
   onEndProjectDrag,
+  creatingWorkspaceIDs = new Set(),
+  creatingSession = false,
 }) {
   const isBuild = useBuildVariant();
   const [dragState, setDragState] = useState(null);
@@ -318,7 +421,9 @@ export function Sidebar({
                   return (
                     <button
                       type="button"
-                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}`}
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creatingWorkspaceIDs.has(workspace.id) ? " pending" : ""}`}
+                      disabled={creatingWorkspaceIDs.has(workspace.id)}
+                      aria-busy={creatingWorkspaceIDs.has(workspace.id) || undefined}
                       key={workspace.id}
                       onClick={() => onChooseWorkspace(workspace.id)}
                       onDoubleClick={() => onOpenWorkspace(workspace.id)}
@@ -326,6 +431,7 @@ export function Sidebar({
                     >
                       <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />
                       <span className="branch">{project?.name || "Project"} · {workspace.branch || workspace.name || "Workspace"}</span>
+                      {creatingWorkspaceIDs.has(workspace.id) && <span className="workspace-pending" role="status">Creating…</span>}
                     </button>
                   );
                 }) : <div className="workspace-row task-empty">No linked workspaces</div>}
@@ -362,6 +468,8 @@ export function Sidebar({
                   <button
                     type="button"
                     className="project-add"
+                    disabled={creatingSession || creatingWorkspaceIDs.has(workspaces[0].id)}
+                    aria-busy={creatingWorkspaceIDs.has(workspaces[0].id) || undefined}
                     aria-label={`New session in ${project.name}`}
                     title="New session"
                     onClick={event => {
@@ -386,10 +494,12 @@ export function Sidebar({
                   const task = workspace.task
                     ? catalog.tasks.find(value => value.id === workspace.task)
                     : null;
+                  const creating = creatingWorkspaceIDs.has(workspace.id);
                   return (
                     <div
-                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
                       key={workspace.id}
+                      aria-busy={creating || undefined}
                       onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
                       draggable
                       onDragStart={event => beginDrag("workspace", workspace.id, workspace.project, event)}
@@ -400,6 +510,8 @@ export function Sidebar({
                       <button
                         type="button"
                         className="workspace-row-main"
+                        disabled={creating}
+                        aria-busy={creating || undefined}
                         onClick={() => onChooseWorkspace(workspace.id)}
                         onDoubleClick={() => onOpenWorkspace(workspace.id)}
                       >
@@ -409,12 +521,14 @@ export function Sidebar({
                         {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
                         <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
                       </button>
+                      {creating && <span className="workspace-pending" role="status">Creating…</span>}
                       {task && (
                         <button
                           type="button"
                           className="workspace-task-link"
                           aria-label={`Open task ${task.name}`}
                           title={`Task: ${task.name}`}
+                          disabled={creating}
                           onClick={event => {
                             event.stopPropagation();
                             onFocusTask(task.id);
@@ -467,11 +581,12 @@ export function Sidebar({
         <button
           type="button"
           className="footer-new-session"
-          disabled={!activeWorkspace}
+          disabled={!activeWorkspace || creatingSession}
+          aria-busy={creatingSession || undefined}
           onClick={onNewSession}
         >
           <PlusIcon />
-          <span>New session</span>
+          <span>{creatingSession ? "Starting…" : "New session"}</span>
         </button>
         <button type="button" className="chrome-button" aria-label="Settings" onClick={onOpenSettings}>
           <SettingsIcon />
@@ -492,6 +607,8 @@ export function TopBar({
   onToggleGit,
   gitActive,
   onTabContextMenu,
+  pendingSessionID = null,
+  creatingSession = false,
 }) {
   const tabRefs = useRef(new Map());
   const tabsRef = useRef(null);
@@ -549,6 +666,7 @@ export function TopBar({
     event.preventDefault();
     const session = tabs[next];
     if (!session) return;
+    if (pendingSessionID || creatingSession) return;
     onAttachSession(session.id);
     tabRefs.current.get(session.id)?.focus();
   };
@@ -576,12 +694,15 @@ export function TopBar({
         >
           {tabs.map(session => {
             const active = session.id === activeSession;
+            const pending = session.id === pendingSessionID;
             return (
               <button
                 type="button"
                 role="tab"
                 aria-selected={active}
-                className={`tab${active ? " active" : ""}`}
+                className={`tab${active ? " active" : ""}${pending ? " pending" : ""}`}
+                disabled={Boolean(pendingSessionID) || creatingSession}
+                aria-busy={pending || undefined}
                 key={session.id}
                 onClick={() => onAttachSession(session.id)}
                 onContextMenu={event => onTabContextMenu(event, session)}
@@ -608,7 +729,7 @@ export function TopBar({
           </button>
         )}
       </div>
-      <button type="button" className="new-session" aria-label="New shell" onClick={onNewSession}>
+      <button type="button" className="new-session" aria-label="New shell" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
         <PlusIcon />
       </button>
       <div className="chrome-spacer" />
@@ -630,6 +751,7 @@ export function TopBar({
 
 export function MobileShell({
   workspace,
+  projectName,
   tabs,
   activeSession,
   connection,
@@ -642,6 +764,8 @@ export function MobileShell({
   onNewSession,
   onOpenSessionMenu,
   onSessionContextMenu,
+  pendingSessionID = null,
+  creatingSession = false,
 }) {
   const handleTabListKeyDown = event => {
     const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
@@ -655,6 +779,7 @@ export function MobileShell({
     event.preventDefault();
     const session = tabs[next];
     if (!session) return;
+    if (pendingSessionID || creatingSession) return;
     onAttachSession(session.id);
     document.querySelector(`.mobile-tab[data-session="${session.id}"]`)?.focus();
   };
@@ -664,7 +789,21 @@ export function MobileShell({
       <div className="mobile-command">
         <button type="button" className="menu-button" aria-label="Open navigation" onClick={onOpenMenu}>{MenuIcon}</button>
         <div className="mobile-workspace" title={connection.message}>
-          <span className="mobile-workspace-name">{workspace?.branch || workspace?.name || "Warren"}</span>
+          <div className="mobile-workspace-context" aria-label="Project, workspace and branch">
+            {projectName && (
+              <>
+                <span className="mobile-breadcrumb-item project">{projectName}</span>
+                <span className="mobile-breadcrumb-separator" aria-hidden="true">›</span>
+              </>
+            )}
+            <span className="mobile-breadcrumb-item workspace">{workspace?.name || "Workspace"}</span>
+            {workspace?.branch && workspace.branch !== workspace.name && (
+              <>
+                <span className="mobile-breadcrumb-separator" aria-hidden="true">›</span>
+                <span className="mobile-breadcrumb-item branch">{workspace.branch}</span>
+              </>
+            )}
+          </div>
           <span className={`mobile-connection${connection.online ? " online" : ""}`} aria-label={connection.message}>
             <span className="connection-dot" />
           </span>
@@ -702,20 +841,23 @@ export function MobileShell({
         <button type="button" className="chrome-button" aria-label="Search projects" onClick={onOpenSearch}>
           <SearchIcon />
         </button>
-        <button type="button" className="new-session" aria-label="New session" onClick={onNewSession}>
+        <button type="button" className="new-session" aria-label="New session" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
           <PlusIcon />
         </button>
       </div>
       <nav className="mobile-tabs" role="tablist" aria-label="Sessions" onKeyDown={handleTabListKeyDown}>
         {tabs.map(session => {
           const active = session.id === activeSession;
+          const pending = session.id === pendingSessionID;
           return (
             <button
               type="button"
               role="tab"
               data-session={session.id}
               aria-selected={active}
-              className={`mobile-tab${active ? " active" : ""}`}
+              className={`mobile-tab${active ? " active" : ""}${pending ? " pending" : ""}`}
+              disabled={Boolean(pendingSessionID) || creatingSession}
+              aria-busy={pending || undefined}
               key={session.id}
               onClick={() => onAttachSession(session.id)}
               onContextMenu={event => onSessionContextMenu?.(event, session)}
@@ -732,7 +874,12 @@ export function MobileShell({
 
 export function ContextMenu({ menu, onClose }) {
   const menuRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+  useFocusRestore(Boolean(menu));
+  useFocusTrap(Boolean(menu), menuRef);
+  useBodyScrollLock(Boolean(menu) && mobile);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -743,14 +890,21 @@ export function ContextMenu({ menu, onClose }) {
 
   useEffect(() => {
     if (!menu) return undefined;
-    const items = () => Array.from(menuRef.current?.querySelectorAll('[role="menuitem"]') || []);
-    const first = items()[0] || menuRef.current?.querySelector("button");
+    const items = () => Array.from(menuRef.current?.querySelectorAll(
+      mobile ? 'button:not(:disabled)' : '[role="menuitem"]:not(:disabled)',
+    ) || [])
+      .filter(item => item.getAttribute("aria-disabled") !== "true");
+    const first = items()[0] || menuRef.current?.querySelector("button:not(:disabled)");
     first?.focus();
     const handlePointerDown = event => {
-      if (!menuRef.current?.contains(event.target)) onClose();
+      if (!menuRef.current?.contains(event.target)) onCloseRef.current();
     };
     const handleKeyDown = event => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCloseRef.current();
+      }
       else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
         event.preventDefault();
         const list = items();
@@ -764,54 +918,74 @@ export function ContextMenu({ menu, onClose }) {
         list[next]?.focus();
       }
     };
+    const handleBlur = () => onCloseRef.current();
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("blur", onClose);
+    window.addEventListener("blur", handleBlur);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("blur", onClose);
+      window.removeEventListener("blur", handleBlur);
     };
-  }, [menu, onClose]);
+  }, [Boolean(menu), mobile]);
 
   if (!menu) return null;
   return (
-    <div
-      ref={menuRef}
-      className="context-menu"
-      role={mobile ? "dialog" : "menu"}
-      aria-modal={mobile ? "true" : undefined}
-      aria-label={mobile ? "Actions" : undefined}
-      style={{ left: menu.x, top: menu.y }}
-    >
-      {menu.items.map((item, index) => (
-        <button
-          type="button"
-          role={mobile ? undefined : "menuitem"}
-          className={item.danger ? "danger" : undefined}
-          key={index}
-          disabled={item.disabled}
-          aria-disabled={item.disabled ? "true" : undefined}
-          onClick={() => {
-            if (item.disabled) return;
-            onClose();
-            item.action();
+    <>
+      {mobile && (
+        <div
+          className="context-menu-scrim"
+          aria-hidden="true"
+          onPointerDown={event => {
+            event.stopPropagation();
+            onCloseRef.current();
           }}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+        />
+      )}
+      <div
+        ref={menuRef}
+        className="context-menu"
+        role={mobile ? "dialog" : "menu"}
+        aria-modal={mobile ? "true" : undefined}
+        aria-label={mobile ? "Actions" : undefined}
+        style={{ left: menu.x, top: menu.y }}
+      >
+        {menu.items.map((item, index) => (
+          <button
+            type="button"
+            role={mobile ? undefined : "menuitem"}
+            className={item.danger ? "danger" : undefined}
+            key={index}
+            disabled={item.disabled}
+            aria-disabled={item.disabled ? "true" : undefined}
+            onClick={() => {
+              if (item.disabled) return;
+              onCloseRef.current();
+              item.action();
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
-export function PresetBar({ presets, onCreateSession }) {
+export function PresetBar({ presets, onCreateSession, creatingKind = null }) {
   return (
     <nav className="presetbar" aria-label="Session presets">
       {presets.map(preset => (
-        <button type="button" className="preset" key={preset.kind} onClick={() => onCreateSession(preset.kind)}>
+        <button
+          type="button"
+          className={`preset${creatingKind === preset.kind ? " pending" : ""}`}
+          key={preset.kind}
+          disabled={Boolean(creatingKind)}
+          aria-busy={creatingKind === preset.kind || undefined}
+          onClick={() => onCreateSession(preset.kind)}
+        >
           <SessionPresetIcon kind={preset.kind} />
-          {preset.label}
+          <span>{creatingKind === preset.kind ? "Starting…" : preset.label}</span>
         </button>
       ))}
     </nav>
@@ -836,7 +1010,9 @@ export function EmptyTerminal({
     hidden = true;
     content = null;
   } else if (activeSession) {
-    content = <Loading message="Connecting…" />;
+    // Keep the terminal surface quiet while a new subscription is warming.
+    // A static status avoids a spinner flash over the cached renderer.
+    content = <span className="terminal-switching" role="status" aria-live="polite">Switching session…</span>;
   } else if (activeWorkspace && tabCount) {
     content = (
       <div className="empty-state">
@@ -867,7 +1043,8 @@ export function EmptyTerminal({
     );
   }
 
-  return <div className="terminal-empty" hidden={hidden}>{content}</div>;
+  const switching = Boolean(activeSession && terminalReadySession !== activeSession && !override);
+  return <div className={`terminal-empty${switching ? " switching" : ""}`} hidden={hidden}>{content}</div>;
 }
 
 export function TerminalSearch({
@@ -894,6 +1071,7 @@ export function TerminalSearch({
       else onNext();
     } else if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       onClose();
     }
   };
@@ -982,30 +1160,79 @@ export function MobileKeys({ onInput }) {
   );
 }
 
-export function SessionSheet({ open, presets, onChoose, onClose }) {
+export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null }) {
   const firstItemRef = useRef(null);
+  const cancelRef = useRef(null);
+  const sheetRef = useRef(null);
+  const dragStartYRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const pendingKindRef = useRef(pendingKind);
+  pendingKindRef.current = pendingKind;
+  useFocusRestore(open);
+  useFocusTrap(open, sheetRef);
+  useBodyScrollLock(open);
 
   useEffect(() => {
     if (!open) return undefined;
-    firstItemRef.current?.focus();
+    (firstItemRef.current || cancelRef.current)?.focus();
     const handleKeyDown = event => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!pendingKindRef.current) onCloseRef.current();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   if (!open) return null;
   return (
-    <div className="session-sheet-overlay" onClick={onClose}>
+    <div
+      className="session-sheet-overlay"
+      onClick={event => {
+        if (event.target === event.currentTarget && !pendingKindRef.current) onCloseRef.current();
+      }}
+    >
       <div
+        ref={sheetRef}
         className="session-sheet"
         role="dialog"
         aria-modal="true"
         aria-label="New session"
         onClick={event => event.stopPropagation()}
       >
-        <div className="session-sheet-handle" aria-hidden="true" />
+        <div
+          className="session-sheet-handle"
+          role="button"
+          tabIndex={0}
+          aria-label="Close new session sheet"
+          onPointerDown={event => {
+            if (event.pointerType === "touch") {
+              dragStartYRef.current = event.clientY;
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }
+          }}
+          onPointerUp={event => {
+            const start = dragStartYRef.current;
+            dragStartYRef.current = null;
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+            if (start !== null && event.clientY - start > 56 && !pendingKindRef.current) onCloseRef.current();
+          }}
+          onPointerCancel={event => {
+            dragStartYRef.current = null;
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+          }}
+          onKeyDown={event => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              if (!pendingKindRef.current) onCloseRef.current();
+            }
+          }}
+        />
         <div className="session-sheet-title">New session</div>
         {presets.map((preset, index) => (
           <button
@@ -1013,13 +1240,23 @@ export function SessionSheet({ open, presets, onChoose, onClose }) {
             className="session-sheet-item"
             key={preset.kind}
             ref={index === 0 ? firstItemRef : undefined}
+            disabled={Boolean(pendingKind)}
+            aria-busy={pendingKind === preset.kind || undefined}
             onClick={() => onChoose(preset.kind)}
           >
             <SessionPresetIcon kind={preset.kind} />
-            <span>{preset.label}</span>
+            <span>{pendingKind === preset.kind ? "Starting…" : preset.label}</span>
           </button>
         ))}
-        <button type="button" className="session-sheet-cancel" onClick={onClose}>Cancel</button>
+        <button
+          ref={cancelRef}
+          type="button"
+          className="session-sheet-cancel"
+          disabled={Boolean(pendingKind)}
+          onClick={() => { if (!pendingKind) onCloseRef.current(); }}
+        >
+          Cancel
+        </button>
       </div>
     </div>
   );
@@ -1027,21 +1264,38 @@ export function SessionSheet({ open, presets, onChoose, onClose }) {
 
 export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
   const firstItemRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const dialogRef = useRef(null);
+  const dialogStateRef = useRef(dialog);
+  dialogStateRef.current = dialog;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useFocusRestore(Boolean(dialog));
+  useFocusTrap(Boolean(dialog), dialogRef);
 
   useEffect(() => {
     if (!dialog) return undefined;
-    firstItemRef.current?.focus();
+    (firstItemRef.current || closeButtonRef.current)?.focus();
     const handleKeyDown = event => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        const current = dialogStateRef.current;
+        const selectedCount = current?.selectedPaths?.length || 0;
+        if (current && !current.loading && selectedCount === 0) onCloseRef.current();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [dialog, onClose]);
+  }, [Boolean(dialog)]);
+
+  useBodyScrollLock(Boolean(dialog));
 
   if (!dialog) return null;
   const candidates = Array.isArray(dialog.candidates) ? dialog.candidates : [];
   const selected = new Set(dialog.selectedPaths || []);
   const availableCount = candidates.filter(candidate => !candidate.imported).length;
+  const firstAvailableIndex = candidates.findIndex(candidate => !candidate.imported);
 
   return (
     <div
@@ -1051,6 +1305,7 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
       }}
     >
       <div
+        ref={dialogRef}
         className="worktree-dialog"
         role="dialog"
         aria-modal="true"
@@ -1062,7 +1317,7 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
             <h2 id="worktree-dialog-title">Import existing worktrees</h2>
             <p>Choose Git worktrees to register under <strong>{dialog.project.name}</strong>. This is a one-time import: Warren does not create, move, or delete files.</p>
           </div>
-          <button type="button" className="worktree-dialog-close" aria-label="Close" onClick={onClose}>×</button>
+          <button ref={closeButtonRef} type="button" className="worktree-dialog-close" aria-label="Close" onClick={onClose}>×</button>
         </div>
         <div className="worktree-dialog-body">
           {dialog.loading ? (
@@ -1084,7 +1339,7 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
                     aria-disabled={imported}
                     className={`worktree-candidate${checked ? " selected" : ""}${imported ? " imported" : ""}`}
                     key={candidate.path}
-                    ref={index === 0 ? firstItemRef : undefined}
+                    ref={index === firstAvailableIndex ? firstItemRef : undefined}
                     disabled={imported}
                     onClick={() => onToggle(candidate.path)}
                   >
@@ -1134,21 +1389,32 @@ export function TextInputDialog({
   destructive = false,
   onCancel,
   onConfirm,
+  pending = false,
+  error = "",
 }) {
   const inputRef = useRef(null);
+  const dialogRef = useRef(null);
   const [text, setText] = useState(initialValue || "");
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  useFocusRestore(true);
+  useFocusTrap(true, dialogRef);
+  useBodyScrollLock(true);
 
   useEffect(() => {
     inputRef.current?.focus();
     const handleKeyDown = event => {
       if (event.key === "Escape") {
+        event.preventDefault();
         event.stopPropagation();
-        onCancel();
+        if (!pendingRef.current) onCancelRef.current();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  }, []);
 
   const submit = () => {
     const trimmed = text.trim();
@@ -1158,6 +1424,7 @@ export function TextInputDialog({
   return (
     <div className="warren-dialog-overlay">
       <div
+        ref={dialogRef}
         className="warren-dialog"
         role="dialog"
         aria-modal="true"
@@ -1165,6 +1432,7 @@ export function TextInputDialog({
       >
         <h2 id="warren-dialog-title" className="warren-dialog-title">{title}</h2>
         {message && <p className="warren-dialog-message">{message}</p>}
+        {error && <p className="warren-dialog-error" role="alert">{error}</p>}
         <label className="warren-dialog-field">
           <span>{fieldLabel}</span>
           <input
@@ -1174,7 +1442,7 @@ export function TextInputDialog({
             onKeyDown={event => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                submit();
+                if (!pending) submit();
               }
             }}
             autoComplete="off"
@@ -1182,16 +1450,16 @@ export function TextInputDialog({
           />
         </label>
         <div className="warren-dialog-actions">
-          <button type="button" className="warren-dialog-button secondary" onClick={onCancel}>
+          <button type="button" className="warren-dialog-button secondary" disabled={pending} onClick={onCancel}>
             Cancel
           </button>
           <button
             type="button"
             className={`warren-dialog-button ${destructive ? "danger" : "primary"}`}
-            disabled={!text.trim()}
+            disabled={!text.trim() || pending}
             onClick={submit}
           >
-            {confirmLabel}
+            {pending ? "Saving…" : confirmLabel}
           </button>
         </div>
       </div>
@@ -1205,24 +1473,36 @@ export function ConfirmationDialog({
   confirmLabel = "Delete",
   onCancel,
   onConfirm,
+  pending = false,
+  error = "",
 }) {
   const cancelRef = useRef(null);
+  const dialogRef = useRef(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  useFocusRestore(true);
+  useFocusTrap(true, dialogRef);
+  useBodyScrollLock(true);
 
   useEffect(() => {
     cancelRef.current?.focus();
     const handleKeyDown = event => {
       if (event.key === "Escape") {
+        event.preventDefault();
         event.stopPropagation();
-        onCancel();
+        if (!pendingRef.current) onCancelRef.current();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  }, []);
 
   return (
     <div className="warren-dialog-overlay">
       <div
+        ref={dialogRef}
         className="warren-dialog"
         role="dialog"
         aria-modal="true"
@@ -1230,17 +1510,19 @@ export function ConfirmationDialog({
       >
         <h2 id="warren-dialog-title" className="warren-dialog-title">{title}</h2>
         {message && <p className="warren-dialog-message">{message}</p>}
+        {error && <p className="warren-dialog-error" role="alert">{error}</p>}
         <div className="warren-dialog-actions">
           <button
             ref={cancelRef}
             type="button"
             className="warren-dialog-button secondary"
+            disabled={pending}
             onClick={onCancel}
           >
             Cancel
           </button>
-          <button type="button" className="warren-dialog-button danger" onClick={onConfirm}>
-            {confirmLabel}
+          <button type="button" className="warren-dialog-button danger" disabled={pending} onClick={onConfirm}>
+            {pending ? "Working…" : confirmLabel}
           </button>
         </div>
       </div>
@@ -1281,6 +1563,7 @@ export function SettingsPage({
 }) {
   const [activeSection, setActiveSection] = useState("font");
   const [searchQuery, setSearchQuery] = useState("");
+  useBodyScrollLock(open);
 
   const sections = useMemo(() => [
     {
@@ -1639,9 +1922,13 @@ export function SearchPanel({
   onChooseProject,
 }) {
   const inputRef = useRef(null);
+  const panelRef = useRef(null);
   const itemRefs = useRef(new Map());
   const [activeIndex, setActiveIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  useFocusRestore(open);
+  useFocusTrap(open, panelRef);
+  useBodyScrollLock(open);
 
   useEffect(() => {
     if (open) {
@@ -1717,6 +2004,7 @@ export function SearchPanel({
       chooseRow(activeRow);
     } else if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       onClose();
     }
   };
@@ -1724,11 +2012,11 @@ export function SearchPanel({
   return (
     <div
       className={`search-overlay${open ? " open" : ""}`}
-      onMouseDown={event => {
+      onPointerDown={event => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section className="search-panel" role="dialog" aria-modal="true" aria-label="Project search">
+      <section ref={panelRef} className="search-panel" role="dialog" aria-modal="true" aria-label="Project search">
         <div className="search-input-wrap">
           <SearchIcon />
           <label className="visually-hidden" htmlFor="warren-search">Search projects and workspaces</label>
@@ -1811,6 +2099,26 @@ export function Loading({ message }) {
       </span>
       {message}
     </span>
+  );
+}
+
+/** A short, app-owned acknowledgement for actions that otherwise complete
+ * outside the current surface (session switches, Git actions, and uploads). */
+export function TransientFeedback({ feedback }) {
+  if (!feedback?.message) return null;
+  const kind = feedback.kind || "success";
+  return (
+    <div
+      key={feedback.id}
+      className={`transient-feedback ${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+    >
+      <span className="transient-feedback-mark" aria-hidden="true">
+        {kind === "error" ? "!" : kind === "pending" ? "…" : "✓"}
+      </span>
+      <span>{feedback.message}</span>
+    </div>
   );
 }
 

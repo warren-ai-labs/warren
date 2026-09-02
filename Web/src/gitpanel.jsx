@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   normalizeGitPanel,
   relativeTime,
@@ -204,6 +204,8 @@ export function GitPanel({
   const [prTitle, setPrTitle] = useState("");
   const [prBody, setPrBody] = useState("");
   const [asyncNotice, setAsyncNotice] = useState(false);
+  const commitSubmittedRef = useRef(false);
+  const prSubmittedRef = useRef(false);
   const busy = Boolean(action);
   const panelTitle = data?.branch || workspaceName || "Git";
   const changeCount = (data?.staged?.length || 0) + (data?.unstaged?.length || 0);
@@ -222,15 +224,42 @@ export function GitPanel({
     return () => clearTimeout(timer);
   }, [data?.refreshing]);
 
+  useEffect(() => {
+    if (action === "git.commit") commitSubmittedRef.current = true;
+    if (commitSubmittedRef.current && action !== "git.commit") {
+      commitSubmittedRef.current = false;
+      // Keep the form open when `error` is populated so the original message
+      // remains available for an immediate retry. A successful commit moves
+      // on to the automatic push action (or an idle state), so it is safe to
+      // dismiss the form at that boundary.
+      if (!error) {
+        setCommitOpen(false);
+        setCommitMessage("");
+      }
+    }
+  }, [action, error]);
+
+  useEffect(() => {
+    if (action === "git.pr.create") prSubmittedRef.current = true;
+    if (prSubmittedRef.current && action !== "git.pr.create") {
+      prSubmittedRef.current = false;
+      if (!error) {
+        setPrOpen(false);
+        setPrTitle("");
+        setPrBody("");
+      }
+    }
+  }, [action, error]);
+
   const openCommit = () => {
     setCommitMessage("");
     setCommitOpen(true);
   };
 
   const submitCommit = () => {
+    if (busy) return;
     const message = commitMessage.trim();
     if (!message) return;
-    setCommitOpen(false);
     onCommit(message);
   };
 
@@ -242,9 +271,9 @@ export function GitPanel({
   };
 
   const submitCreatePR = () => {
+    if (busy) return;
     const title = prTitle.trim();
     if (!title) return;
-    setPrOpen(false);
     onCreatePR(title, prBody.trim());
   };
 
@@ -289,6 +318,7 @@ export function GitPanel({
   }, [onUIChange, openPanes, selectedKey, expanded, branchTouched, branch]);
 
   const submitCheckout = () => {
+    if (busy) return;
     if (createMode) {
       const name = newBranch.trim();
       if (name) onCheckout(name, true);
