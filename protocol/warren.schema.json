@@ -318,8 +318,8 @@
           "notes": "Full roster snapshot. Sent on welcome and on full re-sync."
         },
         "roster.delta": {
-          "fields": { "t": "roster.delta", "version": "string", "tasks": "api.Task[]?", "projects": "api.Project[]?", "workspaces": "api.Workspace[]?", "terminalGroups": "api.TerminalGroup[]?", "sessions": "api.Session[]?" },
-          "notes": "Requires capability 'roster-delta'. Absent collections mean no change."
+          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "terminalGroups": "EntityChanges<api.TerminalGroup>?", "sessions": "EntityChanges<api.Session>?", "ghostlineMigration": "api.GhostlineMigration?" },
+          "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision."
         },
         "attached": {
           "fields": { "t": "attached", "session": "string" },

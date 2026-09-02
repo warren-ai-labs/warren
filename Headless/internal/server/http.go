@@ -1254,7 +1254,21 @@ func (s *HTTPServer) HandleRelayControl(
 	if command.Type != "request" {
 		return peer.writeError(command.ID, errors.New("unsupported message type"))
 	}
-	if isSlowMutation(command.Method) || isBackgroundRequest(command.Method) {
+	if isSlowMutation(command.Method) {
+		go func() {
+			// Keep accepted lifecycle mutations bounded and independent from the
+			// Relay stream lifetime, matching the local WebSocket path.
+			mutationContext, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx), slowMutationTimeout,
+			)
+			defer cancel()
+			if err := peer.handle(mutationContext, command); err != nil {
+				_ = peer.writeError(command.ID, err)
+			}
+		}()
+		return nil
+	}
+	if isBackgroundRequest(command.Method) {
 		go func() {
 			if err := peer.handle(ctx, command); err != nil {
 				_ = peer.writeError(command.ID, err)
@@ -1284,6 +1298,7 @@ func (s *HTTPServer) removeRelayControl(id relay.ConnectionID, entry *relayContr
 func isSlowMutation(method string) bool {
 	switch method {
 	case "project.remove", "workspace.remove",
+		"session.create", "session.delete",
 		"public-access.enable", "public-access.test", "public-access.disable",
 		"public-access.reset", "public-access.restart":
 		return true
@@ -2443,9 +2458,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.server.Service.DeleteSession(ctx, id); err != nil {
 			return err
 		}
-		if p.attached != nil && p.attached.ID == id {
-			p.detach()
-		}
+		p.detachIfAttached(id)
 		return p.writeResult(command.ID, map[string]bool{"deleted": true})
 	case "session.delete.preflight":
 		id := stringParam(params, "id")
@@ -2918,6 +2931,22 @@ func (p *wsPeer) detach() {
 	if attached != nil {
 		p.server.Service.detachPeer(p, attached.ID)
 	}
+}
+
+// detachIfAttached releases the control lease only when it still belongs to
+// the requested session. Slow lifecycle mutations run concurrently with
+// attach/focus requests, so a separate check followed by detach could remove
+// a newer session's lease.
+func (p *wsPeer) detachIfAttached(sessionID string) {
+	p.enqueueMu.Lock()
+	if p.attached == nil || p.attached.ID != sessionID {
+		p.enqueueMu.Unlock()
+		return
+	}
+	p.attached = nil
+	p.controlSession = ""
+	p.enqueueMu.Unlock()
+	p.server.Service.detachPeer(p, sessionID)
 }
 
 func (p *wsPeer) attachedSession() (api.Session, bool) {

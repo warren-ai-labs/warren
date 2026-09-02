@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
 import {
+  applyRosterDelta,
   buildCatalog,
   moveInCatalog,
   rosterFromMessage,
@@ -319,6 +320,8 @@ export default function App() {
   const connectionOnlineRef = useRef(false);
   const appStateRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
+  const rosterRef = useRef(null);
+  const rosterRefreshInFlightRef = useRef(false);
   const relayRefreshInFlightRef = useRef(false);
   const fileDiffNeedsReloadRef = useRef(false);
   const creatingSessionWorkspaceIDsRef = useRef(new Set());
@@ -1929,12 +1932,43 @@ export default function App() {
   }, [autoOpenShell, chooseWorkspace, createSession]);
 
   const acceptRoster = useCallback(message => {
+    const isDelta = message?.t === "roster.delta";
+    const nextRoster = isDelta
+      ? applyRosterDelta(rosterRef.current, message)
+      : rosterFromMessage(message);
+    if (!nextRoster) {
+      // A delta without the matching baseline (or with a revision gap) is not
+      // safe to merge. Ask the Host for a fresh authoritative snapshot once;
+      // reconnecting is reserved for an actually broken transport.
+      if (!rosterRefreshInFlightRef.current) {
+        rosterRefreshInFlightRef.current = true;
+        const sent = request("roster", {}, result => {
+          rosterRefreshInFlightRef.current = false;
+          acceptRoster(result);
+        }, detail => {
+          rosterRefreshInFlightRef.current = false;
+          setConnectionStatus({ message: detail || "Unable to refresh roster", online: false });
+        });
+        if (!sent) rosterRefreshInFlightRef.current = false;
+      }
+      return;
+    }
+    // A full snapshot is authoritative. Delta responses can race a recovery
+    // request, so never roll a known revision backwards.
+    const previousRoster = rosterRef.current;
+    if (!isDelta && previousRoster?.revision !== null && nextRoster.revision !== null
+      && nextRoster.revision < previousRoster.revision) {
+      rosterRefreshInFlightRef.current = false;
+      return;
+    }
+    rosterRef.current = nextRoster;
+    if (!isDelta) rosterRefreshInFlightRef.current = false;
     clearMaintenanceTimeout();
     connectionRef.current?.markStable();
     if (!connectionOnlineRef.current) announceFeedback("Connected", "success");
     connectionOnlineRef.current = true;
     loadRemoteSettings();
-    const nextCatalog = buildCatalog(rosterFromMessage(message));
+    const nextCatalog = buildCatalog(nextRoster);
     const state = appStateRef.current;
     const completedSessions = agentTurnCompletionTrackerRef.current.observe(nextCatalog.sessions.values());
     const previousWorkspaceID = state.activeWorkspace;
@@ -2020,7 +2054,7 @@ export default function App() {
     for (const sessionID of completedSessions) {
       agentCompletionEventsRef.current.emit({ sessionID });
     }
-  }, [announceFeedback, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [announceFeedback, applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -2114,6 +2148,7 @@ export default function App() {
       break;
     }
     case "roster":
+    case "roster.delta":
       acceptRoster(message);
       break;
     case "attached": {
@@ -2444,6 +2479,8 @@ export default function App() {
       // every recovery callback before the reconnect roster reattaches the
       // selected session; do not send an unsubscribe over the closing socket.
       cancelSubscription(false);
+      rosterRef.current = null;
+      rosterRefreshInFlightRef.current = false;
       settingsLoadedRef.current = false;
       agentCapabilitiesRef.current = new Set();
       setAgentCapabilitiesState([]);

@@ -21,6 +21,10 @@ test("web app never calls browser-native prompts", () => {
   }
 });
 
+test("web dispatches roster deltas through the catalog synchronizer", () => {
+  assert.match(read("App.jsx"), /case "roster":\s*case "roster\.delta":\s*acceptRoster\(message\)/);
+});
+
 test("dialogs and menus wire initial focus", () => {
   const components = read("components.jsx");
   assert.match(components, /inputRef\.current\?\.focus\(\)/);
