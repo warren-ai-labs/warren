@@ -367,8 +367,8 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
 
 示例：
 
-> Agent → ActivityGroup 展开 → Tool 子行：失败时右侧还有红叉；删除右侧图标，保留左侧
-> 红色轨道；工具标题与轨道保持至少 6pt 间距。
+> Agent → ActivityGroup 展开 → Tool 子行：失败时右侧红色 x 要无边框并贴在最右侧；
+> 不要给 Tool/Thinking 子行添加竖线，标题、正文和输出沿同一层级基线对齐。
 
 这类描述可以直接定位到 `AgentActivityGroupBlock`、`AgentToolBlockView`、
 `AgentToolStatusMark` 和 `AgentStatusRail`，不会误改附件删除按钮或 Question 选项圆圈。
