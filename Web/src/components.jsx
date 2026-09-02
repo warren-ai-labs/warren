@@ -1582,7 +1582,7 @@ export function SettingsPage({
       id: "presets",
       label: "Presets",
       description: "Choose visible presets and customize every launch command.",
-      keywords: ["preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden"],
+      keywords: ["preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "qoder", "trae", "agent", "visible", "hidden"],
     },
     {
       id: "workspaces",
