@@ -648,24 +648,10 @@ public struct AgentChatView: View {
                         .accessibilityLabel(attachmentFeedback)
                 }
 
-                HStack(alignment: .center, spacing: 4) {
-                    // Keep every composer affordance in the same 44pt row as
-                    // the message field. Attachments scroll horizontally so
-                    // they never increase the composer height.
-                    attachmentControlsWithPlus
-
-                    if !localAttachments.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 3) {
-                                ForEach(localAttachments) { attachment in
-                                    attachmentChip(attachment)
-                                }
-                            }
-                            .padding(.horizontal, 2)
-                        }
-                        .frame(minWidth: 0, maxWidth: 108, minHeight: 44, maxHeight: 44)
-                    }
-
+                VStack(spacing: 0) {
+                    // Row 1: Message input. The fixed height keeps the
+                    // composer compact while UIKit scrolls long drafts inside
+                    // this field instead of growing the surface.
                     ZStack(alignment: .leading) {
                         Text("Message…")
                             .font(IOSTypography.input)
@@ -700,33 +686,55 @@ public struct AgentChatView: View {
 #endif
                     }
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+                    .padding(.horizontal, 8)
 
-                    if let metadata = agentComposerMetadata {
-                        Text(metadata)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.horizontal, 8)
-                            .frame(minWidth: 0, maxWidth: 108)
-                            .accessibilityLabel("Agent type and model: \(metadata)")
-                    }
+                    // Row 2: Attachment and model controls. These controls
+                    // stay on one compact toolbar row below the message.
+                    HStack(alignment: .center, spacing: 4) {
+                        attachmentControlsWithPlus
 
-                    Button {
-                        sendComposerMessage()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(IOSTypography.button)
-                            .foregroundStyle(IOSTheme.text)
-                            .frame(width: 44, height: 44)
+                        if !localAttachments.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 3) {
+                                    ForEach(localAttachments) { attachment in
+                                        attachmentChip(attachment)
+                                    }
+                                }
+                                .padding(.horizontal, 2)
+                            }
+                            .frame(minWidth: 0, maxWidth: 120, minHeight: 44, maxHeight: 44)
+                        }
+
+                        if let metadata = agentComposerMetadata {
+                            Text(metadata)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .padding(.horizontal, 8)
+                                .frame(minWidth: 0, maxWidth: 116)
+                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
+                                .accessibilityLabel("Agent type and model: \(metadata)")
+                        }
+
+                        Spacer(minLength: 0)
+
+                        Button {
+                            sendComposerMessage()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(IOSTypography.button)
+                                .foregroundStyle(IOSTheme.text)
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
+                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
+                        .accessibilityLabel("Send Agent message")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
-                    .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
-                    .accessibilityLabel("Send Agent message")
+                    .frame(minHeight: 44, maxHeight: 44)
+                    .padding(.horizontal, 4)
                 }
-                .frame(minHeight: 44, maxHeight: 44)
-                .padding(.horizontal, 4)
                 .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
@@ -2019,6 +2027,7 @@ private struct AgentStructuredEventBlock: View {
             }
         }
         .padding(.vertical, WarrenSpacing.xs)
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -2026,10 +2035,11 @@ private struct AgentStructuredEventBlock: View {
             in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
         )
         .overlay(alignment: .leading) {
-            if expanded {
+            if expanded || isFailure {
                 Rectangle()
                     .fill(stateColor)
                     .frame(width: 2)
+                    .padding(.leading, 2)
                     .padding(.vertical, WarrenSpacing.xs)
             }
         }
@@ -2249,7 +2259,7 @@ private struct AgentStructuredEventBlock: View {
         case "submitting": return "Submitting…"
         case "resolved", "completed": return "Completed"
         case "cancelled", "canceled": return "Cancelled"
-        case "failed": return "Failed"
+        case "failed", "error": return "Failed"
         case "in_progress": return "In progress"
         default: return state.isEmpty ? "Details" : state.capitalized
         }
@@ -2257,11 +2267,15 @@ private struct AgentStructuredEventBlock: View {
 
     private var stateColor: Color {
         switch state {
-        case "failed": return IOSTheme.red
+        case "failed", "error": return IOSTheme.red
         case "pending", "submitting", "in_progress": return IOSTheme.amber
         case "resolved", "completed": return IOSTheme.green
         default: return IOSTheme.secondaryText
         }
+    }
+
+    private var isFailure: Bool {
+        state == "failed" || state == "error"
     }
 
     private var options: [AgentInteractionOption] {
@@ -2436,9 +2450,6 @@ private struct AgentSecondaryEventBlock: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Circle()
-                        .fill(IOSTheme.tertiaryText)
-                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 11)
@@ -2471,12 +2482,14 @@ private struct AgentSecondaryEventBlock: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(IOSTheme.separator.opacity(0.52))
                 .frame(width: 1)
+                .padding(.leading, 2)
                 .padding(.vertical, 2)
         }
     }
@@ -2608,15 +2621,16 @@ private struct AgentActivityGroupBlock: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            if expanded {
+            if expanded || activity.status == .failed {
                 Rectangle()
                     .fill(activityStatusColor.opacity(0.70))
                     .frame(width: 1)
                     .padding(.vertical, 4)
-                    .padding(.leading, 6)
+                    .padding(.leading, 2)
             }
         }
     }
@@ -2629,10 +2643,7 @@ private struct AgentActivityGroupBlock: View {
             // group discoverable without adding another status label.
             IOSAgentActivityMark(activity: .working, slotSize: 18)
         case .failed:
-            Image(systemName: "xmark.circle")
-                .font(IOSTypography.label)
-                .foregroundStyle(IOSTheme.red)
-                .accessibilityLabel("Activity failed")
+            EmptyView()
         case .interrupted:
             Image(systemName: "pause.circle")
                 .font(IOSTypography.label)
@@ -2708,6 +2719,7 @@ private struct AgentReasoningEntry: View {
                     .padding(.leading, 12)
             }
         }
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
@@ -2715,6 +2727,7 @@ private struct AgentReasoningEntry: View {
                 Rectangle()
                     .fill(IOSTheme.separator.opacity(0.64))
                     .frame(width: 1)
+                    .padding(.leading, 2)
                     .padding(.vertical, 2)
             }
         }
@@ -2746,9 +2759,6 @@ private struct AgentToolBlockView: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Circle()
-                        .fill(toolStatusColor)
-                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2805,12 +2815,14 @@ private struct AgentToolBlockView: View {
                 .padding(.bottom, 6)
             }
         }
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(toolStatusColor.opacity(0.64))
                 .frame(width: 1)
+                .padding(.leading, 2)
                 .padding(.vertical, 2)
         }
     }
@@ -2844,9 +2856,6 @@ private struct AgentToolOutputBlock: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Circle()
-                        .fill(toolStatusColor)
-                        .frame(width: 5, height: 5)
                     Image(systemName: expanded ? "chevron.down" : "chevron.forward")
                         .font(IOSTypography.label)
                         .frame(width: 12)
@@ -2882,12 +2891,14 @@ private struct AgentToolOutputBlock: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.leading, 10)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(toolStatusColor.opacity(0.64))
                 .frame(width: 1)
+                .padding(.leading, 2)
                 .padding(.vertical, 2)
         }
     }
@@ -2914,10 +2925,7 @@ private struct AgentToolStatusMark: View {
             IOSAgentActivityMark(activity: .working, slotSize: 17)
                 .accessibilityLabel("Tool running")
         case "error", "failed":
-            Image(systemName: "xmark.circle")
-                .font(IOSTypography.label)
-                .foregroundStyle(IOSTheme.red)
-                .accessibilityLabel("Tool failed")
+            EmptyView()
         case "interrupted":
             Image(systemName: "pause.circle")
                 .font(IOSTypography.label)
