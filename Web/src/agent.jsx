@@ -4,8 +4,6 @@ import remarkGfm from "remark-gfm";
 
 import {
   agentDraftMaximumBytes,
-  copyAgentText,
-  copyableAgentText,
   formatAgentModel,
   groupAgentEvents,
   loadAgentDraft,
@@ -79,7 +77,6 @@ export function AgentView({
   const [showQueue, setShowQueue] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [copyStatus, setCopyStatus] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [submitStatus, setSubmitStatus] = useState("");
   const [cancelPending, setCancelPending] = useState(false);
@@ -114,13 +111,6 @@ export function AgentView({
   const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
 
-  const copyMessage = async event => {
-    const value = copyableAgentText(event);
-    if (!value) return;
-    const copied = await copyAgentText(value);
-    setCopyStatus(copied ? "Copied" : "Copy failed");
-    setTimeout(() => setCopyStatus(""), 1600);
-  };
   const editAndResend = value => {
     if (onEditResend) onEditResend(value);
     else setDraft(value);
@@ -488,7 +478,6 @@ export function AgentView({
                 block={block}
                 onInteraction={onInteraction}
                 canInteract={canInteract}
-                onCopy={copyMessage}
                 onEditResend={editAndResend}
                 isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
               />
@@ -515,7 +504,6 @@ export function AgentView({
       {draftWarning && (
         <div className="agent-draft-warning" role="status">{draftWarning}</div>
       )}
-      {copyStatus && <div className="agent-copy-status" role="status" aria-live="polite">{copyStatus}</div>}
       {showQueue && (
         <AgentQueuePanel
           items={queueItems}
@@ -779,7 +767,7 @@ function blockKindKey(block, index) {
   return `${block.kind}-${id || "event"}-${sequence || index}`;
 }
 
-function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEditResend = () => {}, isLastUser = false, canInteract = false }) {
+function AgentBlock({ block, onInteraction = () => {}, onEditResend = () => {}, isLastUser = false, canInteract = false }) {
   switch (block.kind) {
   case "structured":
     return <StructuredAgentBlock event={block.event} onInteraction={onInteraction} canInteract={canInteract} />;
@@ -793,16 +781,13 @@ function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEdit
           <div className="agent-bubble">
             <MarkdownContent value={event.content || ""} />
           </div>
-          <div className="agent-message-actions">
-            <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
-              <CopyIcon />
-            </button>
-            {isLastUser && (
+          {isLastUser && (
+            <div className="agent-message-actions">
               <button type="button" onClick={() => onEditResend(event.content || "")} aria-label="Edit and resend message" title="Edit and resend message">
                 <EditIcon />
               </button>
-            )}
-          </div>
+            </div>
+          )}
           <div className="agent-message-meta">
             {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
             {formatMessageTime(event.timestamp)}
@@ -813,11 +798,6 @@ function AgentBlock({ block, onInteraction = () => {}, onCopy = () => {}, onEdit
     return (
       <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
         <MarkdownContent value={event.content || ""} />
-        <div className="agent-message-actions">
-          <button type="button" onClick={() => onCopy(event)} aria-label="Copy message" title="Copy message">
-            <CopyIcon />
-          </button>
-        </div>
         <div className="agent-message-meta">
           {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
           {event.durationMs ? formatDuration(event.durationMs) : ""}
@@ -1350,15 +1330,6 @@ function displayToolName(name) {
     apply_patch: "Apply patch",
   };
   return labels[name] || name || "Tool";
-}
-
-function CopyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="8" y="8" width="11" height="12" rx="2" />
-      <path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1" />
-    </svg>
-  );
 }
 
 function EditIcon() {
