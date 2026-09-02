@@ -20,6 +20,24 @@ import UIKit
 /// Keep the native editing behavior, but make the caret follow the font's
 /// point-size scale just like the text it accompanies.
 private final class AgentComposerTextView: UITextView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        // UITextView lays its first line at the top of the text container.
+        // Recompute equal insets from the actual control height so the
+        // single-line draft (and the caret beside it) stays vertically
+        // centered in the 44pt composer row. Long drafts still scroll inside
+        // the same bounded control.
+        guard bounds.height > 0, let font else { return }
+        let verticalInset = max(4, floor((bounds.height - font.lineHeight) / 2))
+        guard abs(textContainerInset.top - verticalInset) > 0.5
+                || abs(textContainerInset.bottom - verticalInset) > 0.5 else { return }
+        var inset = textContainerInset
+        inset.top = verticalInset
+        inset.bottom = verticalInset
+        textContainerInset = inset
+    }
+
     override func caretRect(for position: UITextPosition) -> CGRect {
         var rect = super.caretRect(for: position)
         guard let font else { return rect }
@@ -61,8 +79,8 @@ private struct AgentComposerInput: UIViewRepresentable {
         view.isScrollEnabled = true
         view.showsVerticalScrollIndicator = false
         view.textContainer.lineFragmentPadding = 0
-        // A single-line draft sits in a 44pt control. Equal vertical insets
-        // center the glyphs and caret while leaving long drafts scrollable.
+        // layoutSubviews derives the exact vertical inset after Auto Layout
+        // gives the text view its 44pt row height.
         view.textContainerInset = UIEdgeInsets(top: 8, left: 7, bottom: 8, right: 2)
         view.textContainer.maximumNumberOfLines = 0
         view.textContainer.lineBreakMode = .byWordWrapping
@@ -760,29 +778,17 @@ public struct AgentChatView: View {
     @ViewBuilder
     private var attachmentControlsWithPlus: some View {
         let attachmentsSupported = model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
-        Button {
-            #if os(iOS)
-            if attachmentsSupported {
-                photoPickerButton
-            } else {
-                filePickerButton
-            }
-            #else
+#if os(iOS)
+        // Return the picker itself. Wrapping it in a Button only evaluated the
+        // picker View as an unused expression, so tapping + never presented
+        // PhotosPicker on a real device.
+        if attachmentsSupported {
+            photoPickerButton
+        } else {
             filePickerButton
-            #endif
-        } label: {
-            Image(systemName: "plus")
-                .font(IOSTypography.button)
-                .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 44, height: 44)
         }
-        .buttonStyle(.plain)
-        .disabled(!attachmentsSupported || isUploadingAttachments || sendStatus == "sending")
-        .accessibilityLabel("Add attachments")
-#if canImport(UIKit)
-        .onChange(of: photoItems) { _, items in
-            loadPhotos(items)
-        }
+#else
+        filePickerButton
 #endif
     }
 
@@ -819,6 +825,11 @@ public struct AgentChatView: View {
         .buttonStyle(.plain)
         .disabled(!model.supportsAgentCapability(WarrenRemoteAgentCapability.attachments) || isUploadingAttachments || sendStatus == "sending")
         .accessibilityLabel("Choose photos")
+#if canImport(UIKit)
+        .onChange(of: photoItems) { _, items in
+            loadPhotos(items)
+        }
+#endif
     }
 #endif
 
