@@ -113,24 +113,24 @@ SessionView（某个 Session）
 
 ### 5.1 时间线容器与滚动
 
-- `AgentComposerInput`（`34-143`）：UIKit `UITextView` 封装。固定控制高度，内部可滚动；
-  placeholder、输入文字和 caret 以相同垂直内边距居中。`AgentComposerTextView.caretRect`
-  只缩短插入光标，不改变输入行为。
-- `AgentChatTopOffsetPreferenceKey`（`146-151`）和 `AgentChatBottomOffsetPreferenceKey`
-  （`154-159`）：滚动顶部/底部哨兵的位置测量。
-- `AgentChatView`（`166-511`）：Agent 时间线、空状态、历史加载、回到底部按钮、Attention/
+- `AgentComposerTextView` / `AgentComposerInput`（`22-162`）：UIKit `UITextView` 封装。固定
+  44pt 控制高度，内部可滚动；`layoutSubviews` 根据实际行高计算上下 inset，让首行文字和
+  caret 居中，`caretRect` 只缩短插入光标，不改变输入行为。
+- `AgentChatTopOffsetPreferenceKey`（`164-170`）和 `AgentChatBottomOffsetPreferenceKey`
+  （`172-178`）：滚动顶部/底部哨兵的位置测量。
+- `AgentChatView`（`184-529`）：Agent 时间线、空状态、历史加载、回到底部按钮、Attention/
   Working/错误提示和 Composer 的总装配。每个时间线块使用稳定 `.id`。
-- `refreshRenderedBlocks`（`512-516`）：把当前 Session 的事件投影成 `AgentDisplayBlock`。
-- `handleTopOffset` / `requestOlderHistory`（`522-550`）：下拉到顶部阈值时请求旧历史，并用
+- `refreshRenderedBlocks`（`530-534`）：把当前 Session 的事件投影成 `AgentDisplayBlock`。
+- `handleTopOffset` / `requestOlderHistory`（`540-568`）：下拉到顶部阈值时请求旧历史，并用
   首个 block ID 做锚点。
-- `handleNewContent` / `observeAgentRevision`（`552-584`）：刷新事件前先捕获用户是否接近底部，
+- `handleNewContent` / `observeAgentRevision`（`570-602`）：刷新事件前先捕获用户是否接近底部，
   等待两轮主线程布局后再滚到底部，避免新增消息后滚动位置停在旧高度。
-- `scrollToLatest` / `restoreHistoryScrollAnchor`（`585-625`）：主动回到底部或加载历史后恢复
+- `scrollToLatest` / `restoreHistoryScrollAnchor`（`603-642`）：主动回到底部或加载历史后恢复
   原可视位置。
 
 ### 5.2 Composer（固定两行）
 
-`composer` 位于 `626-760`，外层是一个带边框的 raised surface，结构固定为：
+`composer` 位于 `644-777`，外层是一个带边框的 raised surface，结构固定为：
 
 1. 第一行（44pt）：`Message…` placeholder 和 `AgentComposerInput`。长文本在 UITextView
    内部滚动，不把 Composer 无限撑高。
@@ -139,55 +139,55 @@ SessionView（某个 Session）
 
 相关位置：
 
-- `attachmentControlsWithPlus`（`761-789`）：加号入口；iOS 使用 PhotosPicker，其他平台
-  使用 file importer。
-- `filePickerButton` / `photoPickerButton`（`790-824`）：文件/照片选择器。
-- `attachmentChip`（`825-870`）：附件名称、上传进度、失败重试和删除附件。这里的
+- `attachmentControlsWithPlus`（`778-793`）：加号入口直接返回 picker；iOS 使用 PhotosPicker，
+  其他平台使用 file importer，不能再把 picker 当成 Button action 内的无效表达式。
+- `filePickerButton` / `photoPickerButton`（`795-834`）：文件/照片选择器。
+- `attachmentChip`（`836-881`）：附件名称、上传进度、失败重试和删除附件。这里的
   `xmark.circle.fill` 是“删除附件”按钮，不能误认为失败红叉。
-- `agentComposerMetadata` / `agentTypeLabel`（`1091-1116`）：第二行的 provider + model
+- `agentComposerMetadata` / `agentTypeLabel`（`1105-1130`）：第二行的 provider + model
   文案，不是新的输入框。
-- `sendComposerMessage`（`915-1007`）：无附件直接发送；有附件先上传，再用 opaque reference
+- `sendComposerMessage`（`926-1018`）：无附件直接发送；有附件先上传，再用 opaque reference
   发送；失败显示反馈。
-- `canSend`（`1153-1156`）：发送按钮是否启用。
+- `canSend`（`1164-1167`）：发送按钮是否启用。
 
 ### 5.3 队列、提示和辅助行
 
-- `IOSAgentQueueSheet`（`1158-1276`）：Working 时排队消息的查看、编辑、重试、置顶、删除。
-- `AgentEmptyState`（`1277-1297`）：没有 Agent 消息时的占位。
-- `AgentMarkdownText`（`1298-1311`）：时间线中 Markdown 文本的轻包装。
-- `AgentAttentionBanner`（`1312-1404`）：Agent 需要输入/批准/警告时的底部横幅；输入类可
+- `IOSAgentQueueSheet`（`1169-1287`）：Working 时排队消息的查看、编辑、重试、置顶、删除。
+- `AgentEmptyState`（`1288-1308`）：没有 Agent 消息时的占位。
+- `AgentMarkdownText`（`1309-1322`）：时间线中 Markdown 文本的轻包装。
+- `AgentAttentionBanner`（`1323-1415`）：Agent 需要输入/批准/警告时的底部横幅；输入类可
   聚焦 Composer，批准类打开 Terminal。
-- `AgentWorkingFooter`（`1405-1425`）：工作中的动态文案（`Fermenting…` 等）。
-- `AgentWorkingPhrases`（`1426-1452`）：工作文案循环。
-- `AgentHistoryLoadMoreRow`（`1453-1502`）：加载更早消息、失败重试按钮。
+- `AgentWorkingFooter`（`1416-1436`）：工作中的动态文案（`Fermenting…` 等）。
+- `AgentWorkingPhrases`（`1437-1463`）：工作文案循环。
+- `AgentHistoryLoadMoreRow`（`1464-1513`）：加载更早消息、失败重试按钮。
 
 ### 5.4 事件投影和折叠层级
 
-- `AgentDisplayBlock`（`1503-1513`）：普通事件或一段活动的顶层行。
-- `AgentActivityGroup`（`1515-1593`）：统计 reasoning/tool 数量、折叠预览和活动状态。
-- `AgentActivityStatus` / `AgentActivityEntry` / `AgentToolBlock`（`1594-1633`）：活动内部
+- `AgentDisplayBlock`（`1514-1524`）：普通事件或一段活动的顶层行。
+- `AgentActivityGroup`（`1526-1604`）：统计 reasoning/tool 数量、折叠预览和活动状态。
+- `AgentActivityStatus` / `AgentActivityEntry` / `AgentToolBlock`（`1605-1644`）：活动内部
   的值模型。
-- `agentDisplayBlocks`（`1634-1713`）：按 sequence 排序、合并结构化事件、把 reasoning 和
+- `agentDisplayBlocks`（`1645-1724`）：按 sequence 排序、合并结构化事件、把 reasoning 和
   tool call/output 组成活动组；未知事件推进序列但可以不绘制。
-- `displayBlockView`（`1787-1807`）：顶层 block 到具体 View 的分派。
-- `AgentEventBlock`（`1808-1945`）：用户气泡、助手 Markdown、错误事件、系统/元数据事件和
+- `displayBlockView`（`1798-1818`）：顶层 block 到具体 View 的分派。
+- `AgentEventBlock`（`1819-1957`）：用户气泡、助手 Markdown、错误事件、系统/元数据事件和
   结构化事件的分派；用户最后一条消息可显示编辑重发按钮。
 
 ## 6. 折叠组件的视觉约定（当前实现）
 
 ### 6.1 状态轨道
 
-`AgentStatusRail`（`1947-1978`）是所有折叠行共用的左侧状态轨道：圆角竖条、独立的左侧
+`AgentStatusRail`（`1958-1995`）是所有折叠行共用的左侧状态轨道：圆角竖条、独立的左侧
 预留列、不可点击，不压在 chevron 或业务图标上。各组件的调用位置：
 
-- `AgentStructuredEventBlock`（`2007-2452`）：Question/Permission/Plan/Todo/Activity/
+- `AgentStructuredEventBlock`（`2018-2463`）：Question/Permission/Plan/Todo/Activity/
   Plugin/Subagent/Attachment；展开或失败时绘制，失败使用红色轨道。
-- `AgentSecondaryEventBlock`（`2495-2561`）：System/metadata/notice 等次要信息，使用中性
+- `AgentSecondaryEventBlock`（`2506-2572`）：System/metadata/notice 等次要信息，使用中性
   分隔轨道。
-- `AgentActivityGroupBlock`（`2596-2722`）：reasoning/tool 活动组；展开、运行或失败时绘制，
+- `AgentActivityGroupBlock`（`2607-2742`）：reasoning/tool 活动组；展开、运行或失败时绘制，
   运行是琥珀色，失败是红色，完成是绿色。
-- `AgentReasoningEntry`（`2723-2789`）：活动组内的 Thinking 子折叠，展开时使用中性轨道。
-- `AgentToolBlockView`（`2790-2881`）和 `AgentToolOutputBlock`（`2882-2956`）：工具调用及
+- `AgentReasoningEntry`（`2743-2809`）：活动组内的 Thinking 子折叠，展开时使用中性轨道。
+- `AgentToolBlockView`（`2810-2901`）和 `AgentToolOutputBlock`（`2902-2976`）：工具调用及
   输出的状态轨道；成功绿色、运行琥珀色、中断黄色、失败红色。
 
 轨道与标题的间隔由各行的 `.padding(.leading, 8)` 和 `AgentStatusRail` 的 leading inset
@@ -198,12 +198,12 @@ SessionView（某个 Session）
 
 | 用户描述 | 代码位置 | 当前规则 |
 | --- | --- | --- |
-| 条件圆点 / Plan 圆点 | `AgentStructuredEventBlock.detail` 的 Plan/Todo 分支，约 `2214-2231` | 已删除 `circle`、`circle.lefthalf.filled`、`checkmark.circle.fill` 状态图标；条目只显示文字和紧凑状态文案 |
+| 条件圆点 / Plan 圆点 | `AgentStructuredEventBlock.detail` 的 Plan/Todo 分支，约 `2232-2246` | 已删除 `circle`、`circle.lefthalf.filled`、`checkmark.circle.fill` 状态图标；条目只显示文字和紧凑状态文案 |
 | 折叠标题状态圆点 | `AgentStructuredEventBlock`、`AgentActivityGroupBlock`、`AgentReasoningEntry` 标题 | 不再按 expanded 条件插入 Circle；标题的 chevron 起始位置保持不变 |
 | 工具状态圆点 | `AgentToolBlockView` / `AgentToolOutputBlock` 标题 | 不绘制小 Circle；状态由左侧轨道表示 |
-| 运行中的圆点 | `activityStatusMark`（约 `2652-2680`）、`AgentToolStatusMark`（约 `2957-2980`） | 折叠行不显示 trailing pulsing dot；保留轨道和 VoiceOver 语义 |
+| 运行中的圆点 | `activityStatusMark`（约 `2690-2718`）、`AgentToolStatusMark`（约 `2977-3001`） | 折叠行不显示 trailing pulsing dot；保留轨道和 VoiceOver 语义 |
 | Question/Permission 选项圆圈 | `interactionOptionRow`，约 `2250-2264` | 这是可点击的单选/多选控件，不能按“条件圆点”删除；选中态仍用 `checkmark.circle.fill` |
-| 附件删除叉 | `attachmentChip`，约 `849-860` | 这是删除附件动作，不是失败状态，不能删除或替换为失败轨道 |
+| 附件删除叉 | `attachmentChip`，约 `860-871` | 这是删除附件动作，不是失败状态，不能删除或替换为失败轨道 |
 | 失败红叉 | 旧实现位于 `activityStatusMark` / `AgentToolStatusMark` | 当前为 `EmptyView()`；失败只用红色状态轨道表示 |
 
 ### 6.3 结构化卡片和交互
@@ -314,24 +314,24 @@ SessionView（某个 Session）
 
 | 用户说法 | 先查这里 | 备注 |
 | --- | --- | --- |
-| “条件圆点没删” | `AgentStructuredEventBlock` Plan/Todo 分支（约 `2214`） | 现在应没有状态 Circle；不要改 `interactionOptionRow` 的单选圆圈 |
-| “折叠前没有最左对齐” | `AgentStatusRail`（`1947`）及五个折叠 View 的 `.padding(.leading, 8)` | 检查 rail inset、标题 chevron 起点和嵌套 detail padding |
-| “展开后缩进太深” | `AgentStructuredEventBlock` detail（约 `2065`）、`AgentActivityGroupBlock` detail（约 `2637`）、reasoning/tool detail | 优先调固定 indent，不要插入状态圆点 |
+| “条件圆点没删” | `AgentStructuredEventBlock` Plan/Todo 分支（约 `2232`） | 现在应没有状态 Circle；不要改 `interactionOptionRow` 的单选圆圈 |
+| “折叠前没有最左对齐” | `AgentStatusRail`（`1958`）及五个折叠 View 的 `.padding(.leading, 8)` | 检查 rail inset、标题 chevron 起点和嵌套 detail padding |
+| “展开后缩进太深” | `AgentStructuredEventBlock` detail（约 `2074`）、`AgentActivityGroupBlock` detail（约 `2650`）、reasoning/tool detail | 优先调固定 indent，不要插入状态圆点 |
 | “右侧红叉” | `activityStatusMark`、`AgentToolStatusMark` | 失败分支必须是 `EmptyView()`，红色只从 `AgentStatusRail` 来 |
 | “红/绿色竖线压住箭头” | `AgentStatusRail` + `AgentStructuredEventBlock` / `AgentActivityGroupBlock` / `AgentReasoningEntry` / `AgentToolBlockView` / `AgentToolOutputBlock` overlays | 轨道要在保留左列间距的位置，不能直接覆盖标题 HStack |
-| “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`34-143`）与 `composer` 第一行（约 `650-705`） | 固定 44pt；UITextView 内部滚动；placeholder 与 caret 使用同一垂直 inset |
-| “Composer 应该两行” | `composer`（`626-760`） | 第一行 Message，第二行 +/附件/Model/发送箭头；不要把两行合并成 HStack |
-| “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `728-751`） | 当前是无背景的白色 `arrow.up`，44pt hit area |
-| “+ 按钮” | `attachmentControlsWithPlus`（`761-789`） | PhotosPicker/fileImporter 入口 |
+| “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`52-162`）与 `composer` 第一行（约 `670-707`） | 固定 44pt；UITextView 内部滚动；`layoutSubviews` 动态计算上下 inset，placeholder 与 caret 对齐 |
+| “Composer 应该两行” | `composer`（`644-777`） | 第一行 Message，第二行 +/附件/Model/发送箭头；不要把两行合并成 HStack |
+| “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `740-769`） | 当前是无背景的白色 `arrow.up`，44pt hit area |
+| “+ 按钮” | `attachmentControlsWithPlus`（`778-793`） | 直接呈现 PhotosPicker/fileImporter，点击后真正打开选择器 |
 | “Model 文案” | `agentComposerMetadata`（`1094`）与 `IOSAgentInteraction.formatAgentModel` | 这是第二行 metadata，不是 Message 输入框 |
-| “新增消息没有自动下滚” | `observeAgentRevision`（`567`）、`handleNewContent`（`552`）、底部哨兵（约 `286`） | 刷新前捕获 `isNearLatest`，等待两轮布局后滚动 |
+| “新增消息没有自动下滚” | `observeAgentRevision`（`585`）、`handleNewContent`（`570`）、底部哨兵（约 `304`） | 刷新前捕获 `isNearLatest`，等待两轮布局后滚动 |
 | “Working/正在思考” | `shouldShowWorking`（约 `1124`）、`AgentWorkingFooter`（`1405`） | 文案动画来自 `IOSShimmerText` |
-| “需要我回答/权限” | `AgentAttentionBanner`（`1312`）、`AgentStructuredEventBlock` Question/Permission 分支 | input 可聚焦 Composer，approval 引导 Terminal |
-| “思考步骤” | `AgentActivityGroupBlock` + `AgentReasoningEntry`（`2596`、`2723`） | 第二级折叠，不是普通 assistant 消息 |
-| “工具调用/工具输出” | `AgentToolBlockView` / `AgentToolOutputBlock`（`2790`、`2882`） | 看 status rail、summary、output/error 文本 |
-| “Plan/Todo” | `AgentStructuredEventBlock.detail` Plan/Todo（约 `2214`） | 只读、无状态圆点，使用文字状态 |
-| “队列消息” | `IOSAgentQueueSheet`（`1158`）与 model 队列 API | 队列是本地 View 状态，不是 transcript event |
-| “历史加载/上拉” | `AgentHistoryLoadMoreRow`（`1453`）、顶部哨兵和 `requestOlderHistory` | 使用 anchor 保持原可视位置 |
+| “需要我回答/权限” | `AgentAttentionBanner`（`1323`）、`AgentStructuredEventBlock` Question/Permission 分支 | input 可聚焦 Composer，approval 引导 Terminal |
+| “思考步骤” | `AgentActivityGroupBlock` + `AgentReasoningEntry`（`2607`、`2743`） | 第二级折叠，不是普通 assistant 消息 |
+| “工具调用/工具输出” | `AgentToolBlockView` / `AgentToolOutputBlock`（`2810`、`2902`） | 看 status rail、summary、output/error 文本 |
+| “Plan/Todo” | `AgentStructuredEventBlock.detail` Plan/Todo（约 `2232`） | 只读、无状态圆点，使用文字状态 |
+| “队列消息” | `IOSAgentQueueSheet`（`1169`）与 model 队列 API | 队列是本地 View 状态，不是 transcript event |
+| “历史加载/上拉” | `AgentHistoryLoadMoreRow`（`1464`）、顶部哨兵和 `requestOlderHistory` | 使用 anchor 保持原可视位置 |
 | “Session 顶栏/Terminal-Agent 切换” | `SessionHeader`、`IOSModeToggle`、`SessionView` | `IOSSessionDisplayMode` 是每个 Session 的本地偏好 |
 | “Terminal 快捷键” | `TerminalShortcutBar`（`688`）与 `IOSKeyCap`（`681`） | 不要在 Agent Composer 中复用 Terminal 快捷键栏 |
 | “首页项目/Workspace 折叠” | `HostDashboardView`、`CollapsibleSectionHeader`、`WorkspaceRailRow` | 这是首页目录折叠，不是 Agent 时间线折叠 |
