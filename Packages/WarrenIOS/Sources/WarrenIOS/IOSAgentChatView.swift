@@ -1164,7 +1164,7 @@ public struct AgentChatView: View {
     /// are intentionally not repeated beside the input.
     private var agentComposerMetadata: String? {
         let type = agentTypeLabel
-        let modelName = model.agentModel(for: sessionID)
+        let modelName = formatAgentModel(model.agentModel(for: sessionID))
         let values = [type, modelName].compactMap { value -> String? in
             guard let value else { return nil }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)

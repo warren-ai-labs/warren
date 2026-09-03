@@ -21,6 +21,8 @@ import {
 test("formatAgentModel turns wire names into readable labels", () => {
   assert.equal(formatAgentModel("5.6-sol"), "5.6 Sol");
   assert.equal(formatAgentModel("openai/gpt-5.4"), "GPT 5.4");
+  assert.equal(formatAgentModel("z-ai/xxx-xxx-xx"), "Xxx Xxx Xx");
+  assert.equal(formatAgentModel("z-ai/glm-4-flash"), "Glm 4 Flash");
   assert.equal(formatAgentModel(""), "");
 });
 

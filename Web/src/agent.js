@@ -27,6 +27,7 @@ export function formatAgentModel(raw) {
   const leaf = value.split("/").at(-1) || value;
   const words = leaf
     .replaceAll("_", "-")
+    .replaceAll(" ", "-")
     .split("-")
     .filter(Boolean);
   return words.map(word => {
@@ -37,7 +38,7 @@ export function formatAgentModel(raw) {
     if (lower === "sonnet") return "Sonnet";
     if (lower === "haiku") return "Haiku";
     if (lower === "opus") return "Opus";
-    return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+    return `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`;
   }).join(" ");
 }
 
