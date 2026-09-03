@@ -14,6 +14,8 @@ final class IOSPersistenceTests: XCTestCase {
     func testAgentModelAndCopyFeedbackFormatting() {
         XCTAssertEqual(formatAgentModel("5.6-sol"), "5.6 Sol")
         XCTAssertEqual(formatAgentModel("openai/gpt-5.4"), "GPT 5.4")
+        XCTAssertEqual(formatAgentModel("z-ai/xxx-xxx-xx"), "Xxx Xxx Xx")
+        XCTAssertEqual(formatAgentModel("z-ai/glm-4-flash"), "Glm 4 Flash")
         XCTAssertEqual(cleanCopiedText("  hello\r\nworld  "), "hello\nworld")
         XCTAssertEqual(truncateCopiedText(String(repeating: "x", count: 121))?.count, 121)
         XCTAssertNil(truncateCopiedText("   "))

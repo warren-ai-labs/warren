@@ -570,24 +570,47 @@ private struct SessionTabRail: View {
                         }
                     }
                 }
-            } else {
+            } else if let currentSession = sessions.first(where: { $0.id == activeSessionID }) ?? sessions.first {
                 Button(action: showSwitcher) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "rectangle.stack")
-                        Text("\(sessions.count)")
-                            .font(IOSTypography.metric)
-                        Spacer()
+                    HStack(spacing: 8) {
+                        HStack(spacing: 6) {
+                            SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
+                            Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
+                                .font(IOSTypography.label)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+
+                        HStack(spacing: 3) {
+                            Image(systemName: "rectangle.stack")
+                                .font(.system(size: 10, weight: .medium))
+                            Text("\(sessions.count)")
+                                .font(IOSTypography.metadata)
+                        }
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(IOSTheme.muted.opacity(0.4), in: Capsule())
+
+                        Spacer(minLength: 8)
+
                         Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(IOSTheme.secondaryText)
                     }
-                    .font(IOSTypography.label)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 12)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(IOSTheme.accent)
+                            .frame(height: 2)
+                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(pendingSessionID != nil || model.isMutating)
-                .accessibilityLabel("Switch session")
-                .accessibilityValue("\(sessions.count) sessions")
+                .accessibilityLabel("Session \(currentSession.displayTitle), \(sessions.count) sessions")
+                .accessibilityValue("Selected · Switcher")
             }
         }
         .background(IOSTheme.chrome)

@@ -23,6 +23,7 @@ public func formatAgentModel(_ raw: String?) -> String? {
     let leaf = value.split(separator: "/").last.map(String.init) ?? value
     let words = leaf
         .replacingOccurrences(of: "_", with: "-")
+        .replacingOccurrences(of: " ", with: "-")
         .split(separator: "-", omittingEmptySubsequences: true)
         .map(String.init)
     guard !words.isEmpty else { return nil }
@@ -36,7 +37,7 @@ public func formatAgentModel(_ raw: String?) -> String? {
         case "sol": return "Sol"
         default:
             guard let first = word.first else { return word }
-            return String(first).uppercased() + word.dropFirst()
+            return String(first).uppercased() + word.dropFirst().lowercased()
         }
     }.joined(separator: " ")
 }
