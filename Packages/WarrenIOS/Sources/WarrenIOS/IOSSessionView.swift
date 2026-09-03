@@ -768,8 +768,18 @@ private struct TerminalShortcutBar: View {
         guard let sessionID = model.currentSessionID else { return "" }
         let snapshot = model.terminalState.terminalSnapshotBySessionID[sessionID] ?? Data()
         let output = model.terminalState.terminalOutputBySessionID[sessionID] ?? Data()
-        return String(decoding: snapshot + output, as: UTF8.self)
+        let raw = String(decoding: snapshot + output, as: UTF8.self)
+        return stripANSISequences(raw)
     }
+}
+
+private func stripANSISequences(_ text: String) -> String {
+    let pattern = #"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[ -/]*[@-~])"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+        return text
+    }
+    let range = NSRange(text.startIndex..., in: text)
+    return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
 }
 
 private func pathLeaf(_ path: String) -> String {

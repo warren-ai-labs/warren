@@ -493,7 +493,12 @@ public struct WarrenTextInputDialog: View {
                 }
             }
             .padding(WarrenSpacing.large)
+#if os(iOS)
+            .frame(maxWidth: WarrenLayoutMetrics.compactDialogWidth)
+            .padding(.horizontal, 20)
+#else
             .frame(width: WarrenLayoutMetrics.compactDialogWidth)
+#endif
         }
 #if os(macOS)
         .onExitCommand(perform: onCancel)
@@ -547,7 +552,12 @@ public struct WarrenMessageDialog: View {
                 }
             }
             .padding(WarrenSpacing.large)
+#if os(iOS)
+            .frame(maxWidth: WarrenLayoutMetrics.compactDialogWidth)
+            .padding(.horizontal, 20)
+#else
             .frame(width: WarrenLayoutMetrics.compactDialogWidth)
+#endif
         }
 #if os(macOS)
         .onExitCommand(perform: onDismiss)
