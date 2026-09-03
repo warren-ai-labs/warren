@@ -22,9 +22,21 @@ export default defineConfig({
           ? "assets/app.css"
           : "assets/[name][extname]",
         manualChunks(id) {
+          if (id.includes("vite/preload-helper")) return "react";
           if (!id.includes("/node_modules/")) return;
           if (id.includes("/@xterm/")) return "xterm";
-          if (id.includes("/react/") || id.includes("/react-dom/")) return "react";
+          if (id.includes("/@pierre/")) return "diffs";
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react";
+          if (
+            id.includes("/react-markdown/") ||
+            id.includes("/remark-") ||
+            id.includes("/micromark") ||
+            id.includes("/mdast-") ||
+            id.includes("/hast-") ||
+            id.includes("/unist-") ||
+            id.includes("/vfile") ||
+            id.includes("/property-information/")
+          ) return "agent-markdown";
         },
       },
     },

@@ -2468,7 +2468,9 @@ public final class IOSApplicationModel: ObservableObject {
         // and receives the full atomic checkpoint when it is recreated.
         let maxBytes = 8 * 1024 * 1024
         if data.count > maxBytes {
-            data = Data(data.suffix(maxBytes))
+            terminalState.terminalReadyBySessionID[frame.sessionID] = false
+            requestTerminalRecovery(for: frame.sessionID)
+            return
         }
         terminalState.terminalOutputBySessionID[frame.sessionID] = data
         terminalNextSequenceBySessionID[frame.sessionID] = endSequence
@@ -2506,9 +2508,10 @@ public final class IOSApplicationModel: ObservableObject {
             // Fold any provider's content-delta events by (type,id) key so streaming replies do not
             // produce a bubble per database poll. Seed events have contentDelta=false; later updates
             // carry contentDelta=true and append to the accumulated content.
-            if let index = events.lastIndex(where: {
-                $0.id == event.id && $0.type == event.type && $0.contentDelta
-            }) {
+            if event.contentDelta,
+               let index = events.lastIndex(where: {
+                   $0.id == event.id && $0.type == event.type
+               }) {
                 let existing = events[index]
                 // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
                 if keys.contains(key) { continue }
