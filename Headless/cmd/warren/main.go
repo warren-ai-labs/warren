@@ -1631,6 +1631,9 @@ func agentCreateCommand(args []string) error {
 
 	request := normalizedParams(params, "session", "create")
 	request["kind"] = provider
+	if handler := strings.TrimSpace(stringValue(params, "agent-handler")); handler != "" {
+		request["agentHandler"] = handler
+	}
 	if hasPrompt {
 		// Codex and Claude accept an initial prompt as the final positional
 		// argument. OpenCode exposes the same behavior through its --prompt
@@ -2573,7 +2576,7 @@ var agentReadBooleanFlags = map[string]bool{
 }
 
 var agentCreateValueFlags = map[string]bool{
-	"provider": true, "command": true, "prompt": true, "title": true,
+	"provider": true, "agent-handler": true, "command": true, "prompt": true, "title": true,
 	"group": true, "runtime-kind": true, "timeout": true,
 }
 
@@ -3025,6 +3028,10 @@ func normalizedParams(values map[string]any, resource, action string) map[string
 		if value, ok := result["runtime-kind"]; ok {
 			result["runtimeKind"] = value
 			delete(result, "runtime-kind")
+		}
+		if value, ok := result["agent-handler"]; ok {
+			result["agentHandler"] = value
+			delete(result, "agent-handler")
 		}
 	}
 	if (action == "create" || action == "add") && resource == "task" {
@@ -3912,6 +3919,7 @@ func agentCreateUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID]
       --provider codex|claude|opencode|pi|qoder
+      [--agent-handler tui|cli|acp]
       [--command CMD]
       [--prompt TEXT | --no-prompt]
       [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]

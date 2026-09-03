@@ -133,7 +133,11 @@ type Session struct {
 	// precedence over Title in every client that renders a session name.
 	CustomTitle string `json:"customTitle,omitempty"`
 	Kind        string `json:"kind"`
-	Command     string `json:"command,omitempty"`
+	// AgentHandler selects the transport implementation inside an agent
+	// family (for example tui or acp). It is optional so legacy Sessions keep
+	// the provider's default handler.
+	AgentHandler string `json:"agentHandler,omitempty"`
+	Command      string `json:"command,omitempty"`
 	// Process and Directory are live runtime metadata overlaid on roster
 	// snapshots only; they are never persisted with the session record.
 	Process     string `json:"process,omitempty"`
@@ -162,8 +166,13 @@ type Session struct {
 	// AgentStatus, it is overlaid on roster snapshots only so clients can
 	// distinguish a completed turn from an initially-ready agent.
 	AgentTurn *AgentTurn `json:"agentTurn,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	EndedAt   *time.Time `json:"endedAt,omitempty"`
+	// AgentCapabilities is the effective capability set for this Session,
+	// after provider and transport negotiation. It is live projection data and
+	// is never persisted in the durable Session record. An explicit empty array
+	// means this agent is known but currently exposes no optional controls.
+	AgentCapabilities []string   `json:"agentCapabilities"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	EndedAt           *time.Time `json:"endedAt,omitempty"`
 	// OperationID is returned by mutating session APIs for audit and safe
 	// undo. It is intentionally not persisted in the session record.
 	OperationID string `json:"operationId,omitempty"`

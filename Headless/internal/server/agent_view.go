@@ -69,7 +69,8 @@ func (s *Service) AgentViewCapabilities() []string {
 	if s == nil {
 		return capabilities
 	}
-	if nonNilInterface(s.AgentFinder) {
+	registry := s.agentProviderRegistry()
+	if nonNilInterface(s.AgentFinder) || (registry != nil && len(registry.Kinds()) > 0) {
 		capabilities = append(capabilities, api.CapabilityAgentTimeline)
 	}
 	if nonNilInterface(s.AgentController) {
@@ -81,10 +82,19 @@ func (s *Service) AgentViewCapabilities() []string {
 	// Attachments can use a provider-native controller when one is installed,
 	// or the built-in PTY bridge below, which materializes each upload as a
 	// Host-local file and includes its path in the provider prompt.
-	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
+	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() || (registry != nil && len(registry.Kinds()) > 0) {
 		capabilities = append(capabilities, api.CapabilityAgentAttachments)
 	}
-	return capabilities
+	seen := make(map[string]struct{}, len(capabilities))
+	result := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		result = append(result, capability)
+	}
+	return result
 }
 
 func (s *Service) hasRuntimeAdapter() bool {
@@ -291,6 +301,9 @@ func (s *Service) prepareAgentAttachment(
 	if _, ok := s.Session(sessionID); !ok {
 		return api.AgentAttachmentPrepareResult{}, fmt.Errorf("session not found: %s", sessionID)
 	}
+	if !s.sessionSupportsCapability(sessionID, CapabilityAttachments) {
+		return api.AgentAttachmentPrepareResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, sessionID)
+	}
 	request.Session = sessionID
 	request, err := validateAttachmentPrepare(request)
 	if err != nil {
@@ -326,6 +339,9 @@ func (s *Service) putAgentAttachmentChunk(
 	request.UploadID = strings.TrimSpace(request.UploadID)
 	if request.Session == "" || request.UploadID == "" {
 		return api.AgentAttachmentResult{}, errors.New("session and uploadId are required")
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+		return api.AgentAttachmentResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
 	}
 	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(request.Data))
 	if err != nil {
@@ -404,6 +420,9 @@ func (s *Service) completeAgentAttachment(
 	request.UploadID = strings.TrimSpace(request.UploadID)
 	if request.Session == "" || request.UploadID == "" {
 		return api.AgentAttachmentResult{}, errors.New("session and uploadId are required")
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+		return api.AgentAttachmentResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
 	}
 	if request.Length < 0 {
 		return api.AgentAttachmentResult{}, errors.New("attachment complete length is invalid")
@@ -517,6 +536,9 @@ func (s *Service) abortAgentAttachment(ctx context.Context, request api.AgentAtt
 	request.UploadID = strings.TrimSpace(request.UploadID)
 	if request.Session == "" || request.UploadID == "" {
 		return api.AgentAttachmentResult{}, errors.New("session and uploadId are required")
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+		return api.AgentAttachmentResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
 	}
 	s.ensureAgentViewState()
 	s.agentViewMu.Lock()
@@ -748,6 +770,9 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 	if _, ok := s.Session(request.Session); !ok {
 		return api.AgentMessageSendResult{}, fmt.Errorf("session not found: %s", request.Session)
 	}
+	if len(request.Attachments) > 0 && !s.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+		return api.AgentMessageSendResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
+	}
 	fingerprint, err := agentActionFingerprint(request)
 	if err != nil {
 		return api.AgentMessageSendResult{}, err
@@ -786,7 +811,12 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			return api.AgentMessageSendResult{}, fmt.Errorf("attachment %s: %w", attachment.AttachmentID, err)
 		}
 	}
-	if controller := s.AgentController; nonNilInterface(controller) {
+	if handle := s.currentAgentHandle(request.Session); handle != nil {
+		if err := handle.SendMessage(ctx, request); err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentMessageSendResult{}, err
+		}
+	} else if controller := s.AgentController; nonNilInterface(controller) {
 		if err := controller.SendMessage(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentMessageSendResult{}, err
@@ -884,6 +914,9 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 	if _, ok := s.Session(request.Session); !ok {
 		return api.AgentInteractionResult{}, fmt.Errorf("session not found: %s", request.Session)
 	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityInteractions) {
+		return api.AgentInteractionResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInteractions, request.Session)
+	}
 	fingerprint, err := agentActionFingerprint(request)
 	if err != nil {
 		return api.AgentInteractionResult{}, err
@@ -926,7 +959,12 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 		s.finishAgentAction(actionKey, call, nil, err)
 		return api.AgentInteractionResult{}, err
 	}
-	if controller := s.AgentController; nonNilInterface(controller) {
+	if handle := s.currentAgentHandle(request.Session); handle != nil {
+		if err := handle.RespondInteraction(ctx, request); err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
+	} else if controller := s.AgentController; nonNilInterface(controller) {
 		if err := controller.RespondInteraction(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentInteractionResult{}, err
@@ -972,6 +1010,9 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 	}
 	if _, ok := s.Session(request.Session); !ok {
 		return api.AgentTurnInterruptResult{}, fmt.Errorf("session not found: %s", request.Session)
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityInterrupt) {
+		return api.AgentTurnInterruptResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInterrupt, request.Session)
 	}
 	if request.Replacement != nil && request.Replacement.ClientMessageID == "" {
 		return api.AgentTurnInterruptResult{}, errors.New("replacement clientMessageId is required")
@@ -1039,7 +1080,19 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			}
 		}
 	}
-	if controller := s.AgentController; nonNilInterface(controller) {
+	if handle := s.currentAgentHandle(request.Session); handle != nil {
+		if request.Replacement != nil {
+			// AgentHandle owns the atomic send-now operation. Attachments stay
+			// opaque refs here; only the legacy PTY branch materializes paths.
+			if err := handle.Interrupt(ctx, request); err != nil {
+				s.finishAgentAction(actionKey, call, nil, err)
+				return api.AgentTurnInterruptResult{}, err
+			}
+		} else if err := handle.Interrupt(ctx, request); err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentTurnInterruptResult{}, err
+		}
+	} else if controller := s.AgentController; nonNilInterface(controller) {
 		var err error
 		if request.Replacement != nil {
 			atomicController, atomicOK := controller.(AgentViewAtomicController)

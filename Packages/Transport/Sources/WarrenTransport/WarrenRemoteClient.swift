@@ -650,6 +650,7 @@ public actor WarrenRemoteClient {
         terminalGroupID: String? = nil,
         command: String? = nil,
         kind: String? = nil,
+        agentHandler: String? = nil,
         title: String? = nil,
         runtimeKind: String? = nil
     ) async throws -> WarrenRemoteSession {
@@ -658,6 +659,7 @@ public actor WarrenRemoteClient {
         if let terminalGroupID, !terminalGroupID.isEmpty { params["group"] = terminalGroupID }
         if let command { params["command"] = command }
         if let kind { params["kind"] = kind }
+        if let agentHandler { params["agentHandler"] = agentHandler }
         if let title { params["title"] = title }
         if let runtimeKind { params["runtimeKind"] = runtimeKind }
         return try await request("session.create", params: params, decoding: WarrenRemoteSession.self)

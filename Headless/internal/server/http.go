@@ -1082,8 +1082,9 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	_ = connection.SetReadDeadline(time.Time{})
-	state, revision := s.Service.RosterVersion(request.Context())
 	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
+	state, revision := s.Service.RosterVersion(request.Context())
+	state = projectRosterCapabilities(state, peer.capabilitiesList())
 	if err := peer.writeJSON(map[string]any{
 		"t": "welcome", "version": api.Version, "host": state.Host,
 		"capabilities": peer.capabilitiesList(),
@@ -1227,8 +1228,9 @@ func (s *HTTPServer) HandleRelayControl(
 		entry.authenticated = true
 		entry.stateMu.Unlock()
 		s.registerPeer(peer)
-		state, revision := s.Service.RosterVersion(ctx)
 		peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), auth.Capabilities))
+		state, revision := s.Service.RosterVersion(ctx)
+		state = projectRosterCapabilities(state, peer.capabilitiesList())
 		if err := peer.writeJSON(map[string]any{
 			"t": "welcome", "version": api.Version, "host": state.Host,
 			"capabilities": peer.capabilitiesList(),
@@ -1829,6 +1831,7 @@ func (p *wsPeer) startRoster(parent context.Context, initial api.State, initialR
 		}
 		refresh := func() bool {
 			next, storeRevision := p.server.Service.RosterVersion(ctx)
+			next = projectRosterCapabilities(next, p.capabilitiesList())
 			observedRevision = storeRevision
 			return publish(next, next.Revision)
 		}
@@ -1870,8 +1873,35 @@ func makeRoster(state api.State) rosterMessage {
 	return rosterMessage{Type: "roster", State: state}
 }
 
+// projectRosterCapabilities applies the connection-level negotiation to the
+// Host-computed Session capability set. The durable/observer roster retains
+// provider capabilities; each WebSocket receives only the intersection it can
+// actually decode and execute.
+func projectRosterCapabilities(state api.State, connection []string) api.State {
+	for index := range state.Sessions {
+		values := state.Sessions[index].AgentCapabilities
+		if values == nil {
+			// A roster produced by an older embedded Service has no Session-level
+			// field. Treat it as unknown and preserve the established connection
+			// capability fallback instead of denying every control.
+			values = api.AgentViewCapabilities
+		}
+		allowed := make([]string, 0, len(values))
+		for _, value := range values {
+			if api.SupportsCapability(connection, value) {
+				allowed = append(allowed, value)
+			}
+		}
+		state.Sessions[index].AgentCapabilities = api.NormalizeCapabilityList(allowed)
+	}
+	return state
+}
+
 func publicSession(session api.Session) api.Session {
 	session.OutputCursor = ""
+	if session.AgentCapabilities == nil {
+		session.AgentCapabilities = []string{}
+	}
 	return session
 }
 
@@ -1965,6 +1995,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
 		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityInteractions) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInteractions, request.Session)
+		}
 		result, err := p.server.Service.respondAgentInteraction(ctx, request)
 		if err != nil {
 			return err
@@ -1987,6 +2020,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
+		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityInterrupt) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInterrupt, request.Session)
 		}
 		result, err := p.server.Service.interruptAgentTurn(ctx, request)
 		if err != nil {
@@ -2013,6 +2049,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
 		}
+		if len(request.Attachments) > 0 && !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
+		}
 		result, err := p.server.Service.sendAgentMessage(ctx, request)
 		if err != nil {
 			return err
@@ -2030,6 +2069,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
 		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
+		}
 		result, err := p.server.Service.prepareAgentAttachment(ctx, request.Session, request)
 		if err != nil {
 			return err
@@ -2045,6 +2087,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
+		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
 		}
 		result, err := p.server.Service.putAgentAttachmentChunk(ctx, request)
 		if err != nil {
@@ -2062,6 +2107,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
 		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
+		}
 		result, err := p.server.Service.completeAgentAttachment(ctx, request)
 		if err != nil {
 			return err
@@ -2077,6 +2125,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		if err := p.requireAgentControl(request.Session); err != nil {
 			return err
+		}
+		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
+			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
 		}
 		result, err := p.server.Service.abortAgentAttachment(ctx, request)
 		if err != nil {
@@ -2108,6 +2159,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if refreshed, ok := p.server.Service.Session(sessionID); ok {
 			session = refreshed
 		}
+		// The subscription response is also a Session-level capability
+		// snapshot. Apply the same connection intersection used by roster
+		// messages so clients do not briefly enable controls from Host-global
+		// capabilities while switching Sessions.
+		session.AgentCapabilities = p.server.Service.agentCapabilitiesForSession(sessionID, session)
+		if handler := p.server.Service.agentHandlerForSession(sessionID); handler != "" {
+			session.AgentHandler = handler
+		}
+		session = projectRosterCapabilities(api.State{Sessions: []api.Session{session}}, p.capabilitiesList()).Sessions[0]
 		lock := p.server.Service.broadcastLock(sessionID)
 		if err := lock.LockContext(ctx); err != nil {
 			return err
@@ -2423,30 +2483,33 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return errors.New("workspace and terminal group are mutually exclusive")
 		}
 		if groupID != "" {
-			value, err = p.server.Service.CreateGroupSession(
+			value, err = p.server.Service.CreateGroupSessionWithHandler(
 				ctx,
 				groupID,
 				stringParam(params, "command"),
 				stringParam(params, "kind"),
 				stringParam(params, "title"),
 				stringParam(params, "runtimeKind"),
+				stringParam(params, "agentHandler"),
 			)
 		} else if workspaceID != "" {
-			value, err = p.server.Service.CreateSession(
+			value, err = p.server.Service.CreateSessionWithHandler(
 				ctx,
 				workspaceID,
 				stringParam(params, "command"),
 				stringParam(params, "kind"),
 				stringParam(params, "title"),
 				stringParam(params, "runtimeKind"),
+				stringParam(params, "agentHandler"),
 			)
 		} else {
-			value, err = p.server.Service.CreateDefaultGroupSession(
+			value, err = p.server.Service.CreateDefaultGroupSessionWithHandler(
 				ctx,
 				stringParam(params, "command"),
 				stringParam(params, "kind"),
 				stringParam(params, "title"),
 				stringParam(params, "runtimeKind"),
+				stringParam(params, "agentHandler"),
 			)
 		}
 		if err != nil {

@@ -225,6 +225,7 @@ func main() {
 			return nil
 		},
 	}
+	service.AgentProviders = server.NewTUIAgentProviderRegistry(service)
 	serviceContext, stopService := context.WithCancel(context.Background())
 	service.Start(serviceContext)
 	defer func() {

@@ -256,6 +256,16 @@ function sessionToTab(session = {}) {
     agentTurn: session.agentTurn || null,
     pinned: session.pinned || false,
   };
+  if (Object.prototype.hasOwnProperty.call(session, "agentHandler")) {
+    tab.agentHandler = session.agentHandler || "";
+  }
+  // null distinguishes an older Host that omitted the field from a modern
+  // Host's explicit empty capability set.
+  if (Object.prototype.hasOwnProperty.call(session, "agentCapabilities")) {
+    tab.agentCapabilities = Array.isArray(session.agentCapabilities)
+      ? [...session.agentCapabilities]
+      : [];
+  }
   // Session scope fields are optional in older Hosts. Preserve them when
   // present so group-scoped sessions do not lose their ownership metadata.
   for (const key of ["terminalGroup", "scope"]) {

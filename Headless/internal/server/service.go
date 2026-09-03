@@ -118,6 +118,15 @@ type Service struct {
 	// CLI session ID and transcript path. Nil disables installation; the
 	// finder then remains the best-effort fallback.
 	AgentHooks func() error
+	// AgentProviders is the optional provider registry used by the lifecycle
+	// supervisor. Nil retains the legacy built-in transcript path for
+	// embedders that have not opted into provider handles yet.
+	AgentProviders *AgentProviderRegistry
+	// ProviderRegistry and AgentRegistry are compatibility aliases for
+	// embedders that used the shorter names while this abstraction was being
+	// introduced. When more than one is set, AgentProviders wins.
+	ProviderRegistry *AgentProviderRegistry
+	AgentRegistry    *AgentProviderRegistry
 	// AgentController is an optional provider-native bridge for structured
 	// Agent View actions. When absent, ordinary text keeps its legacy PTY path,
 	// while interaction and interrupt requests fail explicitly.
@@ -177,6 +186,11 @@ type Service struct {
 	openCodeBindingMu sync.Mutex
 	agents            map[string]*agentSession
 	agentEpoch        uint64
+	// agentRosterRevision advances the observer-facing roster token when live
+	// Agent handle state changes without a durable Store write. This lets
+	// roster-delta clients receive capability/rebind updates immediately while
+	// ChangesSince continues to track only durable mutations.
+	agentRosterRevision atomic.Uint64
 	// Agent View upload and idempotency state is device-local to this Host. It
 	// contains no authentication material and is discarded on daemon restart.
 	agentViewMu             sync.Mutex
@@ -217,6 +231,13 @@ type peerOutputStream struct {
 type agentSession struct {
 	mu      sync.Mutex
 	watcher *agent.Watcher
+	// handle is the provider-owned lifecycle object. watcher/tailer remain
+	// populated for compatibility with existing tests and the legacy PTY path.
+	handle       AgentHandle
+	bindingKey   string
+	providerKind string
+	handlerKind  string
+	capabilities CapabilitySet
 	// tailer is non-nil only for OpenCode. It owns the read-only projection
 	// from the provider's SQLite store into watcher.Path().
 	tailer *agent.OpenCodeTailer
@@ -518,6 +539,7 @@ func (s *Service) Shutdown() {
 	s.agentsMu.Lock()
 	agentWatchers := make([]*agent.Watcher, 0, len(s.agents))
 	agentTailers := make([]*agent.OpenCodeTailer, 0, len(s.agents))
+	agentHandles := make([]AgentHandle, 0, len(s.agents))
 	for _, agentSession := range s.agents {
 		if agentSession == nil {
 			continue
@@ -528,6 +550,19 @@ func (s *Service) Shutdown() {
 		if agentSession.tailer != nil {
 			agentTailers = append(agentTailers, agentSession.tailer)
 		}
+		agentSession.mu.Lock()
+		if agentSession.handle != nil {
+			agentHandles = append(agentHandles, agentSession.handle)
+			// Detach before invoking Close so a repeated Shutdown (or a
+			// callback racing shutdown) cannot close or mutate the same handle
+			// twice.
+			agentSession.handle = nil
+			agentSession.bindingKey = ""
+			agentSession.providerKind = ""
+			agentSession.handlerKind = ""
+			agentSession.capabilities = nil
+		}
+		agentSession.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
 	for _, watcher := range agentWatchers {
@@ -535,6 +570,9 @@ func (s *Service) Shutdown() {
 	}
 	for _, tailer := range agentTailers {
 		tailer.Close()
+	}
+	for _, handle := range agentHandles {
+		_ = handle.Close()
 	}
 }
 
@@ -603,11 +641,14 @@ func (s *Service) reconcile(ctx context.Context) {
 	defer cancel()
 	running := s.runningSessions(probeContext)
 	state := s.Store.Snapshot()
+	seenSessions := make(map[string]struct{}, len(state.Sessions))
 	for _, session := range state.Sessions {
 		if session.Lifecycle != "running" {
 			s.stopOutput(session.ID, false)
+			s.stopAgent(session.ID)
 			continue
 		}
+		seenSessions[session.ID] = struct{}{}
 		if session.RuntimeKind != "" && session.RuntimeKind != settings.RuntimeGhostline {
 			// Preserve ownership metadata for removed runtimes. Do not silently
 			// reassign or mark such sessions ended during reconciliation.
@@ -625,6 +666,26 @@ func (s *Service) reconcile(ctx context.Context) {
 		_, _ = s.ensureOutput(ctx, session)
 		s.applyAgentState(session)
 		_, _ = s.ensureAgentWithState(probeContext, session, &state)
+	}
+	s.stopMissingAgents(seenSessions)
+}
+
+// stopMissingAgents closes provider handles whose Session was deleted from
+// the durable roster. Without this sweep a forced Session delete could leave
+// a transcript watcher alive forever because no future reconcile visits its
+// old ID.
+func (s *Service) stopMissingAgents(seen map[string]struct{}) {
+	s.lazyInit()
+	var stale []string
+	s.agentsMu.Lock()
+	for sessionID := range s.agents {
+		if _, ok := seen[sessionID]; !ok {
+			stale = append(stale, sessionID)
+		}
+	}
+	s.agentsMu.Unlock()
+	for _, sessionID := range stale {
+		s.stopAgent(sessionID)
 	}
 }
 
@@ -779,6 +840,9 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// wire token so every current snapshot carries a non-zero revision without
 	// persisting it into State.
 	state.Revision = revision + 1
+	if agentRevision := s.agentRosterRevision.Load(); agentRevision > state.Revision {
+		state.Revision = agentRevision
+	}
 	sortTasks(state.Tasks)
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
@@ -802,6 +866,10 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
 		session.OutputCursor = ""
+		session.AgentCapabilities = s.agentCapabilitiesForSession(session.ID, *session)
+		if handler := s.agentHandlerForSession(session.ID); handler != "" {
+			session.AgentHandler = handler
+		}
 		if session.Scope == "" {
 			session.Scope = session.ScopeKind()
 		}
@@ -2438,23 +2506,38 @@ func apiGitPullRequest(pr *git.PullRequest) *api.GitPullRequest {
 }
 
 func (s *Service) CreateSession(ctx context.Context, workspaceID, command, kind, title, runtimeKind string) (api.Session, error) {
+	return s.CreateSessionWithHandler(ctx, workspaceID, command, kind, title, runtimeKind, "")
+}
+
+// CreateSessionWithHandler is the handler-aware form used by protocol
+// clients that explicitly select a transport such as codex/acp. The original
+// CreateSession signature remains source-compatible for shell and TUI users.
+func (s *Service) CreateSessionWithHandler(ctx context.Context, workspaceID, command, kind, title, runtimeKind, agentHandler string) (api.Session, error) {
 	if workspaceID != "" {
 		if projectLock := s.lockWorkspaceForSession(workspaceID); projectLock != nil {
 			defer projectLock.RUnlock()
 		}
 	}
-	return s.createSession(ctx, workspaceID, "", command, kind, title, runtimeKind)
+	return s.createSession(ctx, workspaceID, "", command, kind, title, runtimeKind, agentHandler)
 }
 
 func (s *Service) CreateGroupSession(ctx context.Context, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
+	return s.CreateGroupSessionWithHandler(ctx, groupID, command, kind, title, runtimeKind, "")
+}
+
+func (s *Service) CreateGroupSessionWithHandler(ctx context.Context, groupID, command, kind, title, runtimeKind, agentHandler string) (api.Session, error) {
 	s.terminalGroupLifecycleMu.Lock()
 	defer s.terminalGroupLifecycleMu.Unlock()
-	return s.createSession(ctx, "", groupID, command, kind, title, runtimeKind)
+	return s.createSession(ctx, "", groupID, command, kind, title, runtimeKind, agentHandler)
 }
 
 // CreateDefaultGroupSession creates a standalone shell in the first ordered
 // Group, recreating Inbox when a Host has no Groups left.
 func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, title, runtimeKind string) (api.Session, error) {
+	return s.CreateDefaultGroupSessionWithHandler(ctx, command, kind, title, runtimeKind, "")
+}
+
+func (s *Service) CreateDefaultGroupSessionWithHandler(ctx context.Context, command, kind, title, runtimeKind, agentHandler string) (api.Session, error) {
 	s.terminalGroupLifecycleMu.Lock()
 	defer s.terminalGroupLifecycleMu.Unlock()
 
@@ -2462,7 +2545,7 @@ func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, 
 	if err != nil {
 		return api.Session{}, err
 	}
-	return s.createSession(ctx, "", group.ID, command, kind, title, runtimeKind)
+	return s.createSession(ctx, "", group.ID, command, kind, title, runtimeKind, agentHandler)
 }
 
 // sessionEnvironment returns the per-session bindings together with the
@@ -2488,7 +2571,7 @@ func (s *Service) sessionEnvironment(id, kind string) ([]string, error) {
 	return env, nil
 }
 
-func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
+func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string, agentHandler ...string) (api.Session, error) {
 	startedAt := time.Now()
 	if workspaceID == "" && groupID == "" {
 		return api.Session{}, errors.New("workspace or terminal group is required")
@@ -2526,8 +2609,22 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	}
 	id := store.NewID()
 	runtimeName := "warren_" + strings.ReplaceAll(id, "-", "")
+	kind = normalizeProviderKind(kind)
 	if kind == "" {
 		kind = "shell"
+	}
+	kind, embeddedAgentHandler := splitAgentKey(kind)
+	selectedAgentHandler := ""
+	if embeddedAgentHandler != "" {
+		selectedAgentHandler = embeddedAgentHandler
+	}
+	if len(agentHandler) > 0 {
+		explicitHandler := normalizeProviderKind(agentHandler[0])
+		if family, embeddedHandler := splitAgentKey(explicitHandler); family == kind && embeddedHandler != "" {
+			selectedAgentHandler = embeddedHandler
+		} else if explicitHandler != "" {
+			selectedAgentHandler = explicitHandler
+		}
 	}
 	if kind == "opencode" {
 		if strings.TrimSpace(command) == "" {
@@ -2625,6 +2722,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		Title:           defaultTitle,
 		CustomTitle:     customTitle,
 		Kind:            kind,
+		AgentHandler:    selectedAgentHandler,
 		Command:         command,
 		Runtime:         runtimeName,
 		RuntimeKind:     sessionKind,
@@ -3510,6 +3608,9 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 // running sessions. A deep Store snapshot is intentionally expensive, so the
 // lifecycle loop must not take one for every session it inspects.
 func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
+	if registry := s.agentProviderRegistry(); registry != nil {
+		return s.ensureAgentWithRegistry(ctx, session, state, registry)
+	}
 	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
@@ -3835,6 +3936,7 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		// the epoch so attached clients drop the old transcript's events and
 		// refetch the new rollout from history.
 		s.bumpAgentEpoch()
+		s.bumpAgentRosterRevision()
 		s.broadcastAgentReset(sessionID)
 	}
 	var tailer *agent.OpenCodeTailer
@@ -3894,6 +3996,7 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	current.watcher = watcher
 	current.tailer = tailer
 	s.agentsMu.Unlock()
+	s.bumpAgentRosterRevision()
 	if closing != nil {
 		closing.Close()
 	}
@@ -4064,52 +4167,78 @@ func (s *Service) persistAgentMetaWithState(state *api.State, sessionID, agentSe
 // recordAgentEvents stores a bounded event history and forwards the batch to
 // every peer attached to the session.
 func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
+	s.recordAgentEventsForHandle(sessionID, nil, events, status)
+}
+
+// recordAgentEventsForHandle is the provider callback path. The handle
+// identity is checked while the projection lock is held, so a callback that
+// races a rebind cannot append events from the retired transcript to the new
+// Agent session.
+func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHandle, events []api.AgentEvent, status api.AgentStatus) {
 	if len(events) == 0 {
 		return
+	}
+	var broadcastLock *sessionLock
+	if expected != nil {
+		broadcastLock = s.broadcastLock(sessionID)
+		broadcastLock.Lock()
+		defer broadcastLock.Unlock()
 	}
 	s.lazyInit()
 	s.agentsMu.Lock()
 	effectiveStatus := status
 	shouldTryTitle := false
-	if entry := s.agents[sessionID]; entry != nil {
-		entry.mu.Lock()
-		entry.events = append(entry.events, events...)
-		if len(entry.events) > 2000 {
-			entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
+	entry := s.agents[sessionID]
+	if entry == nil {
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	if expected != nil && entry.handle != expected {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.events = append(entry.events, events...)
+	if len(entry.events) > 2000 {
+		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
+	}
+	if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
+		effectiveStatus = entry.status
+	} else {
+		entry.status = status
+		effectiveStatus = entry.status
+	}
+	for _, event := range events {
+		if event.Sidechain {
+			continue
 		}
-		if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
-			effectiveStatus = entry.status
-		} else {
-			entry.status = status
-			effectiveStatus = entry.status
-		}
-		for _, event := range events {
-			if event.Sidechain {
+		switch event.Type {
+		case "user":
+			content := strings.TrimSpace(event.Content)
+			if content == "" || isTitleSystemContext(content) {
 				continue
 			}
-			switch event.Type {
-			case "user":
-				content := strings.TrimSpace(event.Content)
-				if content == "" || isTitleSystemContext(content) {
-					continue
-				}
-				appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event)
-			case "assistant":
-				appendTitleMessage(&entry.titleAssistant, &entry.titleAssistantProvider, &entry.titleAssistantID, event)
-				// Codex and Claude emit complete assistant messages as ordinary
-				// events. OpenCode emits an initial snapshot followed by deltas;
-				// its turn-complete callback is the completion boundary unless a
-				// terminal finish reason is attached directly to this event.
-				if entry.titleAssistant != "" && (event.StopReason != "" || (!event.ContentDelta && event.Provider != "opencode")) {
-					entry.titleAssistantComplete = true
-				}
+			appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event)
+		case "assistant":
+			appendTitleMessage(&entry.titleAssistant, &entry.titleAssistantProvider, &entry.titleAssistantID, event)
+			// Codex and Claude emit complete assistant messages as ordinary
+			// events. OpenCode emits an initial snapshot followed by deltas;
+			// its turn-complete callback is the completion boundary unless a
+			// terminal finish reason is attached directly to this event.
+			if entry.titleAssistant != "" && (event.StopReason != "" || (!event.ContentDelta && event.Provider != "opencode")) {
+				entry.titleAssistantComplete = true
 			}
 		}
-		shouldTryTitle = entry.titleAssistantComplete
-		entry.mu.Unlock()
 	}
+	shouldTryTitle = entry.titleAssistantComplete
+	entry.mu.Unlock()
 	s.agentsMu.Unlock()
-	s.broadcastAgentIncrements(sessionID, events, effectiveStatus)
+	if expected != nil {
+		s.broadcastAgentIncrementsLocked(sessionID, events, effectiveStatus)
+	} else {
+		s.broadcastAgentIncrements(sessionID, events, effectiveStatus)
+	}
 	if shouldTryTitle {
 		s.tryStartSessionTitle(sessionID)
 	}
@@ -4118,15 +4247,29 @@ func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, s
 // recordAgentStatus forwards a status change that arrived without new
 // transcript events, such as a liveness warning.
 func (s *Service) recordAgentStatus(sessionID string, status api.AgentStatus) {
-	s.setAgentStatus(sessionID, status, false)
+	s.setAgentStatusForHandle(sessionID, nil, status, false)
+}
+
+func (s *Service) recordAgentStatusForHandle(sessionID string, handle AgentHandle, status api.AgentStatus) {
+	s.setAgentStatusForHandle(sessionID, handle, status, false)
 }
 
 // recordAgentTurns stores the latest turn cursor and optionally broadcasts
 // live boundaries. Historical replay updates the snapshot without waking a
 // waiter for work that completed before it subscribed.
 func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broadcast bool) {
+	s.recordAgentTurnsForHandle(sessionID, nil, turns, broadcast)
+}
+
+func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHandle, turns []api.AgentTurn, broadcast bool) {
 	if len(turns) == 0 {
 		return
+	}
+	var broadcastLock *sessionLock
+	if expected != nil {
+		broadcastLock = s.broadcastLock(sessionID)
+		broadcastLock.Lock()
+		defer broadcastLock.Unlock()
 	}
 	s.lazyInit()
 	for _, turn := range turns {
@@ -4137,6 +4280,11 @@ func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broa
 			s.agents[sessionID] = entry
 		}
 		entry.mu.Lock()
+		if expected != nil && entry.handle != expected {
+			entry.mu.Unlock()
+			s.agentsMu.Unlock()
+			return
+		}
 		entry.turn = turn
 		if turn.Status == api.AgentTurnCompleted && strings.TrimSpace(entry.titleAssistant) != "" {
 			entry.titleAssistantComplete = true
@@ -4144,7 +4292,11 @@ func (s *Service) recordAgentTurns(sessionID string, turns []api.AgentTurn, broa
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
 		if broadcast {
-			s.broadcastAgentTurn(sessionID, turn)
+			if expected != nil {
+				s.broadcastAgentTurnLocked(sessionID, turn)
+			} else {
+				s.broadcastAgentTurn(sessionID, turn)
+			}
 		}
 		if turn.Status == api.AgentTurnCompleted {
 			s.tryStartSessionTitle(sessionID)
@@ -4308,6 +4460,16 @@ func (s *Service) forceAgentStatus(sessionID string, status api.AgentStatus) {
 }
 
 func (s *Service) setAgentStatus(sessionID string, status api.AgentStatus, force bool) {
+	s.setAgentStatusForHandle(sessionID, nil, status, force)
+}
+
+func (s *Service) setAgentStatusForHandle(sessionID string, expected AgentHandle, status api.AgentStatus, force bool) {
+	var broadcastLock *sessionLock
+	if expected != nil {
+		broadcastLock = s.broadcastLock(sessionID)
+		broadcastLock.Lock()
+		defer broadcastLock.Unlock()
+	}
 	s.lazyInit()
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
@@ -4316,6 +4478,11 @@ func (s *Service) setAgentStatus(sessionID string, status api.AgentStatus, force
 		s.agents[sessionID] = entry
 	}
 	entry.mu.Lock()
+	if expected != nil && entry.handle != expected {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
 	if !force && entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
@@ -4324,7 +4491,11 @@ func (s *Service) setAgentStatus(sessionID string, status api.AgentStatus, force
 	entry.status = status
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
-	s.broadcastAgentStatus(sessionID, status)
+	if expected != nil {
+		s.broadcastAgentStatusLocked(sessionID, status)
+	} else {
+		s.broadcastAgentStatus(sessionID, status)
+	}
 }
 
 func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
@@ -4694,10 +4865,17 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	var watcher *agent.Watcher
+	var handle AgentHandle
 	if entry != nil {
 		watcher = entry.watcher
+		entry.mu.Lock()
+		handle = entry.handle
+		entry.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
+	if handle != nil {
+		return nil
+	}
 	if watcher == nil {
 		// A dedicated Agent TUI is input-ready before its first prompt creates
 		// a transcript binding. Allow the initial subscription so agent send can
@@ -4799,9 +4977,21 @@ func (s *Service) stopAgent(sessionID string) {
 	delete(s.agents, sessionID)
 	var watcher *agent.Watcher
 	var tailer *agent.OpenCodeTailer
+	var handle AgentHandle
+	hadAgent := false
 	if entry != nil {
 		watcher = entry.watcher
 		tailer = entry.tailer
+		hadAgent = watcher != nil || tailer != nil
+		entry.mu.Lock()
+		handle = entry.handle
+		hadAgent = hadAgent || handle != nil
+		entry.handle = nil
+		entry.bindingKey = ""
+		entry.providerKind = ""
+		entry.handlerKind = ""
+		entry.capabilities = nil
+		entry.mu.Unlock()
 	}
 	s.agentsMu.Unlock()
 	if watcher != nil {
@@ -4810,6 +5000,12 @@ func (s *Service) stopAgent(sessionID string) {
 	if tailer != nil {
 		tailer.Close()
 	}
+	if handle != nil {
+		_ = handle.Close()
+	}
+	if hadAgent {
+		s.bumpAgentRosterRevision()
+	}
 }
 
 // broadcastAgentIncrements pushes a live batch of agent events to attached
@@ -4817,18 +5013,32 @@ func (s *Service) stopAgent(sessionID string) {
 // agentMessageMaxBytes, then broadcasts the accompanying complete status as
 // its own lightweight message.
 func (s *Service) broadcastAgentIncrements(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
+	lock := s.broadcastLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	s.broadcastAgentIncrementsLocked(sessionID, events, status)
+}
+
+func (s *Service) broadcastAgentIncrementsLocked(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
 	if len(events) > 0 {
 		for _, batch := range splitAgentEvents(events, agentMessageMaxBytes) {
-			s.broadcastAgentBatch(sessionID, batch)
+			s.broadcastAgentBatchLocked(sessionID, batch)
 		}
 	}
 	if status.Activity != "" {
-		s.broadcastAgentStatus(sessionID, status)
+		s.broadcastAgentStatusLocked(sessionID, status)
 	}
 }
 
 func (s *Service) broadcastAgentBatch(sessionID string, events []api.AgentEvent) {
-	s.broadcastAgent(func(peer *wsPeer) error {
+	lock := s.broadcastLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	s.broadcastAgentBatchLocked(sessionID, events)
+}
+
+func (s *Service) broadcastAgentBatchLocked(sessionID string, events []api.AgentEvent) {
+	s.broadcastAgentLocked(func(peer *wsPeer) error {
 		return peer.enqueueAgentEvents(sessionID, events)
 	}, sessionID)
 }
@@ -4851,7 +5061,17 @@ func (s *Service) broadcastAgentStatus(sessionID string, status api.AgentStatus)
 	if status.Activity == "" {
 		return
 	}
-	s.broadcastAgent(func(peer *wsPeer) error {
+	lock := s.broadcastLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	s.broadcastAgentStatusLocked(sessionID, status)
+}
+
+func (s *Service) broadcastAgentStatusLocked(sessionID string, status api.AgentStatus) {
+	if status.Activity == "" {
+		return
+	}
+	s.broadcastAgentLocked(func(peer *wsPeer) error {
 		return peer.enqueueAgentStatus(sessionID, status)
 	}, sessionID)
 }
@@ -4860,7 +5080,17 @@ func (s *Service) broadcastAgentTurn(sessionID string, turn api.AgentTurn) {
 	if turn.Status == "" {
 		return
 	}
-	s.broadcastAgent(func(peer *wsPeer) error {
+	lock := s.broadcastLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	s.broadcastAgentTurnLocked(sessionID, turn)
+}
+
+func (s *Service) broadcastAgentTurnLocked(sessionID string, turn api.AgentTurn) {
+	if turn.Status == "" {
+		return
+	}
+	s.broadcastAgentLocked(func(peer *wsPeer) error {
 		return peer.enqueueAgentTurn(sessionID, turn)
 	}, sessionID)
 }
@@ -4871,6 +5101,10 @@ func (s *Service) broadcastAgent(send func(*wsPeer) error, sessionID string) {
 	lock := s.broadcastLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
+	s.broadcastAgentLocked(send, sessionID)
+}
+
+func (s *Service) broadcastAgentLocked(send func(*wsPeer) error, sessionID string) {
 	s.outputMu.Lock()
 	unique := make(map[*wsPeer]struct{}, len(s.peers[sessionID])+len(s.agentPeers[sessionID]))
 	for peer := range s.peers[sessionID] {
