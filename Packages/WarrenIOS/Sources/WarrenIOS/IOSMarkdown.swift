@@ -538,7 +538,7 @@ struct IOSMarkdownView: View {
         case .heading(let level, let text):
             IOSMarkdownInlineText(value: text, font: headingFont(level))
                 .foregroundStyle(IOSTheme.text)
-                .padding(.top, level <= 2 ? 4 : 1)
+                .padding(.top, level <= 2 ? 10 : 4)
         case .unorderedList(let items), .orderedList(let items):
             IOSMarkdownListView(items: items, font: font)
         case .quote(let value):
@@ -569,8 +569,8 @@ struct IOSMarkdownView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .system(.title3, weight: .semibold)
-        case 2: return .system(.headline, weight: .semibold)
+        case 1: return .system(.title3, weight: .bold)
+        case 2: return .system(.headline, weight: .bold)
         case 3: return .system(.subheadline, weight: .semibold)
         case 4: return .system(.subheadline, weight: .semibold)
         default: return .system(.footnote, weight: .semibold)
@@ -580,10 +580,10 @@ struct IOSMarkdownView: View {
     private func blockSpacing(after block: IOSMarkdownBlock) -> CGFloat {
         switch block {
         case .heading: return 8
-        case .paragraph: return 9
-        case .unorderedList, .orderedList: return 7
+        case .paragraph: return 10
+        case .unorderedList, .orderedList: return 8
         case .quote: return 9
-        case .table, .code: return 10
+        case .table, .code: return 12
         case .divider: return 8
         }
     }
@@ -604,14 +604,14 @@ private struct IOSMarkdownInlineText: View {
         ) {
             Text(attributed)
                 .font(font)
-                .lineSpacing(3)
+                .lineSpacing(4)
                 .iosNaturalWrap()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .tint(IOSTheme.link)
         } else {
             Text(value)
                 .font(font)
-                .lineSpacing(3)
+                .lineSpacing(4)
                 .iosNaturalWrap()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -629,10 +629,23 @@ private struct IOSMarkdownInlineText: View {
             if current.isEmpty || next.isEmpty || current.hasSuffix("  ") || current.hasSuffix("\\") {
                 result += "\n"
             } else {
-                // CommonMark treats a single newline as a soft break. Agent
-                // transcripts are authored line-by-line, so retain that
-                // intentional rhythm as a hard break on the phone.
-                result += "  \n"
+                let trimmed = current.trimmingCharacters(in: .whitespaces)
+                let isSoftWrap = trimmed.count > 50
+                    && !trimmed.hasSuffix(".")
+                    && !trimmed.hasSuffix("。")
+                    && !trimmed.hasSuffix(":")
+                    && !trimmed.hasSuffix("：")
+                    && !trimmed.hasSuffix("!")
+                    && !trimmed.hasSuffix("！")
+                    && !trimmed.hasSuffix("?")
+                    && !trimmed.hasSuffix("？")
+                    && !trimmed.hasSuffix(";")
+                    && !trimmed.hasSuffix("；")
+                if isSoftWrap {
+                    result += " "
+                } else {
+                    result += "  \n"
+                }
             }
         }
         return result
@@ -644,14 +657,14 @@ private struct IOSMarkdownListView: View {
     let font: Font
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: 7) {
                     marker(item)
-                        .frame(minWidth: item.taskState == nil && item.marker != "•" ? 25 : 18, alignment: .trailing)
+                        .frame(minWidth: item.taskState == nil && item.marker != "•" ? 22 : 16, alignment: .trailing)
                     IOSMarkdownInlineText(value: item.text, font: font)
                 }
-                .padding(.leading, CGFloat(item.depth) * 18)
+                .padding(.leading, CGFloat(item.depth) * 14)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -114,15 +114,14 @@ public enum IOSTypography {
     public static let body = Font.system(.body, weight: .regular)
     public static let bodyEmphasis = Font.system(.callout, weight: .medium)
     public static let secondaryBody = Font.system(.callout, weight: .regular)
-    /// Paseo's conversation measure is 15pt with roughly a 1.4 line-height.
-    /// `subheadline` maps to that size while retaining Dynamic Type scaling,
-    /// unlike a fixed point-size font.
-    public static let conversation = Font.system(.subheadline, weight: .regular)
-    public static let conversationEmphasis = Font.system(.subheadline, weight: .medium)
+    /// Paseo's conversation measure is 16pt with generous line-height for mobile reading.
+    /// `callout` maps to that size while retaining Dynamic Type scaling.
+    public static let conversation = Font.system(.callout, weight: .regular)
+    public static let conversationEmphasis = Font.system(.callout, weight: .medium)
     /// Agent prose stays in the standard SF Pro family so its text shape
     /// matches the surrounding conversation while retaining Dynamic Type.
-    public static let agentConversation = Font.system(.subheadline, weight: .regular)
-    public static let userMessage = Font.system(.subheadline, weight: .regular)
+    public static let agentConversation = Font.system(.callout, weight: .regular)
+    public static let userMessage = Font.system(.callout, weight: .regular)
     /// Avenir Next gives the live activity cue a warmer editorial voice while
     /// leaving ordinary navigation and transcript text in SF Pro.
     public static let working = Font.custom("Avenir Next", size: 14, relativeTo: .subheadline).weight(.medium)

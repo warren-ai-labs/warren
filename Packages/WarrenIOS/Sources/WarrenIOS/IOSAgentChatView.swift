@@ -304,12 +304,7 @@ public struct AgentChatView: View {
                                 ForEach(blocks) { block in
                                     displayBlockView(
                                         block,
-                                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
-                                        isLastUser: userEventKey(for: block) == latestUserEventKey,
-                                        onEditResend: { value in
-                                            draft = value
-                                            composerFocused = true
-                                        }
+                                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
                                     ) { requestID, kind, response in
                                         model.respondToAgentInteraction(
                                             sessionID: sessionID,
@@ -567,11 +562,6 @@ public struct AgentChatView: View {
     private func refreshRenderedBlocks(for requestedSessionID: String? = nil) {
         let targetSessionID = requestedSessionID ?? sessionID
         renderedBlocks = agentDisplayBlocks(from: agentState.agentEventsBySessionID[targetSessionID] ?? [])
-    }
-
-    private func userEventKey(for block: AgentDisplayBlock) -> String? {
-        guard case .event(let event) = block, event.isUserEvent else { return nil }
-        return "\(event.sequence):\(event.id)"
     }
 
     private func handleTopOffset(
@@ -1192,12 +1182,6 @@ public struct AgentChatView: View {
         }
     }
 
-    private var latestUserEventKey: String? {
-        agentState.agentEventsBySessionID[sessionID]?
-            .last(where: \.isUserEvent)
-            .map { "\($0.sequence):\($0.id)" }
-    }
-
     private var shouldShowWorking: Bool {
         guard agentStatus?.activity == .working else { return false }
         guard let last = (agentState.agentEventsBySessionID[sessionID] ?? [])
@@ -1627,8 +1611,32 @@ private struct AgentActivityGroup {
 
     var title: String {
         var parts: [String] = []
-        if reasoningCount > 0 { parts.append("Thinking × \(reasoningCount)") }
-        if toolCount > 0 { parts.append("Tools × \(toolCount)") }
+        if reasoningCount > 0 {
+            parts.append(reasoningCount == 1 ? "Thinking" : "Thinking × \(reasoningCount)")
+        }
+        if toolCount > 0 {
+            if toolCount == 1, let firstTool = toolBlocks.first?.call.toolName {
+                parts.append(displayToolName(firstTool))
+            } else {
+                let toolNames = Set(toolBlocks.compactMap { $0.call.toolName?.lowercased() })
+                if toolNames.count == 1, let singleType = toolNames.first {
+                    switch singleType {
+                    case "read", "view_file", "viewfile":
+                        parts.append("Read \(toolCount) files")
+                    case "edit", "write", "apply_patch":
+                        parts.append("Edited \(toolCount) files")
+                    case "grep", "glob", "web_search":
+                        parts.append("Searched \(toolCount) times")
+                    case "shell":
+                        parts.append("Ran \(toolCount) commands")
+                    default:
+                        parts.append("\(displayToolName(singleType)) × \(toolCount)")
+                    }
+                } else {
+                    parts.append("Tools × \(toolCount)")
+                }
+            }
+        }
         return parts.isEmpty ? "Activity" : parts.joined(separator: " · ")
     }
 
@@ -1865,8 +1873,6 @@ private extension WarrenRemoteAgentEvent {
 private func displayBlockView(
     _ block: AgentDisplayBlock,
     canInteract: Bool,
-    isLastUser: Bool = false,
-    onEditResend: @escaping (String) -> Void = { _ in },
     onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 ) -> some View {
     switch block {
@@ -1874,8 +1880,6 @@ private func displayBlockView(
         AgentEventBlock(
             event: event,
             canInteract: canInteract,
-            isLastUser: isLastUser,
-            onEditResend: onEditResend,
             onInteraction: onInteraction
         )
     case .activity(let activity):
@@ -1886,21 +1890,15 @@ private func displayBlockView(
 private struct AgentEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
-    let isLastUser: Bool
-    let onEditResend: (String) -> Void
     let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 
     init(
         event: WarrenRemoteAgentEvent,
         canInteract: Bool = false,
-        isLastUser: Bool = false,
-        onEditResend: @escaping (String) -> Void = { _ in },
         onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never> = { _, _, _ in Task { true } }
     ) {
         self.event = event
         self.canInteract = canInteract
-        self.isLastUser = isLastUser
-        self.onEditResend = onEditResend
         self.onInteraction = onInteraction
     }
 
@@ -1909,26 +1907,18 @@ private struct AgentEventBlock: View {
         if isUser {
             HStack {
                 Spacer(minLength: 34)
-                VStack(alignment: .trailing, spacing: 4) {
-                    AgentMarkdownText(value: event.content ?? "", font: IOSTypography.userMessage)
-                        .foregroundStyle(IOSTheme.text)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 10)
-                        .background(IOSTheme.muted.opacity(0.82), in: UnevenRoundedRectangle(
-                            topLeadingRadius: WarrenRadius.sheet,
-                            bottomLeadingRadius: WarrenRadius.sheet,
-                            bottomTrailingRadius: WarrenRadius.sheet,
-                            topTrailingRadius: WarrenRadius.xs
-                        ))
-                    AgentMessageActions(
-                        event: event,
-                        isLastUser: isLastUser,
-                        alignment: .trailing,
-                        onEditResend: onEditResend
-                    )
-                }
-                .frame(maxWidth: 420, alignment: .trailing)
+                AgentMarkdownText(value: event.content ?? "", font: IOSTypography.userMessage)
+                    .foregroundStyle(IOSTheme.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
+                    .background(IOSTheme.muted.opacity(0.82), in: UnevenRoundedRectangle(
+                        topLeadingRadius: WarrenRadius.sheet,
+                        bottomLeadingRadius: WarrenRadius.sheet,
+                        bottomTrailingRadius: WarrenRadius.sheet,
+                        topTrailingRadius: WarrenRadius.xs
+                    ))
+                    .frame(maxWidth: 420, alignment: .trailing)
             }
             .padding(.vertical, 7)
         } else if isToolOutput {
@@ -1960,17 +1950,8 @@ private struct AgentEventBlock: View {
                 contentFont: IOSTypography.metadata
             )
         } else {
-            VStack(alignment: .leading, spacing: 3) {
-                eventBody
-                if event.isAssistantEvent {
-                    AgentMessageActions(
-                        event: event,
-                        alignment: .leading,
-                        onEditResend: onEditResend
-                    )
-                }
-            }
-            .padding(.vertical, 7)
+            eventBody
+                .padding(.vertical, 7)
         }
         }
     }
@@ -1995,6 +1976,7 @@ private struct AgentEventBlock: View {
                     .font(IOSTypography.code)
                     .foregroundStyle(IOSTheme.red)
                     .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let toolName = event.toolName, !toolName.isEmpty, event.content == nil, event.output == nil {
                 Text(toolName)
@@ -2051,34 +2033,6 @@ private struct AgentStatusRail: View {
             .padding(.vertical, verticalInset)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-    }
-}
-
-private struct AgentMessageActions: View {
-    let event: WarrenRemoteAgentEvent
-    var isLastUser = false
-    let alignment: Alignment
-    let onEditResend: (String) -> Void
-
-    @ViewBuilder
-    var body: some View {
-        if isLastUser,
-           let text = IOSAgentMessageActions.copyableText(for: event) {
-            HStack(spacing: 4) {
-                Button {
-                    onEditResend(text)
-                } label: {
-                    Image(systemName: "pencil")
-                        .font(IOSTypography.label)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Edit and resend message")
-                .frame(width: 44, height: 44)
-            }
-            .foregroundStyle(IOSTheme.tertiaryText)
-            .frame(maxWidth: .infinity, alignment: alignment)
-            .accessibilityElement(children: .contain)
-        }
     }
 }
 
@@ -2691,16 +2645,16 @@ private struct AgentActivityGroupBlock: View {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.72))
+                        .foregroundStyle(activity.status == .running ? IOSTheme.secondaryText : IOSTheme.secondaryText.opacity(0.55))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .frame(width: 10, alignment: .center)
                     Image(systemName: activity.toolCount > 0 ? "terminal" : "brain")
                         .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(IOSTheme.secondaryText)
+                        .foregroundStyle(activity.status == .running ? IOSTheme.text : IOSTheme.secondaryText.opacity(0.75))
                         .frame(width: 14, height: 14, alignment: .center)
                     Text(activity.title)
                         .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.text)
+                        .foregroundStyle(activity.status == .running ? IOSTheme.text : (activity.status == .failed ? IOSTheme.red : IOSTheme.secondaryText))
                         .lineLimit(1)
                     if !expanded, let summary = activity.preview {
                         Text(summary)
@@ -2748,7 +2702,12 @@ private struct AgentActivityGroupBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             if expanded || activity.status == .running || activity.status == .failed {
-                AgentStatusRail(color: activityStatusColor, width: 1.5, opacity: 0.76, verticalInset: 2)
+                AgentStatusRail(
+                    color: activityStatusColor,
+                    width: 1.5,
+                    opacity: activity.status == .completed ? 0.30 : 0.76,
+                    verticalInset: 2
+                )
             }
         }
     }
@@ -2828,7 +2787,7 @@ private struct AgentReasoningEntry: View {
                         .frame(width: 14, height: 14, alignment: .center)
                     Text(step.map { "Step \($0)" } ?? "Thinking")
                         .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.text.opacity(0.9))
+                        .foregroundStyle(IOSTheme.secondaryText)
                     if !expanded, let summary {
                         Text(summary)
                             .font(IOSTypography.metadata)
@@ -2896,7 +2855,7 @@ private struct AgentToolBlockView: View {
                         .frame(width: 14, height: 14, alignment: .center)
                     Text(displayToolName(tool.call.toolName))
                         .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.text.opacity(0.92))
+                        .foregroundStyle(tool.status == "running" ? IOSTheme.text : (tool.status == "error" || tool.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
                         .lineLimit(1)
                     if let summary = toolSummary(for: tool.call) {
                         Text(summary)
@@ -2990,7 +2949,7 @@ private struct AgentToolOutputBlock: View {
                         .frame(width: 14, height: 14, alignment: .center)
                     Text(displayToolName(event.toolName))
                         .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.text)
+                        .foregroundStyle(event.toolStatus?.lowercased() == "error" || event.toolStatus?.lowercased() == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
                     Spacer(minLength: 4)
                     AgentToolStatusMark(status: event.toolStatus ?? "success")
                         .frame(width: 14, height: 14, alignment: .trailing)
