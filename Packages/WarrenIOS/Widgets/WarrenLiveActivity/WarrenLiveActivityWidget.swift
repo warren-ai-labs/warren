@@ -146,21 +146,72 @@ private struct SessionLiveActivityBadge: View {
     }
 }
 
+private struct SessionLiveActivityBreathingDot: View {
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
+                let phase = animationPhase(at: timeline.date, duration: 1.25)
+                ZStack {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(1.0 + pingProgress(for: phase) * 0.8)
+                        .opacity(pingOpacity(for: phase))
+
+                    Circle()
+                        .fill(color)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: color.opacity(0.8), radius: 3)
+                }
+                .frame(width: 14, height: 14)
+            }
+        }
+    }
+
+    private func animationPhase(at date: Date, duration: TimeInterval) -> Double {
+        let elapsed = date.timeIntervalSinceReferenceDate
+        return (elapsed.truncatingRemainder(dividingBy: duration) + duration)
+            .truncatingRemainder(dividingBy: duration) / duration
+    }
+
+    private func pingProgress(for phase: Double) -> CGFloat {
+        let activePortion = 0.75
+        guard phase <= activePortion else { return 1.0 }
+        return CGFloat(phase / activePortion)
+    }
+
+    private func pingOpacity(for phase: Double) -> Double {
+        let activePortion = 0.75
+        guard phase <= activePortion else { return 0.0 }
+        return 1.0 - (phase / activePortion)
+    }
+}
+
 private struct SessionLiveActivityStatusView: View {
     let state: WarrenLiveActivityState
     let compact: Bool
 
     var body: some View {
         if compact {
-            Text(compactText)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(SessionLiveActivityStyle.color(for: state.connection))
-                .lineLimit(1)
+            if state.workingSessionCount > 0 || state.attentionSessionCount > 0 {
+                SessionLiveActivityBreathingDot(color: Color(red: 0.96, green: 0.69, blue: 0.24))
+            } else {
+                Circle()
+                    .fill(SessionLiveActivityStyle.color(for: state.connection))
+                    .frame(width: 6, height: 6)
+            }
         } else {
             VStack(alignment: .trailing, spacing: 2) {
                 Image(systemName: SessionLiveActivityStyle.symbol(for: state.connection))
                     .foregroundStyle(SessionLiveActivityStyle.color(for: state.connection))
-                Text(compactText)
+                Text(expandedText)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -168,9 +219,9 @@ private struct SessionLiveActivityStatusView: View {
         }
     }
 
-    private var compactText: String {
-        if state.attentionSessionCount > 0 { return "!" }
+    private var expandedText: String {
         if state.workingSessionCount > 0 { return "\(state.workingSessionCount)" }
+        if state.attentionSessionCount > 0 { return "Input" }
         return state.connection == .connected ? "✓" : "…"
     }
 }
