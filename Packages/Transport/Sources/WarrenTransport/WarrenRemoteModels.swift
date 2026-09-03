@@ -36,7 +36,8 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let type: String
     public let hostID: String?
     public let routeID: String?
-
+    public let refreshToken: String?  // OAuth2 refresh token for Relay
+    
     public init(
         name: String,
         url: String,
@@ -45,7 +46,8 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         sshRemote: String? = nil,
         type: String = "daemon",
         hostID: String? = nil,
-        routeID: String? = nil
+        routeID: String? = nil,
+        refreshToken: String? = nil
     ) {
         self.name = name
         self.url = url
@@ -55,6 +57,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         self.type = type
         self.hostID = hostID
         self.routeID = routeID
+        self.refreshToken = refreshToken
     }
 
     public var id: String { name }
@@ -153,17 +156,20 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
 public struct WarrenRelaySessionExchange: Codable, Equatable, Hashable, Sendable {
     public let hostID: String
     public let accessToken: String
+    public let refreshToken: String?
     public let expiresIn: Int?
 
-    public init(hostID: String, accessToken: String, expiresIn: Int? = nil) {
+    public init(hostID: String, accessToken: String, refreshToken: String? = nil, expiresIn: Int? = nil) {
         self.hostID = hostID
         self.accessToken = accessToken
+        self.refreshToken = refreshToken
         self.expiresIn = expiresIn
     }
 
     private enum CodingKeys: String, CodingKey {
         case hostID = "host_id"
         case accessToken = "access_token"
+        case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
     }
 }

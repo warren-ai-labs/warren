@@ -301,14 +301,13 @@ public final class IOSApplicationModel: ObservableObject {
         Task { await client.reconnectNow() }
     }
 
-    /// Saves endpoint metadata and replaces the transport with a client for
-    /// the new Host. A blank token keeps the existing Keychain credential;
-    /// use `clearEndpointToken()` when the user explicitly wants to log out.
+    /// Saves an endpoint and persistently stores both access_token and refresh_token.
     @discardableResult
     public func saveEndpoint(
         name: String,
         url: String,
         token: String? = nil,
+        refreshToken: String? = nil,
         type: String? = nil,
         hostID: String? = nil,
         routeID: String? = nil
@@ -317,42 +316,21 @@ public final class IOSApplicationModel: ObservableObject {
             name: name,
             url: url,
             token: token,
+            refreshToken: refreshToken,
             type: type,
             hostID: hostID,
             routeID: routeID,
             replacingEndpointName: localStore.endpoint?.name
         )
     }
-
-    /// Adds a new Host without treating the currently selected credential as
-    /// the default token for the new item.
-    @discardableResult
-    public func saveNewEndpoint(
-        name: String,
-        url: String,
-        token: String? = nil,
-        type: String? = nil,
-        hostID: String? = nil,
-        routeID: String? = nil
-    ) -> Bool {
-        saveEndpoint(
-            name: name,
-            url: url,
-            token: token,
-            type: type,
-            hostID: hostID,
-            routeID: routeID,
-            replacingEndpointName: nil
-        )
-    }
-
-    /// The explicit replacement form is used by the Host list editor when a
-    /// non-active item is renamed or reconfigured.
+    
+    /// Persists with separate refresh token storage.
     @discardableResult
     public func saveEndpoint(
         name: String,
         url: String,
         token: String? = nil,
+        refreshToken: String? = nil,
         type: String? = nil,
         hostID: String? = nil,
         routeID: String? = nil,
@@ -536,6 +514,10 @@ public final class IOSApplicationModel: ObservableObject {
                         relayURL: pairing.relayURL,
                         requestedEndpointName: replacingEndpointName
                     )
+                    // Save both access_token and refresh_token
+                    if let refreshToken = exchange.refreshToken {
+                        _ = keychain.write(refreshToken, account: "\(target.name).refresh")
+                    }
                     let saved = self.saveEndpoint(
                         name: target.name,
                         url: pairing.relayURL,
