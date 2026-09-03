@@ -1,6 +1,6 @@
 # RFC 0003: Terminal Groups for standalone shells
 
-- Status: Accepted
+- Status: Implemented
 - Owner: Warren Host and Desktop clients
 - Created: 2026-08-17
 - Scope: phase-one standalone shell organization

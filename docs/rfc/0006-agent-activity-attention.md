@@ -1,6 +1,6 @@
 # RFC 0006: Agent activity and human attention
 
-- Status: Accepted
+- Status: Implemented
 - Owner: Warren Headless, Web, Desktop, and CLI clients
 - Created: 2026-08-22
 - Scope: Codex, Claude, and OpenCode session status projection

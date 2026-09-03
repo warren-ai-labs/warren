@@ -1,6 +1,6 @@
 # RFC 0010：Agent View 在 iOS/Web 的能力对齐
 
-- 状态：Proposed
+- 状态：Implemented
 - Owner：Warren Agent View（iOS/Web）
 - 创建日期：2026-08-31
 - 范围：Warren iOS 与 Web 的 Agent View 层
