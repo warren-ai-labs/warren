@@ -3459,9 +3459,10 @@ export default function App() {
     showContextMenu(event, sessionMenuItems(session, {
       togglePin: toggleSessionPin,
       rename: renameSession,
+      search: openTerminalSearch,
       delete: deleteSession,
     }));
-  }, [deleteSession, renameSession, showContextMenu, toggleSessionPin]);
+  }, [deleteSession, openTerminalSearch, renameSession, showContextMenu, toggleSessionPin]);
 
   const openSessionMenu = useCallback(() => {
     const state = appStateRef.current;
@@ -3728,6 +3729,8 @@ export default function App() {
               onToggleAgentView={toggleAgentView}
               onOpenMenu={() => setDrawerOpen(true)}
               onOpenSearch={() => setSearchOpen(true)}
+              onToggleGit={() => setGitOpenState(open => !open)}
+              gitActive={gitOpen}
               onNewSession={() => setSessionSheetOpen(true)}
               onOpenSessionMenu={openSessionMenu}
               onSessionContextMenu={sessionContextMenu}
@@ -3882,7 +3885,7 @@ export default function App() {
           </section>
           {!agentViewActive && <MobileKeys onInput={sendInput} />}
         </main>
-        {!isMobile && gitOpen && (
+        {gitOpen && (!isMobile || !fileView) && (
           <GitPanel
             key={selectedWorkspaceID}
             workspaceName={selectedWorkspace?.branch || selectedWorkspace?.name}

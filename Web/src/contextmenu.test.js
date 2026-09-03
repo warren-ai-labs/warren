@@ -77,3 +77,18 @@ test("session deletion is the only destructive context action", () => {
     ],
   );
 });
+
+test("sessionMenuItems includes search action when provided", () => {
+  let searched = false;
+  const items = sessionMenuItems({ id: "s1", pinned: false }, {
+    togglePin() {},
+    rename() {},
+    search() { searched = true; },
+    delete() {},
+  });
+  assert.equal(items.length, 4);
+  const searchItem = items.find(item => item.label === "Search terminal");
+  assert.ok(searchItem);
+  searchItem.action();
+  assert.equal(searched, true);
+});
