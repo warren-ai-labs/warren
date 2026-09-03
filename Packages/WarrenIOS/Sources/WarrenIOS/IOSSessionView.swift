@@ -577,15 +577,6 @@ private struct SessionTabRail: View {
                     showSwitcher()
                 } label: {
                     HStack(spacing: 8) {
-                        HStack(spacing: 6) {
-                            SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
-                            Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
-                                .font(IOSTypography.label)
-                                .foregroundStyle(IOSTheme.text)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-
                         HStack(spacing: 3) {
                             Image(systemName: "rectangle.stack")
                                 .font(.system(size: 10, weight: .medium))
@@ -596,6 +587,15 @@ private struct SessionTabRail: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(IOSTheme.muted.opacity(0.4), in: Capsule())
+
+                        HStack(spacing: 6) {
+                            SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
+                            Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
+                                .font(IOSTypography.label)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
 
                         Spacer(minLength: 8)
 
