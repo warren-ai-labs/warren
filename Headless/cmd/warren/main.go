@@ -1599,12 +1599,16 @@ func agentCreateCommand(args []string) error {
 		return newUsageError("workspace and --group are mutually exclusive", agentCreateUsageText())
 	}
 	provider := strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
-	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" {
-		return newUsageError("--provider must be codex, claude, opencode, pi, or qoder", agentCreateUsageText())
+	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" && provider != "antigravity" {
+		return newUsageError("--provider must be codex, claude, opencode, pi, qoder, or antigravity", agentCreateUsageText())
 	}
 	command := strings.TrimSpace(stringValue(params, "command"))
 	if command == "" {
-		command = provider
+		if provider == "antigravity" {
+			command = "agy"
+		} else {
+			command = provider
+		}
 	}
 	if err := validateAgentCommand(command, provider); err != nil {
 		return newUsageError(err.Error(), agentCreateUsageText())
@@ -1741,7 +1745,7 @@ func agentCurrentCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("current session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
+		return fmt.Errorf("current session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
 	return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
 }
@@ -1806,7 +1810,7 @@ func agentSendCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
 	if err != nil {
@@ -1875,7 +1879,7 @@ func agentReadCommand(args []string) error {
 	}
 	session := subscription.Session
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
 	return agentReadSession(ctx, c, session, params)
 }
@@ -1916,7 +1920,7 @@ func agentAttachCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
 	return sessionTerminalRead(ctx, c, map[string]any{"timeout": ""}, true)
 }
@@ -1952,7 +1956,7 @@ const (
 
 func isAgentSession(session api.Session) bool {
 	switch strings.ToLower(strings.TrimSpace(session.Kind)) {
-	case "codex", "claude", "opencode", "pi", "qoder":
+	case "codex", "claude", "opencode", "pi", "qoder", "antigravity":
 		return true
 	case "shell", "custom":
 		// A shell overlay is Agent-capable only after Warren's managed hook
@@ -2045,6 +2049,11 @@ func validateAgentCommand(command, provider string) error {
 			return err
 		}
 	}
+	if provider == "antigravity" {
+		if err := agent.ValidateAntigravityCommand(command); err != nil {
+			return err
+		}
+	}
 	for _, token := range tokens {
 		if agentCommandShellOperator[token] {
 			return errors.New("--command must be an executable with options; shell operators are not supported")
@@ -2126,24 +2135,27 @@ func validateAgentCommandShellSyntax(command string) error {
 }
 
 var agentCommandPromptFlags = map[string]map[string]bool{
-	"codex":    {"--prompt": true},
-	"claude":   {"--prompt": true},
-	"opencode": {"--prompt": true},
-	"pi":       {},
-	"qoder":    {},
+	"codex":       {"--prompt": true},
+	"claude":      {"--prompt": true},
+	"opencode":    {"--prompt": true},
+	"pi":          {},
+	"qoder":       {},
+	"antigravity": {"-i": true, "--prompt-interactive": true, "--prompt": true},
 }
 
 var agentCommandNonInteractiveFlags = map[string]map[string]bool{
-	"claude":   {"-p": true, "--print": true},
-	"opencode": {},
-	"pi":       {"-p": true, "--print": true, "--mode": true},
-	"qoder":    {"-p": true, "--print": true},
+	"claude":      {"-p": true, "--print": true},
+	"opencode":    {},
+	"pi":          {"-p": true, "--print": true, "--mode": true},
+	"qoder":       {"-p": true, "--print": true},
+	"antigravity": {"-p": true, "--print": true, "--input-format": true, "--output-format": true},
 }
 
 var agentCommandSessionReuseFlags = map[string]map[string]bool{
-	"opencode": {"--continue": true, "-c": true, "--session": true, "-s": true, "--fork": true},
-	"pi":       {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
-	"qoder":    {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--fork-session": true, "--no-session": true, "--no-session-persistence": true},
+	"opencode":    {"--continue": true, "-c": true, "--session": true, "-s": true, "--fork": true},
+	"pi":          {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--no-session": true},
+	"qoder":       {"--continue": true, "-c": true, "--resume": true, "-r": true, "--session": true, "--session-id": true, "--fork": true, "--fork-session": true, "--no-session": true, "--no-session-persistence": true},
+	"antigravity": {"--conversation": true, "-c": true, "--continue": true},
 }
 
 var agentCommandShellOperator = map[string]bool{
@@ -2208,6 +2220,12 @@ var agentCommandValueFlags = map[string]map[string]bool{
 		"--max-model-request-retries": true, "--agent": true, "--agents": true,
 		"--system-prompt": true, "--append-system-prompt": true,
 		"--input-format": true, "--output-format": true,
+	},
+	"antigravity": {
+		"--conversation": true, "--input-format": true, "--output-format": true,
+		"--model": true, "--effort": true, "--mode": true, "--project": true,
+		"--log-file": true, "--print-timeout": true, "--json-schema": true,
+		"--agent": true, "--add-dir": true,
 	},
 }
 
@@ -2290,6 +2308,9 @@ func appendAgentInitialPromptForProvider(command, provider, prompt string) strin
 	if strings.EqualFold(strings.TrimSpace(provider), "opencode") {
 		return command + " --prompt " + shellQuote(prompt)
 	}
+	if strings.EqualFold(strings.TrimSpace(provider), "antigravity") {
+		return command + " -i " + shellQuote(prompt)
+	}
 	return appendAgentInitialPrompt(command, prompt)
 }
 
@@ -2368,7 +2389,7 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	if !isAgentSession(session) {
-		return fmt.Errorf("session is not a Codex, Claude, OpenCode, or Pi agent: %s", session.ID)
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
 	subscription, err := waitForAgentSubscription(ctx, c, positions[0], agentStartupTimeout)
 	if err != nil {
@@ -3918,15 +3939,15 @@ Run 'warren agent <command> --help' for command-specific help.
 func agentCreateUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID]
-      --provider codex|claude|opencode|pi|qoder
+      --provider codex|claude|opencode|pi|qoder|antigravity
       [--agent-handler tui|cli|acp]
       [--command CMD]
       [--prompt TEXT | --no-prompt]
       [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]
 
-Create an Agent backed by a Codex, Claude, OpenCode, Pi, or Qoder session. --prompt is
-passed with the provider's startup syntax (positional for Codex/Claude/Pi/Qoder and
---prompt for OpenCode). Use --no-prompt to create an idle Agent explicitly.
+Create an Agent backed by a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity session. --prompt is
+passed with the provider's startup syntax (positional for Codex/Claude/Pi/Qoder,
+--prompt for OpenCode, and -i for Antigravity). Use --no-prompt to create an idle Agent explicitly.
 --command defaults to the provider executable and may name an alias or wrapper
 command with options, but must not include a positional prompt or prompt option.
 `

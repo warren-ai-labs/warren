@@ -28,6 +28,7 @@ const kindLabels = {
   opencode: "opencode",
   pi: "pi",
   qoder: "qoder",
+  antigravity: "antigravity",
   trae: "trae",
   custom: "Custom",
 };
@@ -140,10 +141,10 @@ function tabPurpose(session = {}) {
   const kind = String(session.kind || "").trim().toLowerCase();
   const process = String(session.process || "").trim();
 
-  // Integrated Codex/Claude/OpenCode/Pi/Qoder sessions keep their stable launch
+  // Integrated Codex/Claude/OpenCode/Pi/Qoder/Antigravity sessions keep their stable launch
   // kind even when the foreground process is a shell or another
   // implementation detail.
-  if (kind === "claude" || kind === "codex" || kind === "opencode" || kind === "pi" || kind === "qoder") {
+  if (kind === "claude" || kind === "codex" || kind === "opencode" || kind === "pi" || kind === "qoder" || kind === "antigravity") {
     return kindLabels[kind];
   }
   if (process && !shellProcessNames.has(process)) return process;

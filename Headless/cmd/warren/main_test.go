@@ -802,7 +802,7 @@ func TestValidateAgentCreateRequiresExplicitPromptMode(t *testing.T) {
 func TestAgentCreateProviderValidationHappensBeforeConnect(t *testing.T) {
 	err := run([]string{"agent", "create", "workspace-1", "--provider", "shell", "--no-prompt"})
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex, claude, opencode, pi, or qoder") {
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "codex, claude, opencode, pi, qoder, or antigravity") {
 		t.Fatalf("invalid provider error = %v, want local provider validation", err)
 	}
 }
@@ -870,9 +870,23 @@ func TestAgentCommandAllowsProviderOptions(t *testing.T) {
 		{provider: "codex", command: "codex-alias --dangerously-bypass-hook-trust --model gpt-5.6"},
 		{provider: "claude", command: "claude --dangerously-skip-permissions --model sonnet"},
 		{provider: "opencode", command: "opencode --model openai/gpt-5 --agent build"},
+		{provider: "antigravity", command: "agy --model auto --effort high --sandbox"},
 	} {
 		if err := validateAgentCommand(test.command, test.provider); err != nil {
 			t.Fatalf("validateAgentCommand(%q) = %v, want options accepted", test.command, err)
+		}
+	}
+}
+
+func TestAgentCommandRejectsAntigravityResumeAndPrint(t *testing.T) {
+	for _, command := range []string{"agy --continue", "agy -c", "agy --conversation c1"} {
+		if err := validateAgentCommand(command, "antigravity"); err == nil || !strings.Contains(err.Error(), "start a new session") {
+			t.Fatalf("validateAgentCommand(%q) = %v, want session resume rejection", command, err)
+		}
+	}
+	for _, command := range []string{"agy -p 'prompt'", "agy --print 'prompt'", "agy --input-format stream-json"} {
+		if err := validateAgentCommand(command, "antigravity"); err == nil || !strings.Contains(err.Error(), "interactive mode") {
+			t.Fatalf("validateAgentCommand(%q) = %v, want print mode rejection", command, err)
 		}
 	}
 }
@@ -883,6 +897,9 @@ func TestAgentCommandRejectsMissingOptionValue(t *testing.T) {
 	}
 	if err := validateAgentCommand("claude --session-id --bare", "claude"); err == nil || !strings.Contains(err.Error(), "requires a value") {
 		t.Fatalf("missing Claude option value = %v", err)
+	}
+	if err := validateAgentCommand("agy --model", "antigravity"); err == nil || !strings.Contains(err.Error(), "requires a value") {
+		t.Fatalf("missing Antigravity option value = %v", err)
 	}
 }
 
@@ -897,6 +914,14 @@ func TestAppendAgentInitialPromptShellQuotesText(t *testing.T) {
 func TestAppendAgentInitialPromptUsesOpenCodeOption(t *testing.T) {
 	got := appendAgentInitialPromptForProvider("opencode --model openai/gpt-5", "opencode", "ship it's ready\nnow")
 	want := "opencode --model openai/gpt-5 --prompt 'ship it'\"'\"'s ready\nnow'"
+	if got != want {
+		t.Fatalf("appendAgentInitialPromptForProvider = %q, want %q", got, want)
+	}
+}
+
+func TestAppendAgentInitialPromptUsesAntigravityOption(t *testing.T) {
+	got := appendAgentInitialPromptForProvider("agy --model auto", "antigravity", "ship it's ready\nnow")
+	want := "agy --model auto -i 'ship it'\"'\"'s ready\nnow'"
 	if got != want {
 		t.Fatalf("appendAgentInitialPromptForProvider = %q, want %q", got, want)
 	}

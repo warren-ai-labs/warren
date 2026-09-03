@@ -127,6 +127,8 @@ struct WarrenDesktopSettingsView: View {
     private var piCommand = "pi"
     @AppStorage(WarrenPreferenceKey.presetCommandQoder)
     private var qoderCommand = "qoder"
+    @AppStorage(WarrenPreferenceKey.presetCommandAntigravity)
+    private var antigravityCommand = "agy"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -780,6 +782,8 @@ struct WarrenDesktopSettingsView: View {
             settingsInputField("Pi", text: $piCommand, placeholder: "pi")
         case .qoder:
             settingsInputField("Qoder", text: $qoderCommand, placeholder: "qoder")
+        case .antigravity:
+            settingsInputField("Antigravity", text: $antigravityCommand, placeholder: "agy")
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:

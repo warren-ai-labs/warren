@@ -1319,7 +1319,7 @@ func NewTUIAgentProvider(service *Service, kind string) *TUIAgentProvider {
 // without changing Service reconciliation.
 func NewTUIAgentProviderRegistry(service *Service) *AgentProviderRegistry {
 	registry := NewAgentProviderRegistry()
-	for _, kind := range []string{"codex", "claude", "opencode", "pi", "qoder"} {
+	for _, kind := range []string{"codex", "claude", "opencode", "pi", "qoder", "antigravity"} {
 		tuiProvider := NewTUIAgentProvider(service, kind)
 		acpProvider := NewACPAgentProvider(kind, service)
 		_ = registry.Register(NewAgentProviderWithHandlers(kind, tuiProvider, acpProvider))
@@ -1403,6 +1403,9 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 	}
 	if transcriptPath == "" && kind == "qoder" && agentSessionID != "" {
 		transcriptPath = agent.FindQoderTranscript(agentSessionID, value.WorkspacePath)
+	}
+	if transcriptPath == "" && kind == "antigravity" && agentSessionID != "" {
+		transcriptPath = agent.FindAntigravityTranscript(agentSessionID, value.WorkspacePath)
 	}
 	if transcriptPath == "" && nonNilInterface(service.AgentFinder) {
 		found, err := service.AgentFinder.Find(ctx, kind, value.WorkspacePath, value.Session.CreatedAt)

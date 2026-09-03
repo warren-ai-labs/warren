@@ -5,6 +5,7 @@ export const defaultPresetCommands = {
   opencode: "opencode",
   pi: "pi",
   qoder: "qoder",
+  antigravity: "agy",
   trae: "trae-cli interactive",
 };
 
@@ -15,6 +16,7 @@ export const sessionPresets = [
   { kind: "opencode", label: "OpenCode", title: "OpenCode", isAgent: true },
   { kind: "pi", label: "Pi", title: "Pi", isAgent: true },
   { kind: "qoder", label: "Qoder", title: "Qoder", isAgent: true },
+  { kind: "antigravity", label: "Antigravity", title: "Antigravity", isAgent: true },
   // Trae is currently only a launch preset for an interactive shell. It does
   // not have Warren transcript/activity/send integration yet.
   { kind: "trae", label: "Trae", title: "Trae", isAgent: false },
@@ -110,6 +112,7 @@ export function isAgentSession(session = {}) {
     || kind === "opencode"
     || kind === "pi"
     || kind === "qoder"
+    || kind === "antigravity"
     || ((kind === "shell" || kind === "custom") && Boolean(session.agentSessionId));
 }
 

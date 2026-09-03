@@ -884,7 +884,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
-		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" {
+		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" || session.Kind == "antigravity" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
 		}
 		if turn := s.agentTurn(session.ID); turn.ID > 0 {
@@ -2650,9 +2650,17 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 			return api.Session{}, err
 		}
 	}
+	if kind == "antigravity" {
+		if strings.TrimSpace(command) == "" {
+			command = "agy"
+		}
+		if err := agent.ValidateAntigravityCommand(command); err != nil {
+			return api.Session{}, err
+		}
+	}
 	customTitle := strings.TrimSpace(title)
 	defaultTitle := map[string]string{
-		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "trae": "Trae", "pi": "Pi", "qoder": "Qoder",
+		"shell": "Shell", "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "trae": "Trae", "pi": "Pi", "qoder": "Qoder", "antigravity": "Antigravity",
 	}[kind]
 	if defaultTitle == "" {
 		fields := strings.Fields(command)
@@ -3633,7 +3641,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 	if registry := s.agentProviderRegistry(); registry != nil {
 		return s.ensureAgentWithRegistry(ctx, session, state, registry)
 	}
-	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder"
+	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" || session.Kind == "antigravity"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
 	if !dedicated && !shellOverlay {
 		return nil, nil
@@ -3741,6 +3749,17 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				agentSessionID = session.AgentSessionID
 				transcriptPath = agent.FindQoderTranscript(session.AgentSessionID, workspacePath)
 			}
+		} else if session.Kind == "antigravity" {
+			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil && binding.Provider == "antigravity" && binding.SessionID != "" {
+				agentSessionID = binding.SessionID
+				transcriptPath = binding.TranscriptPath
+				if transcriptPath == "" || !regularFileExists(transcriptPath) {
+					transcriptPath = agent.FindAntigravityTranscript(binding.SessionID, workspacePath)
+				}
+			} else {
+				agentSessionID = session.AgentSessionID
+				transcriptPath = agent.FindAntigravityTranscript(session.AgentSessionID, workspacePath)
+			}
 		} else {
 			transcriptPath = s.boundTranscript(session, workspacePath)
 			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
@@ -3783,7 +3802,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		}
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
-		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi" && binding.Provider != "qoder") {
+		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi" && binding.Provider != "qoder" && binding.Provider != "antigravity") {
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
@@ -3857,6 +3876,16 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			transcriptPath = binding.TranscriptPath
 			if transcriptPath == "" || !regularFileExists(transcriptPath) {
 				transcriptPath = agent.FindQoderTranscript(binding.SessionID, workspacePath)
+			}
+			if transcriptPath == "" {
+				return nil, nil
+			}
+		} else if binding.Provider == "antigravity" {
+			provider = binding.Provider
+			agentSessionID = binding.SessionID
+			transcriptPath = binding.TranscriptPath
+			if transcriptPath == "" || !regularFileExists(transcriptPath) {
+				transcriptPath = agent.FindAntigravityTranscript(binding.SessionID, workspacePath)
 			}
 			if transcriptPath == "" {
 				return nil, nil
@@ -4903,7 +4932,7 @@ func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
 		// a transcript binding. Allow the initial subscription so agent send can
 		// deliver that prompt and let reconciliation attach the watcher later.
 		if sessionExists && session.Lifecycle == "running" &&
-			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder") {
+			(session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" || session.Kind == "antigravity") {
 			return nil
 		}
 		return fmt.Errorf("agent is still starting for session %s; finish first-time setup in Terminal and retry", sessionID)
@@ -4922,7 +4951,7 @@ func (s *Service) applyAgentState(session api.Session) {
 			kind = binding.Provider
 		}
 	}
-	if kind != "codex" && kind != "claude" && kind != "opencode" && kind != "qoder" {
+	if kind != "codex" && kind != "claude" && kind != "opencode" && kind != "qoder" && kind != "antigravity" {
 		return
 	}
 	state, err := agent.ReadAgentState(agent.StatePath(session.ID))
