@@ -813,7 +813,8 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 		}
 	}
 	status := s.agentStatus(request.Session)
-	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+	isInputAttention := status.Attention != nil && status.Attention.Kind == api.AgentAttentionInput
+	if (status.Activity == api.AgentActivityBlocked && !isInputAttention) || (status.Attention != nil && status.Attention.Kind == api.AgentAttentionApproval) {
 		s.finishAgentAction(actionKey, call, nil, api.ErrAgentBlocked)
 		return api.AgentMessageSendResult{}, api.ErrAgentBlocked
 	}

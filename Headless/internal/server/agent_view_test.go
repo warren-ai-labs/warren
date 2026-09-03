@@ -447,4 +447,22 @@ func TestSendAgentMessageStatusMutexGuards(t *testing.T) {
 	if !bytes.Contains(captured, []byte("hello ready")) {
 		t.Fatalf("runtime captured %q, want message text", captured)
 	}
+
+	// Case 4: Blocked on input attention (e.g. asking for prompt) -> Success
+	service.agents[sessionID].status = api.AgentStatus{
+		Activity: api.AgentActivityBlocked,
+		Attention: &api.AgentAttention{Kind: api.AgentAttentionInput, Reason: "prompt"},
+	}
+	msg4 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m4", Text: "answer to prompt"}
+	res4, err := service.sendAgentMessage(context.Background(), msg4)
+	if err != nil {
+		t.Fatalf("sendAgentMessage when blocked on input failed: %v", err)
+	}
+	if !res4.Accepted || res4.ClientMessageID != "m4" {
+		t.Fatalf("result = %#v, want accepted", res4)
+	}
+	captured, _ = runtime.Capture(context.Background(), "runtime")
+	if !bytes.Contains(captured, []byte("answer to prompt")) {
+		t.Fatalf("runtime captured %q, want answer text", captured)
+	}
 }
