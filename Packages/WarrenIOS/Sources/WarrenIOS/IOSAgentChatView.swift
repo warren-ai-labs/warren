@@ -2688,15 +2688,16 @@ private struct AgentActivityGroupBlock: View {
                     expanded.toggle()
                 }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.72))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 12)
+                        .frame(width: 10, alignment: .center)
                     Image(systemName: activity.toolCount > 0 ? "terminal" : "brain")
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
                     Text(activity.title)
                         .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text)
@@ -2710,6 +2711,7 @@ private struct AgentActivityGroupBlock: View {
                     }
                     Spacer(minLength: 4)
                     activityStatusMark
+                        .frame(width: 14, height: 14, alignment: .trailing)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
                 .frame(minHeight: 28)
@@ -2819,10 +2821,11 @@ private struct AgentReasoningEntry: View {
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10)
+                        .frame(width: 10, alignment: .center)
                     Image(systemName: "brain")
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
                     Text(step.map { "Step \($0)" } ?? "Thinking")
                         .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text.opacity(0.9))
@@ -2833,7 +2836,9 @@ private struct AgentReasoningEntry: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 4)
+                    Color.clear
+                        .frame(width: 14, height: 14)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
                 .frame(minHeight: 26)
@@ -2884,10 +2889,11 @@ private struct AgentToolBlockView: View {
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10)
+                        .frame(width: 10, alignment: .center)
                     Image(systemName: toolIconName(tool.call.toolName))
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
                     Text(displayToolName(tool.call.toolName))
                         .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text.opacity(0.92))
@@ -2899,8 +2905,9 @@ private struct AgentToolBlockView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    Spacer(minLength: 3)
+                    Spacer(minLength: 4)
                     AgentToolStatusMark(status: tool.status)
+                        .frame(width: 14, height: 14, alignment: .trailing)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
                 .frame(minHeight: 26)
@@ -2976,15 +2983,17 @@ private struct AgentToolOutputBlock: View {
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10)
+                        .frame(width: 10, alignment: .center)
                     Image(systemName: toolIconName(event.toolName))
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
                     Text(displayToolName(event.toolName))
                         .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text)
-                    Spacer(minLength: 3)
+                    Spacer(minLength: 4)
                     AgentToolStatusMark(status: event.toolStatus ?? "success")
+                        .frame(width: 14, height: 14, alignment: .trailing)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
                 .frame(minHeight: 26)
@@ -3020,6 +3029,7 @@ private struct AgentToolOutputBlock: View {
             }
         }
         .padding(.vertical, 1)
+        .padding(.leading, 2)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3085,7 +3095,7 @@ private func toolIconName(_ name: String?) -> String {
     switch name?.lowercased() {
     case "shell": return "terminal"
     case "edit", "write", "apply_patch": return "pencil"
-    case "read": return "doc.text"
+    case "read", "view_file", "viewfile": return "doc.text"
     case "grep", "glob", "web_search": return "magnifyingglass"
     case "fetch": return "arrow.down.circle"
     case "subagent": return "person.2"
