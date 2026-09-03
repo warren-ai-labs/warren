@@ -78,6 +78,21 @@ import {
   loadAgentCompletionSoundEnabled,
   saveAgentCompletionSoundEnabled,
 } from "./notifications.js";
+
+function supportsSessionAgentCapability(catalog, connectionCapabilities, sessionID, capability) {
+  if (!connectionCapabilities?.has(capability)) return false;
+  const session = catalog?.sessions?.get?.(sessionID);
+  if (!session || !Array.isArray(session.agentCapabilities)) return true;
+  return session.agentCapabilities.includes(capability);
+}
+
+function sessionAgentCapabilities(catalog, connectionCapabilities, sessionID) {
+  const session = catalog?.sessions?.get?.(sessionID);
+  if (!session || !Array.isArray(session.agentCapabilities)) {
+    return [...(connectionCapabilities || [])];
+  }
+  return session.agentCapabilities.filter(capability => connectionCapabilities?.has(capability));
+}
 const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
 import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
 import { OutputBatcher } from "./output.js";
@@ -256,7 +271,6 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState(null);
   const [agentStateBySession, setAgentStateBySession] = useState({});
   const [agentQueueBySession, setAgentQueueBySession] = useState({});
-  const [agentCapabilitiesState, setAgentCapabilitiesState] = useState([]);
   const [agentActionError, setAgentActionError] = useState("");
   const agentCapabilitiesRef = useRef(new Set());
   const agentQueueRef = useRef({});
@@ -502,7 +516,7 @@ export default function App() {
 
   const uploadAgentAttachments = useCallback(async (files, onProgress = () => {}) => {
     const sessionID = appStateRef.current.activeSession;
-    if (!sessionID || !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+    if (!sessionID || !supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-attachments-v1")) {
       throw new Error("This Host does not support attachments");
     }
     const ensureCurrentSession = () => {
@@ -1297,9 +1311,9 @@ export default function App() {
       else queue.markQueued(item.id);
       publishAgentQueue(sessionID, queue);
     };
-    if (item.attachments?.length > 0 && !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+    if (item.attachments?.length > 0 && !supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-attachments-v1")) {
       failed("This Host does not support attachments");
-    } else if (agentCapabilitiesRef.current.has("agent-timeline-v1") || item.attachments?.length > 0) {
+    } else if (supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-timeline-v1") || item.attachments?.length > 0) {
       const sent = request(
         "agent.message.send",
         {
@@ -1400,7 +1414,7 @@ export default function App() {
   }, [agentStateBySession]);
 
   const cancelAgentTurn = useCallback(sessionID => {
-    if (!agentCapabilitiesRef.current.has("agent-interrupt-v1")) return;
+    if (!supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-interrupt-v1")) return;
     const turn = activeAgentTurn(sessionID);
     if (!turn || agentInterruptInFlightRef.current.has(sessionID)) return;
     agentInterruptInFlightRef.current.add(sessionID);
@@ -1434,10 +1448,10 @@ export default function App() {
   }, [activeAgentTurn, request]);
 
   const sendAgentMessageNow = useCallback((sessionID, text, attachments = []) => {
-    if (!agentCapabilitiesRef.current.has("agent-interrupt-v1")) {
+    if (!supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-interrupt-v1")) {
       return Promise.reject(new Error("This Host does not support interrupting turns"));
     }
-    if (attachments.length > 0 && !agentCapabilitiesRef.current.has("agent-attachments-v1")) {
+    if (attachments.length > 0 && !supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-attachments-v1")) {
       return Promise.reject(new Error("This Host does not support attachments"));
     }
     const turn = activeAgentTurn(sessionID);
@@ -1496,7 +1510,7 @@ export default function App() {
   }, [activeAgentTurn, publishAgentQueue, queueAgentMessage, request]);
 
   const respondAgentInteraction = useCallback((sessionID, value) => {
-    if (!agentCapabilitiesRef.current.has("agent-interactions-v1")) {
+    if (!supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-interactions-v1")) {
       return Promise.reject(new Error("This Host does not support interactions"));
     }
     setAgentActionError("");
@@ -2129,7 +2143,6 @@ export default function App() {
           ? message.capabilities.filter(value => typeof value === "string")
           : [],
       );
-      setAgentCapabilitiesState([...agentCapabilitiesRef.current]);
       break;
     case "response": {
       const handler = pendingRequestsRef.current.get(message.id);
@@ -2483,7 +2496,6 @@ export default function App() {
       rosterRefreshInFlightRef.current = false;
       settingsLoadedRef.current = false;
       agentCapabilitiesRef.current = new Set();
-      setAgentCapabilitiesState([]);
       setConnectionStatus({ message: "Connecting…", online: false });
       clearPendingSession();
       if (connectionOnlineRef.current) announceFeedback("Reconnecting…", "pending");
@@ -3805,7 +3817,7 @@ export default function App() {
                 ready={agentViewReady}
                 hasControl={focusedSessionID === selectedSession.id}
                 endpointIdentity={webSocketURL()}
-                capabilities={agentCapabilitiesState}
+                capabilities={sessionAgentCapabilities(catalog, agentCapabilitiesRef.current, selectedSession.id)}
                 actionError={agentActionError}
                 onCancel={() => cancelAgentTurn(selectedSession.id)}
                 onSendNow={(text, attachments) => sendAgentMessageNow(selectedSession.id, text, attachments)}

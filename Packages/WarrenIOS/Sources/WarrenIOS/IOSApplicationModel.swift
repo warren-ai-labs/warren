@@ -89,6 +89,10 @@ public final class IOSApplicationModel: ObservableObject {
     @Published public private(set) var agentQueuedMessageCountBySessionID: [String: Int] = [:]
     @Published public private(set) var agentQueueBySessionID: [String: IOSAgentMessageQueue] = [:]
     @Published public private(set) var agentCapabilities: Set<String> = []
+    /// Session-scoped capability projection. Missing entries represent an
+    /// older Host that omitted `agentCapabilities`; an empty Set is an
+    /// explicit denial for a modern Session.
+    @Published public private(set) var agentCapabilitiesBySessionID: [String: Set<String>] = [:]
     @Published public private(set) var agentActionError: String?
     @Published public private(set) var historyLoadingBySessionID: Set<String> = []
     @Published public private(set) var historyErrorBySessionID: [String: String] = [:]
@@ -1105,8 +1109,13 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
-    public func supportsAgentCapability(_ capability: String) -> Bool {
-        agentCapabilities.contains(capability)
+    public func supportsAgentCapability(_ capability: String, for sessionID: String? = nil) -> Bool {
+        guard agentCapabilities.contains(capability) else { return false }
+        let target = sessionID ?? currentSessionID
+        if let target, let sessionCapabilities = agentCapabilitiesBySessionID[target] {
+            return sessionCapabilities.contains(capability)
+        }
+        return true
     }
 
     @discardableResult
@@ -1822,6 +1831,7 @@ public final class IOSApplicationModel: ObservableObject {
         terminalGroupID: String? = nil,
         command: String? = nil,
         kind: String? = nil,
+        agentHandler: String? = nil,
         title: String? = nil,
         runtimeKind: String? = nil
     ) {
@@ -1838,6 +1848,7 @@ public final class IOSApplicationModel: ObservableObject {
                     terminalGroupID: terminalGroupID,
                     command: command,
                     kind: kind,
+                    agentHandler: agentHandler,
                     title: title,
                     runtimeKind: runtimeKind
                 )
@@ -2585,9 +2596,13 @@ public final class IOSApplicationModel: ObservableObject {
         maintenanceMessage = nil
         agentStatusBySessionID = [:]
         agentTurnBySessionID = [:]
+        agentCapabilitiesBySessionID = [:]
         for session in next.sessions {
             if let status = session.agentStatus { agentStatusBySessionID[session.id] = status }
             if let turn = session.agentTurn { agentTurnBySessionID[session.id] = turn }
+            if let capabilities = session.agentCapabilities {
+                agentCapabilitiesBySessionID[session.id] = Set(capabilities)
+            }
         }
         selectPendingSessionIfPresent()
         restoreNavigationIfNeeded()

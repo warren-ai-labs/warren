@@ -123,17 +123,20 @@ func TestSnapshotDoesNotShareMutableState(t *testing.T) {
 	store := &Store{changed: make(chan struct{}), state: api.State{
 		Tasks:    []api.Task{{ID: "task"}},
 		Projects: []api.Project{{ID: "project"}},
-		Sessions: []api.Session{{ID: "session", EndedAt: &endedAt}},
+		Sessions: []api.Session{{ID: "session", AgentCapabilities: []string{"agent-timeline-v1"}, EndedAt: &endedAt}},
 	}}
 
 	snapshot := store.Snapshot()
 	snapshot.Tasks[0].ID = "changed-task"
 	snapshot.Projects[0].ID = "changed"
+	snapshot.Sessions[0].AgentCapabilities[0] = "changed-capability"
 	changedTime := endedAt.Add(time.Hour)
 	*snapshot.Sessions[0].EndedAt = changedTime
 
 	current := store.Snapshot()
-	if current.Tasks[0].ID != "task" || current.Projects[0].ID != "project" || !current.Sessions[0].EndedAt.Equal(endedAt) {
+	if current.Tasks[0].ID != "task" || current.Projects[0].ID != "project" ||
+		current.Sessions[0].AgentCapabilities[0] != "agent-timeline-v1" ||
+		!current.Sessions[0].EndedAt.Equal(endedAt) {
 		t.Fatalf("snapshot mutated store: %#v", current)
 	}
 }

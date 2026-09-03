@@ -169,6 +169,9 @@ func clone(value api.State) api.State {
 	}
 	result.Operations = append([]api.OperationAudit(nil), value.Operations...)
 	for index := range result.Sessions {
+		if value.Sessions[index].AgentCapabilities != nil {
+			result.Sessions[index].AgentCapabilities = append([]string(nil), value.Sessions[index].AgentCapabilities...)
+		}
 		if value.Sessions[index].EndedAt == nil {
 			continue
 		}

@@ -524,6 +524,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let title: String
         public let customTitle: String?
         public let kind: String
+        public let agentHandler: String?
         public let command: String?
         public let process: String?
         public let directory: String?
@@ -537,6 +538,10 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let transcriptPath: String?
         public let agentStatus: WarrenRemoteAgentStatus?
         public let agentTurn: WarrenRemoteAgentTurn?
+        /// Effective optional capabilities for this Session. `nil` means an
+        /// older Host omitted the field; an empty array is an explicit
+        /// capability denial.
+        public let agentCapabilities: [String]?
         public let createdAt: String?
         public let endedAt: String?
 
@@ -548,6 +553,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title: String = "",
             customTitle: String? = nil,
             kind: String = "shell",
+            agentHandler: String? = nil,
             command: String? = nil,
             process: String? = nil,
             directory: String? = nil,
@@ -561,6 +567,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             transcriptPath: String? = nil,
             agentStatus: WarrenRemoteAgentStatus? = nil,
             agentTurn: WarrenRemoteAgentTurn? = nil,
+            agentCapabilities: [String]? = nil,
             createdAt: String? = nil,
             endedAt: String? = nil
         ) {
@@ -575,6 +582,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.title = title
             self.customTitle = customTitle
             self.kind = kind
+            self.agentHandler = agentHandler
             self.command = command
             self.process = process
             self.directory = directory
@@ -588,6 +596,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.transcriptPath = transcriptPath
             self.agentStatus = agentStatus
             self.agentTurn = agentTurn
+            self.agentCapabilities = agentCapabilities
             self.createdAt = createdAt
             self.endedAt = endedAt
         }
@@ -608,21 +617,30 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
                 return true
             }
             switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "codex", "claude", "opencode", "pi":
+            case "codex", "claude", "opencode", "pi", "qoder":
                 return true
             default:
                 return false
             }
         }
 
+        public func supportsAgentCapability(_ capability: String) -> Bool {
+            guard let agentCapabilities else {
+                // Compatibility with Hosts predating Session-level fields is
+                // handled by the connection-level capability handshake.
+                return true
+            }
+            return agentCapabilities.contains(capability)
+        }
+
         private enum CodingKeys: String, CodingKey {
             case id
             case workspaceID = "workspace"
             case terminalGroupID = "terminalGroup"
-            case scope, title, customTitle, kind, command, process, directory, runtime, runtimeKind
+            case scope, title, customTitle, kind, agentHandler, command, process, directory, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
-            case transcriptPath, agentStatus, agentTurn, createdAt, endedAt
+            case transcriptPath, agentStatus, agentTurn, agentCapabilities, createdAt, endedAt
         }
 
         public init(from decoder: Decoder) throws {
@@ -643,6 +661,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
             customTitle = try values.decodeIfPresent(String.self, forKey: .customTitle)
             kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "shell"
+            agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)
             command = try values.decodeIfPresent(String.self, forKey: .command)
             process = try values.decodeIfPresent(String.self, forKey: .process)
             directory = try values.decodeIfPresent(String.self, forKey: .directory)
@@ -656,6 +675,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             transcriptPath = try values.decodeIfPresent(String.self, forKey: .transcriptPath)
             agentStatus = try values.decodeIfPresent(WarrenRemoteAgentStatus.self, forKey: .agentStatus)
             agentTurn = try values.decodeIfPresent(WarrenRemoteAgentTurn.self, forKey: .agentTurn)
+            agentCapabilities = try values.decodeIfPresent([String].self, forKey: .agentCapabilities)
             createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
             endedAt = try values.decodeIfPresent(String.self, forKey: .endedAt)
         }

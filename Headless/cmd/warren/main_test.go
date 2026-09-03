@@ -788,6 +788,9 @@ func TestValidateAgentCreateRequiresExplicitPromptMode(t *testing.T) {
 	if _, err := validateAgentCreateArgs([]string{"workspace-1", "--provider", "codex"}); err == nil || !strings.Contains(err.Error(), "--prompt") {
 		t.Fatalf("missing prompt mode error = %v", err)
 	}
+	if _, err := validateAgentCreateArgs([]string{"workspace-1", "--provider", "codex", "--agent-handler", "acp", "--no-prompt"}); err != nil {
+		t.Fatalf("agent handler flag was rejected: %v", err)
+	}
 	if _, err := validateAgentCreateArgs([]string{"workspace-1", "--provider", "codex", "--prompt", "hello", "--no-prompt"}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("conflicting prompt mode error = %v", err)
 	}
