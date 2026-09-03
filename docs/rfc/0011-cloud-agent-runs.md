@@ -1,6 +1,6 @@
 # RFC 0011: Cloud Agent runs and runner control plane
 
-- Status: Proposed
+- Status: Abandoned (Superseded by [RFC 0015](0015-cloud-agent-daemon-and-scheduled-bots.md))
 - Owner: Warren Headless, clients, and Runner
 - Created: 2026-09-01
 - Scope: asynchronous Agent execution across local, remote, and cloud targets
