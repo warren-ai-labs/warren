@@ -20,6 +20,16 @@ const (
 	CapabilityAgentAttachments  = "agent-attachments-v1"
 )
 
+var (
+	// ErrAgentBlocked is returned when a prompt cannot be injected because
+	// the terminal agent is currently awaiting human attention or approval.
+	ErrAgentBlocked = errors.New("agent is blocked on attention")
+
+	// ErrAgentBusy is returned when a prompt cannot be injected because
+	// the agent is currently working on an active turn without queue support.
+	ErrAgentBusy = errors.New("agent is currently working")
+)
+
 // AgentViewCapabilities is the complete capability set implemented by this
 // Host. A copy is returned so callers cannot mutate the process-wide list.
 var AgentViewCapabilities = []string{

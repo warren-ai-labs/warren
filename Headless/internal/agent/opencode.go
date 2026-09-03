@@ -1383,7 +1383,27 @@ type openCodePartSnapshot struct {
 	CallEmitted bool
 }
 
-func (p *parser) parseOpenCode(line []byte) []api.AgentEvent {
+type openCodeParser struct {
+	baseParser
+	opencodeMessages map[string]openCodeMessageSnapshot
+}
+
+func newOpenCodeParser(contentLimit int) *openCodeParser {
+	return &openCodeParser{
+		baseParser:       newBaseParser(contentLimit),
+		opencodeMessages: make(map[string]openCodeMessageSnapshot),
+	}
+}
+
+func (p *openCodeParser) Parse(line []byte) []api.AgentEvent {
+	return p.observe(p.parseOpenCode(line))
+}
+
+func (p *openCodeParser) parse(line []byte) []api.AgentEvent {
+	return p.Parse(line)
+}
+
+func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 	var envelope openCodeEnvelope
 	if json.Unmarshal(line, &envelope) != nil {
 		return nil

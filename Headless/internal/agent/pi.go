@@ -346,7 +346,25 @@ type piUsage struct {
 	TotalTokens int64 `json:"totalTokens"`
 }
 
-func (p *parser) parsePi(line []byte) []api.AgentEvent {
+type piParser struct {
+	baseParser
+}
+
+func newPiParser(contentLimit int) *piParser {
+	return &piParser{
+		baseParser: newBaseParser(contentLimit),
+	}
+}
+
+func (p *piParser) Parse(line []byte) []api.AgentEvent {
+	return p.observe(p.parsePi(line))
+}
+
+func (p *piParser) parse(line []byte) []api.AgentEvent {
+	return p.Parse(line)
+}
+
+func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 	var record piRecord
 	if json.Unmarshal(line, &record) != nil {
 		return nil
@@ -437,7 +455,7 @@ func (p *parser) parsePi(line []byte) []api.AgentEvent {
 	}
 }
 
-func (p *parser) parsePiAssistant(record piRecord, message piMessage, model string, timestamp time.Time) []api.AgentEvent {
+func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model string, timestamp time.Time) []api.AgentEvent {
 	var blocks []piContentBlock
 	if json.Unmarshal(message.Content, &blocks) != nil {
 		content := p.content(message.Content)
@@ -546,7 +564,7 @@ func (p *parser) parsePiAssistant(record piRecord, message piMessage, model stri
 	return events
 }
 
-func (p *parser) parsePiToolResult(record piRecord, message piMessage, model string, timestamp time.Time) []api.AgentEvent {
+func (p *piParser) parsePiToolResult(record piRecord, message piMessage, model string, timestamp time.Time) []api.AgentEvent {
 	callID := message.ToolCallID
 	if callID == "" {
 		callID = record.ID
@@ -575,7 +593,7 @@ func (p *parser) parsePiToolResult(record piRecord, message piMessage, model str
 // parsePiBash projects pi's user-invoked `!`/`!!` shell execution record as a
 // compact tool card. The command is the input and the captured output the
 // result; exitCode drives the status like any other tool result.
-func (p *parser) parsePiBash(record piRecord, message piMessage, timestamp time.Time) []api.AgentEvent {
+func (p *piParser) parsePiBash(record piRecord, message piMessage, timestamp time.Time) []api.AgentEvent {
 	callID := record.ID
 	command := message.Command
 	output := p.clip(message.Output)

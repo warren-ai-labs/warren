@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -358,5 +359,92 @@ func TestAgentViewMutationsRequireTheMatchingControlLease(t *testing.T) {
 	}
 	if err := peer.requireAgentControl(""); err != nil {
 		t.Fatalf("malformed request should reach service validation: %v", err)
+	}
+}
+
+func TestSendAgentMessageInputBracketedPasteFraming(t *testing.T) {
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	text := "line1\nline2\twith tab\nline3"
+	if err := sendAgentMessageInput(context.Background(), runtime, "sess", text); err != nil {
+		t.Fatal(err)
+	}
+	data, err := runtime.Capture(context.Background(), "sess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\x1b[200~line1\rline2\twith tab\rline3\x1b[201~\x1b[13u"
+	if !bytes.Contains(data, []byte(want)) {
+		t.Fatalf("captured = %q, want containing %q", data, want)
+	}
+}
+
+func TestSendAgentMessageStatusMutexGuards(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "status-mutex-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "agent-mutex-session"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: sessionID, Kind: "codex", Runtime: "runtime", Lifecycle: "running",
+			Title: "Codex", CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	// Case 1: Blocked on attention -> ErrAgentBlocked
+	service.agents[sessionID].status = api.AgentStatus{
+		Activity: api.AgentActivityBlocked,
+		Attention: &api.AgentAttention{Kind: "approval", Reason: "permission"},
+	}
+	msg1 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m1", Text: "hello blocked"}
+	if _, err := service.sendAgentMessage(context.Background(), msg1); !errors.Is(err, api.ErrAgentBlocked) {
+		t.Fatalf("sendAgentMessage when blocked = %v, want %v", err, api.ErrAgentBlocked)
+	}
+	captured, _ := runtime.Capture(context.Background(), "runtime")
+	if string(captured) != "ready\n" {
+		t.Fatalf("runtime captured %q when blocked, want initial ready only", captured)
+	}
+
+	// Case 2: Working -> ErrAgentBusy
+	service.agents[sessionID].status = api.AgentStatus{
+		Activity: api.AgentActivityWorking,
+	}
+	msg2 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m2", Text: "hello working"}
+	if _, err := service.sendAgentMessage(context.Background(), msg2); !errors.Is(err, api.ErrAgentBusy) {
+		t.Fatalf("sendAgentMessage when working = %v, want %v", err, api.ErrAgentBusy)
+	}
+	captured, _ = runtime.Capture(context.Background(), "runtime")
+	if string(captured) != "ready\n" {
+		t.Fatalf("runtime captured %q when working, want initial ready only", captured)
+	}
+
+	// Case 3: Ready -> Success
+	service.agents[sessionID].status = api.AgentStatus{
+		Activity: api.AgentActivityReady,
+	}
+	msg3 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m3", Text: "hello ready"}
+	res, err := service.sendAgentMessage(context.Background(), msg3)
+	if err != nil {
+		t.Fatalf("sendAgentMessage when ready failed: %v", err)
+	}
+	if !res.Accepted || res.ClientMessageID != "m3" {
+		t.Fatalf("result = %#v, want accepted", res)
+	}
+	captured, _ = runtime.Capture(context.Background(), "runtime")
+	if !bytes.Contains(captured, []byte("hello ready")) {
+		t.Fatalf("runtime captured %q, want message text", captured)
 	}
 }

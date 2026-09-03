@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -479,3 +480,56 @@ func TestAgentHandleCloseOnDeleteAndShutdown(t *testing.T) {
 		}
 	})
 }
+
+func TestACPAgentProviderRegistrationAndHandle(t *testing.T) {
+	service := &Service{}
+	registry := NewDefaultAgentProviderRegistry(service)
+
+	// Test handler resolution for codex with acp handler
+	ctx := context.Background()
+	handle, err := registry.Ensure(ctx, AgentSessionContext{
+		SessionID: "sess-acp-1",
+		Kind:      "codex",
+		Handler:   AgentHandlerACP,
+	})
+	if err != nil {
+		t.Fatalf("failed to ensure ACP agent handle: %v", err)
+	}
+
+	acpHandle, ok := handle.(*acpAgentHandle)
+	if !ok {
+		t.Fatalf("handle is %T, want *acpAgentHandle", handle)
+	}
+
+	caps := acpHandle.Capabilities()
+	for _, expectedCap := range []Capability{CapabilityTimeline, CapabilityInteractions, CapabilityInterrupt, CapabilityAttachments} {
+		if !caps.Has(expectedCap) {
+			t.Errorf("expected capability %v in ACP handle capabilities", expectedCap)
+		}
+	}
+
+	if err := acpHandle.SendMessage(ctx, AgentMessage{Text: "hello"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("SendMessage err = %v, want 'not implemented yet'", err)
+	}
+
+	if err := acpHandle.Interrupt(ctx, AgentInterruptRequest{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("Interrupt err = %v, want 'not implemented yet'", err)
+	}
+
+	if err := acpHandle.RespondInteraction(ctx, AgentInteractionResponse{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("RespondInteraction err = %v, want 'not implemented yet'", err)
+	}
+
+	// Also verify embedded handler syntax "codex-acp"
+	handleEmbedded, err := registry.Ensure(ctx, AgentSessionContext{
+		SessionID: "sess-acp-2",
+		Kind:      "codex-acp",
+	})
+	if err != nil {
+		t.Fatalf("failed to ensure embedded ACP agent handle: %v", err)
+	}
+	if _, ok := handleEmbedded.(*acpAgentHandle); !ok {
+		t.Fatalf("embedded handle is %T, want *acpAgentHandle", handleEmbedded)
+	}
+}
+

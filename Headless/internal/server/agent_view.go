@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -811,6 +812,15 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			return api.AgentMessageSendResult{}, fmt.Errorf("attachment %s: %w", attachment.AttachmentID, err)
 		}
 	}
+	status := s.agentStatus(request.Session)
+	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+		s.finishAgentAction(actionKey, call, nil, api.ErrAgentBlocked)
+		return api.AgentMessageSendResult{}, api.ErrAgentBlocked
+	}
+	if status.Activity == api.AgentActivityWorking {
+		s.finishAgentAction(actionKey, call, nil, api.ErrAgentBusy)
+		return api.AgentMessageSendResult{}, api.ErrAgentBusy
+	}
 	if handle := s.currentAgentHandle(request.Session); handle != nil {
 		if err := handle.SendMessage(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -875,7 +885,11 @@ func (s *Service) existingAgentMessageIdentity(sessionID, clientMessageID, finge
 }
 
 func sendAgentMessageInput(ctx context.Context, runtime Runtime, sessionID, text string) error {
-	if err := runtime.Input(ctx, sessionID, []byte(strings.ReplaceAll(text, "\n", "\r"))); err != nil {
+	var buf bytes.Buffer
+	buf.WriteString("\x1b[200~")
+	buf.WriteString(strings.ReplaceAll(text, "\n", "\r"))
+	buf.WriteString("\x1b[201~")
+	if err := runtime.Input(ctx, sessionID, buf.Bytes()); err != nil {
 		return err
 	}
 	return runtime.Input(ctx, sessionID, []byte{0x1b, 0x5b, 0x31, 0x33, 0x75})
