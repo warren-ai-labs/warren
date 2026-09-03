@@ -70,6 +70,12 @@ import {
   removeAgentDraft,
   validateAgentAttachment,
 } from "./agent.js";
+import {
+  saveAgentEvents,
+  loadRecentAgentEvents,
+  getAgentMaxSequence,
+  clearAgentSession,
+} from "./agent-store.js";
 import { AgentView } from "./agent.jsx";
 import {
   AgentCompletionEventChannel,
@@ -936,6 +942,9 @@ export default function App() {
         const cursor = Number(result?.cursor) || 0;
         const hasMore = Boolean(result?.hasMore);
         const epoch = result?.epoch;
+        if (events.length > 0) {
+          saveAgentEvents(sessionID, epoch, events);
+        }
         setAgentStateBySession(previous => {
           if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
           const current = previous[sessionID] || {};
@@ -2302,10 +2311,14 @@ export default function App() {
       break;
     }
     case "agent":
+      if (Array.isArray(message.events) && message.events.length > 0) {
+        saveAgentEvents(message.session, message.epoch, message.events);
+      }
       setAgentStateBySession(previous => {
         const current = previous[message.session];
         const sameEpoch = !message.epoch || current?.epoch === message.epoch;
         if (!sameEpoch) {
+          clearAgentSession(message.session);
           // A new projection epoch means the daemon restarted: drop the old
           // conversation and let the history loader refetch from scratch.
           return {
@@ -3674,11 +3687,70 @@ export default function App() {
   // fetched page by page so a huge transcript never arrives as one message.
   useEffect(() => {
     if (!agentViewActive || !selectedSession) return;
-    const state = agentStateBySession[selectedSession.id];
+    const sessionID = selectedSession.id;
+
+    loadRecentAgentEvents(sessionID, 100).then(cached => {
+      if (cached && cached.length > 0) {
+        setAgentStateBySession(prev => {
+          const cur = prev[sessionID] || {};
+          if (!cur.events || cur.events.length === 0) {
+            return { ...prev, [sessionID]: { ...cur, events: cached } };
+          }
+          return prev;
+        });
+      }
+    });
+
+    const state = agentStateBySession[sessionID];
+    getAgentMaxSequence(sessionID, state?.epoch).then(lastSeq => {
+      const params = { session: sessionID };
+      if (lastSeq > 0) params.lastSequence = String(lastSeq);
+      if (state?.epoch) params.epoch = String(state.epoch);
+      request("agent.subscribe", params, result => {
+        const epoch = result?.snapshot?.epoch;
+        const gapEvents = result?.gapEvents || [];
+        if (gapEvents.length > 0) {
+          saveAgentEvents(sessionID, epoch, gapEvents);
+          setAgentStateBySession(prev => {
+            const cur = prev[sessionID] || {};
+            return {
+              ...prev,
+              [sessionID]: {
+                ...cur,
+                epoch: epoch || cur.epoch,
+                events: mergeAgentEvents(cur.events || [], gapEvents),
+              },
+            };
+          });
+        } else if (result?.snapshot?.sequence > lastSeq && (result.snapshot.sequence - lastSeq) > 0) {
+          request("agent.history", {
+            session: sessionID,
+            since: String(lastSeq + 1),
+            before: String(result.snapshot.sequence + 1),
+            limit: "100",
+          }, page => {
+            if (page?.events?.length > 0) {
+              saveAgentEvents(sessionID, page.epoch || epoch, page.events);
+              setAgentStateBySession(prev => {
+                const cur = prev[sessionID] || {};
+                return {
+                  ...prev,
+                  [sessionID]: {
+                    ...cur,
+                    events: mergeAgentEvents(cur.events || [], page.events),
+                  },
+                };
+              });
+            }
+          });
+        }
+      });
+    });
+
     if (!state?.historyLoaded && !state?.historyLoading && !state?.historyError) {
-      loadAgentHistory(selectedSession.id);
+      loadAgentHistory(sessionID);
     }
-  }, [agentViewActive, selectedSession, agentStateBySession, loadAgentHistory]);
+  }, [agentViewActive, selectedSession?.id]);
 
   return (
     <>
