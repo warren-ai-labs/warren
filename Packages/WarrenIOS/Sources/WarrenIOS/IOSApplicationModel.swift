@@ -811,10 +811,27 @@ public final class IOSApplicationModel: ObservableObject {
         persistNavigation()
     }
 
+    /// Extracts a target session identifier from a deep link URL (e.g. `warren://session/{sessionID}`).
+    public func parseSessionDeepLink(_ url: URL) -> String? {
+        guard url.scheme?.lowercased() == "warren" else { return nil }
+        if url.host?.lowercased() == "session" {
+            let sessionID = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return sessionID.isEmpty ? nil : sessionID
+        }
+        if let index = url.pathComponents.firstIndex(where: { $0.lowercased() == "session" }), index + 1 < url.pathComponents.count {
+            let sessionID = url.pathComponents[index + 1].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return sessionID.isEmpty ? nil : sessionID
+        }
+        return nil
+    }
+
     /// Changes the visible Session without ending it. The old subscription is
     /// acknowledged before its replacement to prevent stale recovery markers.
     public func selectSession(_ sessionID: String) {
-        guard let selectedSession = roster?.sessions.first(where: { $0.id == sessionID && $0.isRunning }) else { return }
+        guard let selectedSession = roster?.sessions.first(where: { $0.id == sessionID && $0.isRunning }) else {
+            navigation.sessionID = sessionID
+            return
+        }
         guard currentSessionID != sessionID else { return }
         pendingSessionDeletion = nil
         sessionDeletionDestination = nil

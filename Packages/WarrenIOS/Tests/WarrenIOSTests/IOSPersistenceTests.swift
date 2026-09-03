@@ -21,6 +21,16 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertNil(truncateCopiedText("   "))
     }
 
+    @MainActor
+    func testParseSessionDeepLink() {
+        let store = IOSLocalStore(defaults: UserDefaults(suiteName: "test-\(UUID())")!, keychain: IOSKeychainStore(service: "test"))
+        let model = IOSApplicationModel(configuration: .init(name: "Host", url: "ws://localhost:9000"), localStore: store)
+        XCTAssertEqual(model.parseSessionDeepLink(URL(string: "warren://session/session-123")!), "session-123")
+        XCTAssertEqual(model.parseSessionDeepLink(URL(string: "warren:///session/session-456")!), "session-456")
+        XCTAssertNil(model.parseSessionDeepLink(URL(string: "https://example.com/session/123")!))
+        XCTAssertNil(model.parseSessionDeepLink(URL(string: "warren://other/123")!))
+    }
+
     func testComposerActionInterruptsOnlyWhileWorking() {
         XCTAssertEqual(agentComposerAction(activity: .working, hasControl: true, hasText: false), .interrupt)
         XCTAssertEqual(agentComposerAction(activity: .ready, hasControl: true, hasText: true), .send)

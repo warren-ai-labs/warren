@@ -68,8 +68,11 @@ public struct IOSRootView: View {
             IOSWorkspaceManagementSheet(model: model, projectID: workspaceManagerProjectID)
                 .iosSheetPresentation(.medium, .large)
         }
-        .onChange(of: showingWorkspaceManager) { _, isPresented in
-            if !isPresented { workspaceManagerProjectID = nil }
+        .onOpenURL { url in
+            if let sessionID = model.parseSessionDeepLink(url) {
+                model.selectSession(sessionID)
+                navigateToSession(sessionID)
+            }
         }
         .onChange(of: model.currentSessionID) { _, sessionID in
             guard let sessionID else {
@@ -89,22 +92,26 @@ public struct IOSRootView: View {
                 }
                 return
             }
-            revealActiveSession(sessionID)
-            if let routeIndex = navigationPath.firstIndex(where: { route in
-                if case .session = route { return true }
-                return false
-            }) {
-                // SessionView can switch siblings without changing the
-                // NavigationStack depth. Keep the path's identity in lockstep
-                // with the model so dismissal never returns to a deleted tab.
-                navigationPath[routeIndex] = .session(sessionID)
-                if routeIndex + 1 < navigationPath.count {
-                    navigationPath.removeSubrange((routeIndex + 1)..<navigationPath.count)
-                }
-                return
-            }
-            navigationPath.append(.session(sessionID))
+            navigateToSession(sessionID)
         }
+    }
+
+    private func navigateToSession(_ sessionID: String) {
+        revealActiveSession(sessionID)
+        if let routeIndex = navigationPath.firstIndex(where: { route in
+            if case .session = route { return true }
+            return false
+        }) {
+            // SessionView can switch siblings without changing the
+            // NavigationStack depth. Keep the path's identity in lockstep
+            // with the model so dismissal never returns to a deleted tab.
+            navigationPath[routeIndex] = .session(sessionID)
+            if routeIndex + 1 < navigationPath.count {
+                navigationPath.removeSubrange((routeIndex + 1)..<navigationPath.count)
+            }
+            return
+        }
+        navigationPath.append(.session(sessionID))
     }
 
     private func revealActiveSession(_ sessionID: String?) {
