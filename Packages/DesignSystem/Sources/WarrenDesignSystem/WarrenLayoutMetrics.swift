@@ -97,8 +97,13 @@ public enum WarrenLayoutMetrics {
 
     // Presentation surface geometry. Business surfaces use a documented width
     // instead of inheriting arbitrary frame values from individual screens.
+#if os(iOS)
+    public static let compactDialogWidth: CGFloat = 320
+    public static let standardDialogWidth: CGFloat = 340
+#else
     public static let compactDialogWidth: CGFloat = 400
     public static let standardDialogWidth: CGFloat = 480
+#endif
     public static let wideSheetWidth: CGFloat = 720
     public static let desktopSheetMaximumHeight: CGFloat = 680
     public static let mobileActionRowHeight: CGFloat = 44

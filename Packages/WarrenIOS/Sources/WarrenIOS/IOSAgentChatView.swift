@@ -23,19 +23,32 @@ private final class AgentComposerTextView: UITextView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // UITextView lays its first line at the top of the text container.
-        // Recompute equal insets from the actual control height so the
-        // single-line draft (and the caret beside it) stays vertically
-        // centered in the 44pt composer row. Long drafts still scroll inside
-        // the same bounded control.
         guard bounds.height > 0, let font else { return }
-        let verticalInset = max(4, floor((bounds.height - font.lineHeight) / 2))
-        guard abs(textContainerInset.top - verticalInset) > 0.5
-                || abs(textContainerInset.bottom - verticalInset) > 0.5 else { return }
-        var inset = textContainerInset
-        inset.top = verticalInset
-        inset.bottom = verticalInset
-        textContainerInset = inset
+        let singleLine = contentSize.height <= font.lineHeight + 14
+        let verticalInset: CGFloat = singleLine
+            ? max(6, floor((bounds.height - font.lineHeight) / 2))
+            : 6
+        if abs(textContainerInset.top - verticalInset) > 0.5
+            || abs(textContainerInset.bottom - verticalInset) > 0.5 {
+            textContainerInset.top = verticalInset
+            textContainerInset.bottom = verticalInset
+        }
+        let shouldScroll = contentSize.height > bounds.height + 2
+        if isScrollEnabled != shouldScroll {
+            isScrollEnabled = shouldScroll
+        }
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        let fitting = super.sizeThatFits(size)
+        let minHeight: CGFloat = 34
+        let maxHeight: CGFloat = 94
+        return CGSize(width: size.width, height: min(max(fitting.height, minHeight), maxHeight))
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let width = bounds.width > 0 ? bounds.width : 300
+        return sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     }
 
     override func caretRect(for position: UITextPosition) -> CGRect {
@@ -121,6 +134,11 @@ private struct AgentComposerInput: UIViewRepresentable {
         view.invalidateIntrinsicContentSize()
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: AgentComposerTextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width
+        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+    }
+
     final class Coordinator: NSObject, UITextViewDelegate {
         private var text: Binding<String>
         private var isFocused: Binding<Bool>
@@ -141,6 +159,7 @@ private struct AgentComposerInput: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             guard text.wrappedValue != textView.text else { return }
             text.wrappedValue = textView.text
+            textView.invalidateIntrinsicContentSize()
         }
 
         func textViewDidBeginEditing(_: UITextView) {
@@ -695,7 +714,7 @@ public struct AgentChatView: View {
                             .font(IOSTypography.input)
                             .foregroundStyle(IOSTheme.text)
                             .textFieldStyle(.plain)
-                            .lineLimit(1)
+                            .lineLimit(1...4)
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                             .disabled(isUploadingAttachments || sendStatus == "sending")
@@ -703,7 +722,7 @@ public struct AgentChatView: View {
                             .accessibilityLabel("Agent message")
 #endif
                     }
-                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 34, maxHeight: 94)
                     .padding(.horizontal, 8)
 
                     // Row 2: Attachment and model controls. These controls
