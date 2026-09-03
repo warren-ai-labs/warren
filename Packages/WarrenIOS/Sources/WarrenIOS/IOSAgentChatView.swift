@@ -679,7 +679,7 @@ public struct AgentChatView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .center, spacing: 6) {
             if let reason = model.agentDisabledReason,
                model.hasControlLease,
                model.agentAttention(for: sessionID) == nil,
@@ -691,6 +691,7 @@ public struct AgentChatView: View {
                     .lineLimit(2)
                     .iosNaturalWrap()
                     .layoutPriority(1)
+                    .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
             }
 
             VStack(alignment: .leading, spacing: 0) {
@@ -734,7 +735,7 @@ public struct AgentChatView: View {
                                 .textFieldStyle(.plain)
                                 .lineLimit(1...4)
                                 .multilineTextAlignment(.leading)
-                                .frame(width: geometry.size.width * 0.9, alignment: .leading)
+                                .frame(width: geometry.size.width, alignment: .leading)
                                 .disabled(isUploadingAttachments || sendStatus == "sending")
                                 .focused($composerFocused)
                                 .accessibilityLabel("Agent message")
@@ -817,8 +818,11 @@ public struct AgentChatView: View {
                         .accessibilityLabel(sendStatusLabel)
                 }
             }
+            .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 3)
+        .padding(.bottom, 6)
         .background(IOSTheme.background)
     }
 
