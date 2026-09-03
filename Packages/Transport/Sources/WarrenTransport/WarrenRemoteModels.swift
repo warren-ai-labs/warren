@@ -1570,6 +1570,34 @@ public struct WarrenRemoteAgentHistoryPage: Codable, Equatable, Sendable {
     }
 }
 
+public struct WarrenRemoteAgentSnapshotResult: Codable, Equatable, Sendable {
+    public let epoch: UInt64
+    public let turn: WarrenRemoteAgentTurn
+    public let sequence: UInt64
+
+    public init(epoch: UInt64, turn: WarrenRemoteAgentTurn, sequence: UInt64) {
+        self.epoch = epoch
+        self.turn = turn
+        self.sequence = sequence
+    }
+}
+
+public struct WarrenRemoteAgentSubscriptionResult: Codable, Equatable, Sendable {
+    public let session: WarrenRemoteSession
+    public let snapshot: WarrenRemoteAgentSnapshotResult
+    public let gapEvents: [WarrenRemoteAgentEvent]?
+
+    public init(
+        session: WarrenRemoteSession,
+        snapshot: WarrenRemoteAgentSnapshotResult,
+        gapEvents: [WarrenRemoteAgentEvent]? = nil
+    ) {
+        self.session = session
+        self.snapshot = snapshot
+        self.gapEvents = gapEvents
+    }
+}
+
 public struct WarrenRemoteOutputFrame: Hashable, Sendable {
     public let sessionID: String
     public let epoch: UInt64

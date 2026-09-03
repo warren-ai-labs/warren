@@ -1022,13 +1022,26 @@ public actor WarrenRemoteClient {
         )
     }
 
+    public func subscribeAgent(
+        sessionID: String,
+        epoch: UInt64? = nil,
+        lastSequence: UInt64? = nil
+    ) async throws -> WarrenRemoteAgentSubscriptionResult {
+        var params = ["session": sessionID]
+        if let epoch { params["epoch"] = String(epoch) }
+        if let lastSequence { params["lastSequence"] = String(lastSequence) }
+        return try await request("agent.subscribe", params: params, decoding: WarrenRemoteAgentSubscriptionResult.self)
+    }
+
     public func agentHistory(
         sessionID: String,
+        since: UInt64? = nil,
         before: UInt64? = nil,
         limit: Int = 100,
         conversationOnly: Bool = false
     ) async throws -> WarrenRemoteAgentHistoryPage {
         var params = ["session": sessionID, "limit": String(limit)]
+        if let since { params["since"] = String(since) }
         if let before { params["before"] = String(before) }
         if conversationOnly { params["priority"] = "conversation" }
         return try await request("agent.history", params: params, decoding: WarrenRemoteAgentHistoryPage.self)

@@ -131,6 +131,8 @@ public final class IOSApplicationModel: ObservableObject {
     private var clientGeneration: UInt64 = 0
     private var agentEpochBySessionID: [String: UInt64] = [:]
     private var agentEventKeysBySessionID: [String: Set<String>] = [:]
+    private var agentSubscribedSessionIDs: Set<String> = []
+    private var agentHighestSequenceBySessionID: [String: UInt64] = [:]
     /// Display mode is a presentation preference of each Session, not a
     /// property of the Host process. Agent-backed Sessions open on Agent by
     /// default; an explicit Terminal/Agent switch is remembered while the
@@ -599,6 +601,8 @@ public final class IOSApplicationModel: ObservableObject {
         invalidatedAgentDraftKeys = []
         agentEpochBySessionID = [:]
         agentEventKeysBySessionID = [:]
+        agentSubscribedSessionIDs = []
+        agentHighestSequenceBySessionID = [:]
         historyCursorBySessionID = [:]
         historyHasMoreBySessionID = [:]
         draftSaveTasksBySessionID.values.forEach { $0.cancel() }
@@ -922,6 +926,7 @@ public final class IOSApplicationModel: ObservableObject {
                   let self,
                   self.sessionSelectionGeneration == generation,
                   self.currentSessionID == sessionID else { return }
+
             let anchor = await client.recoveryAnchor(for: sessionID)
             do {
                 let result = try await client.subscribe(
@@ -2405,6 +2410,30 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
+    private func fillAgentSequenceGap(sessionID: String, since: UInt64, before: UInt64) {
+        guard since < before else { return }
+        let client = client
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let page = try await client.agentHistory(
+                    sessionID: sessionID,
+                    since: since,
+                    before: before,
+                    limit: 100,
+                    conversationOnly: false
+                )
+                if !page.events.isEmpty {
+                    await MainActor.run {
+                        self.mergeAgentEvents(page.events, sessionID: sessionID, epoch: page.epoch ?? 0, prepend: false)
+                    }
+                }
+            } catch {
+                // Gap recovery will retry on subsequent message boundaries
+            }
+        }
+    }
+
     public func agentHistoryHasMore(for sessionID: String) -> Bool {
         historyHasMoreBySessionID[sessionID] ?? true
     }
@@ -2418,6 +2447,41 @@ public final class IOSApplicationModel: ObservableObject {
 
     public func agentHistoryError(for sessionID: String) -> String? {
         historyErrorBySessionID[sessionID]
+    }
+
+    public func ensureAgentSubscribed(for sessionID: String) {
+        guard !agentSubscribedSessionIDs.contains(sessionID) else { return }
+        agentSubscribedSessionIDs.insert(sessionID)
+        let client = client
+        Task { [weak self] in
+            guard let self else { return }
+            let cached = await IOSAgentEventStore.shared.loadRecentEvents(sessionID: sessionID, limit: 100)
+            if !cached.isEmpty {
+                await MainActor.run {
+                    if self.agentState.agentEventsBySessionID[sessionID]?.isEmpty ?? true {
+                        self.agentState.agentEventsBySessionID[sessionID] = cached
+                        self.agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
+                    }
+                }
+            }
+            let currentEpoch = await MainActor.run { self.agentEpochBySessionID[sessionID] ?? 0 }
+            let lastSeq = await IOSAgentEventStore.shared.maxSequence(sessionID: sessionID, epoch: currentEpoch)
+            do {
+                let subResult = try await client.subscribeAgent(sessionID: sessionID, epoch: currentEpoch, lastSequence: lastSeq)
+                _ = await MainActor.run {
+                    self.agentEpochBySessionID[sessionID] = subResult.snapshot.epoch
+                    if let gap = subResult.gapEvents, !gap.isEmpty {
+                        self.mergeAgentEvents(gap, sessionID: sessionID, epoch: subResult.snapshot.epoch, prepend: false)
+                    } else if subResult.snapshot.sequence > lastSeq && subResult.snapshot.sequence - lastSeq > 0 {
+                        self.fillAgentSequenceGap(sessionID: sessionID, since: lastSeq + 1, before: subResult.snapshot.sequence + 1)
+                    }
+                }
+            } catch {
+                _ = await MainActor.run {
+                    _ = self.agentSubscribedSessionIDs.remove(sessionID)
+                }
+            }
+        }
     }
 
     private func consume(_ event: WarrenRemoteEvent) {
@@ -2638,11 +2702,16 @@ public final class IOSApplicationModel: ObservableObject {
             agentState.agentEventsBySessionID[sessionID] = []
             agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
             agentEventKeysBySessionID[sessionID] = []
+            agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
+            agentSubscribedSessionIDs.remove(sessionID)
             historyCursorBySessionID.removeValue(forKey: sessionID)
             historyHasMoreBySessionID.removeValue(forKey: sessionID)
             historyLoadedBySessionID.remove(sessionID)
             historyErrorBySessionID.removeValue(forKey: sessionID)
             invalidateAgentHistoryRequest(for: sessionID)
+            Task {
+                await IOSAgentEventStore.shared.clearSession(sessionID: sessionID)
+            }
         }
         if epoch != 0 {
             agentEpochBySessionID[sessionID] = epoch
@@ -2653,9 +2722,13 @@ public final class IOSApplicationModel: ObservableObject {
         // full copy of the transcript for each delta.
         var events = agentState.agentEventsBySessionID.removeValue(forKey: sessionID) ?? []
         var keys = agentEventKeysBySessionID.removeValue(forKey: sessionID) ?? []
+        let currentHighest = agentHighestSequenceBySessionID[sessionID] ?? 0
         var didChange = false
         for event in incoming {
             let key = "\(eventEpoch):\(event.sequence)"
+            if event.sequence > (agentHighestSequenceBySessionID[sessionID] ?? 0) {
+                agentHighestSequenceBySessionID[sessionID] = event.sequence
+            }
             // Fold any provider's content-delta events by (type,id) key so streaming replies do not
             // produce a bubble per database poll. Seed events have contentDelta=false; later updates
             // carry contentDelta=true and append to the accumulated content.
@@ -2667,7 +2740,7 @@ public final class IOSApplicationModel: ObservableObject {
                 // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
                 if keys.contains(key) { continue }
                 let merged = WarrenRemoteAgentEvent(
-                    sequence: existing.sequence,
+                    sequence: max(existing.sequence, event.sequence),
                     turn: event.turn ?? existing.turn,
                     id: event.id,
                     provider: event.provider.isEmpty ? existing.provider : event.provider,
@@ -2709,6 +2782,12 @@ public final class IOSApplicationModel: ObservableObject {
         agentEventKeysBySessionID[sessionID] = keys
         if didChange {
             agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
+        }
+        if !prepend, currentHighest > 0, let incomingMinSeq = incoming.first?.sequence, incomingMinSeq > currentHighest + 1 {
+            fillAgentSequenceGap(sessionID: sessionID, since: currentHighest + 1, before: incomingMinSeq)
+        }
+        Task {
+            try? await IOSAgentEventStore.shared.saveEvents(incoming, sessionID: sessionID, epoch: eventEpoch)
         }
     }
 
