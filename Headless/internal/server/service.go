@@ -145,8 +145,7 @@ type Service struct {
 	// ClientsActive reports whether any client can observe roster snapshots.
 	// The merge projection only refreshes while clients are connected; nil
 	// means "always active" for tests and embedders.
-	ClientsActive func() bool
-
+	ClientsActive    func() bool
 	metadataCache    *metadataCache
 	mergeOnce        sync.Once
 	mergeCache       *mergeStateCache
@@ -201,6 +200,10 @@ type Service struct {
 	agentActionFingerprints map[string]string
 	agentActionCalls        map[string]*agentActionCall
 	agentSessionActionLocks map[string]*sync.Mutex
+	liveActivityMu          sync.Mutex
+	liveActivityWake        chan struct{}
+	liveActivityPublisher   LiveActivityPublisher
+	liveActivityDigest      []byte
 
 	lifecycleOnce   sync.Once
 	lifecycleCancel context.CancelFunc
@@ -430,6 +433,7 @@ func (s *Service) Start(parent context.Context) {
 		ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 		s.lifecycleCancel = cancel
 		go s.lifecycleLoop(ctx)
+		go s.liveActivityLoop(ctx)
 		go s.mergeLoop(ctx)
 		if s.ProbeForeground {
 			go s.metadataLoop(ctx)
@@ -2751,6 +2755,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		_ = adapter.Kill(ctx, runtimeName)
 		return api.Session{}, err
 	}
+	s.wakeLiveActivity()
 	storeDuration := time.Since(storeStartedAt)
 	outputStartedAt := time.Now()
 	if _, err := s.ensureOutput(ctx, session); err != nil {
@@ -2944,10 +2949,14 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 		_ = agent.RemoveOpenCodeCache(session.TranscriptPath)
 	}
 	agent.RemoveBinding(id)
-	return s.Store.Update(func(value *api.State) error {
+	err := s.Store.Update(func(value *api.State) error {
 		value.Sessions = filter(value.Sessions, func(item api.Session) bool { return item.ID != id })
 		return nil
 	})
+	if err == nil {
+		s.wakeLiveActivity()
+	}
+	return err
 }
 
 func (s *Service) Session(id string) (api.Session, bool) {
@@ -4293,6 +4302,7 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 	if shouldTryTitle {
 		s.tryStartSessionTitle(sessionID)
 	}
+	s.wakeLiveActivity()
 }
 
 // recordAgentStatus forwards a status change that arrived without new
@@ -4353,6 +4363,7 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 			s.tryStartSessionTitle(sessionID)
 		}
 	}
+	s.wakeLiveActivity()
 }
 
 // tryStartSessionTitle atomically claims the one automatic title request for a
@@ -4501,6 +4512,8 @@ func (s *Service) generateSessionTitle(sessionID string, config sessiontitle.Con
 	})
 	if err != nil {
 		s.logWarn("persist session title", "session", sessionID, "error", err)
+	} else {
+		s.wakeLiveActivity()
 	}
 }
 
@@ -4547,6 +4560,7 @@ func (s *Service) setAgentStatusForHandle(sessionID string, expected AgentHandle
 	} else {
 		s.broadcastAgentStatus(sessionID, status)
 	}
+	s.wakeLiveActivity()
 }
 
 func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
@@ -5057,6 +5071,7 @@ func (s *Service) stopAgent(sessionID string) {
 	if hadAgent {
 		s.bumpAgentRosterRevision()
 	}
+	s.wakeLiveActivity()
 }
 
 // broadcastAgentIncrements pushes a live batch of agent events to attached
@@ -5956,6 +5971,7 @@ func (s *Service) markEnded(sessionID string) {
 	})
 	if changed {
 		s.stopOutput(sessionID, true)
+		s.wakeLiveActivity()
 	}
 }
 

@@ -264,6 +264,9 @@ func main() {
 		fatal(err)
 	}
 	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), strings.TrimSpace(*relayHostID), logger)
+	service.SetLiveActivityPublisher(func(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
+		return relaySupervisor.PublishLiveActivity(ctx, snapshot)
+	})
 	httpHandler.RelayStart = relaySupervisor.Start
 	httpHandler.RelayStop = relaySupervisor.Stop
 	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
@@ -526,6 +529,55 @@ func (supervisor *relaySupervisor) Pairing(ctx context.Context) (relay.PairingRe
 		return relay.PairingResult{}, err
 	}
 	return client.Share(ctx)
+}
+
+// PublishLiveActivity forwards a bounded Host projection through the Relay's
+// authenticated Host API. The Host Secret never enters the JSON payload.
+func (supervisor *relaySupervisor) PublishLiveActivity(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
+	value, _, err := supervisor.desiredSettings()
+	if err != nil {
+		// Relay is optional. A Host may start before enrollment or while the
+		// operator has disabled Relay; in that state there is no push sink and
+		// the periodic Live Activity publisher should stay quiet.
+		if strings.TrimSpace(value.URL) == "" || strings.TrimSpace(value.HostID) == "" {
+			return nil
+		}
+		return err
+	}
+	urlValue := strings.TrimSpace(value.URL)
+	hostID := strings.TrimSpace(value.HostID)
+	if supervisor.overrideURL != "" {
+		urlValue = supervisor.overrideURL
+	}
+	if supervisor.overrideID != "" {
+		hostID = supervisor.overrideID
+	}
+	client, err := relay.NewLiveActivityClient(urlValue, hostID, supervisor.token)
+	if err != nil {
+		return err
+	}
+	return client.Publish(ctx, relay.LiveActivitySnapshot{
+		Connection:            snapshot.Connection,
+		ActiveSessionCount:    snapshot.ActiveSessionCount,
+		WorkingSessionCount:   snapshot.WorkingSessionCount,
+		AttentionSessionCount: snapshot.AttentionSessionCount,
+		Sessions:              convertLiveActivitySessions(snapshot.Sessions),
+		UpdatedAt:             snapshot.UpdatedAt,
+	})
+}
+
+func convertLiveActivitySessions(values []server.LiveActivitySession) []relay.LiveActivitySession {
+	result := make([]relay.LiveActivitySession, 0, len(values))
+	for _, value := range values {
+		result = append(result, relay.LiveActivitySession{
+			ID:         value.ID,
+			Title:      value.Title,
+			Connection: value.Connection,
+			Activity:   value.Activity,
+			Attention:  value.Attention,
+		})
+	}
+	return result
 }
 
 func listenerPort(listener net.Listener) string {

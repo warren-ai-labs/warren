@@ -357,6 +357,10 @@ final class IOSPersistenceTests: XCTestCase {
             endpoint.relaySessionRefreshURL?.absoluteString,
             "https://relay.example.test/relay/h/host-123/v1/session/refresh"
         )
+        XCTAssertEqual(
+            endpoint.relayLiveActivityRegistrationURL?.absoluteString,
+            "https://relay.example.test/relay/h/host-123/v1/live-activities"
+        )
         let defaults = UserDefaults(suiteName: "warren-ios-relay-metadata-\(UUID())")!
         let store = IOSLocalStore(
             defaults: defaults,

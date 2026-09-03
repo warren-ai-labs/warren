@@ -50,6 +50,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: 2PX99VFWSU.WarrenIOSDevice
         INFOPLIST_FILE: Sources/WarrenIOSApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/WarrenIOSApp/WarrenIOSApp.entitlements
+        APS_ENVIRONMENT: development
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -60,8 +62,10 @@ targets:
       configs:
         Debug:
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          APS_ENVIRONMENT: development
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
+          APS_ENVIRONMENT: production
 
 schemes:
   WarrenIOSApp:
