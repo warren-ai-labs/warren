@@ -71,15 +71,17 @@ struct WarrenIOSApp: App {
             IOSRootView(model: model)
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
-                    case .active: model.start()
+                    case .active:
+                        model.sceneWillEnterForeground()
+                        model.start()
                     case .background:
                         // A background scene is routinely produced by an
                         // interruption, lock/unlock cycle, or an app switch.
                         // Stopping here tears down the WebSocket and publishes
                         // a misleading Offline state. Keep the connection
-                        // intent alive; iOS may suspend the socket, and the
-                        // transport will reconnect when the scene is active.
-                        break
+                        // intent alive and grant Relay the finite background
+                        // execution window available to ordinary iOS apps.
+                        model.sceneDidEnterBackground()
                     case .inactive: break
                     @unknown default: break
                     }
