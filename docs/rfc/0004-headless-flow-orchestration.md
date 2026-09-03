@@ -1,6 +1,6 @@
 # RFC 0004: Headless flow orchestration and optional extensions
 
-- Status: Proposed
+- Status: Abandoned (Superseded by [RFC 0014](0014-autonomous-engineering-pipeline.md))
 - Owner: Warren Headless and clients
 - Created: 2026-08-21
 - Scope: flow orchestration, agent tasks, and plugin boundaries
