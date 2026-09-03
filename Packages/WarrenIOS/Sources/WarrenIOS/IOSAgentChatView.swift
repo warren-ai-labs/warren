@@ -2646,18 +2646,21 @@ private struct AgentActivityGroupBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
                     expanded.toggle()
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.72))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
                         .frame(width: 12)
-                    Image(systemName: activity.toolCount > 0 ? "terminal" : "brain.head.profile")
-                        .font(IOSTypography.label)
+                    Image(systemName: activity.toolCount > 0 ? "terminal" : "brain")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
                     Text(activity.title)
-                        .font(IOSTypography.label)
+                        .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text)
                         .lineLimit(1)
                     if !expanded, let summary = activity.preview {
@@ -2671,56 +2674,41 @@ private struct AgentActivityGroupBlock: View {
                     activityStatusMark
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 44)
+                .frame(minHeight: 28)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(activity.title)
             .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(activityStatusLabel)")
 
             if expanded {
-                VStack(alignment: .leading, spacing: 9) {
+                VStack(alignment: .leading, spacing: 3) {
                     if !activity.reasoningEvents.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if activity.toolCount > 0 {
-                                Text("Thinking")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.tertiaryText)
-                            }
-                            ForEach(Array(activity.reasoningEvents.enumerated()), id: \.element.idForSwiftUI) { index, event in
-                                AgentReasoningEntry(
-                                    event: event,
-                                    step: activity.reasoningEvents.count > 1 ? index + 1 : nil
-                                )
-                            }
+                        ForEach(Array(activity.reasoningEvents.enumerated()), id: \.element.idForSwiftUI) { index, event in
+                            AgentReasoningEntry(
+                                event: event,
+                                step: activity.reasoningEvents.count > 1 ? index + 1 : nil
+                            )
                         }
                     }
                     if !activity.toolBlocks.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if activity.reasoningCount > 0 {
-                                Text("Tools")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.tertiaryText)
-                            }
-                            ForEach(activity.toolBlocks, id: \.id) { tool in
-                                AgentToolBlockView(tool: tool)
-                            }
+                        ForEach(activity.toolBlocks, id: \.id) { tool in
+                            AgentToolBlockView(tool: tool)
                         }
-                        .padding(.horizontal, 0)
-                        .padding(.vertical, 6)
-                        .background(IOSTheme.muted.opacity(0.28), in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
                     }
                 }
-                .padding(.leading, 12)
-                .padding(.bottom, 9)
+                .padding(.leading, 6)
+                .padding(.top, 2)
+                .padding(.bottom, 3)
             }
         }
-        .padding(.vertical, 2)
-        .padding(.leading, 8)
+        .padding(.vertical, 1)
+        .padding(.leading, 2)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             if expanded || activity.status == .running || activity.status == .failed {
-                AgentStatusRail(color: activityStatusColor, width: 2, opacity: 0.86, verticalInset: 4)
+                AgentStatusRail(color: activityStatusColor, width: 1.5, opacity: 0.76, verticalInset: 2)
             }
         }
     }
@@ -2729,21 +2717,22 @@ private struct AgentActivityGroupBlock: View {
     private var activityStatusMark: some View {
         switch activity.status {
         case .running:
-            // The amber rail is the sole running indicator in a disclosure
-            // row; a second circular mark on the trailing edge is noisy.
-            EmptyView()
+            Circle()
+                .fill(IOSTheme.amber)
+                .frame(width: 6, height: 6)
+                .accessibilityLabel("Activity running")
         case .failed:
-            EmptyView()
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(IOSTheme.red)
+                .accessibilityLabel("Activity failed")
         case .interrupted:
             Image(systemName: "pause.circle")
-                .font(IOSTypography.label)
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.yellow)
                 .accessibilityLabel("Activity interrupted")
         case .completed:
-            Image(systemName: "checkmark")
-                .font(IOSTypography.label)
-                .foregroundStyle(IOSTheme.green.opacity(0.86))
-                .accessibilityLabel("Activity completed")
+            EmptyView()
         }
     }
 
@@ -2752,7 +2741,7 @@ private struct AgentActivityGroupBlock: View {
         case .running: return IOSTheme.amber
         case .failed: return IOSTheme.red
         case .interrupted: return IOSTheme.yellow
-        case .completed: return IOSTheme.green
+        case .completed: return IOSTheme.secondaryText.opacity(0.35)
         }
     }
 
@@ -2781,20 +2770,24 @@ private struct AgentReasoningEntry: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 2) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
                     expanded.toggle()
                 }
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
-                        .frame(width: 11)
-                    Image(systemName: "brain.head.profile")
-                        .font(IOSTypography.label)
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 10)
+                    Image(systemName: "brain")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
                     Text(step.map { "Step \($0)" } ?? "Thinking")
-                        .font(IOSTypography.label)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.text.opacity(0.9))
                     if !expanded, let summary {
                         Text(summary)
                             .font(IOSTypography.metadata)
@@ -2805,7 +2798,8 @@ private struct AgentReasoningEntry: View {
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 44)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Thinking")
@@ -2815,10 +2809,10 @@ private struct AgentReasoningEntry: View {
                 AgentMarkdownText(value: content, font: IOSTypography.helper)
                     .foregroundStyle(IOSTheme.secondaryText)
                     .textSelection(.enabled)
-                    .padding(.leading, 0)
+                    .padding(.leading, 15)
+                    .padding(.vertical, 2)
             }
         }
-        .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -2841,19 +2835,24 @@ private struct AgentToolBlockView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
                     expanded.toggle()
                 }
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
-                        .frame(width: 12)
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 10)
+                    Image(systemName: toolIconName(tool.call.toolName))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
                     Text(displayToolName(tool.call.toolName))
-                        .font(IOSTypography.label)
-                        .foregroundStyle(IOSTheme.text)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.text.opacity(0.92))
                         .lineLimit(1)
                     if let summary = toolSummary(for: tool.call) {
                         Text(summary)
@@ -2866,14 +2865,15 @@ private struct AgentToolBlockView: View {
                     AgentToolStatusMark(status: tool.status)
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 44)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(tool.call.toolName))
             .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(tool.status))")
 
             if expanded {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     if let summary = toolSummary(for: tool.call) {
                         Text(summary)
                             .font(IOSTypography.code)
@@ -2900,11 +2900,17 @@ private struct AgentToolBlockView: View {
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
                 }
-                .padding(.leading, 0)
-                .padding(.bottom, 6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
+                        .stroke(IOSTheme.ring.opacity(0.45), lineWidth: 1)
+                }
+                .padding(.leading, 15)
+                .padding(.bottom, 2)
             }
         }
-        .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -2921,30 +2927,36 @@ private struct AgentToolOutputBlock: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
                     expanded.toggle()
                 }
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
-                        .frame(width: 12)
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 10)
+                    Image(systemName: toolIconName(event.toolName))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
                     Text(displayToolName(event.toolName))
-                        .font(IOSTypography.label)
+                        .font(IOSTypography.status)
                         .foregroundStyle(IOSTheme.text)
                     Spacer(minLength: 3)
                     AgentToolStatusMark(status: event.toolStatus ?? "success")
                 }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 44)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(displayToolName(event.toolName))
             .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(event.toolStatus ?? "success"))")
             if expanded {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     if let output = event.output, !output.isEmpty {
                         Text(output)
                             .font(IOSTypography.code)
@@ -2958,11 +2970,18 @@ private struct AgentToolOutputBlock: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.leading, 0)
-                .padding(.bottom, 7)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
+                        .stroke(IOSTheme.ring.opacity(0.45), lineWidth: 1)
+                }
+                .padding(.leading, 15)
+                .padding(.bottom, 2)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -2977,23 +2996,24 @@ private struct AgentToolStatusMark: View {
     var body: some View {
         switch status.lowercased() {
         case "running", "working":
-            EmptyView()
+            Circle()
+                .fill(IOSTheme.amber)
+                .frame(width: 5, height: 5)
+                .accessibilityLabel("Tool running")
         case "error", "failed", "failure":
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .semibold))
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.red)
-                .frame(width: 20, height: 20, alignment: .center)
+                .frame(width: 14, height: 14, alignment: .center)
                 .accessibilityLabel("Tool failed")
         case "interrupted":
             Image(systemName: "pause.circle")
-                .font(IOSTypography.label)
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.yellow)
+                .frame(width: 14, height: 14, alignment: .center)
                 .accessibilityLabel("Tool interrupted")
         default:
-            Image(systemName: "checkmark")
-                .font(IOSTypography.label)
-                .foregroundStyle(IOSTheme.green.opacity(0.86))
-                .accessibilityLabel("Tool completed")
+            EmptyView()
         }
     }
 }
@@ -3020,6 +3040,21 @@ private func displayToolName(_ name: String?) -> String {
     case "permission": return "Permission"
     case "reasoning": return "Thinking"
     default: return name?.isEmpty == false ? name! : "Tool"
+    }
+}
+
+private func toolIconName(_ name: String?) -> String {
+    switch name?.lowercased() {
+    case "shell": return "terminal"
+    case "edit", "write", "apply_patch": return "pencil"
+    case "read": return "doc.text"
+    case "grep", "glob", "web_search": return "magnifyingglass"
+    case "fetch": return "arrow.down.circle"
+    case "subagent": return "person.2"
+    case "question", "ask_user_question": return "questionmark.bubble"
+    case "permission", "permission_request": return "shield"
+    case "reasoning": return "brain"
+    default: return "hammer"
     }
 }
 
