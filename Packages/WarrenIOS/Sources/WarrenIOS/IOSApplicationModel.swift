@@ -483,7 +483,8 @@ public final class IOSApplicationModel: ObservableObject {
             return
         }
         guard localStore.activateEndpoint(named: name) else { return }
-        activateEndpoint(configuration, shouldRestart: eventTask != nil)
+        // Always restart connection when switching hosts
+        activateEndpoint(configuration, shouldRestart: true)
     }
 
     /// Removes a saved Host. The active transport moves to the next available
