@@ -101,6 +101,7 @@ var webStaticResources = map[string]string{
 	"icon-192.png":           "image/png",
 	"icon-512.png":           "image/png",
 	"icon.svg":               "image/svg+xml",
+	"preset-antigravity.svg": "image/svg+xml",
 	"preset-claude.svg":      "image/svg+xml",
 	"preset-codex-white.svg": "image/svg+xml",
 	"preset-codex.svg":       "image/svg+xml",
