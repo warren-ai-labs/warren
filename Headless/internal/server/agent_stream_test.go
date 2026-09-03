@@ -789,7 +789,7 @@ func TestAgentHistoryConversationPrioritySkipsToolBurst(t *testing.T) {
 	)
 
 	first := service.agentHistoryPageWithOptions(
-		"session-conversation-priority", 0, 2, true,
+		"session-conversation-priority", 0, 0, 2, true,
 	)
 	if got := first.Events; len(got) != 2 || got[0].Sequence != 103 || got[1].Sequence != 104 {
 		t.Fatalf("priority page = %#v, want conversation sequences 103,104", got)
@@ -799,7 +799,7 @@ func TestAgentHistoryConversationPrioritySkipsToolBurst(t *testing.T) {
 	}
 
 	second := service.agentHistoryPageWithOptions(
-		"session-conversation-priority", first.Cursor, 2, true,
+		"session-conversation-priority", 0, first.Cursor, 2, true,
 	)
 	if got := second.Events; len(got) != 2 || got[0].Sequence != 1 || got[1].Sequence != 2 {
 		t.Fatalf("older priority page = %#v, want conversation sequences 1,2", got)
@@ -828,7 +828,7 @@ func TestAgentHistoryConversationPriorityCoalescesOpenCodeDeltas(t *testing.T) {
 	)
 
 	page := service.agentHistoryPageWithOptions(
-		"session-conversation-deltas", 0, 1, true,
+		"session-conversation-deltas", 0, 0, 1, true,
 	)
 	if len(page.Events) != 1 || page.Events[0].Content != "hello" {
 		t.Fatalf("priority page = %#v, want one coalesced assistant message", page.Events)
@@ -838,7 +838,7 @@ func TestAgentHistoryConversationPriorityCoalescesOpenCodeDeltas(t *testing.T) {
 	}
 
 	older := service.agentHistoryPageWithOptions(
-		"session-conversation-deltas", page.Cursor, 1, true,
+		"session-conversation-deltas", 0, page.Cursor, 1, true,
 	)
 	if len(older.Events) != 1 || older.Events[0].Content != "fix" || older.Events[0].Sequence != 1 {
 		t.Fatalf("older priority page = %#v, want user event sequence 1", older.Events)
@@ -872,7 +872,7 @@ func TestAgentHistoryConversationPriorityKeepsStructuredEvents(t *testing.T) {
 	)
 
 	page := service.agentHistoryPageWithOptions(
-		"session-conversation-structured", 0, 3, true,
+		"session-conversation-structured", 0, 0, 3, true,
 	)
 	if got := page.Events; len(got) != 3 || got[0].Sequence != 2 || got[1].Sequence != 4 || got[2].Sequence != 5 {
 		t.Fatalf("priority page = %#v, want structured sequences 2,4 and assistant 5", got)
@@ -882,7 +882,7 @@ func TestAgentHistoryConversationPriorityKeepsStructuredEvents(t *testing.T) {
 	}
 
 	older := service.agentHistoryPageWithOptions(
-		"session-conversation-structured", page.Cursor, 3, true,
+		"session-conversation-structured", 0, page.Cursor, 3, true,
 	)
 	if got := older.Events; len(got) != 1 || got[0].Sequence != 1 {
 		t.Fatalf("older priority page = %#v, want user sequence 1", got)
@@ -1201,4 +1201,110 @@ func waitForAgentHistory(t *testing.T, service *Service, sessionID, content stri
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("event %q never appeared in agent history", content)
+}
+
+func TestAgentHistorySinceRange(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "agent-events.db")
+
+	service := &Service{
+		AgentStorePath: dbPath,
+	}
+	service.lazyInit()
+
+	sessionID := "session-since-test"
+	events := []api.AgentEvent{
+		{Sequence: 1, Type: "user", Content: "1"},
+		{Sequence: 2, Type: "assistant", Content: "2"},
+		{Sequence: 3, Type: "tool_call", Content: "3"},
+		{Sequence: 4, Type: "tool_output", Content: "4"},
+		{Sequence: 5, Type: "assistant", Content: "5"},
+	}
+
+	service.agentsMu.Lock()
+	service.agents[sessionID] = &agentSession{}
+	service.agentsMu.Unlock()
+
+	service.recordAgentEvents(sessionID, events, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	// Query since 2, before 5 -> sequence 2, 3, 4
+	page := service.agentHistoryPageWithOptions(sessionID, 2, 5, 10, false)
+	if len(page.Events) != 3 {
+		t.Fatalf("page len = %d, want 3", len(page.Events))
+	}
+	if page.Events[0].Sequence != 2 || page.Events[1].Sequence != 3 || page.Events[2].Sequence != 4 {
+		t.Fatalf("page sequences = %d, %d, %d, want 2, 3, 4", page.Events[0].Sequence, page.Events[1].Sequence, page.Events[2].Sequence)
+	}
+
+	// Query since 4 -> sequence 4, 5
+	sincePage := service.agentHistoryPageWithOptions(sessionID, 4, 0, 10, false)
+	if len(sincePage.Events) != 2 {
+		t.Fatalf("sincePage len = %d, want 2", len(sincePage.Events))
+	}
+	if sincePage.Events[0].Sequence != 4 || sincePage.Events[1].Sequence != 5 {
+		t.Fatalf("sincePage sequences = %d, %d, want 4, 5", sincePage.Events[0].Sequence, sincePage.Events[1].Sequence)
+	}
+}
+
+func TestAgentSubscribeWithGapEvents(t *testing.T) {
+	directory := t.TempDir()
+	transcriptPath := filepath.Join(directory, "rollout.jsonl")
+	_ = os.WriteFile(transcriptPath, []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`+"\n"), 0o600)
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session := api.Session{
+		ID: "session-sub-gap", WorkspaceID: workspaceID, Kind: "codex", AgentSessionID: "thread-gap",
+		Runtime: "runtime-gap", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), session.Runtime, directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		Store:          state,
+		Runtime:        runtime,
+		AgentFinder:    staticAgentFinder{path: transcriptPath},
+		AgentStorePath: filepath.Join(directory, "events.db"),
+	}
+	service.lazyInit()
+
+	events := []api.AgentEvent{
+		{Sequence: 1, Type: "user", Content: "1"},
+		{Sequence: 2, Type: "assistant", Content: "2"},
+		{Sequence: 3, Type: "tool_call", Content: "3"},
+	}
+	service.agentsMu.Lock()
+	service.agents[session.ID] = &agentSession{}
+	service.agentsMu.Unlock()
+	service.recordAgentEvents(session.ID, events, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	// Subscribe with lastSequence: 1 -> should return gapEvents 2 and 3
+	epoch := service.currentAgentEpoch()
+	subResult := requestResult[map[string]any](t, connection, "agent.subscribe", map[string]any{
+		"session":      session.ID,
+		"epoch":        strconv.FormatUint(epoch, 10),
+		"lastSequence": 1,
+	})
+	gapEventsRaw, ok := subResult["gapEvents"].([]any)
+	if !ok || len(gapEventsRaw) != 2 {
+		t.Fatalf("gapEvents = %#v, want 2 events", subResult["gapEvents"])
+	}
 }

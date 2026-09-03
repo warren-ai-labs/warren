@@ -484,11 +484,6 @@ func readNewTracked(path string, offset int64, parser Parser, previous os.FileIn
 		// The CLI rotated or truncated the transcript; start over.
 		offset = 0
 	}
-	align := false
-	if offset == 0 && size > maxInitialRead {
-		offset = size - maxInitialRead
-		align = true
-	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return nil, offset, info, err
 	}
@@ -497,14 +492,6 @@ func readNewTracked(path string, offset int64, parser Parser, previous os.FileIn
 		return nil, offset, info, err
 	}
 	baseOffset := offset
-	if align {
-		if index := bytes.IndexByte(data, '\n'); index >= 0 {
-			baseOffset += int64(index) + 1
-			data = data[index+1:]
-		} else {
-			return nil, baseOffset, info, nil
-		}
-	}
 	var events []api.AgentEvent
 	consumed := int64(0)
 	for _, line := range bytes.SplitAfter(data, []byte("\n")) {

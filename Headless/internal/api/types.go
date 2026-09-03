@@ -356,8 +356,9 @@ type AgentSnapshotResult struct {
 // AgentSubscriptionResult binds a read-only subscriber to a session and
 // returns the turn baseline established before live boundaries can interleave.
 type AgentSubscriptionResult struct {
-	Session  Session             `json:"session"`
-	Snapshot AgentSnapshotResult `json:"snapshot"`
+	Session   Session             `json:"session"`
+	Snapshot  AgentSnapshotResult `json:"snapshot"`
+	GapEvents []AgentEvent        `json:"gapEvents,omitempty"`
 }
 
 // AgentWaitResult is printed by the blocking CLI once a turn reaches a

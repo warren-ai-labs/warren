@@ -68,12 +68,15 @@ const (
 	operationAuditLimit = 256
 	// defaultWorktreeRoot is also the compatibility fallback used when an
 	// embedded Service does not provide an explicit worktree root.
-	defaultWorktreeRoot = "~/.warren/worktrees"
-	setupScriptTimeout  = 5 * time.Minute
+	defaultWorktreeRoot   = "~/.warren/worktrees"
+	defaultAgentStorePath = "~/.warren/agent-events.db"
+	setupScriptTimeout    = 5 * time.Minute
 )
 
 type Service struct {
-	Store *store.Store
+	Store          *store.Store
+	AgentStore     *store.AgentEventStore
+	AgentStorePath string
 	// HostName is the Warren Host/system name advertised to the owned Relay.
 	// It is injected by the daemon from --name/WARREN_HOST_NAME.
 	HostName string
@@ -395,6 +398,12 @@ func (s *Service) lazyInitLocked() {
 	}
 	if s.metadataCache == nil {
 		s.metadataCache = &metadataCache{}
+	}
+	if s.AgentStore == nil && strings.TrimSpace(s.AgentStorePath) != "" {
+		path := resolvePath(expandHome(s.AgentStorePath))
+		if agentStore, err := store.OpenAgentEventStore(path); err == nil {
+			s.AgentStore = agentStore
+		}
 	}
 }
 
@@ -4259,6 +4268,12 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		s.agentsMu.Unlock()
 		return
 	}
+	epoch := s.currentAgentEpoch()
+	if s.AgentStore != nil {
+		if assigned, err := s.AgentStore.AppendEvents(context.Background(), sessionID, epoch, events, status); err == nil && len(assigned) == len(events) {
+			events = assigned
+		}
+	}
 	entry.events = append(entry.events, events...)
 	if len(entry.events) > 2000 {
 		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
@@ -4581,7 +4596,7 @@ func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
 // first event's sequence and can be passed back as `before` to page further
 // into the past.
 func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) api.AgentHistoryResult {
-	return s.agentHistoryPageWithOptions(sessionID, before, limit, false)
+	return s.agentHistoryPageWithOptions(sessionID, 0, before, limit, false)
 }
 
 // agentHistoryPageWithOptions serves the regular event page and the mobile
@@ -4592,6 +4607,7 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 // the wire contract or the ordering of the default view.
 func (s *Service) agentHistoryPageWithOptions(
 	sessionID string,
+	since uint64,
 	before uint64,
 	limit int,
 	conversationOnly bool,
@@ -4603,10 +4619,24 @@ func (s *Service) agentHistoryPageWithOptions(
 		limit = agentHistoryMaxLimit
 	}
 	s.lazyInit()
+	result := api.AgentHistoryResult{Epoch: s.currentAgentEpoch()}
+
+	if s.AgentStore != nil {
+		queried, hasMore, err := s.AgentStore.QueryEvents(context.Background(), sessionID, result.Epoch, since, before, limit)
+		if err == nil && len(queried) > 0 {
+			if conversationOnly {
+				return conversationHistoryPage(queried, before, limit, result)
+			}
+			result.Events = queried
+			result.Cursor = queried[0].Sequence
+			result.HasMore = hasMore
+			return result
+		}
+	}
+
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	s.agentsMu.Unlock()
-	result := api.AgentHistoryResult{Epoch: s.currentAgentEpoch()}
 	if entry == nil {
 		return result
 	}
@@ -4625,7 +4655,27 @@ func (s *Service) agentHistoryPageWithOptions(
 	}
 	var page []api.AgentEvent
 	start := 0
-	if before > 0 {
+	if since > 0 && before > 0 {
+		for _, e := range events {
+			if e.Sequence >= since && e.Sequence < before {
+				page = append(page, e)
+			}
+		}
+		if len(page) > limit {
+			result.HasMore = true
+			page = page[:limit]
+		}
+	} else if since > 0 {
+		for _, e := range events {
+			if e.Sequence >= since {
+				page = append(page, e)
+			}
+		}
+		if len(page) > limit {
+			result.HasMore = true
+			page = page[:limit]
+		}
+	} else if before > 0 {
 		// Events are stored in sequence order. Find the first event at or
 		// above the bound and take the `limit` events immediately before it.
 		index := sort.Search(len(events), func(i int) bool {
@@ -4633,16 +4683,17 @@ func (s *Service) agentHistoryPageWithOptions(
 		})
 		start = max(0, index-limit)
 		page = events[start:index]
+		result.HasMore = start > 0
 	} else {
 		start = max(0, len(events)-limit)
 		page = events[start:]
+		result.HasMore = start > 0
 	}
 	if len(page) == 0 {
 		return result
 	}
 	result.Events = append([]api.AgentEvent(nil), page...)
 	result.Cursor = page[0].Sequence
-	result.HasMore = start > 0
 	return result
 }
 
@@ -4813,15 +4864,23 @@ func (s *Service) agentTail(sessionID string, maxEvents, maxBytes int) []api.Age
 		return nil
 	}
 	s.lazyInit()
-	s.agentsMu.Lock()
-	entry := s.agents[sessionID]
-	s.agentsMu.Unlock()
-	if entry == nil {
-		return nil
+	var events []api.AgentEvent
+	if s.AgentStore != nil {
+		if queried, _, err := s.AgentStore.QueryEvents(context.Background(), sessionID, s.currentAgentEpoch(), 0, 0, maxEvents); err == nil && len(queried) > 0 {
+			events = queried
+		}
 	}
-	entry.mu.Lock()
-	events := entry.events
-	entry.mu.Unlock()
+	if len(events) == 0 {
+		s.agentsMu.Lock()
+		entry := s.agents[sessionID]
+		s.agentsMu.Unlock()
+		if entry == nil {
+			return nil
+		}
+		entry.mu.Lock()
+		events = entry.events
+		entry.mu.Unlock()
+	}
 	sizes := make([]int, len(events))
 	for index := range events {
 		if encoded, err := json.Marshal(events[index]); err == nil {
@@ -4906,6 +4965,12 @@ func (s *Service) agentSnapshot(sessionID string) api.AgentSnapshotResult {
 	result := api.AgentSnapshotResult{
 		Epoch: s.currentAgentEpoch(),
 		Turn:  s.agentTurn(sessionID),
+	}
+	if s.AgentStore != nil {
+		if seq, err := s.AgentStore.MaxSequence(context.Background(), sessionID, result.Epoch); err == nil && seq > 0 {
+			result.Sequence = seq
+			return result
+		}
 	}
 	if history := s.agentHistory(sessionID); len(history) > 0 {
 		result.Sequence = history[len(history)-1].Sequence
