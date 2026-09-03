@@ -130,6 +130,15 @@ private struct AgentComposerInput: UIViewRepresentable {
                       !view.isFirstResponder else { return }
                 view.becomeFirstResponder()
             }
+        } else if !isFocused, view.isFirstResponder {
+            let requestID = context.coordinator.focusRequestID
+            DispatchQueue.main.async { [weak view, weak coordinator = context.coordinator] in
+                guard let view, let coordinator,
+                      !coordinator.wantsFocus,
+                      coordinator.focusRequestID == requestID,
+                      view.isFirstResponder else { return }
+                view.resignFirstResponder()
+            }
         }
         view.invalidateIntrinsicContentSize()
     }
@@ -371,7 +380,16 @@ public struct AgentChatView: View {
                     }
                     #if os(iOS)
                     .scrollDismissesKeyboard(.interactively)
+                    .scrollBounceBehavior(.always, axes: .vertical)
                     #endif
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            if composerFocused {
+                                composerFocused = false
+                                model.dismissKeyboard()
+                            }
+                        }
+                    )
                     .onChange(of: composerFocused) { _, focused in
                         if focused {
                             // Agent input is the control affordance. The first
@@ -686,19 +704,18 @@ public struct AgentChatView: View {
                 }
 
                 VStack(spacing: 0) {
-                    // Row 1: Message input. The fixed height keeps the
-                    // composer compact while UIKit scrolls long drafts inside
-                    // this field instead of growing the surface.
+                    // Row 1: Message input. Sized dynamically from 34pt up to 94pt
+                    // via sizeThatFits, scrolling long drafts inside once max height is reached.
                     ZStack(alignment: .leading) {
-                        Text("Message…")
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                            .lineLimit(1)
-                            .padding(.leading, 7)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                            .opacity(draft.isEmpty ? 1 : 0)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(!draft.isEmpty)
+                        if draft.isEmpty {
+                            Text("Message…")
+                                .font(IOSTypography.input)
+                                .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
+                                .lineLimit(1)
+                                .padding(.leading, 7)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
 #if canImport(UIKit)
                         AgentComposerInput(
                             text: $draft,
@@ -708,27 +725,38 @@ public struct AgentChatView: View {
                             ),
                             isDisabled: isUploadingAttachments || sendStatus == "sending"
                         )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity)
 #else
-                        TextField("", text: $draft, axis: .vertical)
-                            .font(IOSTypography.input)
-                            .foregroundStyle(IOSTheme.text)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...4)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                            .disabled(isUploadingAttachments || sendStatus == "sending")
-                            .focused($composerFocused)
-                            .accessibilityLabel("Agent message")
+                        GeometryReader { geometry in
+                            TextField("", text: $draft, axis: .vertical)
+                                .font(IOSTypography.input)
+                                .foregroundStyle(IOSTheme.text)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...4)
+                                .multilineTextAlignment(.leading)
+                                .frame(width: geometry.size.width * 0.9, alignment: .leading)
+                                .disabled(isUploadingAttachments || sendStatus == "sending")
+                                .focused($composerFocused)
+                                .accessibilityLabel("Agent message")
+                        }
+                        .frame(minHeight: 34, maxHeight: 94)
 #endif
                     }
-                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 34, maxHeight: 94)
+                    .frame(minWidth: 0, maxWidth: .infinity)
                     .padding(.horizontal, 8)
 
                     // Row 2: Attachment and model controls. These controls
                     // stay on one compact toolbar row below the message.
                     HStack(alignment: .center, spacing: 4) {
                         attachmentControlsWithPlus
+
+                        if composerFocused {
+                            IOSKeyboardDismissButton {
+                                composerFocused = false
+                                model.dismissKeyboard()
+                            }
+                            .transition(.opacity)
+                        }
 
                         if !localAttachments.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
@@ -969,6 +997,8 @@ public struct AgentChatView: View {
             }
             draft = ""
             model.clearAgentDraft(for: sessionID)
+            composerFocused = false
+            model.dismissKeyboard()
             showSendStatus("sent")
             return
         }
@@ -1041,6 +1071,8 @@ public struct AgentChatView: View {
                 model.clearAgentDraft(for: sessionID)
             }
             localAttachments.removeAll()
+            composerFocused = false
+            model.dismissKeyboard()
             showSendStatus("sent")
         }
     }
