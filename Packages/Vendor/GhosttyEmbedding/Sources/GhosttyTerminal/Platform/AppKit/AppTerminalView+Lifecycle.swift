@@ -57,6 +57,7 @@
             let wasIntended = focusBinding?.isFocused == true
             let result = super.resignFirstResponder()
             if result {
+                inputHandler?.resetModifierState()
                 core.setFocus(false)
                 focusDidResignFirstResponder(
                     from: focusWindow,
@@ -77,6 +78,7 @@
                     // cleanup runs. Do not deliver a stale focus loss to a
                     // view that is already back in a window.
                     guard let self, self.window == nil else { return }
+                    self.inputHandler?.resetModifierState()
                     self.core.stopRenderScheduling()
                     self.core.setFocus(false)
                 }
@@ -160,6 +162,7 @@
             // on reactivation the cursor stays hollow until the user clicks. Ghostty's
             // own macOS app keeps window-key status as separate state for exactly this
             // reason; we mirror that by leaving the binding untouched on key loss.
+            inputHandler?.resetModifierState()
             core.setFocus(false)
         }
 

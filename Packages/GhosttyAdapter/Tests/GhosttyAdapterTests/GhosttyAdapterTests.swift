@@ -219,6 +219,115 @@ final class GhosttyAdapterTests: XCTestCase {
         }
     }
 
+    func testAppKitModifierStateUsesLogicalFlagsForRemappedCapsLock() {
+        var state = TerminalAppKitModifierState()
+
+        // Shift remains held while Caps Lock is remapped to Control. The
+        // physical key code is still Caps Lock, but the changed logical flag
+        // must be sent to Ghostty as Control.
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x38, flags: [.shift])?.modifier,
+            .shift
+        )
+        let pressed = state.resolve(
+            keyCode: 0x39,
+            flags: [.shift, .control]
+        )
+        XCTAssertEqual(pressed?.modifier, .control)
+        XCTAssertEqual(pressed?.action.rawValue, GHOSTTY_ACTION_PRESS.rawValue)
+
+        let released = state.resolve(
+            keyCode: 0x39,
+            flags: [.shift]
+        )
+        XCTAssertEqual(released?.modifier, .control)
+        XCTAssertEqual(released?.action.rawValue, GHOSTTY_ACTION_RELEASE.rawValue)
+    }
+
+    func testAppKitModifierStateReleasesRemappedKeyWhenDestinationRemainsHeld() {
+        var state = TerminalAppKitModifierState()
+
+        // Hold the real Control key first, then press and release Caps Lock
+        // remapped to Control. Aggregate flags never leave `.control` for the
+        // remapped key, so release detection must use the physical key state.
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3B, flags: [.control])?.action.rawValue,
+            GHOSTTY_ACTION_PRESS.rawValue
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x39, flags: [.control])?.modifier,
+            .control
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x39, flags: [.control])?.action.rawValue,
+            GHOSTTY_ACTION_RELEASE.rawValue
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3B, flags: [])?.action.rawValue,
+            GHOSTTY_ACTION_RELEASE.rawValue
+        )
+    }
+
+    func testAppKitModifierStateHandlesUnknownPhysicalKeyFromLogicalTransition() {
+        var state = TerminalAppKitModifierState()
+
+        let pressed = state.resolve(keyCode: 0x7FFF, flags: [.control])
+        XCTAssertEqual(pressed?.modifier, .control)
+        XCTAssertEqual(pressed?.action.rawValue, GHOSTTY_ACTION_PRESS.rawValue)
+
+        let released = state.resolve(keyCode: 0x7FFF, flags: [])
+        XCTAssertEqual(released?.modifier, .control)
+        XCTAssertEqual(released?.action.rawValue, GHOSTTY_ACTION_RELEASE.rawValue)
+    }
+
+    func testAppKitModifierStatePreservesLeftRightModifierTransitions() {
+        var state = TerminalAppKitModifierState()
+        let rightControlFlags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.control.rawValue
+                | UInt(NX_DEVICERCTLKEYMASK)
+        )
+
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3B, flags: [.control])?.action.rawValue,
+            GHOSTTY_ACTION_PRESS.rawValue
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3E, flags: rightControlFlags)?.action.rawValue,
+            GHOSTTY_ACTION_PRESS.rawValue
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3E, flags: [.control])?.action.rawValue,
+            GHOSTTY_ACTION_RELEASE.rawValue
+        )
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3B, flags: [])?.action.rawValue,
+            GHOSTTY_ACTION_RELEASE.rawValue
+        )
+    }
+
+    func testAppKitModifierStateResetDiscardsPressedKeys() {
+        var state = TerminalAppKitModifierState()
+        XCTAssertEqual(
+            state.resolve(keyCode: 0x3B, flags: [.control])?.action.rawValue,
+            GHOSTTY_ACTION_PRESS.rawValue
+        )
+
+        state.reset()
+
+        // A release arriving after focus was lost must not be synthesized as a
+        // fresh press from an empty aggregate state.
+        XCTAssertNil(state.resolve(keyCode: 0x3B, flags: []))
+    }
+
+    func testAppKitModifierStateDoesNotInventNoActionModifier() {
+        var state = TerminalAppKitModifierState()
+
+        // A known physical key with no logical transition is how AppKit
+        // represents a modifier configured as "No Action". It must not leak a
+        // Caps Lock event into Ghostty.
+        XCTAssertNil(state.resolve(keyCode: 0x39, flags: []))
+    }
+
     @MainActor
     func testShiftEnterKeybindEmitsLiteralNewline() async throws {
         let recorder = LockedInputRecorder()
