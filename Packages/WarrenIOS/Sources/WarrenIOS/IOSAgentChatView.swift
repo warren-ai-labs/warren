@@ -498,6 +498,7 @@ public struct AgentChatView: View {
             draftSessionID = sessionID
             draft = model.agentDraft(for: sessionID)
             refreshRenderedBlocks()
+            model.ensureAgentSubscribed(for: sessionID)
             if !model.agentHistoryLoaded(for: sessionID) {
                 model.loadOlderAgentHistory()
             }
@@ -1579,8 +1580,8 @@ private struct AgentActivityGroup {
 
     var id: String {
         let first = entries.first?.sequence ?? 0
-        let last = entries.last?.sequence ?? first
-        return "activity-\(first)-\(last)"
+        let turn = entries.first?.turn ?? 0
+        return "activity-\(turn)-\(first)"
     }
 
     var reasoningCount: Int {
@@ -1692,6 +1693,13 @@ private enum AgentActivityEntry {
         switch self {
         case .reasoning(let event): return event.sequence
         case .tool(let tool): return tool.call.sequence
+        }
+    }
+
+    var turn: UInt64? {
+        switch self {
+        case .reasoning(let event): return event.turn
+        case .tool(let tool): return tool.call.turn
         }
     }
 }
