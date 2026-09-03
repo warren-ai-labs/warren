@@ -376,14 +376,18 @@ public final class IOSLocalStore: @unchecked Sendable {
         let type: String
         let hostID: String?
         let routeID: String?
-
+        // Note: refreshToken is stored separately in Keychain, not here
+        // Keep the field for backwards compatibility but always ignored
+        let _refreshToken: String?  // internal use only
+        
         init(
             name: String,
             url: String,
             ssh: String?,
             type: String = "daemon",
             hostID: String? = nil,
-            routeID: String? = nil
+            routeID: String? = nil,
+            _refreshToken: String? = nil
         ) {
             self.name = name
             self.url = url
@@ -391,10 +395,11 @@ public final class IOSLocalStore: @unchecked Sendable {
             self.type = type
             self.hostID = hostID
             self.routeID = routeID
+            self._refreshToken = _refreshToken
         }
 
         private enum CodingKeys: String, CodingKey {
-            case name, url, ssh, type, hostID, routeID
+            case name, url, ssh, type, hostID, routeID, _refreshToken = "refreshToken"
         }
 
         init(from decoder: Decoder) throws {
@@ -405,7 +410,8 @@ public final class IOSLocalStore: @unchecked Sendable {
                 ssh: try values.decodeIfPresent(String.self, forKey: .ssh),
                 type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
                 hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
-                routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
+                routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
+                _refreshToken: try values.decodeIfPresent(String.self, forKey: ._refreshToken)
             )
         }
     }
@@ -428,10 +434,11 @@ public final class IOSLocalStore: @unchecked Sendable {
             ssh: value.ssh,
             type: value.type,
             hostID: value.hostID,
-            routeID: value.routeID
+            routeID: value.routeID,
+            refreshToken: keychain.read(account: "\(value.name).refresh")
         )
     }
-
+    
     private func writeEndpoints(_ values: [WarrenRemoteEndpointConfiguration]) {
         let metadata = values.map {
             StoredEndpoint(
@@ -441,6 +448,7 @@ public final class IOSLocalStore: @unchecked Sendable {
                 type: $0.type,
                 hostID: $0.hostID,
                 routeID: $0.routeID
+                // Note: refreshToken is NOT stored in JSON, it's kept in Keychain only
             )
         }
         defaults.set(try? JSONEncoder().encode(metadata), forKey: Keys.endpoints)

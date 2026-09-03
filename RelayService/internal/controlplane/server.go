@@ -700,7 +700,7 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 		return
 	}
 	server.setRefreshCookie(response, request, entry.HostID, refresh)
-	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds())}
+	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds()), "refresh_token": refresh}
 	if route, ok := server.registry.route(entry.HostID); ok {
 		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"tunnel"}, Generation: entry.Generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
 			result["tunnel_token"] = tunnelToken
@@ -768,7 +768,7 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		return
 	}
 	server.setRefreshCookie(response, request, entry.HostID, next)
-	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds())}
+	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds()), "refresh_token": next}
 	if route, ok := server.registry.route(entry.HostID); ok {
 		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"tunnel"}, Generation: entry.Generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
 			result["tunnel_token"] = tunnelToken

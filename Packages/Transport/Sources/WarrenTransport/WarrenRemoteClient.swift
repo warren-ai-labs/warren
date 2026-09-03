@@ -508,6 +508,7 @@ public actor WarrenRemoteClient {
     private let urlSession: URLSession
     private var accessToken: String
     private let advertisedCapabilities: [String]
+    private let refreshToken: String?  // OAuth2-style refresh token for Relay
     /// A native pairing intentionally leaves the Relay capability's client_id
     /// empty. Keeping this optional also lets a future enrollment flow pin a
     /// stable client identity without changing the WebSocket protocol.
@@ -536,6 +537,8 @@ public actor WarrenRemoteClient {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
+        // Extract refresh_token from endpoint metadata if available
+        self.refreshToken = configuration.refreshToken
         self.advertisedCapabilities = [
             "roster-delta",
             WarrenRemoteAgentCapability.timeline,
@@ -560,6 +563,7 @@ public actor WarrenRemoteClient {
         self.configuration = configuration
         self.urlSession = .shared
         self.accessToken = configuration.token
+        self.refreshToken = configuration.refreshToken
         self.advertisedCapabilities = capabilities
         self.clientID = nil
         self.injectedTask = task
@@ -1052,6 +1056,34 @@ public actor WarrenRemoteClient {
     private func refreshRelayAccessToken() async -> Bool {
         guard configuration.isRelay,
               let url = configuration.relaySessionRefreshURL else { return false }
+        
+        // Try OAuth2-style refresh_token first (preferred)
+        if let refreshToken = refreshToken, !refreshToken.isEmpty {
+            do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.timeoutInterval = 15
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                
+                let body: [String: String] = ["refresh_token": refreshToken]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                
+                let (data, response) = try await urlSession.data(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode) else { return false }
+                
+                let value = try JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data)
+                guard value.hostID == configuration.hostID,
+                      !value.accessToken.isEmpty else { return false }
+                
+                accessToken = value.accessToken
+                return true
+            } catch {
+                // OAuth2 refresh failed, fall back to cookie-based approach
+            }
+        }
+        
+        // Fallback: Cookie-based refresh (legacy)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
