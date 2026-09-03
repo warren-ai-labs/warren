@@ -2715,11 +2715,8 @@ private struct AgentActivityGroupBlock: View {
     @ViewBuilder
     private var activityStatusMark: some View {
         switch activity.status {
-        case .running:
-            Circle()
-                .fill(IOSTheme.amber)
-                .frame(width: 6, height: 6)
-                .accessibilityLabel("Activity running")
+        case .running, .completed:
+            EmptyView()
         case .failed:
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 11, weight: .regular))
@@ -2730,8 +2727,6 @@ private struct AgentActivityGroupBlock: View {
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.yellow)
                 .accessibilityLabel("Activity interrupted")
-        case .completed:
-            EmptyView()
         }
     }
 
@@ -2993,11 +2988,6 @@ private struct AgentToolStatusMark: View {
 
     var body: some View {
         switch status.lowercased() {
-        case "running", "working":
-            Circle()
-                .fill(IOSTheme.amber)
-                .frame(width: 5, height: 5)
-                .accessibilityLabel("Tool running")
         case "error", "failed", "failure":
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 11, weight: .regular))
