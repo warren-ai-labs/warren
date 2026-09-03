@@ -31,9 +31,6 @@ struct WarrenLiveActivityWidget: Widget {
                         }
                     }
                 }
-                DynamicIslandExpandedRegion(.trailing) {
-                    SessionLiveActivityStatusView(state: context.state, compact: false)
-                }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 8) {
                         Circle()
@@ -50,7 +47,7 @@ struct WarrenLiveActivityWidget: Widget {
                 Image(systemName: "bolt.horizontal.circle.fill")
                     .foregroundStyle(SessionLiveActivityStyle.accent)
             } compactTrailing: {
-                SessionLiveActivityStatusView(state: context.state, compact: true)
+                SessionLiveActivityStatusView(state: context.state)
             } minimal: {
                 Image(systemName: "bolt.horizontal.circle.fill")
                     .foregroundStyle(SessionLiveActivityStyle.color(for: context.state.connection))
@@ -65,84 +62,40 @@ private struct SessionLiveActivityLockScreenView: View {
     let state: WarrenLiveActivityState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 6) {
-                Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SessionLiveActivityStyle.accent)
-                Text(attributes.hostName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text("·")
-                    .foregroundStyle(.secondary.opacity(0.6))
-                Circle()
-                    .fill(SessionLiveActivityStyle.color(for: state.connection))
-                    .frame(width: 6, height: 6)
-                Text(state.connection.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                SessionLiveActivityBadge(state: state)
-            }
-
+        HStack(spacing: 10) {
+            Image(systemName: "bolt.horizontal.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(SessionLiveActivityStyle.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(state.currentSessionTitle ?? attributes.sessionTitle)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text(SessionLiveActivitySummary(state: state).text)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    SessionLiveActivityStatusView(state: state)
+                    Text(SessionLiveActivitySummary(state: state).text)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(red: 0.14, green: 0.13, blue: 0.12))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
         )
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
-    }
-}
-
-private struct SessionLiveActivityBadge: View {
-    let state: WarrenLiveActivityState
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if state.attentionSessionCount > 0 {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
-                Text("Needs input")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
-            } else if state.workingSessionCount > 0 {
-                Circle()
-                    .fill(Color(red: 0.96, green: 0.69, blue: 0.24))
-                    .frame(width: 5, height: 5)
-                Text("Working")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
-            } else {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.44))
-                Text("Ready")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Color.white.opacity(0.08), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(state.currentSessionTitle ?? attributes.sessionTitle)
+        .accessibilityValue("\(attributes.hostName), \(state.connection.label), \(SessionLiveActivitySummary(state: state).text)")
     }
 }
 
@@ -196,33 +149,15 @@ private struct SessionLiveActivityBreathingDot: View {
 
 private struct SessionLiveActivityStatusView: View {
     let state: WarrenLiveActivityState
-    let compact: Bool
 
     var body: some View {
-        if compact {
-            if state.workingSessionCount > 0 || state.attentionSessionCount > 0 {
-                SessionLiveActivityBreathingDot(color: Color(red: 0.96, green: 0.69, blue: 0.24))
-            } else {
-                Circle()
-                    .fill(SessionLiveActivityStyle.color(for: state.connection))
-                    .frame(width: 6, height: 6)
-            }
+        if state.workingSessionCount > 0 || state.attentionSessionCount > 0 {
+            SessionLiveActivityBreathingDot(color: Color(red: 0.96, green: 0.69, blue: 0.24))
         } else {
-            VStack(alignment: .trailing, spacing: 2) {
-                Image(systemName: SessionLiveActivityStyle.symbol(for: state.connection))
-                    .foregroundStyle(SessionLiveActivityStyle.color(for: state.connection))
-                Text(expandedText)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Circle()
+                .fill(SessionLiveActivityStyle.color(for: state.connection))
+                .frame(width: 6, height: 6)
         }
-    }
-
-    private var expandedText: String {
-        if state.workingSessionCount > 0 { return "\(state.workingSessionCount)" }
-        if state.attentionSessionCount > 0 { return "Input" }
-        return state.connection == .connected ? "✓" : "…"
     }
 }
 
@@ -255,12 +190,4 @@ private enum SessionLiveActivityStyle {
         }
     }
 
-    static func symbol(for connection: WarrenLiveActivityConnection) -> String {
-        switch connection {
-        case .connected: return "checkmark.circle.fill"
-        case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
-        case .disconnected: return "exclamationmark.triangle.fill"
-        case .stopped: return "pause.circle.fill"
-        }
-    }
 }
