@@ -232,3 +232,61 @@ Observer cost must scale with changes, not with retained object count. A cheap
 syscall becomes a process-wide bottleneck when multiplied by hundreds of idle
 resources and an interactive polling frequency. Put reusable change detection
 in the owning library; keep product policy and diagnostics in the product.
+## 005 - Warm TUI reattach can leave the viewport misaligned until a second switch
+
+### Symptom
+
+A pi (or any full-screen/diff-rendering TUI) tab occasionally shows content
+that is present but visually misarranged — characters appear reordered or
+duplicated across rows. The pane does not repair itself; switching away and
+back restores it. Reported on the desktop app while rapidly switching between
+workspaces/tabs, no repro on demand so far.
+
+### Working hypothesis (not yet confirmed with a repro)
+
+`TerminalSurfaceManager` keeps a demoted surface warm: its Ghostty native
+surface stays alive and hidden output keeps draining. When the surface is
+reattached, `attach()` calls `view.fitToSize()` and then installs the current
+daemon snapshot. The TUI client (pi) renders with its own idea of the
+terminal width, and only re-lays-out on a SIGWINCH/full redraw:
+
+- `WarrenRemoteApplicationModel.resize(_:)` guards on
+  `selectedSessionID == sessionID && attachedSessionID == sessionID`
+  (`Sources/Warren/WarrenRemoteApplicationModel.swift:3430`). During the
+  attach window `attachedSessionID` is nil until `attach_complete`, and a warm
+  (non-selected) session's resize is dropped entirely.
+- `ownsTerminalFocus` requires a key window whose first responder is the
+  terminal view, so an attach that lands while the window is not key (click on
+  the tab bar, switching apps, etc.) does not claim control and does not
+  forward the measured size to the daemon (`seedSessionSubscription` passes
+  `size: nil`).
+- If Ghostty's pixel/grid size changed while the TUI was warm (window drag,
+  zoom, split) and the new size never reaches the PTY, the TUI keeps emitting
+  rows for the old width while Ghostty wraps them at the new width — rows
+  visually reorder/duplicate. The diff renderer believes the screen matches
+  its `previousLines`, so it never full-redraws on its own.
+
+`docs/lessons.md` 001 has a related earlier instance of TUI misalignment
+(tmux color blocks on soft-wrapped history); this one is about the client
+view/PTY size agreement after warm reattach rather than history replay.
+
+### Status
+
+- **Open — not yet reproduced on demand.** Diagnostics added in
+  `Headless/internal/server/http.go` (`subscribe: step`) and the join bounds
+  in `service.go` (`stopCursorOutputWithin`) help rule out a subscribe stall
+  as the trigger; the misalignment itself is a rendering/size agreement issue,
+  not a stall.
+- Candidate fix (deferred until repro): after `attach_complete`, forward the
+  surface's measured size to the daemon with `session.resize` even when the
+  view is not focused. The daemon already no-ops identical sizes
+  (`resizeRuntime` returns early when `runtimeSizes[session] == size`), so
+  unfocused reattaches with an unchanged size cause no SIGWINCH and no TUI
+  churn; a changed size gets the one WINCH that re-aligns the diff renderer.
+
+### Engineering lesson
+
+A retained warm surface can diverge from the PTY's idea of size when resize
+ownership is coupled to focus and attach state. Size is display state that
+must be reconciled on every reattach, independent of input focus; focus should
+decide who may resize, not whether the size is known.
