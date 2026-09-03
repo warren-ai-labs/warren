@@ -205,6 +205,7 @@ func main() {
 		Settings:        loadedSettings,
 		SettingsPath:    *settingsFile,
 		WorktreeRoot:    *worktreeRoot,
+		AgentStorePath:  filepath.Join(configDir, "agent-events.db"),
 		AgentFinder:     agent.DefaultFinder{},
 		AgentHooks: func() error {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {

@@ -1923,11 +1923,13 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if sessionID == "" {
 			return fmt.Errorf("session parameter required")
 		}
+		since, _ := uint64Param(params, "since")
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
 		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithOptions(
 			sessionID,
+			since,
 			before,
 			limit,
 			priority == "conversation" || priority == "messages",
@@ -2178,7 +2180,21 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err != nil {
 			return err
 		}
-		return p.writeResult(command.ID, api.AgentSubscriptionResult{Session: publicSession(session), Snapshot: snapshot})
+		lastSeq, _ := uint64Param(params, "lastSequence")
+		epoch, _ := uint64Param(params, "epoch")
+		var gapEvents []api.AgentEvent
+		if (epoch == 0 || epoch == snapshot.Epoch) && lastSeq > 0 && lastSeq < snapshot.Sequence && snapshot.Sequence-lastSeq <= 100 {
+			res := p.server.Service.agentHistoryPageWithOptions(sessionID, lastSeq+1, 0, 100, false)
+			gapEvents = res.Events
+		} else if lastSeq == 0 && snapshot.Sequence > 0 {
+			res := p.server.Service.agentHistoryPageWithOptions(sessionID, 0, 0, 64, false)
+			gapEvents = res.Events
+		}
+		return p.writeResult(command.ID, api.AgentSubscriptionResult{
+			Session:   publicSession(session),
+			Snapshot:  snapshot,
+			GapEvents: gapEvents,
+		})
 	case "relay.pairing":
 		if p.server.RelayPairing == nil {
 			return errors.New("Relay pairing is unavailable")
@@ -3255,6 +3271,12 @@ func optionalBoolParam(values map[string]any, key string) (value, specified bool
 
 func intParam(values map[string]any, key string) int {
 	switch value := values[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case uint64:
+		return int(value)
 	case float64:
 		return int(value)
 	case string:
@@ -3275,6 +3297,12 @@ func anchorFromParams(values map[string]any) *output.Anchor {
 
 func uint64Param(values map[string]any, key string) (uint64, bool) {
 	switch value := values[key].(type) {
+	case int:
+		return uint64(value), true
+	case int64:
+		return uint64(value), true
+	case uint64:
+		return value, true
 	case float64:
 		return uint64(value), true
 	case string:
