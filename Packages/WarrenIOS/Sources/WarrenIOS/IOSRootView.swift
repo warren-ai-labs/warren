@@ -1458,14 +1458,14 @@ private struct ScopeDetailView: View {
 private struct IOSBackHeader: View {
     let title: String
     let subtitle: String
-    let symbol: String
+    let symbol: String?
     let actions: AnyView?
     let onBack: () -> Void
 
     init(
         title: String,
         subtitle: String,
-        symbol: String,
+        symbol: String? = nil,
         actions: AnyView? = nil,
         onBack: @escaping () -> Void
     ) {
@@ -1477,11 +1477,13 @@ private struct IOSBackHeader: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             IOSIconButton("chevron.backward", label: "Back", action: onBack)
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(IOSTheme.secondaryText)
+            if let symbol, !symbol.isEmpty {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(IOSTheme.secondaryText)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(IOSTypography.navigationTitle)
@@ -2342,8 +2344,7 @@ public struct IOSEndpointConfigurationView: View {
         VStack(spacing: 0) {
             IOSBackHeader(
                 title: "Hosts",
-                subtitle: "Connections",
-                symbol: "server.rack"
+                subtitle: "Connections"
             ) {
                 dismiss()
             }
@@ -2353,18 +2354,29 @@ public struct IOSEndpointConfigurationView: View {
                         .padding(.top, 22)
                         .padding(.bottom, 8)
 
-                    Button { showingHostPicker = true } label: {
-                        HStack(spacing: 11) {
+                    Button {
+                        IOSHaptics.selection()
+                        showingHostPicker = true
+                    } label: {
+                        HStack(spacing: 12) {
                             Image(systemName: model.endpointMetadata.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(IOSTheme.accent)
-                                .frame(width: 25)
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(IOSTheme.text)
+                                .frame(width: 24)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(model.endpointMetadata.name)
-                                    .font(IOSTypography.bodyEmphasis)
-                                    .foregroundStyle(IOSTheme.text)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                HStack(spacing: 6) {
+                                    Text(model.endpointMetadata.name)
+                                        .font(IOSTypography.bodyEmphasis)
+                                        .foregroundStyle(IOSTheme.text)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text("Active")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(IOSTheme.green)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(IOSTheme.green.opacity(0.12), in: Capsule())
+                                }
                                 Text(model.endpointMetadata.isRelay ? "Relay" : model.endpointMetadata.url)
                                     .font(IOSTypography.metadata)
                                     .foregroundStyle(IOSTheme.secondaryText)
@@ -2372,11 +2384,17 @@ public struct IOSEndpointConfigurationView: View {
                                     .truncationMode(.middle)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(IOSCopy.connectionTitle(for: model.connectionState))
-                                .font(IOSTypography.status)
-                                .foregroundStyle(connectionColor)
+                            HStack(spacing: 5) {
+                                IOSStatusDot(color: connectionColor, size: 6)
+                                Text(IOSCopy.connectionTitle(for: model.connectionState))
+                                    .font(IOSTypography.status)
+                                    .foregroundStyle(connectionColor)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                            }
                         }
-                        .padding(.horizontal, 13)
+                        .padding(.horizontal, 14)
                         .frame(minHeight: 64)
                         .contentShape(Rectangle())
                     }
@@ -2446,7 +2464,7 @@ public struct IOSEndpointConfigurationView: View {
                     .iosSurface(color: IOSTheme.chrome)
                     .accessibilityLabel("Add a direct Host")
 
-                    IOSSectionLabel("Saved Hosts")
+                    IOSSectionLabel("Saved Hosts", count: hosts.isEmpty ? nil : hosts.count)
                         .padding(.top, 25)
                         .padding(.bottom, 9)
                     if hosts.isEmpty {
@@ -2460,14 +2478,15 @@ public struct IOSEndpointConfigurationView: View {
                             ForEach(hosts, id: \.name) { host in
                                 HStack(spacing: 0) {
                                     Button {
+                                        IOSHaptics.selection()
                                         model.selectEndpoint(named: host.name)
                                     } label: {
                                         HStack(spacing: 11) {
                                             Image(systemName: host.name == model.endpointMetadata.name
-                                                ? "checkmark.circle.fill"
+                                                ? "checkmark"
                                                 : host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
-                                                .font(.system(size: 16, weight: .medium))
-                                                .foregroundStyle(host.name == model.endpointMetadata.name ? IOSTheme.green : IOSTheme.secondaryText)
+                                                .font(.system(size: 15, weight: host.name == model.endpointMetadata.name ? .semibold : .regular))
+                                                .foregroundStyle(host.name == model.endpointMetadata.name ? IOSTheme.accent : IOSTheme.secondaryText)
                                                 .frame(width: 24)
                                             VStack(alignment: .leading, spacing: 3) {
                                                 Text(host.name)
@@ -2602,7 +2621,6 @@ private struct IOSEndpointDetailView: View {
             IOSBackHeader(
                 title: endpoint.name,
                 subtitle: "Host details",
-                symbol: "server.rack",
                 actions: AnyView(
                     NavigationLink {
                         IOSEndpointEditorView(model: model, endpoint: endpoint)
@@ -2736,8 +2754,7 @@ private struct IOSEndpointEditorView: View {
         VStack(spacing: 0) {
             IOSBackHeader(
                 title: endpoint == nil ? "Add Host" : "Edit Host",
-                subtitle: "Connection",
-                symbol: "server.rack"
+                subtitle: "Connection"
             ) {
                 dismiss()
             }

@@ -1,6 +1,9 @@
 import SwiftUI
 import WarrenDesignSystem
 import WarrenTransport
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Functional interface copy is kept as localization keys instead of
 /// eagerly-resolved `String` values. SwiftUI can then load a String Catalog
@@ -472,7 +475,7 @@ public struct IOSSectionLabel: View {
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             Text(title)
                 .font(IOSTypography.eyebrow)
                 .foregroundStyle(IOSTheme.secondaryText.opacity(0.74))
@@ -480,8 +483,11 @@ public struct IOSSectionLabel: View {
                 .layoutPriority(1)
             if let count {
                 Text("\(count)")
-                    .font(IOSTypography.metric)
-                    .foregroundStyle(IOSTheme.tertiaryText)
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(IOSTheme.muted.opacity(0.4), in: Capsule())
             }
             Rectangle()
                 .fill(IOSTheme.separator.opacity(0.72))
@@ -723,5 +729,21 @@ public struct IOSKeyCap: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .accessibilityLabel(title)
+    }
+}
+
+/// Lightweight tactile feedback for discrete user interactions.
+@MainActor
+public enum IOSHaptics {
+    public static func selection() {
+        #if os(iOS) && canImport(UIKit)
+        UISelectionFeedbackGenerator().selectionChanged()
+        #endif
+    }
+
+    public static func light() {
+        #if os(iOS) && canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
     }
 }

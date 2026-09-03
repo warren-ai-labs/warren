@@ -537,7 +537,8 @@ private struct SessionTabRail: View {
                     HStack(spacing: 0) {
                         ForEach(sessions) { session in
                             Button {
-                                _ = selectSession(session.id)
+                                IOSHaptics.selection()
+                                selectSession(session.id)
                             } label: {
                                 HStack(spacing: 6) {
                                     SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 20)
@@ -571,7 +572,10 @@ private struct SessionTabRail: View {
                     }
                 }
             } else if let currentSession = sessions.first(where: { $0.id == activeSessionID }) ?? sessions.first {
-                Button(action: showSwitcher) {
+                Button {
+                    IOSHaptics.selection()
+                    showSwitcher()
+                } label: {
                     HStack(spacing: 8) {
                         HStack(spacing: 6) {
                             SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
