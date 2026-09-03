@@ -110,6 +110,9 @@ public final class IOSApplicationModel: ObservableObject {
     public let localStore: IOSLocalStore
 
     private var endpointToken: String
+    private let liveActivityCoordinator: IOSLiveActivityCoordinator
+    private let relayBackgroundKeepAlive: IOSRelayBackgroundKeepAlive
+    private var didEnterBackground = false
     private var eventTask: Task<Void, Never>?
     /// The UI's desired lifecycle is separate from the transport's last
     /// published state.  A stop event can still be buffered while a scene is
@@ -199,6 +202,8 @@ public final class IOSApplicationModel: ObservableObject {
         self.agentState = IOSAgentLiveState()
         self.client = client
         self.localStore = localStore
+        self.liveActivityCoordinator = IOSLiveActivityCoordinator()
+        self.relayBackgroundKeepAlive = IOSRelayBackgroundKeepAlive()
         self.endpointToken = storedEndpoint?.token ?? ""
         self.navigation = restoredNavigation
         self.displayMode = restoredNavigation.displayMode
@@ -237,6 +242,7 @@ public final class IOSApplicationModel: ObservableObject {
     /// previous roster remains visible while a reconnect is in progress.
     public func start() {
         connectionRequested = true
+        syncLiveActivity()
         guard eventTask == nil else { return }
         let client = client
         let previousLifecycle = clientLifecycleTask
@@ -258,6 +264,9 @@ public final class IOSApplicationModel: ObservableObject {
 
     public func stop() {
         connectionRequested = false
+        didEnterBackground = false
+        relayBackgroundKeepAlive.end()
+        liveActivityCoordinator.end()
         eventTask?.cancel()
         eventTask = nil
         sessionTask?.cancel()
@@ -293,6 +302,59 @@ public final class IOSApplicationModel: ObservableObject {
             terminalRecoveryRequests.remove(currentSessionID)
         }
         connectionState = .stopped
+    }
+
+    /// Keeps the Relay socket alive for the finite background execution window
+    /// granted by iOS. The Live Activity remains visible after suspension, but
+    /// it is not itself a permission to run an indefinite WebSocket loop.
+    public func sceneDidEnterBackground() {
+        guard endpointMetadata.isRelay, connectionRequested else { return }
+        didEnterBackground = true
+        relayBackgroundKeepAlive.begin()
+    }
+
+    /// Ends the temporary background task and forces a fresh Relay handshake.
+    /// URLSession sockets can be suspended without delivering a close event;
+    /// reconnecting here avoids presenting a stale connected state.
+    public func sceneWillEnterForeground() {
+        let wasBackground = didEnterBackground
+        didEnterBackground = false
+        relayBackgroundKeepAlive.end()
+        guard wasBackground, connectionRequested else { return }
+        reconnect()
+    }
+
+    /// Projects the selected Session into the optional Live Activity. Relay
+    /// routing decides whether a background task is requested, while this
+    /// activity remains a presentation of the current session state.
+    private func syncLiveActivity() {
+        guard connectionRequested, let currentSession else {
+            liveActivityCoordinator.end()
+            return
+        }
+
+        let sessions = activeSessions
+        var workingCount = 0
+        var attentionCount = 0
+        for session in sessions {
+            guard let status = agentStatus(for: session.id) else { continue }
+            if status.activity == .working { workingCount += 1 }
+            if status.attention != nil || status.activity == .blocked || status.activity == .stalled {
+                attentionCount += 1
+            }
+        }
+        liveActivityCoordinator.sync(
+            sessionID: currentSession.id,
+            sessionTitle: currentSession.displayTitle,
+            hostName: endpointMetadata.name,
+            state: WarrenLiveActivityState(
+                connection: WarrenLiveActivityConnection(connectionState),
+                activeSessionCount: sessions.count,
+                workingSessionCount: workingCount,
+                attentionSessionCount: attentionCount,
+                currentSessionTitle: currentSession.displayTitle
+            )
+        )
     }
 
     /// Requests a reconnect without exposing the transport actor to a View.
@@ -445,6 +507,9 @@ public final class IOSApplicationModel: ObservableObject {
         shouldRestart: Bool
     ) {
         connectionRequested = shouldRestart
+        didEnterBackground = false
+        relayBackgroundKeepAlive.end()
+        liveActivityCoordinator.end()
         let oldClient = client
         eventTask?.cancel()
         eventTask = nil
@@ -782,6 +847,7 @@ public final class IOSApplicationModel: ObservableObject {
         pendingTerminalFocusBySessionID.removeAll()
         pendingTerminalRecoveryBySessionID.removeValue(forKey: sessionID)
         terminalRecoveryRequests.remove(sessionID)
+        syncLiveActivity()
         if let oldSessionID {
             terminalSubscriptionRequests.remove(oldSessionID)
             cancelTerminalResize(for: oldSessionID)
@@ -846,6 +912,7 @@ public final class IOSApplicationModel: ObservableObject {
                         if retainIntent { self.connectionState = .reconnecting }
                     }
                     self.persistNavigation()
+                    self.syncLiveActivity()
                 }
             }
         }
@@ -886,6 +953,7 @@ public final class IOSApplicationModel: ObservableObject {
             guard let self, self.sessionSelectionGeneration == generation else { return }
             self.hasControlLease = false
             self.currentSessionID = nil
+            self.syncLiveActivity()
         }
         terminalSubscriptionRequests.remove(oldSessionID)
         cancelTerminalResize(for: oldSessionID)
@@ -893,6 +961,7 @@ public final class IOSApplicationModel: ObservableObject {
         pendingTerminalFocusBySessionID.remove(oldSessionID)
         terminalRecoveryRequests.remove(oldSessionID)
         hasControlLease = false
+        syncLiveActivity()
     }
 
     private func cancelTerminalResize(for sessionID: String) {
@@ -2046,6 +2115,7 @@ public final class IOSApplicationModel: ObservableObject {
         currentSessionID = nil
         navigation.sessionID = nil
         persistNavigation()
+        syncLiveActivity()
     }
 
     private func restoreSessionAfterDeleteFailure(_ sessionID: String) {
@@ -2309,6 +2379,7 @@ public final class IOSApplicationModel: ObservableObject {
                 if connectionState != .connected {
                     connectionState = .reconnecting
                 }
+                syncLiveActivity()
                 return
             }
             connectionState = state
@@ -2330,6 +2401,7 @@ public final class IOSApplicationModel: ObservableObject {
                     terminalRecoveryRequests.remove(currentSessionID)
                 }
             }
+            syncLiveActivity()
         case .welcome:
             let client = client
             Task { [weak self] in
@@ -2339,9 +2411,11 @@ public final class IOSApplicationModel: ObservableObject {
         case .roster(let next):
             guard shouldApplyRoster(next) else { return }
             applyRoster(next)
+            syncLiveActivity()
         case .rosterDelta(let delta):
             guard let current = roster, let next = current.applying(delta) else { return }
             applyRoster(next)
+            syncLiveActivity()
         case .output(let frame):
             appendTerminalOutput(frame)
         case .atomicState(let state):
@@ -2414,6 +2488,7 @@ public final class IOSApplicationModel: ObservableObject {
                 // waiting for a synthetic ready event.
                 submitBlockedAgentMessage(for: sessionID)
             }
+            syncLiveActivity()
         case .agentTurn(let sessionID, let epoch, let turn):
             if epoch != 0,
                let previous = agentEpochBySessionID[sessionID], previous != epoch {
@@ -2433,13 +2508,16 @@ public final class IOSApplicationModel: ObservableObject {
             if turn.status == .completed || turn.status == .failed || turn.status == .aborted {
                 drainQueuedAgentMessages(for: sessionID)
             }
+            syncLiveActivity()
         case .maintenance(let message):
             maintenanceMessage = message ?? "Host is updating."
             connectionState = .reconnecting
+            syncLiveActivity()
         case .disconnected(let reason):
             connectionError = reason
             hasControlLease = false
             if connectionState != .stopped { connectionState = .reconnecting }
+            syncLiveActivity()
         }
     }
 
@@ -2670,6 +2748,7 @@ public final class IOSApplicationModel: ObservableObject {
             pendingTerminalFocusBySessionID.remove(currentSessionID)
             hasControlLease = false
             self.currentSessionID = nil
+            syncLiveActivity()
         }
         if let requested = navigation.sessionID,
            !roster.sessions.contains(where: { $0.id == requested && $0.isRunning }) {
