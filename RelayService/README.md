@@ -66,8 +66,20 @@ export WARREN_RELAY_TUNNEL_BASE_DOMAIN='tunnel.example.com'
 # duration such as 72h when a shorter sharing window is appropriate.
 export WARREN_RELAY_PAIRING_TTL='168h'
 export WARREN_RELAY_PAIRING_TICKET_TTL='168h'
+# Optional Live Activity forwarding. Use the production endpoint for App Store
+# builds and the sandbox endpoint for development builds.
+export WARREN_RELAY_APNS_KEY_ID='XXXXXXXXXX'
+export WARREN_RELAY_APNS_TEAM_ID='YYYYYYYYYY'
+export WARREN_RELAY_APNS_BUNDLE_ID='com.example.Warren'
+export WARREN_RELAY_APNS_PRIVATE_KEY_FILE='/run/secrets/AuthKey_XXXXXXXXXX.p8'
+export WARREN_RELAY_APNS_PRODUCTION='true'
 go run ./RelayService/cmd/warren-relay
 ```
+
+The APNs settings are optional. The private key may be supplied inline with
+`WARREN_RELAY_APNS_PRIVATE_KEY` instead of the file variable; configure only
+one of the two. `WARREN_RELAY_APNS_ENDPOINT` can override the Apple endpoint
+for a controlled test service, but it must be an HTTPS origin.
 
 Or build a container:
 
@@ -79,6 +91,12 @@ docker run --read-only --tmpfs /tmp -p 127.0.0.1:8080:8080 -v warren-relay-data:
   -e WARREN_RELAY_PUBLIC_URL=https://relay.example.com \
   -e WARREN_RELAY_ALLOWED_ORIGIN=https://relay.example.com \
   -e WARREN_RELAY_TUNNEL_BASE_DOMAIN=tunnel.example.com \
+  -e WARREN_RELAY_APNS_KEY_ID \
+  -e WARREN_RELAY_APNS_TEAM_ID \
+  -e WARREN_RELAY_APNS_BUNDLE_ID \
+  -e WARREN_RELAY_APNS_PRIVATE_KEY_FILE=/run/secrets/AuthKey_XXXXXXXXXX.p8 \
+  -e WARREN_RELAY_APNS_PRODUCTION=true \
+  -v /path/to/AuthKey_XXXXXXXXXX.p8:/run/secrets/AuthKey_XXXXXXXXXX.p8:ro \
   --name warren-relay \
   warren-relay
 ```
@@ -182,6 +200,16 @@ opens exactly one outbound `wss://.../v1/host/connect` socket. Control-plane
 secrets are stripped from every shell/runtime child process.
 
 Warren only makes outbound WSS connections; with no control plane configured, it still listens on `127.0.0.1` only.
+
+### Live Activity push forwarding
+
+The iOS Dynamic Island Live Activity is a separate delivery path from Relay
+WebSocket keep-alive. iOS registers its ActivityKit push token at
+`POST /h/<host-id>/v1/live-activities`; the Host publishes bounded Session
+snapshots at `POST /v1/hosts/<host-id>/live-activities` with the Host Secret;
+Relay then forwards those snapshots to APNs. Relay does not parse BRLY/2
+terminal frames, and an Activity never grants an indefinite background
+WebSocket.
 
 Desktop and other local clients can use the equivalent Headless endpoint
 `POST /v1/relay/enroll` with `relayUrl`, `hostId`, and `enrollmentTicket`.

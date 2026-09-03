@@ -99,6 +99,13 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         relaySessionURL(endpoint: "v1/session/refresh")
     }
 
+    /// The host-scoped endpoint used to register an ActivityKit push token.
+    /// Registration is separate from the WebSocket so Relay can deliver a
+    /// Live Activity update while this client and its app process are asleep.
+    public var relayLiveActivityRegistrationURL: URL? {
+        relaySessionURL(endpoint: "v1/live-activities")
+    }
+
     private var normalizedHostID: String? {
         guard let hostID else { return nil }
         let value = hostID.trimmingCharacters(in: .whitespacesAndNewlines)

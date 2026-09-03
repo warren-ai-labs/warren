@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,10 +20,24 @@ func main() {
 	if allowedOrigin == "" {
 		log.Fatal("WARREN_RELAY_ALLOWED_ORIGIN is required")
 	}
+	apnsPrivateKey, err := apnsPrivateKeyFromEnvironment()
+	if err != nil {
+		log.Fatal(err)
+	}
+	apnsProduction, err := boolEnv("WARREN_RELAY_APNS_PRODUCTION", false)
+	if err != nil {
+		log.Fatal(err)
+	}
 	server, err := controlplane.NewServer(controlplane.Config{
 		PublicURL:        env("WARREN_RELAY_PUBLIC_URL", "http://127.0.0.1:8080"),
 		AdminToken:       os.Getenv("WARREN_RELAY_ADMIN_TOKEN"),
 		SigningKey:       []byte(os.Getenv("WARREN_RELAY_SIGNING_KEY")),
+		APNsKeyID:        os.Getenv("WARREN_RELAY_APNS_KEY_ID"),
+		APNsTeamID:       os.Getenv("WARREN_RELAY_APNS_TEAM_ID"),
+		APNsBundleID:     os.Getenv("WARREN_RELAY_APNS_BUNDLE_ID"),
+		APNsPrivateKey:   apnsPrivateKey,
+		APNsProduction:   apnsProduction,
+		APNsEndpoint:     os.Getenv("WARREN_RELAY_APNS_ENDPOINT"),
 		DataURL:          env("WARREN_RELAY_DATA", "./data/registry.json"),
 		AllowedOrigin:    allowedOrigin,
 		TunnelBaseDomain: env("WARREN_RELAY_TUNNEL_BASE_DOMAIN", "tunnel.local"),
@@ -76,4 +93,32 @@ func durationEnv(name string, fallback time.Duration) time.Duration {
 		log.Fatalf("%s must be a valid duration: %v", name, err)
 	}
 	return duration
+}
+
+func boolEnv(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func apnsPrivateKeyFromEnvironment() ([]byte, error) {
+	inline := os.Getenv("WARREN_RELAY_APNS_PRIVATE_KEY")
+	file := strings.TrimSpace(os.Getenv("WARREN_RELAY_APNS_PRIVATE_KEY_FILE"))
+	if inline != "" && file != "" {
+		return nil, errors.New("WARREN_RELAY_APNS_PRIVATE_KEY and WARREN_RELAY_APNS_PRIVATE_KEY_FILE are mutually exclusive")
+	}
+	if file != "" {
+		key, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("read APNs private key file: %w", err)
+		}
+		return key, nil
+	}
+	return []byte(inline), nil
 }

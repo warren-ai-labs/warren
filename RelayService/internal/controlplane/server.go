@@ -29,7 +29,17 @@ type Config struct {
 	PublicURL  string
 	AdminToken string
 	SigningKey []byte
-	DataURL    string
+	// APNs provider credentials are optional. When configured, the Relay can
+	// forward Host-published Live Activity snapshots to ActivityKit push
+	// tokens registered by authorized clients.
+	APNsKeyID      string
+	APNsTeamID     string
+	APNsBundleID   string
+	APNsPrivateKey []byte
+	APNsProduction bool
+	APNsEndpoint   string
+	APNsHTTPClient *http.Client
+	DataURL        string
 	// PairingTTL controls how long a Host pairing code remains valid. The
 	// code is deliberately reusable during this window so one generated link
 	// can provision more than one client.
@@ -70,6 +80,9 @@ type Server struct {
 	clientLimiter   *rateLimiter
 	publicLimiter   *rateLimiter
 	upgradeLimiter  *rateLimiter
+	liveActivityMu  sync.RWMutex
+	liveActivities  map[string]map[string]liveActivityRegistration
+	apns            *apnsSender
 }
 
 type refreshRecord struct {
@@ -207,7 +220,13 @@ func NewServer(config Config) (*Server, error) {
 		clientLimiter:   newRateLimiter(config.ClientRateLimit, config.RateLimitWindow),
 		publicLimiter:   newRateLimiter(config.PublicRateLimit, config.RateLimitWindow),
 		upgradeLimiter:  newRateLimiter(config.UpgradeRateLimit, config.RateLimitWindow),
+		liveActivities:  make(map[string]map[string]liveActivityRegistration),
 	}
+	apns, err := newAPNsSender(config)
+	if err != nil {
+		return nil, err
+	}
+	server.apns = apns
 	server.routes()
 	return server, nil
 }
@@ -233,6 +252,9 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/refresh", server.refreshSession)
+	server.mux.HandleFunc("POST /h/{hostID}/v1/live-activities", server.registerLiveActivity)
+	server.mux.HandleFunc("DELETE /h/{hostID}/v1/live-activities", server.unregisterLiveActivity)
+	server.mux.HandleFunc("POST /v1/hosts/{hostID}/live-activities", server.publishLiveActivity)
 	server.mux.HandleFunc("GET /v1/client/connect", server.connectClient)
 	server.mux.HandleFunc("GET /h/{hostID}/v1/client/connect", server.connectClient)
 	server.mux.HandleFunc("POST /v1/hosts/{hostID}/route", server.configureRoute)
@@ -524,6 +546,7 @@ func (server *Server) enrollHost(response http.ResponseWriter, request *http.Req
 		http.Error(response, "invalid enrollment", http.StatusUnauthorized)
 		return
 	}
+	server.clearLiveActivityRegistrations(hostID)
 	keyID, publicKey := server.signer.currentPublicKey()
 	writeJSON(response, http.StatusOK, map[string]any{"host_id": hostID, "generation": generation, "enrolled": true, "relay_key_id": keyID, "relay_public_key": base64.RawStdEncoding.EncodeToString(publicKey)})
 }
@@ -542,6 +565,7 @@ func (server *Server) revokeHost(response http.ResponseWriter, request *http.Req
 		return
 	}
 	server.revokeRefreshFamilies(request.PathValue("hostID"))
+	server.clearLiveActivityRegistrations(request.PathValue("hostID"))
 	response.WriteHeader(http.StatusNoContent)
 }
 

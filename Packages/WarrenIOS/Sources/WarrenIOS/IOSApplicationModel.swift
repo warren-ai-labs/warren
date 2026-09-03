@@ -112,6 +112,7 @@ public final class IOSApplicationModel: ObservableObject {
     private var endpointToken: String
     private let liveActivityCoordinator: IOSLiveActivityCoordinator
     private let relayBackgroundKeepAlive: IOSRelayBackgroundKeepAlive
+    private var liveActivityPushTokensBySessionID: [String: String] = [:]
     private var didEnterBackground = false
     private var eventTask: Task<Void, Never>?
     /// The UI's desired lifecycle is separate from the transport's last
@@ -216,6 +217,12 @@ public final class IOSApplicationModel: ObservableObject {
         // fresh roster confirms that the Host still owns the Session.
         self.currentSessionID = nil
         self.sessionDeletionDestination = nil
+        self.liveActivityCoordinator.pushTokenHandler = { [weak self] sessionID, token in
+            self?.registerLiveActivityPushToken(token, for: sessionID)
+        }
+        self.liveActivityCoordinator.activityEndedHandler = { [weak self] sessionID in
+            self?.unregisterLiveActivityPushToken(for: sessionID)
+        }
     }
 
     public convenience init(
@@ -302,6 +309,33 @@ public final class IOSApplicationModel: ObservableObject {
             terminalRecoveryRequests.remove(currentSessionID)
         }
         connectionState = .stopped
+    }
+
+    private func registerLiveActivityPushToken(_ token: String, for sessionID: String) {
+        guard endpointMetadata.isRelay else { return }
+        liveActivityPushTokensBySessionID[sessionID] = token
+        let client = client
+        Task {
+            _ = try? await client.registerLiveActivityPushToken(sessionID: sessionID, token: token)
+        }
+    }
+
+    private func unregisterLiveActivityPushToken(for sessionID: String) {
+        guard let token = liveActivityPushTokensBySessionID.removeValue(forKey: sessionID) else { return }
+        let client = client
+        Task {
+            _ = try? await client.unregisterLiveActivityPushToken(sessionID: sessionID, token: token)
+        }
+    }
+
+    private func retryLiveActivityPushTokenRegistrations() {
+        guard endpointMetadata.isRelay else { return }
+        let client = client
+        for (sessionID, token) in liveActivityPushTokensBySessionID {
+            Task {
+                _ = try? await client.registerLiveActivityPushToken(sessionID: sessionID, token: token)
+            }
+        }
     }
 
     /// Keeps the Relay socket alive for the finite background execution window
@@ -511,6 +545,7 @@ public final class IOSApplicationModel: ObservableObject {
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
         liveActivityCoordinator.end()
+        liveActivityPushTokensBySessionID.removeAll()
         let oldClient = client
         eventTask?.cancel()
         eventTask = nil
@@ -2401,7 +2436,10 @@ public final class IOSApplicationModel: ObservableObject {
                 return
             }
             connectionState = state
-            if state == .connected { connectionError = nil }
+            if state == .connected {
+                connectionError = nil
+                retryLiveActivityPushTokenRegistrations()
+            }
             if state != .connected {
                 hasControlLease = false
                 terminalFocusGeneration &+= 1

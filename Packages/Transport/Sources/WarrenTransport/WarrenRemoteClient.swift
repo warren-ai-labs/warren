@@ -558,10 +558,11 @@ public actor WarrenRemoteClient {
         configuration: WarrenRemoteEndpointConfiguration,
         task: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
-        capabilities: [String] = ["roster-delta"]
+        capabilities: [String] = ["roster-delta"],
+        urlSession: URLSession = WarrenRemoteNetworking.session
     ) {
         self.configuration = configuration
-        self.urlSession = .shared
+        self.urlSession = urlSession
         self.accessToken = configuration.token
         self.refreshToken = configuration.refreshToken
         self.advertisedCapabilities = capabilities
@@ -644,6 +645,82 @@ public actor WarrenRemoteClient {
     ) async throws -> Value {
         let data = try await request(method, jsonParams: jsonParams)
         return try decode(data, as: type)
+    }
+
+    /// Registers an ActivityKit push token with the Relay. This HTTP call is
+    /// intentionally independent from the WebSocket connection: iOS may
+    /// suspend the app immediately after the Activity is created.
+    @discardableResult
+    public func registerLiveActivityPushToken(sessionID: String, token: String) async throws -> Bool {
+        guard configuration.isRelay else { throw WarrenRemoteClientError.invalidEndpoint }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "session_id": sessionID,
+            "push_token": token,
+        ])
+        let response = try await relayLiveActivityRequest(
+            method: "POST",
+            body: data,
+            retryAfterRefresh: true
+        )
+        guard let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              value["registered"] as? Bool == true else {
+            throw WarrenRemoteClientError.invalidResponse
+        }
+        return true
+    }
+
+    /// Removes a previously registered ActivityKit token. A best-effort
+    /// caller may ignore failures when the Relay is already offline.
+    @discardableResult
+    public func unregisterLiveActivityPushToken(sessionID: String, token: String) async throws -> Bool {
+        guard configuration.isRelay else { throw WarrenRemoteClientError.invalidEndpoint }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "session_id": sessionID,
+            "push_token": token,
+        ])
+        let response = try await relayLiveActivityRequest(
+            method: "DELETE",
+            body: data,
+            retryAfterRefresh: true
+        )
+        guard let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else {
+            throw WarrenRemoteClientError.invalidResponse
+        }
+        return value["unregistered"] as? Bool == true
+    }
+
+    private func relayLiveActivityRequest(
+        method: String,
+        body: Data,
+        retryAfterRefresh: Bool
+    ) async throws -> Data {
+        guard let url = configuration.relayLiveActivityRegistrationURL else {
+            throw WarrenRemoteClientError.invalidEndpoint
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw WarrenRemoteClientError.invalidResponse
+        }
+        if http.statusCode == 401, retryAfterRefresh,
+           await refreshRelayAccessToken() {
+            return try await relayLiveActivityRequest(
+                method: method,
+                body: body,
+                retryAfterRefresh: false
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = detail?.isEmpty == false ? detail! : "HTTP \(http.statusCode)"
+            throw WarrenRemoteClientError.requestFailed("Relay live activity request failed: \(message)")
+        }
+        return data
     }
 
     /// Creates a Host-owned session in a workspace, terminal group, or the

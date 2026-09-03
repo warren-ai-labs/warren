@@ -114,9 +114,19 @@ public struct WarrenLiveActivityAttributes: Codable, Hashable, Sendable {
 /// gets the native Dynamic Island implementation on iOS 17.
 @MainActor
 public final class IOSLiveActivityCoordinator {
+    /// Receives `(sessionID, hex push token)` whenever ActivityKit rotates the
+    /// token. The app registers it with Relay over HTTPS; the callback is
+    /// intentionally absent from the Widget extension and never enters the
+    /// Dynamic Island payload.
+    public var pushTokenHandler: (@MainActor (String, String) -> Void)?
+    /// Called when the local Activity is ended (for example after changing
+    /// the selected Session) so the Relay can drop its token registration.
+    public var activityEndedHandler: (@MainActor (String) -> Void)?
+
 #if os(iOS) && canImport(ActivityKit)
     private var activity: Activity<WarrenLiveActivityAttributes>?
     private var updateTask: Task<Void, Never>?
+    private var pushTokenTask: Task<Void, Never>?
     private var lastSessionIdentity: String?
     private var lastState: WarrenLiveActivityState?
 #endif
@@ -182,15 +192,17 @@ public final class IOSLiveActivityCoordinator {
         }
 
         do {
-            activity = try Activity.request(
+            let requestedActivity = try Activity.request(
                 attributes: WarrenLiveActivityAttributes(
                     sessionID: normalizedSessionID,
                     sessionTitle: resolvedTitle,
                     hostName: normalizedHostName,
                 ),
                 content: content,
-                pushType: nil
+                pushType: .token
             )
+            activity = requestedActivity
+            observePushTokenUpdates(for: requestedActivity, sessionID: normalizedSessionID)
         } catch {
             // Live Activities are optional UI. A denied authorization or a
             // system quota must never affect Relay connection handling.
@@ -206,16 +218,42 @@ public final class IOSLiveActivityCoordinator {
 
     public func end() {
 #if os(iOS) && canImport(ActivityKit)
+        let endedSessionID = activity?.attributes.sessionID
         updateTask?.cancel()
         updateTask = nil
+        pushTokenTask?.cancel()
+        pushTokenTask = nil
         let activity = activity
         self.activity = nil
         lastSessionIdentity = nil
         lastState = nil
+        if let endedSessionID {
+            activityEndedHandler?(endedSessionID)
+        }
         guard let activity else { return }
         Task { await activity.end(nil, dismissalPolicy: .default) }
 #endif
     }
+
+#if os(iOS) && canImport(ActivityKit)
+    private func observePushTokenUpdates(
+        for activity: Activity<WarrenLiveActivityAttributes>,
+        sessionID: String
+    ) {
+        pushTokenTask?.cancel()
+        pushTokenTask = Task { [weak self, activity] in
+            for await data in activity.pushTokenUpdates {
+                guard !Task.isCancelled else { return }
+                let token = data.map { String(format: "%02x", $0) }.joined()
+                guard !token.isEmpty else { continue }
+                await MainActor.run {
+                    guard let self, self.activity?.id == activity.id else { return }
+                    self.pushTokenHandler?(sessionID, token)
+                }
+            }
+        }
+    }
+#endif
 }
 
 /// Extends a Relay connection for the finite background execution window that

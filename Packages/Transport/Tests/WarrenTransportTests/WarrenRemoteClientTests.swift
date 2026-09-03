@@ -72,6 +72,42 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testLiveActivityPushTokenRegistrationUsesHostScopedHTTPAPI() async throws {
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [LiveActivityURLProtocol.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        LiveActivityURLProtocol.reset()
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "Relay",
+            url: "https://relay.example.test/relay",
+            token: "relay-access",
+            type: "relay",
+            hostID: "host-123"
+        )
+        let client = WarrenRemoteClient(
+            configuration: endpoint,
+            task: ScriptedWebSocketTask(),
+            urlSession: session
+        )
+
+        let registered = try await client.registerLiveActivityPushToken(sessionID: "session-1", token: "aabb")
+        let unregistered = try await client.unregisterLiveActivityPushToken(sessionID: "session-1", token: "aabb")
+        XCTAssertTrue(registered)
+        XCTAssertTrue(unregistered)
+        let requests = LiveActivityURLProtocol.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].httpMethod, "POST")
+        XCTAssertEqual(requests[1].httpMethod, "DELETE")
+        for request in requests {
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://relay.example.test/relay/h/host-123/v1/live-activities"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer relay-access")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        }
+    }
+
     func testIncompatibleWelcomeReportsProtocolError() async throws {
         let task = ScriptedWebSocketTask()
         await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"1.0\"}"))
@@ -319,6 +355,81 @@ final class WarrenRemoteClientTests: XCTestCase {
             }
         }
     }
+}
+
+private final class LiveActivityURLProtocol: URLProtocol, @unchecked Sendable {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var requests: [URLRequest] = []
+
+        func append(_ request: URLRequest) {
+            lock.lock()
+            requests.append(request)
+            lock.unlock()
+        }
+
+        func snapshot() -> [URLRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return requests
+        }
+
+        func reset() {
+            lock.lock()
+            requests.removeAll()
+            lock.unlock()
+        }
+    }
+
+    private static let state = State()
+
+    static func reset() {
+        state.reset()
+    }
+
+    static func requests() -> [URLRequest] {
+        state.snapshot()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.scheme == "https"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let request = request
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: WarrenRemoteClientError.invalidEndpoint)
+            return
+        }
+        Self.state.append(request)
+        let body: Data
+        let status: Int
+        if request.httpMethod == "POST" {
+            body = Data(#"{"registered":true}"#.utf8)
+            status = 200
+        } else {
+            body = Data(#"{"unregistered":true}"#.utf8)
+            status = 200
+        }
+        guard let response = HTTPURLResponse(
+            url: url,
+            statusCode: status,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        ) else {
+            client?.urlProtocol(self, didFailWithError: WarrenRemoteClientError.invalidResponse)
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 
