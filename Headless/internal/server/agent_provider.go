@@ -1320,9 +1320,11 @@ func NewTUIAgentProvider(service *Service, kind string) *TUIAgentProvider {
 func NewTUIAgentProviderRegistry(service *Service) *AgentProviderRegistry {
 	registry := NewAgentProviderRegistry()
 	for _, kind := range []string{"codex", "claude", "opencode", "pi", "qoder"} {
-		provider := NewTUIAgentProvider(service, kind)
-		_ = registry.Register(NewAgentProviderWithHandlers(kind, provider))
-		_ = registry.RegisterHandler(provider, provider.HandlerKind())
+		tuiProvider := NewTUIAgentProvider(service, kind)
+		acpProvider := NewACPAgentProvider(kind, service)
+		_ = registry.Register(NewAgentProviderWithHandlers(kind, tuiProvider, acpProvider))
+		_ = registry.RegisterHandler(tuiProvider, tuiProvider.HandlerKind())
+		_ = registry.RegisterHandler(acpProvider, acpProvider.HandlerKind())
 	}
 	return registry
 }
@@ -1565,6 +1567,13 @@ func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message AgentMess
 	if handle == nil || handle.service == nil {
 		return errors.New("agent message transport is unavailable")
 	}
+	status := handle.service.agentStatus(handle.sessionID)
+	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+		return api.ErrAgentBlocked
+	}
+	if status.Activity == api.AgentActivityWorking {
+		return api.ErrAgentBusy
+	}
 	if controller := handle.service.AgentController; nonNilInterface(controller) {
 		return controller.SendMessage(ctx, message)
 	}
@@ -1664,3 +1673,91 @@ func (handle *tuiAgentHandle) Close() error {
 
 var _ AgentProvider = (*TUIAgentProvider)(nil)
 var _ AgentHandle = (*tuiAgentHandle)(nil)
+
+// ACPAgentProvider is a stub for the standardized bidirectional Agent Client Protocol (ACP).
+// It implements AgentProvider and AgentProviderCapabilities for the "acp" handler kind.
+type ACPAgentProvider struct {
+	kind    string
+	service *Service
+}
+
+func NewACPAgentProvider(kind string, service *Service) *ACPAgentProvider {
+	return &ACPAgentProvider{
+		kind:    normalizeProviderKind(kind),
+		service: service,
+	}
+}
+
+func (provider *ACPAgentProvider) Kind() string {
+	if provider == nil {
+		return ""
+	}
+	return provider.kind
+}
+
+func (provider *ACPAgentProvider) HandlerKind() string { return AgentHandlerACP }
+
+// Capabilities advertises Track 2 native bidirectional capabilities.
+func (provider *ACPAgentProvider) Capabilities() CapabilitySet {
+	return NewCapabilitySet(
+		CapabilityTimeline,
+		CapabilityInteractions,
+		CapabilityInterrupt,
+		CapabilityAttachments,
+	)
+}
+
+func (provider *ACPAgentProvider) Ensure(ctx context.Context, value AgentSessionContext) (AgentHandle, error) {
+	if provider == nil || provider.service == nil {
+		return nil, ErrAgentNotReady
+	}
+	return &acpAgentHandle{
+		provider: provider,
+		value:    value,
+	}, nil
+}
+
+type acpAgentHandle struct {
+	provider *ACPAgentProvider
+	value    AgentSessionContext
+}
+
+func (handle *acpAgentHandle) Start(ctx context.Context, sink AgentEventSink) error {
+	// ACP wire transport connection is stubbed and will be implemented when the protocol adapter is ready.
+	return nil
+}
+
+func (handle *acpAgentHandle) Capabilities() CapabilitySet {
+	if handle == nil || handle.provider == nil {
+		return NewCapabilitySet()
+	}
+	return handle.provider.Capabilities()
+}
+
+func (handle *acpAgentHandle) SendMessage(ctx context.Context, message AgentMessage) error {
+	return errors.New("acp message transport is not implemented yet")
+}
+
+func (handle *acpAgentHandle) Interrupt(ctx context.Context, request AgentInterruptRequest) error {
+	return errors.New("acp interrupt transport is not implemented yet")
+}
+
+func (handle *acpAgentHandle) RespondInteraction(ctx context.Context, response AgentInteractionResponse) error {
+	return errors.New("acp interaction transport is not implemented yet")
+}
+
+func (handle *acpAgentHandle) BindingKey() string {
+	if handle == nil {
+		return ""
+	}
+	return handle.value.SessionID
+}
+
+func (handle *acpAgentHandle) Close() error {
+	return nil
+}
+
+var _ AgentProvider = (*ACPAgentProvider)(nil)
+var _ AgentProviderCapabilities = (*ACPAgentProvider)(nil)
+var _ AgentHandle = (*acpAgentHandle)(nil)
+

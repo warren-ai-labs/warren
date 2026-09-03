@@ -429,9 +429,29 @@ type qoderContentBlock struct {
 	Content   json.RawMessage `json:"content"`
 }
 
+type qoderParser struct {
+	baseParser
+	qoderCallTool map[string]string
+}
+
+func newQoderParser(contentLimit int) *qoderParser {
+	return &qoderParser{
+		baseParser:    newBaseParser(contentLimit),
+		qoderCallTool: make(map[string]string),
+	}
+}
+
+func (p *qoderParser) Parse(line []byte) []api.AgentEvent {
+	return p.observe(p.parseQoder(line))
+}
+
+func (p *qoderParser) parse(line []byte) []api.AgentEvent {
+	return p.Parse(line)
+}
+
 // parseQoder projects one Qoder record onto the normalized agent event stream
 // understood by the transcription tracker.
-func (p *parser) parseQoder(line []byte) []api.AgentEvent {
+func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 	var record qoderRecord
 	if json.Unmarshal(line, &record) != nil {
 		return nil
@@ -467,7 +487,7 @@ func (p *parser) parseQoder(line []byte) []api.AgentEvent {
 // parseQoderUser projects a user-role record. Plain-text content is a real
 // user turn; a content array of tool_result blocks carries tool outputs whose
 // originating tool call was recorded by the matching assistant record.
-func (p *parser) parseQoderUser(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
+func (p *qoderParser) parseQoderUser(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
 	var blocks []qoderContentBlock
 	if json.Unmarshal(message.Content, &blocks) == nil && len(blocks) > 0 {
 		return p.parseQoderToolResults(record, blocks, timestamp)
@@ -489,7 +509,7 @@ func (p *parser) parseQoderUser(record qoderRecord, message qoderMessage, timest
 // parseQoderToolResults projects each tool_result block in a user message
 // content array. Qoder writes tool results as an array with one element per
 // finished tool call.
-func (p *parser) parseQoderToolResults(record qoderRecord, blocks []qoderContentBlock, timestamp time.Time) []api.AgentEvent {
+func (p *qoderParser) parseQoderToolResults(record qoderRecord, blocks []qoderContentBlock, timestamp time.Time) []api.AgentEvent {
 	events := make([]api.AgentEvent, 0, len(blocks))
 	for _, block := range blocks {
 		if block.Type != "tool_result" {
@@ -527,7 +547,7 @@ func (p *parser) parseQoderToolResults(record qoderRecord, blocks []qoderContent
 // to at most one normalized event. The stop reason on the final record of a
 // turn (end_turn, stop, length, ...) marks the boundary; tool_use is not
 // terminal.
-func (p *parser) parseQoderAssistant(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
+func (p *qoderParser) parseQoderAssistant(record qoderRecord, message qoderMessage, timestamp time.Time) []api.AgentEvent {
 	var blocks []qoderContentBlock
 	if json.Unmarshal(message.Content, &blocks) != nil || len(blocks) == 0 {
 		return nil
