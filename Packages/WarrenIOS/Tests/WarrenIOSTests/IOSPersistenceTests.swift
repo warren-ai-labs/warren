@@ -1,6 +1,8 @@
 import XCTest
 @testable import WarrenIOS
 import WarrenTransport
+import WarrenProtocol
+import WarrenDomain
 
 final class IOSPersistenceTests: XCTestCase {
     func testSessionRailAggregatesOnlyAboveTwoSessions() {
@@ -831,6 +833,171 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(payloads.count, 2)
         XCTAssertEqual(payloads[0], Data("edited locally".utf8))
         XCTAssertEqual(payloads[1], Data([0x1B, 0x5B, 0x31, 0x33, 0x75]))
+        model.stop()
+    }
+
+    @MainActor
+    func testAgentStreamingContentDeltasAreCoalescedIntoSingleMessage() async throws {
+        let sessionID = "agent-stream-test"
+        let task = IOSScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Agent\",\"kind\":\"claude\",\"lifecycle\":\"running\"}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-agent-deltas-" + UUID().uuidString)!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-agent-deltas")
+            )
+        )
+        model.start()
+
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.connectionState, .connected)
+        model.selectSession(sessionID)
+
+        let subscribeMessages = await waitForSentMessages(task, count: 2)
+        let subscribeID = try requestID(from: subscribeMessages[1])
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"attached\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"sequence\":0,\"reanchor\":true}"
+        ))
+
+        // 1. Initial seed event with contentDelta=false
+        await task.enqueue(.text(
+            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":1,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hello\",\"contentDelta\":false}]}"
+        ))
+        for _ in 0..<200 {
+            if (model.agentEventsBySessionID[sessionID]?.count ?? 0) >= 1 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello")
+
+        // 2. Stream delta 1 with contentDelta=true
+        await task.enqueue(.text(
+            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":2,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\" world\",\"contentDelta\":true}]}"
+        ))
+        for _ in 0..<200 {
+            if model.agentEventsBySessionID[sessionID]?.first?.content == "Hello world" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world")
+
+        // 3. Stream delta 2 with contentDelta=true
+        await task.enqueue(.text(
+            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":3,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"!\",\"contentDelta\":true}]}"
+        ))
+        for _ in 0..<200 {
+            if model.agentEventsBySessionID[sessionID]?.first?.content == "Hello world!" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world!")
+
+        // 4. Duplicate sequence delivery does not duplicate content
+        await task.enqueue(.text(
+            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":3,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"!\",\"contentDelta\":true}]}"
+        ))
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world!")
+
+        // 5. New independent message creates a second event
+        await task.enqueue(.text(
+            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":4,\"id\":\"msg-2\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Next\",\"contentDelta\":false}]}"
+        ))
+        for _ in 0..<200 {
+            if (model.agentEventsBySessionID[sessionID]?.count ?? 0) >= 2 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 2)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.last?.content, "Next")
+
+        model.stop()
+    }
+
+    @MainActor
+    func testTerminalBufferOverrunRequestsRecoveryWithoutDuplication() async throws {
+        let sessionUUID = UUID()
+        let sessionID = sessionUUID.uuidString.lowercased()
+        let task = IOSScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-term-overrun-" + UUID().uuidString)!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-term-overrun")
+            )
+        )
+        model.start()
+
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.selectSession(sessionID)
+
+        let subscribeMessages = await waitForSentMessages(task, count: 2)
+        let subscribeID = try requestID(from: subscribeMessages[1])
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"attached\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"sequence\":0,\"reanchor\":true}"
+        ))
+
+        // Send first chunk (4.5 MB)
+        let chunk1 = Data(repeating: 0x41, count: 4_500_000)
+        let header1 = try XCTUnwrap(BinaryOutputFrameHeader(sessionID: TerminalSessionID(rawValue: sessionUUID), epoch: 1, sequence: 0, payloadLength: chunk1.count))
+        let wire1 = try WarrenWireCodec().encodeOutput(header: header1, payload: chunk1)
+        await task.enqueue(.binary(wire1))
+
+        for _ in 0..<400 {
+            if (model.terminalOutputBySessionID[sessionID]?.count ?? 0) >= 4_500_000 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.terminalOutputBySessionID[sessionID]?.count, 4_500_000)
+
+        // Send second chunk (4.5 MB) taking total data to 9 MB (> 8 MB maxBytes)
+        let chunk2 = Data(repeating: 0x42, count: 4_500_000)
+        let header2 = try XCTUnwrap(BinaryOutputFrameHeader(sessionID: TerminalSessionID(rawValue: sessionUUID), epoch: 1, sequence: 4_500_000, payloadLength: chunk2.count))
+        let wire2 = try WarrenWireCodec().encodeOutput(header: header2, payload: chunk2)
+        await task.enqueue(.binary(wire2))
+
+        // When exceeding maxBytes, it should mark terminal not ready and request recovery (subscription with anchor=nil)
+        for _ in 0..<400 {
+            if model.terminalReadyBySessionID[sessionID] == false { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.terminalReadyBySessionID[sessionID], false)
+
+        // Wait for the recovery subscribe request
+        let messages = await waitForSentMessages(task, count: 3)
+        let recoverySubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.subscribe" && (try? requestID(from: $0)) != subscribeID }))
+        let params = requestParams(recoverySubscribe)
+        XCTAssertNil(params?["anchor"])
+
         model.stop()
     }
 

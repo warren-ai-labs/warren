@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -95,7 +95,10 @@ export function AgentView({
     sessionIdentityRef.current = sessionIdentity;
     uploadGenerationRef.current += 1;
   }
-  const blocks = projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event)));
+  const blocks = useMemo(
+    () => projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event))),
+    [events]
+  );
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
@@ -108,7 +111,12 @@ export function AgentView({
   const showWorking = shouldShowWorking(agentStatus, events);
   const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
-  const lastUserEvent = [...events].reverse().find(isUserAgentEvent) || null;
+  const lastUserEvent = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (isUserAgentEvent(events[i])) return events[i];
+    }
+    return null;
+  }, [events]);
   const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
 
   const editAndResend = value => {
@@ -1431,13 +1439,15 @@ function basename(path) {
   return index >= 0 ? path.slice(index + 1) : path;
 }
 
-function MarkdownContent({ value }) {
+const REMARK_PLUGINS = [remarkGfm];
+
+const MarkdownContent = memo(function MarkdownContent({ value }) {
   return (
     <div className="agent-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{value}</ReactMarkdown>
     </div>
   );
-}
+});
 
 function FileList({ files }) {
   return (
