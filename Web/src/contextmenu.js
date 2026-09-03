@@ -53,6 +53,7 @@ export function sessionMenuItems(session, actions) {
       action: () => actions.togglePin(session),
     },
     { label: "Rename session", action: () => actions.rename(session) },
+    ...(actions.search ? [{ label: "Search terminal", action: () => actions.search(session) }] : []),
     { label: "Delete session", danger: true, action: () => actions.delete(session) },
   ];
 }

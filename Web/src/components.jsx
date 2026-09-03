@@ -761,6 +761,8 @@ export function MobileShell({
   onToggleAgentView,
   onOpenMenu,
   onOpenSearch,
+  onToggleGit,
+  gitActive,
   onNewSession,
   onOpenSessionMenu,
   onSessionContextMenu,
@@ -836,6 +838,17 @@ export function MobileShell({
         {activeSession && (
           <button type="button" className="chrome-button" aria-label="Session actions" onClick={onOpenSessionMenu}>
             {moreIcon}
+          </button>
+        )}
+        {onToggleGit && (
+          <button
+            type="button"
+            className={`chrome-button${gitActive ? " active" : ""}`}
+            aria-label="Toggle Git panel"
+            aria-pressed={gitActive}
+            onClick={onToggleGit}
+          >
+            {GitIcon}
           </button>
         )}
         <button type="button" className="chrome-button" aria-label="Search projects" onClick={onOpenSearch}>
