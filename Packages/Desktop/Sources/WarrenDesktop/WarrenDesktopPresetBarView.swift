@@ -49,6 +49,8 @@ struct WarrenDesktopPresetBar: View {
     private var piCommand = "pi"
     @AppStorage(WarrenPreferenceKey.presetCommandQoder)
     private var qoderCommand = "qoder"
+    @AppStorage(WarrenPreferenceKey.presetCommandAntigravity)
+    private var antigravityCommand = "agy"
     @AppStorage(WarrenPreferenceKey.presetCommandTrae)
     private var traeCommand = "trae-cli interactive"
     @AppStorage(WarrenPreferenceKey.sessionPresetOrder)
@@ -154,6 +156,7 @@ struct WarrenDesktopPresetBar: View {
         case "opencode": opencodeCommand
         case "pi": piCommand
         case "qoder": qoderCommand
+        case "antigravity": antigravityCommand
         case "trae": traeCommand
         default: ""
         }
