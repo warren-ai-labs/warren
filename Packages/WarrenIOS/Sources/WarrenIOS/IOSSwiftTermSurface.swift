@@ -136,6 +136,7 @@ private struct PlatformTerminalView: UIViewRepresentable {
             } else {
                 context.coordinator.install(snapshot: snapshot, in: view, force: checkpointChanged)
                 context.coordinator.lastOutputRevision = outputRevision
+                context.coordinator.lastOutputCount = 0
             }
         }
         if !isReady && context.coordinator.pendingSnapshot != nil {
@@ -143,9 +144,9 @@ private struct PlatformTerminalView: UIViewRepresentable {
         }
         if output.count < context.coordinator.lastOutputCount {
             // A fresh atomic checkpoint replaces the previous stream. If a
-            // caller resets the stream without changing the checkpoint, reset
-            // the baseline rather than dropping the next bytes.
-            context.coordinator.lastOutputCount = 0
+            // caller resets or truncates the stream without changing the checkpoint,
+            // align the baseline rather than replaying old bytes.
+            context.coordinator.lastOutputCount = output.isEmpty ? 0 : output.count
             context.coordinator.resetStream()
         }
         if output.count > context.coordinator.lastOutputCount {
