@@ -2701,11 +2701,11 @@ private struct AgentActivityGroupBlock: View {
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
-            if expanded || activity.status == .running || activity.status == .failed {
+            if activity.status == .failed {
                 AgentStatusRail(
-                    color: activityStatusColor,
+                    color: IOSTheme.red,
                     width: 1.5,
-                    opacity: activity.status == .completed ? 0.30 : 0.76,
+                    opacity: 0.86,
                     verticalInset: 2
                 )
             }
@@ -2732,15 +2732,6 @@ private struct AgentActivityGroupBlock: View {
                 .accessibilityLabel("Activity interrupted")
         case .completed:
             EmptyView()
-        }
-    }
-
-    private var activityStatusColor: Color {
-        switch activity.status {
-        case .running: return IOSTheme.amber
-        case .failed: return IOSTheme.red
-        case .interrupted: return IOSTheme.yellow
-        case .completed: return IOSTheme.secondaryText.opacity(0.35)
         }
     }
 

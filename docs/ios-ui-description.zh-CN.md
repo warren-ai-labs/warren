@@ -196,8 +196,7 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
   Plugin/Subagent/Attachment；展开或失败时绘制，失败使用红色轨道。
 - `AgentSecondaryEventBlock`（`2506-2572`）：System/metadata/notice 等次要信息，使用中性
   分隔轨道。
-- `AgentActivityGroupBlock`（`2607-2742`）：reasoning/tool 活动组；展开、运行或失败时绘制
-  顶层状态轨道，轨道位于独立左侧预留列，不压住标题。
+- `AgentActivityGroupBlock`（`2607-2742`）：reasoning/tool 活动组；正常未报错时不绘制颜色轨道避免与展开箭头重叠，仅在失败时绘制红色顶层状态轨道。
 - `AgentReasoningEntry`（`2743-2809`）：活动组内的 Thinking 子折叠；不再绘制绿色、红色
   或中性竖线，标题与 Tool 子行使用同一层级缩进。
 - `AgentToolBlockView`（`2810-2901`）和 `AgentToolOutputBlock`（`2902-2976`）：工具调用及

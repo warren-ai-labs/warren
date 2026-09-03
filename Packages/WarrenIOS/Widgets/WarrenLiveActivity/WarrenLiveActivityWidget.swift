@@ -11,6 +11,7 @@ struct WarrenLiveActivityWidget: Widget {
                 attributes: context.attributes,
                 state: context.state
             )
+            .widgetURL(URL(string: "warren://session/\(context.attributes.sessionID)"))
             .activityBackgroundTint(SessionLiveActivityStyle.background)
             .activitySystemActionForegroundColor(SessionLiveActivityStyle.foreground)
         } dynamicIsland: { context in
@@ -54,6 +55,7 @@ struct WarrenLiveActivityWidget: Widget {
                 Image(systemName: "bolt.horizontal.circle.fill")
                     .foregroundStyle(SessionLiveActivityStyle.color(for: context.state.connection))
             }
+            .widgetURL(URL(string: "warren://session/\(context.attributes.sessionID)"))
         }
     }
 }
@@ -63,34 +65,84 @@ private struct SessionLiveActivityLockScreenView: View {
     let state: WarrenLiveActivityState
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.title2)
-                .foregroundStyle(SessionLiveActivityStyle.accent)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.horizontal.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SessionLiveActivityStyle.accent)
+                Text(attributes.hostName)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text("·")
+                    .foregroundStyle(.secondary.opacity(0.6))
+                Circle()
+                    .fill(SessionLiveActivityStyle.color(for: state.connection))
+                    .frame(width: 6, height: 6)
+                Text(state.connection.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                SessionLiveActivityBadge(state: state)
+            }
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(state.currentSessionTitle ?? attributes.sessionTitle)
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(SessionLiveActivityStyle.color(for: state.connection))
-                        .frame(width: 7, height: 7)
-                    Text(state.connection.label)
-                    Text("·")
-                    Text(SessionLiveActivitySummary(state: state).text)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text(SessionLiveActivitySummary(state: state).text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer(minLength: 0)
-            Text(attributes.hostName)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.14, green: 0.13, blue: 0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+    }
+}
+
+private struct SessionLiveActivityBadge: View {
+    let state: WarrenLiveActivityState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if state.attentionSessionCount > 0 {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
+                Text("Needs input")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
+            } else if state.workingSessionCount > 0 {
+                Circle()
+                    .fill(Color(red: 0.96, green: 0.69, blue: 0.24))
+                    .frame(width: 5, height: 5)
+                Text("Working")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color(red: 0.96, green: 0.69, blue: 0.24))
+            } else {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.44))
+                Text("Ready")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(Color.white.opacity(0.08), in: Capsule())
     }
 }
 
