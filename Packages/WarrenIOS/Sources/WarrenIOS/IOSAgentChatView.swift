@@ -753,6 +753,7 @@ public struct AgentChatView: View {
 
                         if composerFocused {
                             IOSKeyboardDismissButton {
+                                IOSHaptics.light()
                                 composerFocused = false
                                 model.dismissKeyboard()
                             }
@@ -1003,6 +1004,7 @@ public struct AgentChatView: View {
             model.clearAgentDraft(for: sessionID)
             composerFocused = false
             model.dismissKeyboard()
+            IOSHaptics.light()
             showSendStatus("sent")
             return
         }
