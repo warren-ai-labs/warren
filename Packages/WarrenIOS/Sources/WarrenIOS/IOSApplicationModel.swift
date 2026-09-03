@@ -323,6 +323,30 @@ public final class IOSApplicationModel: ObservableObject {
             replacingEndpointName: localStore.endpoint?.name
         )
     }
+
+    /// Adds a new Host without treating the currently selected credential as
+    /// the default token for the new item.
+    @discardableResult
+    public func saveNewEndpoint(
+        name: String,
+        url: String,
+        token: String? = nil,
+        refreshToken: String? = nil,
+        type: String? = nil,
+        hostID: String? = nil,
+        routeID: String? = nil
+    ) -> Bool {
+        saveEndpoint(
+            name: name,
+            url: url,
+            token: token,
+            refreshToken: refreshToken,
+            type: type,
+            hostID: hostID,
+            routeID: routeID,
+            replacingEndpointName: nil
+        )
+    }
     
     /// Persists with separate refresh token storage.
     @discardableResult
@@ -516,7 +540,7 @@ public final class IOSApplicationModel: ObservableObject {
                     )
                     // Save both access_token and refresh_token
                     if let refreshToken = exchange.refreshToken {
-                        _ = keychain.write(refreshToken, account: "\(target.name).refresh")
+                        _ = self.localStore.keychain.write(refreshToken, account: "\(target.name).refresh")
                     }
                     let saved = self.saveEndpoint(
                         name: target.name,
