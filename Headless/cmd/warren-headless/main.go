@@ -222,6 +222,9 @@ func main() {
 			if _, err := agent.EnsureQoderBindHook(agent.QoderConfigDir()); err != nil {
 				return err
 			}
+			if _, err := agent.EnsureAntigravityBindHook(agent.AntigravityConfigDir()); err != nil {
+				return err
+			}
 			return nil
 		},
 	}

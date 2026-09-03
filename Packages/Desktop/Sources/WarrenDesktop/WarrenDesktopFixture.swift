@@ -142,7 +142,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// and for a shell that the Host has promoted through an Agent binding.
     public var isAgentSession: Bool {
         switch kind {
-        case .claude, .codex, .opencode, .pi, .qoder:
+        case .claude, .codex, .opencode, .pi, .qoder, .antigravity:
             true
         case .shell, .custom:
             agentStatus != nil

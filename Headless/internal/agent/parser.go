@@ -107,6 +107,8 @@ func newParserWithContentLimit(provider string, contentLimit int) Parser {
 		return newPiParser(contentLimit)
 	case "qoder":
 		return newQoderParser(contentLimit)
+	case "antigravity":
+		return newAntigravityParser(contentLimit)
 	default:
 		return newFallbackParser(provider, contentLimit)
 	}

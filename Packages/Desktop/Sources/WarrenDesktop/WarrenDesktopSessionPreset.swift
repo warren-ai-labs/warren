@@ -88,6 +88,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "antigravity",
+            title: "Antigravity",
+            subtitle: "Launch the agy CLI (Google Antigravity) in this project",
+            symbolName: "arrow.up.circle",
+            createButtonTitle: "Start Antigravity",
+            request: .antigravity,
+            isPinned: true
+        ),
+        Self(
             id: "trae",
             title: "Trae Agent",
             subtitle: "Launch ByteDance's Trae Agent CLI in this project",
@@ -201,6 +210,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "opencode": "OpenCode"
         case "pi": "Pi"
         case "qoder": "Qoder"
+        case "antigravity": "Antigravity"
         case "trae": "Trae"
         default: title
         }
@@ -214,6 +224,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "opencode": "preset-opencode"
         case "pi": "preset-pi"
         case "qoder": "preset-qoder"
+        case "antigravity": "preset-antigravity"
         case "trae": "preset-trae"
         default: nil
         }
@@ -221,7 +232,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
 
     public var isAI: Bool {
         switch request.kind {
-        case .claude, .codex, .opencode, .pi, .qoder, .trae: true
+        case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae: true
         case .shell, .custom: false
         }
     }
@@ -252,6 +263,7 @@ extension TerminalSessionKind {
         case .opencode: "terminal.fill"
         case .pi: "function"
         case .qoder: "sparkle"
+        case .antigravity: "arrow.up.circle"
         case .trae: "sparkle.magnifyingglass"
         case .custom: "hammer"
         }

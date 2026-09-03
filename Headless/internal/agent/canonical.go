@@ -23,36 +23,36 @@ func canonicalToolName(provider, raw string) string {
 	}
 	switch name {
 	// shell
-	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd":
+	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd", "run_command":
 		return "shell"
 	// edit
-	case "edit", "edit_file", "str_replace_editor", "edit_file_v2":
+	case "edit", "edit_file", "str_replace_editor", "edit_file_v2", "replace_file_content":
 		return "edit"
 	// write
-	case "write", "write_file", "create_file":
+	case "write", "write_file", "create_file", "write_to_file":
 		return "write"
 	// read
-	case "read", "read_file", "view":
+	case "read", "read_file", "view", "view_file":
 		return "read"
 	// grep
-	case "grep", "ripgrep", "rg", "search_content":
+	case "grep", "ripgrep", "rg", "search_content", "grep_search":
 		return "grep"
 	// glob
-	case "glob", "find_files", "list_files":
+	case "glob", "find_files", "list_files", "find_by_name", "list_dir":
 		return "glob"
 	// web search
-	case "websearch", "web_search", "web_search_call":
+	case "websearch", "web_search", "web_search_call", "search_web":
 		return "web_search"
 	// web fetch
-	case "webfetch", "web_fetch", "fetch_url":
+	case "webfetch", "web_fetch", "fetch_url", "read_url_content":
 		return "fetch"
 	// subagent
-	case "task", "subagent", "agent", "delegate":
+	case "task", "subagent", "agent", "delegate", "invoke_subagent", "define_subagent":
 		return "subagent"
-	// claude structured tool calls — these project to RFC 0010 events and
+	// claude and antigravity structured tool calls — these project to RFC 0010 events and
 	// also surface as tool_call for clients that haven't learned the
 	// structured type yet.
-	case "askuserquestion", "ask_user_question":
+	case "askuserquestion", "ask_user_question", "ask_question":
 		return "ask_user_question"
 	case "permissionrequest", "permission_request":
 		return "permission_request"

@@ -76,9 +76,15 @@ func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, aft
 		// Qoder resolves through the injected --session-id binding; the
 		// generic finder has no identity to search with.
 		return "", nil
+	case "antigravity":
+		return f.findAntigravity(ctx, workspacePath, after)
 	default:
 		return "", nil
 	}
+}
+
+func (f DefaultFinder) findAntigravity(ctx context.Context, workspacePath string, after time.Time) (string, error) {
+	return FindAntigravityTranscript("", workspacePath), nil
 }
 
 func (f DefaultFinder) findCodex(ctx context.Context, workspacePath string, after time.Time) (string, error) {

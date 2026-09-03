@@ -66,7 +66,7 @@ func BindEnvironment(warrenSessionID, kind string) []string {
 	// Dedicated agent sessions know their provider up front. Plain shell and
 	// custom sessions must not pin a provider: whichever agent CLI the user
 	// starts inside them is reported by the hook command itself.
-	if kind == "codex" || kind == "claude" {
+	if kind == "codex" || kind == "claude" || kind == "antigravity" {
 		entries = append(entries, BindEnvKind+"="+kind)
 	}
 	return entries
@@ -524,9 +524,25 @@ const agentBindHookScript = `#!/bin/sh
 # warren-agent-bind-v1
 [ -n "$WARREN_BIND_FILE" ] || [ -n "$WARREN_STATE_FILE" ] || exit 0
 input=$(cat)
+provider=${2:-${WARREN_AGENT_KIND:-codex}}
 hook_event=$(printf '%s' "$input" | sed -nE 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$hook_event" ] || hook_event=$3
 session_id=$(printf '%s' "$input" | sed -nE 's/.*"session_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$session_id" ] || session_id=$(printf '%s' "$input" | sed -nE 's/.*"conversationId"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$transcript_path" ] || transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcriptPath"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
+[ -n "$cwd" ] || cwd=$(printf '%s' "$input" | sed -nE 's/.*"workspacePaths"[[:space:]]*:[[:space:]]*\["([^"]*)".*/\1/p')
+
+exit_hook() {
+  if [ "$provider" = "antigravity" ]; then
+    printf '{}\n'
+  else
+    printf '{"continue":true}\n'
+  fi
+  exit 0
+}
 
 # Status files are provider-neutral and contain no prompt text, tool
 # arguments, or secrets. Request IDs are reduced to a conservative character
@@ -560,6 +576,20 @@ write_status() {
   mv -f "$temporary" "$WARREN_STATE_FILE" 2>/dev/null || return 0
 }
 
+bind_session() {
+  [ -n "$session_id" ] || return 0
+  [ -n "$WARREN_BIND_FILE" ] || return 0
+  [ -n "$transcript_path" ] || return 0
+  dir=$(dirname "$WARREN_BIND_FILE")
+  mkdir -p "$dir" 2>/dev/null || return 0
+  temporary="$WARREN_BIND_FILE.tmp.$$"
+  {
+    printf '{"provider":"%s","sessionId":"%s","transcriptPath":"%s","cwd":"%s","updatedAt":"%s"}\n' \
+      "$provider" "$session_id" "$transcript_path" "$cwd" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$temporary" 2>/dev/null || return 0
+  mv -f "$temporary" "$WARREN_BIND_FILE" 2>/dev/null || return 0
+}
+
 request_id=$(printf '%s' "$input" | sed -nE 's/.*"request_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"requestId"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"tool_use_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
@@ -568,8 +598,7 @@ tool_name=$(printf '%s' "$input" | sed -nE 's/.*"tool_name"[[:space:]]*:[[:space
 
 if [ "$hook_event" = "SessionEnd" ]; then
   write_status "exited" "" "" ""
-  printf '%s\n' '{"continue":true}'
-  exit 0
+  exit_hook
 fi
 
 # Claude emits this event immediately before showing a permission prompt. The
@@ -577,15 +606,14 @@ fi
 # decision so the provider's own prompt remains authoritative.
 if [ "$hook_event" = "PermissionRequest" ]; then
   write_status "blocked" "approval" "permission" "$request_id"
-  printf '%s\n' '{"continue":true}'
-  exit 0
+  exit_hook
 fi
 
 # AskUserQuestion is a provider tool, not a question-mark heuristic. Its
 # PreToolUse event is the stable signal that the next input is an answer.
 if [ "$hook_event" = "PreToolUse" ]; then
   case "$tool_name" in
-    AskUserQuestion|ask_user_question)
+    AskUserQuestion|ask_user_question|ask_question)
       write_status "blocked" "input" "question" "$request_id"
       ;;
     *)
@@ -594,40 +622,29 @@ if [ "$hook_event" = "PreToolUse" ]; then
       write_status "working" "" "" ""
       ;;
   esac
-  printf '%s\n' '{"continue":true}'
-  exit 0
+  exit_hook
+fi
+
+if [ "$hook_event" = "PreInvocation" ]; then
+  bind_session
+  write_status "working" "" "" ""
+  exit_hook
 fi
 
 case "$hook_event" in
   PostToolUse|PostToolUseFailure|UserPromptSubmit)
     write_status "working" "" "" ""
-    printf '%s\n' '{"continue":true}'
-    exit 0
+    exit_hook
     ;;
   Stop)
     write_status "ready" "" "" ""
-    printf '%s\n' '{"continue":true}'
-    exit 0
+    exit_hook
     ;;
 esac
 
-transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
-cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
-[ -n "$session_id" ] || exit 0
-provider=${2:-${WARREN_AGENT_KIND:-codex}}
-[ -n "$WARREN_BIND_FILE" ] || exit 0
-[ -n "$transcript_path" ] || exit 0
-dir=$(dirname "$WARREN_BIND_FILE")
-mkdir -p "$dir" 2>/dev/null || exit 0
-temporary="$WARREN_BIND_FILE.tmp.$$"
-{
-  printf '{"provider":"%s","sessionId":"%s","transcriptPath":"%s","cwd":"%s","updatedAt":"%s"}\n' \
-    "$provider" "$session_id" "$transcript_path" "$cwd" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} > "$temporary" 2>/dev/null || exit 0
-mv -f "$temporary" "$WARREN_BIND_FILE" 2>/dev/null || exit 0
+bind_session
 write_status "ready" "" "" ""
-printf '%s\n' '{"continue":true}'
-exit 0
+exit_hook
 `
 
 // piBindExtensionSource is the hook-equivalent for Pi. Pi has no lifecycle
