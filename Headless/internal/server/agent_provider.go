@@ -1568,7 +1568,8 @@ func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message AgentMess
 		return errors.New("agent message transport is unavailable")
 	}
 	status := handle.service.agentStatus(handle.sessionID)
-	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+	isInputAttention := status.Attention != nil && status.Attention.Kind == api.AgentAttentionInput
+	if (status.Activity == api.AgentActivityBlocked && !isInputAttention) || (status.Attention != nil && status.Attention.Kind == api.AgentAttentionApproval) {
 		return api.ErrAgentBlocked
 	}
 	if status.Activity == api.AgentActivityWorking {
