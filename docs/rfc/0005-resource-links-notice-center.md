@@ -1,6 +1,6 @@
 # RFC 0005: Resource links and the desktop notice center
 
-- Status: Complete
+- Status: Implemented
 - Owner: Warren Desktop and Web clients
 - Created: 2026-08-22
 - Scope: navigation links, transient system messages, and text-input ergonomics
