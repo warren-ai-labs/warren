@@ -1,12 +1,10 @@
 export function rosterFromMessage(message = {}) {
   const source = isRecord(message?.state) ? message.state : message;
-  const sessions = Array.isArray(source?.sessions) ? source.sessions : null;
+  const sessions = Array.isArray(source?.sessions) ? source.sessions : [];
   const tabs = sessions
-    ? sessions
-      .filter(session => session?.lifecycle === "running")
-      .map(sessionToTab)
-      .filter(Boolean)
-    : normalizeLegacyTabs(source?.tabs);
+    .filter(session => session?.lifecycle === "running")
+    .map(sessionToTab)
+    .filter(Boolean);
   return normalizeRoster({
     revision: normalizeRevision(source?.revision),
     schema: source?.schema,
@@ -52,14 +50,7 @@ export function applyRosterDelta(roster, message = {}) {
     && !isRecord(message.ghostlineMigration)) {
     return null;
   }
-  const terminalGroupChanges = Object.prototype.hasOwnProperty.call(message, "terminalGroups")
-    ? message.terminalGroups
-    : message.groups;
-  if (Object.prototype.hasOwnProperty.call(message, "groups")
-    && !Object.prototype.hasOwnProperty.call(message, "terminalGroups")
-    && !validEntityChanges(message.groups, entityIDs.terminalGroups)) {
-    return null;
-  }
+  const terminalGroupChanges = message.terminalGroups;
   for (const key of entityKeys) {
     if (Object.prototype.hasOwnProperty.call(message, key)
       && !validEntityChanges(message[key], entityIDs[key])) {
@@ -226,14 +217,8 @@ function normalizeRoster(roster) {
     workspaces: arrayOrEmpty(roster?.workspaces),
     terminalGroups: arrayOrEmpty(roster?.terminalGroups),
     ghostlineMigration: isRecord(roster?.ghostlineMigration) ? roster.ghostlineMigration : null,
-    tabs: normalizeLegacyTabs(roster?.tabs),
+    tabs: arrayOrEmpty(roster?.tabs),
   };
-}
-
-function normalizeLegacyTabs(tabs) {
-  return arrayOrEmpty(tabs).filter(tab => (
-    isRecord(tab) && typeof tab.session === "string" && tab.session
-  ));
 }
 
 function sessionToTab(session = {}) {

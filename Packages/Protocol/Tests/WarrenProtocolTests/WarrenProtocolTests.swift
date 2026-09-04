@@ -11,7 +11,6 @@ final class WarrenProtocolTests: XCTestCase {
     func testClientMessagesRoundTripAndCarryVersion() throws {
         let version = ProtocolVersion(major: 2, minor: 7)
         let messages: [ClientControlMessage] = [
-            .attach(AttachRequest(version: version, sessionID: sessionID, clientID: clientID)),
             .resize(ResizeRequest(version: version, sessionID: sessionID, attachmentID: attachmentID, size: TerminalSize(columns: 120, rows: 40)!)),
             .focus(FocusRequest(version: version, sessionID: sessionID, attachmentID: attachmentID, focused: true)),
             .requestControl(ControlRequest(version: version, sessionID: sessionID, attachmentID: attachmentID)),

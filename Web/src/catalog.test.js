@@ -27,7 +27,7 @@ import { escapeHTML } from "./view.js";
 test("catalog indexes workspaces and open tabs", () => {
   const catalog = buildCatalog(rosterFromMessage({
     workspaces: [{ id: "workspace", project: "project" }],
-    tabs: [{ id: "tab", session: "session", workspace: "workspace", title: "Shell" }],
+    sessions: [{ id: "session", workspace: "workspace", lifecycle: "running", title: "Shell" }],
   }));
 
   assert.equal(catalog.workspacesByProject.get("project")[0].id, "workspace");
@@ -50,7 +50,7 @@ test("catalog indexes task workspaces across projects", () => {
       { id: "workspace-b", project: "project-b", task: "task" },
       { id: "workspace-unassigned", project: "project-b" },
     ],
-    tabs: [],
+    sessions: [],
   });
 
   assert.deepEqual(
@@ -65,7 +65,7 @@ test("live agent status updates preserve task aggregation", () => {
     tasks: [{ id: "task", name: "Delivery" }],
     projects: [{ id: "project" }],
     workspaces: [{ id: "workspace", project: "project", task: "task" }],
-    tabs: [{ id: "tab", session: "session", workspace: "workspace" }],
+    sessions: [{ id: "session", workspace: "workspace", lifecycle: "running" }],
   });
 
   const updated = updateSessionAgentStatus(catalog, "session", { activity: "working" });
@@ -193,13 +193,6 @@ test("roster delta rejects stale, gapped, and malformed revisions", () => {
     revision: 4,
     sessions: [],
   }), null);
-  const alias = applyRosterDelta(baseline, {
-    t: "roster.delta",
-    baseRevision: 3,
-    revision: 4,
-    groups: { upsert: [{ id: "group", name: "Inbox" }] },
-  });
-  assert.deepEqual(alias.terminalGroups.map(group => group.id), ["group"]);
 });
 
 test("catalog keeps merge state on workspaces", () => {

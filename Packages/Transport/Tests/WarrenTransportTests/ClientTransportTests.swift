@@ -8,31 +8,18 @@ final class ClientTransportTests: XCTestCase {
     private let sessionID = TerminalSessionID(rawValue: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!)
     private let attachmentID = TerminalAttachmentID(rawValue: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!)
 
-    private func attachRequest() -> ClientControlMessage {
-        .attach(AttachRequest(
-            sessionID: sessionID,
-            clientID: ClientID(rawValue: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!),
-            attachmentID: attachmentID
-        ))
-    }
-
     func testConnectAndSendControlUsesTextAndInputUsesBinary() async throws {
         let fake = ScriptedWebSocketTask()
         let transport = URLSessionWebSocketClientTransport(task: fake)
         try await transport.connect()
-        try await transport.send(attachRequest())
         let metadata = try XCTUnwrap(
             InputMetadata(sessionID: sessionID, attachmentID: attachmentID, payloadLength: 3)
         )
         try await transport.sendInput(metadata: metadata, payload: Data([1, 0, 255]))
 
         let messages = await fake.sentMessages
-        XCTAssertEqual(messages.count, 2)
-        guard case .text(let text) = messages[0] else {
-            return XCTFail("control must use a text WebSocket message")
-        }
-        XCTAssertEqual(try WarrenWireCodec().decodeClientControl(Array(text.utf8)), attachRequest())
-        guard case .binary(let input) = messages[1] else {
+        XCTAssertEqual(messages.count, 1)
+        guard case .binary(let input) = messages[0] else {
             return XCTFail("terminal input must use a binary WebSocket message")
         }
         let decodedInput = try WarrenWireCodec().decodeInputFrame(input)
@@ -55,9 +42,8 @@ final class ClientTransportTests: XCTestCase {
         } catch {
             // Expected; the receive/send connection remains usable.
         }
-        try await transport.send(attachRequest())
         let sentMessages = await fake.sentMessages
-        XCTAssertEqual(sentMessages.count, 1)
+        XCTAssertEqual(sentMessages.count, 0)
     }
 
     func testSecondConnectDoesNotStartAnotherReceiveLoop() async throws {
@@ -109,7 +95,7 @@ final class ClientTransportTests: XCTestCase {
         let cancelCount = await fake.cancelCallCount
         XCTAssertEqual(cancelCount, 1)
         do {
-            try await transport.send(attachRequest())
+            try await transport.send(.focus(FocusRequest(sessionID: sessionID, attachmentID: attachmentID, focused: true)))
             XCTFail("sending after close must fail")
         } catch let error as URLSessionWebSocketClientTransportError {
             XCTAssertEqual(error, .closed)

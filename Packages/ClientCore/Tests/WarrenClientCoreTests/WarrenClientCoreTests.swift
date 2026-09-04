@@ -55,33 +55,6 @@ final class WarrenClientCoreTests: XCTestCase {
         }
     }
 
-    func testDisconnectPreservesProjectionAndReconnectCarriesAnchor() async throws {
-        let host = WarrenDomain.Host(name: "Mac")
-        let store = ClientSessionStore(host: host, sessionID: sessionID, clientID: clientID)
-        let attached = AttachedMessage(
-            sessionID: sessionID,
-            attachmentID: attachmentID,
-            epoch: 7,
-            sequence: 42
-        )
-        _ = try await store.consume(.attached(attached))
-        await store.markDisconnected()
-
-        let beforeReconnect = await store.snapshot()
-        XCTAssertEqual(beforeReconnect.host, host)
-        XCTAssertEqual(beforeReconnect.recoveryAnchor, RecoveryAnchor(epoch: 7, sequence: 42))
-        XCTAssertEqual(beforeReconnect.connectionState, .disconnected)
-
-        let transport = InMemoryHostTransport()
-        let coordinator = ReconnectCoordinator()
-        let request = try await coordinator.reconnect(through: transport, store: store)
-        XCTAssertEqual(request.recoveryAnchor, RecoveryAnchor(epoch: 7, sequence: 42))
-        XCTAssertEqual(request.attachmentID, attachmentID)
-
-        let sent = await transport.sentMessages
-        XCTAssertEqual(sent, [.attach(request)])
-    }
-
     func testControlChangedProjectsControllerAndLease() async throws {
         let store = ClientSessionStore(sessionID: sessionID, clientID: clientID)
         _ = try await store.consume(.attached(
