@@ -1739,7 +1739,7 @@ func TestAgentHistoryClipsToolOutput(t *testing.T) {
 	service.agentsMu.Unlock()
 
 	longOutput := strings.Repeat("A", 10000)
-	longContent := strings.Repeat("B", 10000)
+	longContent := strings.Repeat("B", 50000)
 	events := []api.AgentEvent{
 		{
 			Sequence: 1,
@@ -1778,9 +1778,9 @@ func TestAgentHistoryClipsToolOutput(t *testing.T) {
 		t.Fatalf("expected tool output to end with ellipsis")
 	}
 
-	// Assistant conversational Content must NEVER be clipped
-	if len(page.Events[1].Content) != 10000 {
-		t.Fatalf("assistant content was clipped: got len %d, want 10000", len(page.Events[1].Content))
+	// Assistant conversational Content must NEVER be clipped regardless of size
+	if len(page.Events[1].Content) != 50000 {
+		t.Fatalf("assistant content was clipped: got len %d, want 50000", len(page.Events[1].Content))
 	}
 
 	// Tool input must be clipped

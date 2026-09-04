@@ -4654,6 +4654,9 @@ func limitToolInput(value any, limit int) any {
 	}
 }
 
+// clipWireEvents restricts oversized tool output and tool call arguments on the wire.
+// Conversational messages (user, assistant, system) and their Content text are
+// intentionally NEVER clipped regardless of length.
 func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
 	if maxOutput <= 0 {
 		return events
