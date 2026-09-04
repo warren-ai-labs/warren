@@ -4654,7 +4654,7 @@ func limitToolInput(value any, limit int) any {
 	}
 }
 
-// clipWireEvents restricts oversized tool output and tool call arguments on the wire.
+// projectWireEvents applies field projection and restricts oversized tool data on the wire.
 // Conversational messages (user, assistant, system) and their Content text are
 // intentionally NEVER clipped regardless of length.
 type wireOptions struct {
@@ -4662,10 +4662,6 @@ type wireOptions struct {
 }
 
 func projectWireEvents(events []api.AgentEvent, options wireOptions) []api.AgentEvent {
-	maxOutput := defaultWireToolOutputLimit
-	if maxOutput <= 0 {
-		return events
-	}
 	result := make([]api.AgentEvent, len(events))
 	for i, e := range events {
 		if _, ok := options.omitFields["output"]; ok {
@@ -4684,31 +4680,11 @@ func projectWireEvents(events []api.AgentEvent, options wireOptions) []api.Agent
 			e.Usage = nil
 		}
 		typeName := normalizedAgentEventType(e)
-		if typeName == "tool_output" && len(e.Output) > maxOutput {
-			e.Output = truncateString(e.Output, maxOutput)
+		if typeName == "tool_output" && len(e.Output) > defaultWireToolOutputLimit {
+			e.Output = truncateString(e.Output, defaultWireToolOutputLimit)
 		}
 		if typeName == "tool_call" && e.ToolInput != nil {
-			e.ToolInput = limitToolInput(e.ToolInput, maxOutput)
-		}
-		result[i] = e
-	}
-	return result
-}
-
-func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
-	if maxOutput <= 0 {
-		return events
-	}
-	result := projectWireEvents(events, wireOptions{})
-	if maxOutput == defaultWireToolOutputLimit {
-		return result
-	}
-	for i, e := range result {
-		if normalizedAgentEventType(e) == "tool_output" && len(e.Output) > maxOutput {
-			e.Output = truncateString(e.Output, maxOutput)
-		}
-		if normalizedAgentEventType(e) == "tool_call" && e.ToolInput != nil {
-			e.ToolInput = limitToolInput(e.ToolInput, maxOutput)
+			e.ToolInput = limitToolInput(e.ToolInput, defaultWireToolOutputLimit)
 		}
 		result[i] = e
 	}
@@ -4727,12 +4703,7 @@ func (s *Service) agentHistoryPageWithOptions(
 	before uint64,
 	limit int,
 	conversationOnly bool,
-	maxOutputOption ...int,
 ) api.AgentHistoryResult {
-	maxOutput := defaultWireToolOutputLimit
-	if len(maxOutputOption) > 0 && maxOutputOption[0] != 0 {
-		maxOutput = maxOutputOption[0]
-	}
 	if limit <= 0 {
 		limit = agentHistoryDefaultLimit
 	}
@@ -4748,7 +4719,7 @@ func (s *Service) agentHistoryPageWithOptions(
 			if conversationOnly {
 				return conversationHistoryPage(queried, before, limit, result)
 			}
-			result.Events = clipWireEvents(queried, maxOutput)
+			result.Events = projectWireEvents(queried, wireOptions{})
 			result.Cursor = queried[0].Sequence
 			result.HasMore = hasMore
 			return result
@@ -4813,7 +4784,7 @@ func (s *Service) agentHistoryPageWithOptions(
 	if len(page) == 0 {
 		return result
 	}
-	result.Events = clipWireEvents(page, maxOutput)
+	result.Events = projectWireEvents(page, wireOptions{})
 	result.Cursor = page[0].Sequence
 	return result
 }

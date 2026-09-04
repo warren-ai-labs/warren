@@ -3729,7 +3729,7 @@ export default function App() {
             since: String(lastSeq + 1),
             before: String(result.snapshot.sequence + 1),
             limit: "100",
-            maxOutput: "4096",
+            wireOptions: { omitFields: ["output"] },
           }, page => {
             if (page?.events?.length > 0) {
               saveAgentEvents(sessionID, page.epoch || epoch, page.events);
