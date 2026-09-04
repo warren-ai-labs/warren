@@ -104,7 +104,7 @@ struct WarrenDesktopSettingsView: View {
     let onWebTest: ((String, String) -> Void)?
     let onWebStop: (() -> Void)?
     let onWebReset: (() -> Void)?
-    let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
     let relaySettings: WarrenDesktopRelaySettings
     let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -166,10 +166,8 @@ struct WarrenDesktopSettingsView: View {
     @State private var publicAccessPathPrefix = ""
     @State private var relayURLDraft = ""
     @State private var relayEnabledDraft = false
-    @State private var relaySetupLinkDraft = ""
     @State private var relayRegistrationURL = ""
-    @State private var relayRegistrationHostID = ""
-    @State private var relayEnrollmentTicket = ""
+    @State private var relayEnrollmentKey = ""
     @State private var relaySettingsBusy = false
     @State private var relayResetBusy = false
     @State private var relaySettingsError: String?
@@ -181,13 +179,11 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayInviteQRPresented = false
     @State private var relayRegistrationExpanded = false
     @State private var relayDetailsExpanded = false
-    @State private var relayAutoEnrollmentKey: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
-    /// A deeplink can select a page and provide its non-secret or explicitly
-    /// shared setup values. Complete Relay setup links are consumed
-    /// automatically; the ticket is never persisted by this view.
+    /// A deeplink can select a page and prefill the Relay URL and bounded-use
+    /// enrollment key. The key is consumed only when the user starts joining.
     var initialSettingsSection: WarrenDesktopSettingsSection?
     var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
     var relayPrefill: WarrenDesktopRelayPrefill?
@@ -221,7 +217,7 @@ struct WarrenDesktopSettingsView: View {
         onWebTest: ((String, String) -> Void)?,
         onWebStop: (() -> Void)?,
         onWebReset: (() -> Void)?,
-        onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
+        onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
@@ -1126,7 +1122,7 @@ struct WarrenDesktopSettingsView: View {
                             .foregroundStyle(tokens.foreground)
                         Text(relaySettings.isEnrolled
                             ? "Connected. You can share this Host with iPhone."
-                            : "Open the setup link from your administrator and Warren will connect automatically.")
+                            : "Enter an enrollment key from your Relay administrator to connect this Host.")
                             .font(WarrenTypography.settingsSupporting)
                             .foregroundStyle(tokens.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1206,7 +1202,7 @@ struct WarrenDesktopSettingsView: View {
 
                 DisclosureGroup(isExpanded: $relayDetailsExpanded) {
                     VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                        Text("These settings are managed automatically when you open a setup link. Change them only for a managed or troubleshooting workflow.")
+                        Text("These settings control the Relay endpoint. Use the Connect this Host form below to claim a new identity.")
                             .font(WarrenTypography.settingsSupporting)
                             .foregroundStyle(tokens.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1250,7 +1246,7 @@ struct WarrenDesktopSettingsView: View {
                         }
 
                         if !relaySettings.isEnrolled {
-                            Text("No connection is configured yet. Open the setup link from your administrator.")
+                            Text("No connection is configured yet. Enter a Relay URL and enrollment key below.")
                                 .font(WarrenTypography.settingsSupporting)
                                 .foregroundStyle(tokens.mutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1325,34 +1321,53 @@ struct WarrenDesktopSettingsView: View {
             if !relaySettings.isEnrolled || relayPrefill != nil {
                 DisclosureGroup(isExpanded: $relayRegistrationExpanded) {
                     VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                        Text("If the setup link did not open automatically, paste it here. Warren keeps the Host credential in the daemon.")
+                        Text("Enter a Relay URL and a short-lived enrollment key. Warren creates this Host identity locally and keeps its credential in the daemon.")
                             .font(WarrenTypography.settingsSupporting)
                             .foregroundStyle(tokens.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        SecureField("Paste Warren setup link", text: $relaySetupLinkDraft)
+                        Text("Relay URL")
+                            .font(WarrenTypography.settingsBody)
+                            .foregroundStyle(tokens.mutedForeground)
+                        TextField("https://relay.example.com", text: $relayRegistrationURL)
                             .textFieldStyle(.roundedBorder)
                             .font(WarrenTypography.settingsControl)
-                            .accessibilityLabel("Warren Relay setup link")
-                            .accessibilityIdentifier("settings.relay.setup-link")
+                            .accessibilityLabel("Relay URL")
+                            .accessibilityIdentifier("settings.relay.join-url")
                             .warrenSemanticElement(
-                                id: "settings.relay.setup-link",
+                                id: "settings.relay.join-url",
                                 role: .text,
-                                label: "Warren Relay setup link"
+                                label: "Relay URL"
+                            )
+
+                        Text("Enrollment key")
+                            .font(WarrenTypography.settingsBody)
+                            .foregroundStyle(tokens.mutedForeground)
+                        SecureField("XXXX-XXXX-XXXX-XXXX", text: $relayEnrollmentKey)
+                            .textFieldStyle(.roundedBorder)
+                            .font(WarrenTypography.settingsControl)
+                            .textContentType(.oneTimeCode)
+                            .accessibilityLabel("Relay enrollment key")
+                            .accessibilityIdentifier("settings.relay.enrollment-key")
+                            .warrenSemanticElement(
+                                id: "settings.relay.enrollment-key",
+                                role: .text,
+                                label: "Relay enrollment key"
                             )
 
                         HStack(spacing: WarrenSpacing.compact) {
                             Button(relayEnrollmentBusy
                                 ? "Connecting…"
                                 : (relaySettings.isEnrolled ? "Replace connection" : "Connect Relay")) {
-                                enrollRelayFromSetupLink()
+                                enrollRelay()
                             }
                             .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
                             .disabled(
                                 relayEnrollmentBusy
                                     || relaySettingsBusy
                                     || onRelayEnroll == nil
-                                    || relaySetupLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             )
                             .accessibilityIdentifier("settings.relay.reregister")
                             .warrenSemanticElement(
@@ -1362,8 +1377,9 @@ struct WarrenDesktopSettingsView: View {
                                 isEnabled: !relayEnrollmentBusy
                                     && !relaySettingsBusy
                                     && onRelayEnroll != nil
-                                    && !relaySetupLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                                action: enrollRelayFromSetupLink
+                                    && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    && !relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                action: enrollRelay
                             )
 
                             if relayEnrollmentBusy {
@@ -1386,12 +1402,12 @@ struct WarrenDesktopSettingsView: View {
                     .padding(.top, WarrenSpacing.small)
                 } label: {
                     VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                        Text(relaySettings.isEnrolled ? "Replace connection manually" : "Use a setup link manually")
+                        Text(relaySettings.isEnrolled ? "Replace connection manually" : "Connect this Host")
                             .font(WarrenTypography.settingsSectionTitle)
                             .foregroundStyle(tokens.foreground)
                         Text(relaySettings.isEnrolled
-                            ? "Use this only when an administrator gives you a replacement setup link."
-                            : "Normally, opening the setup link connects this Host automatically.")
+                            ? "Use a new enrollment key to replace this Host's Relay identity."
+                            : "An administrator can send a settings link that fills these fields for you.")
                             .font(WarrenTypography.settingsSupporting)
                             .foregroundStyle(tokens.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1401,7 +1417,7 @@ struct WarrenDesktopSettingsView: View {
                 .warrenSemanticElement(
                     id: "settings.relay.registration",
                     role: .button,
-                    label: relaySettings.isEnrolled ? "Replace connection manually" : "Use a setup link manually",
+                    label: relaySettings.isEnrolled ? "Replace connection manually" : "Connect this Host",
                     isSelected: relayRegistrationExpanded,
                     action: { relayRegistrationExpanded.toggle() }
                 )
@@ -1591,20 +1607,18 @@ struct WarrenDesktopSettingsView: View {
         guard !relayEnrollmentBusy,
               let onRelayEnroll else { return }
         let relayURL = relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hostID = relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ticket = relayEnrollmentTicket.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !relayURL.isEmpty, !hostID.isEmpty, !ticket.isEmpty else { return }
+        let enrollmentKey = relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relayURL.isEmpty, !enrollmentKey.isEmpty else { return }
         relayEnrollmentBusy = true
         relayEnrollmentError = nil
-        onRelayEnroll(relayURL, hostID, ticket) { result in
+        onRelayEnroll(relayURL, enrollmentKey) { result in
             Task { @MainActor in
                 relayEnrollmentBusy = false
                 switch result {
                 case .success:
-                    // Enrollment tickets are one-time credentials. Remove the
-                    // value as soon as the daemon confirms it was consumed.
-                    relaySetupLinkDraft = ""
-                    relayEnrollmentTicket = ""
+                    // Remove the bearer value as soon as the daemon confirms
+                    // the claim, even when the key allows more than one use.
+                    relayEnrollmentKey = ""
                     relayEnrollmentError = nil
                 case let .failure(error):
                     relayEnrollmentError = error.localizedDescription
@@ -1624,10 +1638,8 @@ struct WarrenDesktopSettingsView: View {
                 case .success:
                     relayURLDraft = ""
                     relayEnabledDraft = false
-                    relaySetupLinkDraft = ""
                     relayRegistrationURL = ""
-                    relayRegistrationHostID = ""
-                    relayEnrollmentTicket = ""
+                    relayEnrollmentKey = ""
                     relayEnrollmentError = nil
                     relaySettingsError = nil
                 case let .failure(error):
@@ -1637,33 +1649,12 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private func enrollRelayFromSetupLink() {
-        let value = relaySetupLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value),
-              let deepLink = WarrenDesktopSettingsDeepLink(url: url),
-              deepLink.section == .relay,
-              let prefill = deepLink.relay,
-              let relayURL = prefill.relayURL,
-              let hostID = prefill.hostID,
-              let ticket = prefill.enrollmentTicket else {
-            relayEnrollmentError = "Paste a Warren Relay setup link from your administrator."
-            return
-        }
-        relayRegistrationURL = relayURL
-        relayRegistrationHostID = hostID
-        relayEnrollmentTicket = ticket
-        enrollRelay()
-    }
-
     private func seedRelayFields() {
         relayURLDraft = relaySettings.relayURL
         relayEnabledDraft = relaySettings.enabled
         guard relayPrefill == nil else { return }
         if relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             relayRegistrationURL = relaySettings.relayURL
-        }
-        if relayRegistrationHostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            relayRegistrationHostID = relaySettings.hostID
         }
     }
 
@@ -1830,10 +1821,7 @@ struct WarrenDesktopSettingsView: View {
 
         if section == .relay {
             relay = relayPrefill ?? WarrenDesktopRelayPrefill(
-                relayURL: relaySettings.relayURL,
-                hostID: relaySettings.hostID,
-                relayKeyID: relaySettings.relayKeyID,
-                relayPublicKey: relaySettings.relayPublicKey
+                relayURL: relaySettings.relayURL
             )
         } else {
             relay = nil
@@ -1871,32 +1859,15 @@ struct WarrenDesktopSettingsView: View {
             if let relayURL = relayPrefill.relayURL {
                 relayRegistrationURL = relayURL
             }
-            if let hostID = relayPrefill.hostID {
-                relayRegistrationHostID = hostID
+            if let enrollmentKey = relayPrefill.enrollmentKey {
+                relayEnrollmentKey = enrollmentKey
             }
-            relayEnrollmentTicket = relayPrefill.enrollmentTicket ?? ""
-            autoEnrollRelayFromPrefill(relayPrefill)
+            // A settings link is a convenience for filling the form. Never
+            // consume its bearer key merely by opening the link; the user must
+            // explicitly press Connect.
+            relayRegistrationExpanded = true
         } else {
             seedRelayFields()
-        }
-    }
-
-    private func autoEnrollRelayFromPrefill(_ prefill: WarrenDesktopRelayPrefill) {
-        guard relayEnrollmentError == nil,
-              let relayURL = prefill.relayURL,
-              let hostID = prefill.hostID,
-              let ticket = prefill.enrollmentTicket,
-              onRelayEnroll != nil else {
-            return
-        }
-        let key = relayURL + "\n" + hostID + "\n" + ticket
-        guard relayAutoEnrollmentKey != key else { return }
-        relayAutoEnrollmentKey = key
-        // The prefill fields are state-backed. Defer until SwiftUI has
-        // committed them so the enrollment request uses the link values the
-        // user opened.
-        DispatchQueue.main.async {
-            enrollRelay()
         }
     }
 

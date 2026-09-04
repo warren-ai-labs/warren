@@ -50,29 +50,20 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     }
 }
 
-/// Relay enrollment metadata carried by a Warren settings link. The URL and
-/// key are public metadata; the enrollment ticket is short-lived and one-time
-/// but still acts as a credential until consumed, so callers must not log or
-/// persist the URL. Desktop consumes a complete link automatically.
+/// Relay join values carried by a Warren settings link. The enrollment key is
+/// a short-lived bearer credential; callers must not log or persist the URL.
+/// Host identity and the long-lived daemon credential are created locally by
+/// Headless after the key is claimed.
 public struct WarrenDesktopRelayPrefill: Equatable, Sendable {
     public let relayURL: String?
-    public let hostID: String?
-    public let enrollmentTicket: String?
-    public let relayKeyID: String?
-    public let relayPublicKey: String?
+    public let enrollmentKey: String?
 
     public init(
         relayURL: String? = nil,
-        hostID: String? = nil,
-        enrollmentTicket: String? = nil,
-        relayKeyID: String? = nil,
-        relayPublicKey: String? = nil
+        enrollmentKey: String? = nil
     ) {
         self.relayURL = Self.nonEmpty(relayURL)
-        self.hostID = Self.nonEmpty(hostID)
-        self.enrollmentTicket = Self.nonEmpty(enrollmentTicket)
-        self.relayKeyID = Self.nonEmpty(relayKeyID)
-        self.relayPublicKey = Self.nonEmpty(relayPublicKey)
+        self.enrollmentKey = Self.nonEmpty(enrollmentKey)
     }
 
     private static func nonEmpty(_ value: String?) -> String? {
@@ -160,18 +151,12 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
 
         if section == .relay {
             let relayURL = Self.nonEmpty(query["relayurl"])
-            let hostID = Self.nonEmpty(query["hostid"])
-            let enrollmentTicket = Self.nonEmpty(query["enrollmentticket"])
-            let relayKeyID = Self.nonEmpty(query["relaykeyid"])
-            let relayPublicKey = Self.nonEmpty(query["relaypublickey"])
-            let hasRelayValues = [relayURL, hostID, enrollmentTicket, relayKeyID, relayPublicKey].contains { $0 != nil }
+            let enrollmentKey = Self.nonEmpty(query["enrollmentkey"] ?? query["key"])
+            let hasRelayValues = [relayURL, enrollmentKey].contains { $0 != nil }
             self.relay = hasRelayValues
                 ? WarrenDesktopRelayPrefill(
                     relayURL: relayURL,
-                    hostID: hostID,
-                    enrollmentTicket: enrollmentTicket,
-                    relayKeyID: relayKeyID,
-                    relayPublicKey: relayPublicKey
+                    enrollmentKey: enrollmentKey
                 )
                 : nil
             self.publicAccess = nil
@@ -201,17 +186,8 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
             if let relayURL = relay.relayURL {
                 items.append(URLQueryItem(name: "relayUrl", value: relayURL))
             }
-            if let hostID = relay.hostID {
-                items.append(URLQueryItem(name: "hostId", value: hostID))
-            }
-            if let enrollmentTicket = relay.enrollmentTicket {
-                items.append(URLQueryItem(name: "enrollmentTicket", value: enrollmentTicket))
-            }
-            if let relayKeyID = relay.relayKeyID {
-                items.append(URLQueryItem(name: "relayKeyId", value: relayKeyID))
-            }
-            if let relayPublicKey = relay.relayPublicKey {
-                items.append(URLQueryItem(name: "relayPublicKey", value: relayPublicKey))
+            if let enrollmentKey = relay.enrollmentKey {
+                items.append(URLQueryItem(name: "enrollmentKey", value: enrollmentKey))
             }
         } else if section == .publicAccess, let publicAccess {
             if let publicHostname = publicAccess.publicHostname {

@@ -189,7 +189,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onWebTest: nil,
             onWebStop: nil,
             onWebReset: nil,
-            onRelayEnroll: { _, _, _, completion in completion(.success(())) },
+            onRelayEnroll: { _, _, completion in completion(.success(())) },
             relaySettings: WarrenDesktopRelaySettings(
                 enabled: true,
                 relayURL: "https://relay.example.test",
@@ -252,14 +252,14 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     @MainActor
-    func testRelaySetupLinkAutomaticallyStartsEnrollment() throws {
+    func testRelaySettingsLinkPrefillsWithoutConsumingEnrollmentKey() throws {
         let enrolled = expectation(description: "relay enrollment")
         var received: (String, String, String)?
-        let setup = WarrenDesktopRelayPrefill(
+        let prefill = WarrenDesktopRelayPrefill(
             relayURL: "https://relay.example.test",
-            hostID: "00000000-0000-4000-8000-000000000001",
-            enrollmentTicket: "one-time-ticket"
+            enrollmentKey: "AAAA-BBBB-CCCC-DDDD"
         )
+        let recorder = WarrenSemanticRecorder()
         let settings = WarrenDesktopSettingsView(
             onBack: {},
             hostName: "Test Host",
@@ -267,8 +267,8 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onWebTest: nil,
             onWebStop: nil,
             onWebReset: nil,
-            onRelayEnroll: { relayURL, hostID, ticket, completion in
-                received = (relayURL, hostID, ticket)
+            onRelayEnroll: { relayURL, key, completion in
+                received = (relayURL, key, "")
                 completion(.success(()))
                 enrolled.fulfill()
             },
@@ -285,18 +285,25 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
             initialSettingsSection: .relay,
-            relayPrefill: setup
+            relayPrefill: prefill
         )
         .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
 
         let hostingView = NSHostingView(rootView: settings)
         hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
         hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(received)
+
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.enrollment-key"))
+        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reregister"))
+        try recorder.perform(.press, on: "settings.relay.reregister")
         wait(for: [enrolled], timeout: 1)
 
         XCTAssertEqual(received?.0, "https://relay.example.test")
-        XCTAssertEqual(received?.1, "00000000-0000-4000-8000-000000000001")
-        XCTAssertEqual(received?.2, "one-time-ticket")
+        XCTAssertEqual(received?.1, "AAAA-BBBB-CCCC-DDDD")
     }
 
     @MainActor
@@ -309,7 +316,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onWebTest: nil,
             onWebStop: nil,
             onWebReset: nil,
-            onRelayEnroll: { _, _, _, completion in completion(.success(())) },
+            onRelayEnroll: { _, _, completion in completion(.success(())) },
             relaySettings: WarrenDesktopRelaySettings(),
             defaultRuntime: nil,
             onSetRuntime: { _ in },
@@ -338,10 +345,9 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         try recorder.perform(.press, on: "settings.relay.registration")
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         let snapshot = recorder.snapshot()
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.setup-link"))
-        XCTAssertNil(snapshot.node(id: "settings.relay.registration-url"))
-        XCTAssertNil(snapshot.node(id: "settings.relay.registration-host-id"))
-        XCTAssertNil(snapshot.node(id: "settings.relay.enrollment-ticket"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.join-url"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.enrollment-key"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.reregister"))
     }
 
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {
@@ -370,36 +376,32 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertEqual(link.publicAccess?.pathPrefix, "/host")
     }
 
-    func testRelaySetupLinkRoundTripsWithoutBecomingPublicAccess() throws {
+    func testRelaySettingsLinkRoundTripsWithoutBecomingPublicAccess() throws {
         let prefill = WarrenDesktopRelayPrefill(
             relayURL: "http://192.0.2.10:8080/relay",
-            hostID: "00000000-0000-4000-8000-000000000001",
-            enrollmentTicket: "one-time ticket/+value",
-            relayKeyID: "relay-key-1",
-            relayPublicKey: "base64-public-key"
+            enrollmentKey: "AAAA-BBBB-CCCC-DDDD"
         )
         let link = WarrenDesktopSettingsDeepLink(section: .relay, relay: prefill)
         let url = try XCTUnwrap(link.url)
         XCTAssertNil(url.fragment)
-        XCTAssertTrue(url.absoluteString.contains("enrollmentTicket="))
+        XCTAssertTrue(url.absoluteString.contains("enrollmentKey="))
         XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: url), link)
         XCTAssertNil(link.publicAccess)
         XCTAssertNotNil(link.relay)
     }
 
-    func testRelaySetupLinkRequiresCanonicalParameters() throws {
-        let url = try XCTUnwrap(URL(string: "warren://settings/relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&hostId=00000000-0000-4000-8000-000000000001&enrollmentTicket=short-lived&relayKeyId=relay-key&relayPublicKey=key"))
+    func testRelaySettingsLinkReadsOnlyURLAndEnrollmentKey() throws {
+        let url = try XCTUnwrap(URL(string: "warren://settings/relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&enrollmentKey=AAAA-BBBB-CCCC-DDDD&hostId=ignored"))
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
         XCTAssertEqual(link.section, .relay)
         XCTAssertEqual(link.relay?.relayURL, "http://192.0.2.10:8080")
-        XCTAssertEqual(link.relay?.hostID, "00000000-0000-4000-8000-000000000001")
-        XCTAssertEqual(link.relay?.enrollmentTicket, "short-lived")
+        XCTAssertEqual(link.relay?.enrollmentKey, "AAAA-BBBB-CCCC-DDDD")
         XCTAssertNil(link.publicAccess)
     }
 
-    func testRelaySetupLinkRejectsLegacyAliases() throws {
-        let aliasParameters = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=00000000-0000-4000-8000-000000000001&ticket=short-lived&keyId=relay-key&publicKey=key"))
-        let aliasSection = try XCTUnwrap(URL(string: "warren://settings/owned-relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&hostId=00000000-0000-4000-8000-000000000001&enrollmentTicket=short-lived&relayKeyId=relay-key&relayPublicKey=key"))
+    func testRelaySettingsLinkRejectsLegacyAliases() throws {
+        let aliasParameters = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=ignored&ticket=short-lived"))
+        let aliasSection = try XCTUnwrap(URL(string: "warren://settings/owned-relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&enrollmentKey=AAAA-BBBB-CCCC-DDDD"))
 
         XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.section, .relay)
         XCTAssertNil(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.relay)

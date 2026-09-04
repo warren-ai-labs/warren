@@ -128,21 +128,28 @@ warren session read SESSION_ID --timeout 8s
 ### Owned Relay
 
 The daemon token is the Host Secret for an enrolled Relay Host. The Relay
-Administrator (or the Relay's first-start bootstrap) creates the Host record,
-generates its UUID, and gives the operator the canonical one-time setup link.
-Open that link in Warren Desktop; the local daemon
-consumes the invitation, persists only non-secret Relay metadata, and starts
-the supervised connector. The CLI has the same client-side path and never
-receives a Relay Administrator token or a Host Secret:
+Administrator creates bounded-use enrollment keys and gives one key (or its
+`warren://settings` shortcut) to the operator. The shortcut only fills the
+Relay URL and key; Desktop consumes it when **Connect Relay** is pressed. The
+daemon then calls `/v1/hosts/claim`, lets Relay allocate the Host UUID, persists
+only non-secret Relay metadata, and starts the supervised connector. The CLI
+has the same client-side path and never receives a Relay Administrator token or
+a Host Secret:
 
 ```sh
-warren relay connect 'warren://settings?...'
+warren relay connect 'warren://settings?...relayUrl=...&enrollmentKey=...'
 ```
 
-When a managed deployment supplies a default Relay endpoint, Warren can start
-the connector automatically after enrollment. A default URL alone cannot
-enroll an unknown Host; the Relay still has to issue an invitation or use a
-managed device identity.
+For a headless-only install, pass both values at startup:
+
+```sh
+WARREN_RELAY_URL='https://relay.example.com' \
+WARREN_RELAY_ENROLLMENT_KEY='XXXX-XXXX-XXXX-XXXX' \
+warren-headless
+```
+
+A default URL alone cannot enroll an unknown Host; the Relay must issue an
+enrollment key first.
 
 Set `relay.enabled` (and, for an application route, `publicTunnel.enabled`) to
 start the supervised connector. It opens one outbound WSS connection and
@@ -433,14 +440,23 @@ The Web client renders an Agent view for these sessions and sends user input
 through the same PTY as terminal bytes. If a transcript is missing or its
 format changes, sessions keep working as plain terminals.
 
-Owned Relay enrollment is a separate lifecycle from Public Access. The Relay
-generates a Host UUID and gives its operator the canonical `settings_url`
-returned by startup or `POST /v1/hosts`; the operator opens it in Warren
-Desktop. The link carries only the Relay URL, Host UUID, pinned signing key,
-and one-time enrollment ticket. A local client may also `POST /v1/relay/enroll`
-with the Relay URL, Host UUID, and ticket while
-authenticating with the daemon token. Headless sends that canonical token to
-Relay, validates and pins the returned signing key, and persists only Relay
-metadata. The request body and settings never accept or store a second Relay
-secret. Discard the setup link after enrollment because its ticket is valid
-for ten minutes and can be consumed only once.
+Owned Relay enrollment is a separate lifecycle from Public Access. A Relay
+administrator creates short-lived `XXXX-XXXX-XXXX-XXXX` enrollment keys with
+the service-owned `POST /v1/admin/enrollment-keys` API. The administrator can
+send a key directly or send the returned `warren://settings` shortcut to a Host
+operator. The shortcut only prefills the Relay URL and key; Desktop consumes it
+when the operator presses **Connect Relay**.
+
+Headless can perform the same active step at startup without Desktop:
+
+```sh
+WARREN_RELAY_URL='https://relay.example.com' \
+WARREN_RELAY_ENROLLMENT_KEY='XXXX-XXXX-XXXX-XXXX' \
+warren-headless
+```
+
+It calls `POST /v1/hosts/claim`, supplies the daemon token as the Host Secret,
+lets Relay allocate the Host UUID, validates and pins the returned signing key,
+and persists only Relay metadata. The token-protected local endpoint
+`POST /v1/relay/join` accepts the same URL/key pair for Desktop and CLI. The
+Relay administrator token never enters Headless clients or a settings URL.

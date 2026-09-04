@@ -179,7 +179,7 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	}
 }
 
-func TestProvisionReturnsRelaySettingsLinkWithoutHostSecret(t *testing.T) {
+func TestEnrollmentKeyBatchReturnsSettingsLinksWithoutHostSecrets(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test/relay/?ignored=deployment-metadata",
 		AdminToken:    "admin-bootstrap",
@@ -192,49 +192,64 @@ func TestProvisionReturnsRelaySettingsLinkWithoutHostSecret(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
-	body, _ := json.Marshal(map[string]string{"name": "Mac"})
-	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", bytes.NewReader(body))
+	body := bytes.NewBufferString(`{"count":2,"ttl":"2h","max_uses":1,"label":"macs"}`)
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/admin/enrollment-keys", body)
 	request.Header.Set("Authorization", "Bearer admin-bootstrap")
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response.StatusCode != http.StatusCreated {
-		t.Fatalf("provision host: response=%v err=%v", response, err)
+		t.Fatalf("create enrollment keys: response=%v err=%v", response, err)
+	}
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("enrollment key response cache control = %q, want no-store", response.Header.Get("Cache-Control"))
 	}
 	defer response.Body.Close()
 	var result struct {
-		HostID     string `json:"host_id"`
-		Credential string `json:"host_credential"`
-		Ticket     string `json:"enrollment_ticket"`
-		KeyID      string `json:"relay_key_id"`
-		PublicKey  string `json:"relay_public_key"`
-		Settings   string `json:"settings_url"`
-		Setup      string `json:"setup_url"`
+		Keys []struct {
+			ID        string `json:"id"`
+			Code      string `json:"key"`
+			Label     string `json:"label"`
+			ExpiresAt string `json:"expires_at"`
+			MaxUses   int    `json:"max_uses"`
+			UsedUses  int    `json:"used_uses"`
+			Settings  string `json:"settings_url"`
+		} `json:"keys"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if !validHostID(result.HostID) || result.Credential != "" || result.Ticket == "" || result.KeyID == "" || result.PublicKey == "" {
-		t.Fatalf("incomplete provision response: %#v", result)
+	if len(result.Keys) != 2 {
+		t.Fatalf("created %d enrollment keys, want 2", len(result.Keys))
 	}
-	if result.Settings == "" || result.Setup != "" {
-		t.Fatalf("unexpected setup link fields: settings=%q setup=%q", result.Settings, result.Setup)
-	}
-	parsed, err := url.Parse(result.Settings)
-	if err != nil || parsed.Scheme != "warren" || parsed.Host != "settings" {
-		t.Fatalf("invalid settings link: %q (%v)", result.Settings, err)
-	}
-	query := parsed.Query()
-	if query.Get("section") != "relay" || query.Get("relayUrl") != "https://relay.example.test/relay" ||
-		query.Get("hostId") != result.HostID || query.Get("enrollmentTicket") != result.Ticket ||
-		query.Get("relayKeyId") != result.KeyID || query.Get("relayPublicKey") != result.PublicKey {
-		t.Fatalf("settings link query mismatch: %v", query)
-	}
-	if parsed.RawQuery == "" || strings.Contains(parsed.RawQuery, "ignored") {
-		t.Fatalf("settings link retained deployment query: %q", parsed.RawQuery)
+	seen := make(map[string]bool)
+	for _, key := range result.Keys {
+		if key.ID == "" || key.Code == "" || seen[key.Code] || key.Label != "macs" || key.ExpiresAt == "" || key.MaxUses != 1 || key.UsedUses != 0 {
+			t.Fatalf("invalid enrollment key response: %#v", key)
+		}
+		seen[key.Code] = true
+		if len(strings.ReplaceAll(key.Code, "-", "")) != enrollmentCodeLength || strings.Count(key.Code, "-") != 3 {
+			t.Fatalf("enrollment key is not formatted as XXXX-XXXX-XXXX-XXXX: %q", key.Code)
+		}
+		parsed, err := url.Parse(key.Settings)
+		if err != nil || parsed.Scheme != "warren" || parsed.Host != "settings" {
+			t.Fatalf("invalid settings link: %q (%v)", key.Settings, err)
+		}
+		query := parsed.Query()
+		if query.Get("section") != "relay" || query.Get("relayUrl") != "https://relay.example.test/relay" || query.Get("enrollmentKey") != key.Code {
+			t.Fatalf("settings link query mismatch: %v", query)
+		}
+		for _, forbidden := range []string{"hostId", "enrollmentTicket", "relayKeyId", "relayPublicKey", "setup_url"} {
+			if query.Get(forbidden) != "" || strings.Contains(parsed.RawQuery, forbidden) {
+				t.Fatalf("settings link retained legacy field %q: %q", forbidden, parsed.RawQuery)
+			}
+		}
+		if strings.Contains(parsed.RawQuery, "ignored") {
+			t.Fatalf("settings link retained deployment query: %q", parsed.RawQuery)
+		}
 	}
 }
 
-func TestProvisionRejectsCallerSuppliedHostID(t *testing.T) {
+func TestEnrollmentKeyClaimCreatesRelayOwnedHost(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test",
 		AdminToken:    "admin-bootstrap",
@@ -246,24 +261,44 @@ func TestProvisionRejectsCallerSuppliedHostID(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	body := bytes.NewBufferString(`{"id":"00000000-0000-4000-8000-000000000001","name":"Mac"}`)
-	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", body)
-	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	key := createEnrollmentKey(t, httpServer.URL)
+	body := bytes.NewBufferString(`{"enrollment_key":"` + key + `","host_secret":"daemon-secret","name":"Mac"}`)
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/claim", body)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("caller-supplied Host ID status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("claim status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
-	if len(server.registry.hosts) != 0 {
-		t.Fatalf("rejected provisioning mutated registry: %d hosts", len(server.registry.hosts))
+	var result struct {
+		HostID     string `json:"host_id"`
+		Generation uint64 `json:"generation"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil || !validHostID(result.HostID) || result.Generation != 1 {
+		t.Fatalf("invalid claim response: %#v (%v)", result, err)
+	}
+	if len(server.registry.hosts) != 1 {
+		t.Fatalf("claim created %d hosts, want 1", len(server.registry.hosts))
+	}
+	// The same daemon may retry after losing the response. It gets the same
+	// Relay-owned identity without consuming another key.
+	retry := bytes.NewBufferString(`{"enrollment_key":"` + key + `","host_secret":"daemon-secret","name":"Renamed"}`)
+	retryRequest, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/claim", retry)
+	retryRequest.Header.Set("Content-Type", "application/json")
+	retryResponse, err := http.DefaultClient.Do(retryRequest)
+	if err != nil || retryResponse.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent claim status = %v (%v)", retryResponse, err)
+	}
+	retryResponse.Body.Close()
+	if host, ok := server.registry.host(result.HostID); !ok || host.Name != "Renamed" {
+		t.Fatalf("idempotent claim did not update host name: %#v", host)
 	}
 }
 
-func TestProvisionGeneratesUniqueHostIDs(t *testing.T) {
+func TestLegacyHostProvisioningEndpointsAreRemoved(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test",
 		AdminToken:    "admin-bootstrap",
@@ -275,77 +310,21 @@ func TestProvisionGeneratesUniqueHostIDs(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	ids := make([]string, 0, 2)
-	for _, name := range []string{"Mac", "iMac"} {
-		body := bytes.NewBufferString(`{"name":"` + name + `"}`)
-		request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", body)
+	for _, endpoint := range []string{
+		httpServer.URL + "/v1/hosts",
+		httpServer.URL + "/v1/hosts/00000000-0000-4000-8000-000000000001/enroll",
+	} {
+		request, _ := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(`{}`))
 		request.Header.Set("Authorization", "Bearer admin-bootstrap")
 		request.Header.Set("Content-Type", "application/json")
 		response, requestErr := http.DefaultClient.Do(request)
-		if requestErr != nil || response.StatusCode != http.StatusCreated {
-			t.Fatalf("provision %s: response=%v err=%v", name, response, requestErr)
+		if requestErr != nil {
+			t.Fatal(requestErr)
 		}
-		var result struct {
-			HostID string `json:"host_id"`
-		}
-		decodeErr := json.NewDecoder(response.Body).Decode(&result)
 		response.Body.Close()
-		if decodeErr != nil || !validHostID(result.HostID) {
-			t.Fatalf("invalid generated Host ID: %#v err=%v", result, decodeErr)
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("legacy endpoint %s status = %d, want %d", endpoint, response.StatusCode, http.StatusNotFound)
 		}
-		ids = append(ids, result.HostID)
-	}
-	if ids[0] == ids[1] || len(server.registry.hosts) != 2 {
-		t.Fatalf("generated Host IDs = %v, registry hosts = %d", ids, len(server.registry.hosts))
-	}
-}
-
-func TestNewSetupLinkGeneratesAndReusesBootstrapHost(t *testing.T) {
-	server, err := NewServer(Config{
-		PublicURL:     "https://relay.example.test",
-		AdminToken:    "admin-bootstrap",
-		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
-		AllowedOrigin: "https://relay.example.test",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := server.NewSetupLink("Mac")
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := url.Parse(first)
-	if err != nil || parsed.Scheme != "warren" || parsed.Host != "settings" {
-		t.Fatalf("invalid setup link: %q (%v)", first, err)
-	}
-	hostID := parsed.Query().Get("hostId")
-	if !validHostID(hostID) {
-		t.Fatalf("setup link Host ID = %q", hostID)
-	}
-	second, err := server.NewSetupLink("Mac")
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondURL, err := url.Parse(second)
-	if err != nil || secondURL.Query().Get("hostId") != hostID {
-		t.Fatalf("pending setup Host ID changed: first=%q second=%q", hostID, secondURL.Query().Get("hostId"))
-	}
-	if len(server.registry.hosts) != 1 {
-		t.Fatalf("repeated setup link created %d hosts", len(server.registry.hosts))
-	}
-	ticket := secondURL.Query().Get("enrollmentTicket")
-	if ticket == "" {
-		t.Fatal("setup link has no enrollment ticket")
-	}
-	if _, err := server.registry.enrollment(hostID, ticket, "daemon-secret"); err != nil {
-		t.Fatal(err)
-	}
-	third, err := server.NewSetupLink("another host")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if third != "" {
-		t.Fatalf("setup link was recreated after enrollment: %q", third)
 	}
 }
 
@@ -510,7 +489,7 @@ func TestHostCredentialCanInspectAndPairOnlyItsOwnHost(t *testing.T) {
 	response.Body.Close()
 }
 
-func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
+func TestClaimRejectsUnknownEnrollmentFields(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test",
 		AdminToken:    "admin-bootstrap",
@@ -523,12 +502,11 @@ func TestProvisionRejectsNonUUIDHostIdentity(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 	body, _ := json.Marshal(map[string]string{"id": "local-default-host", "name": "Mac"})
-	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts", bytes.NewReader(body))
-	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/claim", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("non-UUID Host ID was accepted: response=%v err=%v", response, err)
+		t.Fatalf("unknown claim fields status = %v, want %d", response, http.StatusBadRequest)
 	}
 	response.Body.Close()
 }
@@ -557,7 +535,7 @@ func TestRelayRequiresBRLY2HostConnection(t *testing.T) {
 	response.Body.Close()
 }
 
-func TestRelayRejectsLegacyEnrollmentCredentialField(t *testing.T) {
+func TestRelayClaimRejectsLegacyEnrollmentFields(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test",
 		AdminToken:    "admin-bootstrap",
@@ -569,12 +547,11 @@ func TestRelayRejectsLegacyEnrollmentCredentialField(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	hostID, ticket := provisionHostTicket(t, httpServer.URL)
 	body, _ := json.Marshal(map[string]string{
-		"enrollment_ticket": ticket,
+		"enrollment_ticket": "legacy-ticket",
 		"token":             "daemon-secret",
 	})
-	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
+	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/claim", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -776,21 +753,18 @@ func TestPairingInviteSurvivesRelayRestartAndStoresOnlyHash(t *testing.T) {
 }
 
 func TestPairingCodeExpires(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000004"
 	registry, err := newRegistry("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.provisionHost(hostID, "Mac"); err != nil {
-		t.Fatal("provision failed")
-	}
-	ticket, _, ok := registry.enrollmentTicket(hostID)
-	if !ok {
-		t.Fatal("provision did not create enrollment ticket")
-	}
 	const credential = "daemon-secret-pairing-expiry"
-	if _, err := registry.enrollment(hostID, ticket, credential); err != nil || !registry.authenticateHost(hostID, credential) {
-		t.Fatal("enrollment failed")
+	keys, err := registry.createEnrollmentKeys(1, time.Hour, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, _, err := registry.claimHost(keys[0].Code, credential, "Mac")
+	if err != nil || !registry.authenticateHost(hostID, credential) {
+		t.Fatalf("claim failed: %v", err)
 	}
 	tunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
 	if !registry.connectHost(hostID, "Mac", credential, tunnel) {
@@ -823,67 +797,57 @@ func TestRegistrySkipsMalformedPersistedRecords(t *testing.T) {
 	}
 }
 
-func TestCredentialRotationCannotPublishAStaleHostTunnel(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000005"
+func TestClaimsCreateIndependentHostsWithoutCredentialRotation(t *testing.T) {
 	registry, err := newRegistry("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+	keys, err := registry.createEnrollmentKeys(2, time.Hour, 1, "")
+	if err != nil {
 		t.Fatal(err)
-	}
-	ticket, _, ok := registry.enrollmentTicket(hostID)
-	if !ok {
-		t.Fatal("initial enrollment ticket missing")
 	}
 	const oldCredential = "daemon-secret-old"
-	if _, err := registry.enrollment(hostID, ticket, oldCredential); err != nil || !registry.authenticateHost(hostID, oldCredential) {
-		t.Fatal("initial credential was not accepted")
-	}
-	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+	hostID, _, err := registry.claimHost(keys[0].Code, oldCredential, "Mac")
+	if err != nil {
 		t.Fatal(err)
 	}
-	ticket, _, ok = registry.enrollmentTicket(hostID)
-	if !ok {
-		t.Fatal("rotation enrollment ticket missing")
-	}
+	// A second claim with a different secret creates a separate Host. It must
+	// never rotate the credential or publish a stale tunnel for the first Host.
 	const newCredential = "daemon-secret-new"
-	if _, err := registry.enrollment(hostID, ticket, newCredential); err != nil {
-		t.Fatal(err)
+	otherHostID, _, err := registry.claimHost(keys[1].Code, newCredential, "Mac 2")
+	if err != nil || otherHostID == hostID {
+		t.Fatalf("second claim did not create an independent Host: %s %v", otherHostID, err)
 	}
 	staleTunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
-	if registry.connectHost(hostID, "Mac", oldCredential, staleTunnel) {
-		t.Fatal("rotated credential published a stale Host tunnel")
+	if !registry.connectHost(hostID, "Mac", oldCredential, staleTunnel) {
+		t.Fatal("first Host credential was rejected")
 	}
 	currentTunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
-	if !registry.connectHost(hostID, "Mac", newCredential, currentTunnel) {
-		t.Fatal("current credential could not publish Host tunnel")
+	if !registry.connectHost(otherHostID, "Mac 2", newCredential, currentTunnel) {
+		t.Fatal("current credential could not publish second Host tunnel")
 	}
-	generation, ok := registry.generation(hostID)
-	if !ok || registry.authorizedTunnel(hostID, generation) != currentTunnel {
+	generation, ok := registry.generation(otherHostID)
+	if !ok || registry.authorizedTunnel(otherHostID, generation) != currentTunnel {
 		t.Fatal("current generation could not resolve its Host tunnel")
 	}
-	if registry.authorizedTunnel(hostID, generation-1) != nil {
+	if registry.authorizedTunnel(otherHostID, generation-1) != nil {
 		t.Fatal("old access generation resolved the current Host tunnel")
 	}
 }
 
 func TestRegistryMutationRollsBackWhenPersistenceFails(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000008"
 	dataURL := t.TempDir() + "/registry.json"
 	registry, err := newRegistry(dataURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.provisionHost(hostID, "Mac"); err != nil {
+	const credential = "daemon-secret-persistence"
+	keys, err := registry.createEnrollmentKeys(1, time.Hour, 1, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	ticket, _, ok := registry.enrollmentTicket(hostID)
-	if !ok {
-		t.Fatal("enrollment ticket missing")
-	}
-	const credential = "daemon-secret-persistence"
-	if _, err := registry.enrollment(hostID, ticket, credential); err != nil {
+	hostID, _, err := registry.claimHost(keys[0].Code, credential, "Mac")
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Renaming a file over this existing directory fails on every supported
@@ -895,49 +859,55 @@ func TestRegistryMutationRollsBackWhenPersistenceFails(t *testing.T) {
 	if !registry.authenticateHost(hostID, credential) {
 		t.Fatal("failed revoke changed the in-memory credential")
 	}
-	if err := registry.provisionHost(hostID, "Rotated Mac"); err == nil {
-		t.Fatal("rotation unexpectedly succeeded when persistence failed")
-	}
-	if !registry.authenticateHost(hostID, credential) {
-		t.Fatal("failed rotation changed the in-memory credential")
+	if _, err := registry.createEnrollmentKeys(1, time.Hour, 1, ""); err == nil {
+		t.Fatal("key creation unexpectedly succeeded when persistence failed")
 	}
 }
 
 func provisionHost(t *testing.T, base string) (string, string) {
 	t.Helper()
-	hostID, ticket := provisionHostTicket(t, base)
-	secret := "daemon-secret-" + hostID
-	body, _ := json.Marshal(map[string]string{"enrollment_ticket": ticket, "host_secret": secret})
-	request, _ := http.NewRequest(http.MethodPost, base+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
+	key := createEnrollmentKey(t, base)
+	secret, err := randomToken(24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"enrollment_key": key, "host_secret": secret, "name": "Mac"})
+	request, _ := http.NewRequest(http.MethodPost, base+"/v1/hosts/claim", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response.StatusCode != http.StatusOK {
-		t.Fatalf("enroll host: response=%v err=%v", response, err)
+		t.Fatalf("claim host: response=%v err=%v", response, err)
+	}
+	var result struct {
+		HostID string `json:"host_id"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil || !validHostID(result.HostID) {
+		response.Body.Close()
+		t.Fatalf("invalid claim response: %#v (%v)", result, err)
 	}
 	response.Body.Close()
-	return hostID, secret
+	return result.HostID, secret
 }
 
-func provisionHostTicket(t *testing.T, base string) (string, string) {
+func createEnrollmentKey(t *testing.T, base string) string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"name": "Mac"})
-	request, _ := http.NewRequest(http.MethodPost, base+"/v1/hosts", bytes.NewReader(body))
+	request, _ := http.NewRequest(http.MethodPost, base+"/v1/admin/enrollment-keys", strings.NewReader(`{"count":1}`))
 	request.Header.Set("Authorization", "Bearer admin-bootstrap")
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response.StatusCode != http.StatusCreated {
-		t.Fatalf("provision host: response=%v err=%v", response, err)
+		t.Fatalf("create enrollment key: response=%v err=%v", response, err)
 	}
 	defer response.Body.Close()
 	var result struct {
-		HostID     string `json:"host_id"`
-		Credential string `json:"host_credential"`
-		Ticket     string `json:"enrollment_ticket"`
+		Keys []struct {
+			Code string `json:"key"`
+		} `json:"keys"`
 	}
-	if json.NewDecoder(response.Body).Decode(&result) != nil || !validHostID(result.HostID) || result.Credential != "" || result.Ticket == "" {
-		t.Fatalf("invalid host provisioning response: %#v", result)
+	if json.NewDecoder(response.Body).Decode(&result) != nil || len(result.Keys) != 1 || result.Keys[0].Code == "" {
+		t.Fatalf("invalid enrollment key response: %#v", result)
 	}
-	return result.HostID, result.Ticket
+	return result.Keys[0].Code
 }
 
 func dialV2Host(t *testing.T, websocketBase, hostID, credential, name string) *websocket.Conn {

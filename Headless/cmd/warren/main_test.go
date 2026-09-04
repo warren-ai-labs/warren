@@ -57,8 +57,7 @@ func TestRelayClientCommandsHaveNoControlPlane(t *testing.T) {
 	}
 }
 
-func TestRelayConnectConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000011"
+func TestRelayConnectConsumesEnrollmentKeyThroughLocalDaemon(t *testing.T) {
 	var requests []struct {
 		method string
 		path   string
@@ -78,7 +77,7 @@ func TestRelayConnectConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 		}{request.Method, request.URL.Path, request.Header.Get("Authorization"), body})
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/v1/relay/enroll":
+		case "/v1/relay/join":
 			_, _ = io.WriteString(writer, `{"enrolled":true,"relay":{"enabled":true}}`)
 		default:
 			http.NotFound(writer, request)
@@ -106,8 +105,8 @@ func TestRelayConnectConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 
 	output, err := captureStdout(t, func() error {
 		return run([]string{
-			"--json", "--config", configFile, "relay", "connect", "--url", "https://relay.example.test", "--host", hostID,
-			"--ticket", "ticket-1",
+			"--json", "--config", configFile, "relay", "connect", "--url", "https://relay.example.test",
+			"--key", "AAAA-BBBB-CCCC-DDDD",
 		})
 	})
 	if err != nil {
@@ -120,16 +119,16 @@ func TestRelayConnectConsumesSetupInvitationThroughLocalDaemon(t *testing.T) {
 	if result["connected"] != true {
 		t.Fatalf("connect result = %#v", result)
 	}
-	if strings.Contains(output, "ticket-1") || strings.Contains(output, "daemon-token") {
+	if strings.Contains(output, "AAAA-BBBB-CCCC-DDDD") || strings.Contains(output, "daemon-token") {
 		t.Fatalf("connect output leaked enrollment material: %s", output)
 	}
 	if len(requests) != 1 {
 		t.Fatalf("requests = %#v, want local enrollment", requests)
 	}
-	if requests[0].method != http.MethodPost || requests[0].path != "/v1/relay/enroll" || requests[0].auth != "Bearer daemon-token" {
+	if requests[0].method != http.MethodPost || requests[0].path != "/v1/relay/join" || requests[0].auth != "Bearer daemon-token" {
 		t.Fatalf("enrollment request = %#v", requests[0])
 	}
-	if requests[0].body["relayUrl"] != "https://relay.example.test" || requests[0].body["hostId"] != hostID || requests[0].body["enrollmentTicket"] != "ticket-1" {
+	if requests[0].body["relayUrl"] != "https://relay.example.test" || requests[0].body["enrollmentKey"] != "AAAA-BBBB-CCCC-DDDD" {
 		t.Fatalf("enrollment body = %#v", requests[0].body)
 	}
 }
@@ -184,7 +183,6 @@ func TestRelayShareUsesLocalDaemon(t *testing.T) {
 }
 
 func TestRelayConnectAcceptsSettingsLink(t *testing.T) {
-	const hostID = "00000000-0000-4000-8000-000000000014"
 	var requestBody map[string]any
 	var requestAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -211,7 +209,7 @@ func TestRelayConnectAcceptsSettingsLink(t *testing.T) {
 	t.Cleanup(func() {
 		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
 	})
-	setup := "warren://settings?section=relay&relayUrl=https%3A%2F%2Frelay.example.test&hostId=" + hostID + "&enrollmentTicket=one-time"
+	setup := "warren://settings?section=relay&relayUrl=https%3A%2F%2Frelay.example.test&enrollmentKey=AAAA-BBBB-CCCC-DDDD"
 	if _, err := captureStdout(t, func() error {
 		return run([]string{"--json", "--config", configFile, "relay", "connect", setup})
 	}); err != nil {
@@ -220,7 +218,7 @@ func TestRelayConnectAcceptsSettingsLink(t *testing.T) {
 	if requestAuth != "Bearer daemon-token" {
 		t.Fatalf("connect authorization = %q", requestAuth)
 	}
-	if requestBody["relayUrl"] != "https://relay.example.test" || requestBody["hostId"] != hostID || requestBody["enrollmentTicket"] != "one-time" {
+	if requestBody["relayUrl"] != "https://relay.example.test" || requestBody["enrollmentKey"] != "AAAA-BBBB-CCCC-DDDD" {
 		t.Fatalf("connect body = %#v", requestBody)
 	}
 }
@@ -234,7 +232,7 @@ func TestRelayConnectRejectsNonRelaySettingsLink(t *testing.T) {
 		outputJSON, endpointURL, endpointToken, endpointName, configPath = previous.json, previous.url, previous.token, previous.name, previous.configPath
 	})
 	outputJSON, endpointURL, endpointToken, endpointName, configPath = true, "", "", "", filepath.Join(t.TempDir(), "missing-config.json")
-	setup := "warren://settings?section=public-access&relayUrl=https%3A%2F%2Frelay.example.test&hostId=00000000-0000-4000-8000-000000000014&enrollmentTicket=one-time"
+	setup := "warren://settings?section=public-access&relayUrl=https%3A%2F%2Frelay.example.test&enrollmentKey=AAAA-BBBB-CCCC-DDDD"
 	if err := run([]string{"relay", "connect", setup}); err == nil || !strings.Contains(err.Error(), "Relay settings link") {
 		t.Fatalf("connect accepted non-Relay settings link: %v", err)
 	}

@@ -132,7 +132,7 @@ func relayCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "connect", "share":
+	case "connect", "join", "share":
 	default:
 		return newUsageError(fmt.Sprintf("unknown relay command: %s", args[0]), relayUsageText())
 	}
@@ -147,7 +147,7 @@ func relayCommand(args []string) error {
 	// speaks the Relay control-plane protocol. Relay administrator credentials
 	// never need to enter this CLI.
 	switch args[0] {
-	case "connect":
+	case "connect", "join":
 		return relayConnectCommand(flags)
 	case "share":
 		return relayLocalShareCommand(flags)
@@ -158,9 +158,9 @@ func relayCommand(args []string) error {
 func missingRelayPositionals(command string, flags map[string]any) string {
 	items := positionals(flags)
 	switch command {
-	case "connect":
+	case "connect", "join":
 		if len(items) > 1 {
-			return "a single setup URL"
+			return "a single Relay settings link"
 		}
 		return ""
 	default:
@@ -176,9 +176,13 @@ func validateRelayFlags(command string, flags map[string]any) error {
 	switch command {
 	case "connect":
 		allowed["url"], allowed["relay-url"] = true, true
-		allowed["host"], allowed["host-id"] = true, true
-		allowed["ticket"], allowed["setup-url"] = true, true
+		allowed["key"], allowed["enrollment-key"] = true, true
+		allowed["name"], allowed["settings-url"] = true, true
 		allowed["share"], allowed["qr"], allowed["open"] = true, true, true
+	case "join":
+		allowed["url"], allowed["relay-url"] = true, true
+		allowed["key"], allowed["enrollment-key"] = true, true
+		allowed["name"], allowed["settings-url"] = true, true
 	case "share":
 		allowed["qr"], allowed["open"] = true, true
 	}
@@ -194,12 +198,11 @@ func validateRelayFlags(command string, flags map[string]any) error {
 	return nil
 }
 
-// relayConnectCommand consumes an enrollment invitation through the selected
-// Warren daemon. Relay Host creation and administrator credentials belong to
-// the Relay service; this client only presents the one-time invitation while
-// the daemon supplies its own Host Secret.
+// relayConnectCommand asks the selected local daemon to claim a Host identity
+// with a short-lived Relay enrollment key. The daemon owns the long-lived Host
+// credential and performs the outbound Relay request.
 func relayConnectCommand(flags map[string]any) error {
-	relayURL, hostID, ticket, err := relayEnrollmentValues(flags)
+	relayURL, enrollmentKey, hostName, err := relayJoinValues(flags)
 	if err != nil {
 		return err
 	}
@@ -209,12 +212,12 @@ func relayConnectCommand(flags map[string]any) error {
 	}
 	if _, err := doRelayRequest(
 		http.MethodPost,
-		daemonURL+"/v1/relay/enroll",
+		daemonURL+"/v1/relay/join",
 		daemonCredential,
 		map[string]any{
-			"relayUrl":         relayURL,
-			"hostId":           hostID,
-			"enrollmentTicket": ticket,
+			"relayUrl":      relayURL,
+			"enrollmentKey": enrollmentKey,
+			"hostName":      hostName,
 		},
 	); err != nil {
 		return fmt.Errorf("connect local Host to Relay: %w", err)
@@ -230,27 +233,26 @@ func relayConnectCommand(flags map[string]any) error {
 	return nil
 }
 
-// relayEnrollmentValues accepts either the fields from a Relay setup link or
-// a single canonical warren://settings URL. The setup ticket is intentionally
-// kept in memory and is never written to Warren configuration by the CLI.
-func relayEnrollmentValues(flags map[string]any) (string, string, string, error) {
+// relayJoinValues accepts explicit URL/key flags or a Warren settings link.
+// The enrollment key is kept in memory and is never written to Warren config.
+func relayJoinValues(flags map[string]any) (string, string, string, error) {
 	relayURL := strings.TrimSpace(stringValue(flags, "url"))
 	if relayURL == "" {
 		relayURL = strings.TrimSpace(stringValue(flags, "relay-url"))
 	}
-	hostID := strings.TrimSpace(stringValue(flags, "host"))
-	if hostID == "" {
-		hostID = strings.TrimSpace(stringValue(flags, "host-id"))
+	enrollmentKey := strings.TrimSpace(stringValue(flags, "key"))
+	if enrollmentKey == "" {
+		enrollmentKey = strings.TrimSpace(stringValue(flags, "enrollment-key"))
 	}
-	ticket := strings.TrimSpace(stringValue(flags, "ticket"))
-	setupURL := strings.TrimSpace(stringValue(flags, "setup-url"))
+	hostName := strings.TrimSpace(stringValue(flags, "name"))
+	setupURL := strings.TrimSpace(positional(flags, 0, "Relay settings link"))
 	if setupURL == "" {
-		setupURL = strings.TrimSpace(positional(flags, 0, "setup URL"))
+		setupURL = strings.TrimSpace(stringValue(flags, "settings-url"))
 	}
 	if setupURL != "" {
 		parsedURL, err := url.Parse(setupURL)
 		if err != nil || !strings.EqualFold(parsedURL.Scheme, "warren") || !strings.EqualFold(parsedURL.Host, "settings") {
-			return "", "", "", newUsageError("--setup-url must be a Warren settings link", relayUsageText())
+			return "", "", "", newUsageError("Relay settings link must use warren://settings", relayUsageText())
 		}
 		query := parsedURL.Query()
 		if section := firstQueryValue(query, "section"); section != "" && !strings.EqualFold(section, "relay") {
@@ -259,30 +261,27 @@ func relayEnrollmentValues(flags map[string]any) (string, string, string, error)
 		if relayURL == "" {
 			relayURL = firstQueryValue(query, "relayUrl")
 		}
-		if hostID == "" {
-			hostID = firstQueryValue(query, "hostId")
+		if enrollmentKey == "" {
+			enrollmentKey = firstQueryValue(query, "enrollmentKey")
 		}
-		if ticket == "" {
-			ticket = firstQueryValue(query, "enrollmentTicket")
+		if hostName == "" {
+			hostName = firstQueryValue(query, "hostName")
 		}
 	}
 	if relayURL == "" {
 		relayURL = strings.TrimSpace(env("WARREN_RELAY_URL", ""))
 	}
-	if hostID == "" {
-		hostID = strings.TrimSpace(env("WARREN_RELAY_HOST_ID", ""))
+	if enrollmentKey == "" {
+		enrollmentKey = strings.TrimSpace(env("WARREN_RELAY_ENROLLMENT_KEY", ""))
 	}
-	if ticket == "" {
-		ticket = strings.TrimSpace(env("WARREN_RELAY_ENROLLMENT_TICKET", ""))
-	}
-	if relayURL == "" || hostID == "" || ticket == "" {
-		return "", "", "", newUsageError("a Relay setup link or --url, --host, and --ticket is required", relayUsageText())
+	if relayURL == "" || enrollmentKey == "" {
+		return "", "", "", newUsageError("a Relay settings link or --url and --key is required", relayUsageText())
 	}
 	relayURL, err := normalizeRelayBase(relayURL)
 	if err != nil {
 		return "", "", "", newUsageError(err.Error(), relayUsageText())
 	}
-	return relayURL, hostID, ticket, nil
+	return relayURL, enrollmentKey, hostName, nil
 }
 
 func firstQueryValue(query url.Values, key string) string {
@@ -3838,15 +3837,19 @@ func usage() { fmt.Print(usageText()) }
 
 func relayUsageText() string {
 	return `Usage:
-  warren relay connect [SETUP_URL] [--share] [--qr [PATH]] [--open]
+  warren relay connect [SETTINGS_URL] [--url RELAY_URL --key ENROLLMENT_KEY]
+  warren relay join [SETTINGS_URL] [--url RELAY_URL --key ENROLLMENT_KEY]
   warren relay share [--qr [PATH]] [--open]
 
-The setup URL is issued by the Relay administrator. Warren consumes it through
-the selected local Host daemon; the Relay administrator token and Host Secret
-never enter this CLI. 'relay connect' accepts a canonical warren://settings
-link.
+The Relay administrator creates a short-lived enrollment key. 'relay connect'
+passes the Relay URL and key to the selected local Host daemon; the daemon
+allocates its Host identity and keeps the long-lived Host credential locally.
+It also accepts a canonical warren://settings link containing relayUrl and
+enrollmentKey. The Relay administrator token never enters this CLI.
 
-Automation may pass --url, --host, and --ticket instead of SETUP_URL.
+Automation may pass --url and --key instead of SETTINGS_URL. The key is a
+short-lived, bounded-use bootstrap credential and is never written to the
+Warren endpoint configuration.
 
 'relay share' asks the selected local Host for one opaque, reusable pairing
 link. It is the normal Desktop-to-iPhone flow; --qr writes a protected PNG

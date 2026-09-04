@@ -61,29 +61,40 @@ WebSocket upgrades without rewriting the host-scoped paths.
 
 ## Enroll a Host
 
-The Relay creates the first Host automatically at startup and prints its
-`setup_link` in the service log. For another Host, create a record with the
-Relay administrator credential; the Relay generates the UUID:
+The daemon token in `~/.warren/token` is the Host Secret. A Relay administrator
+creates short-lived enrollment keys; each is a 16-letter
+`XXXX-XXXX-XXXX-XXXX` bearer code with an expiry and maximum use count. The
+Relay allocates the Host UUID when Headless claims a key and stores only hashes.
 
 ```bash
-curl -sS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/hosts" \
+curl -sS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"My Host"}' | jq -er '.settings_url'
+  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"LAN hosts"}' \
+  | jq -r '.keys[] | [.key, .settings_url] | @tsv'
 ```
 
-The response includes a canonical `settings_url`. Give that one-time link to
-the Host operator and open it in Warren Desktop. Warren sends the daemon token
-through the local Headless endpoint, pins the Relay key, and starts the
-connector; the Relay administrator token never enters the client. The CLI has
-the same client-side shortcut:
+Give a key or its `warren://settings` shortcut to the Host operator. The
+shortcut only prefills Desktop's Relay URL and key fields; the key is consumed
+when **Connect Relay** is pressed. Headless then calls the Relay claim endpoint
+and pins the signing key. The CLI has the same client-side shortcut:
 
 ```bash
+warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'
 warren relay connect '<settings-url>'
 ```
 
-Enrollment tickets expire quickly and can be consumed only once. Discard the
-ticket and the setup link after enrollment.
+For a headless-only install, set the two startup values:
+
+```bash
+WARREN_RELAY_URL="$WARREN_RELAY_PUBLIC_URL" \
+WARREN_RELAY_ENROLLMENT_KEY='<enrollment-key>' \
+warren-headless
+```
+
+Enrollment keys expire and are limited by their configured use count. Remove
+keys and settings shortcuts from shell history, chat, and copied logs after
+use.
 
 ## Pair a client
 

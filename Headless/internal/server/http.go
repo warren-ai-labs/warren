@@ -17,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +51,12 @@ type HTTPServer struct {
 	// callers may leave them nil.
 	RelayStart func() error
 	RelayStop  func()
+	// RelayEnroll performs a Host-initiated Relay claim. The callback owns the
+	// daemon's Host credential and persists only non-secret Relay metadata.
+	RelayEnroll func(context.Context, string, string, string) error
+	// RelayReset removes the local Relay identity in addition to clearing the
+	// persisted Relay metadata.
+	RelayReset func() error
 	// RelayRouteClient creates an authenticated client for the Relay route API.
 	// Route lifecycle uses the same Host Secret as the BRLY/2 connector.
 	RelayRouteClient func() (*relay.RouteClient, error)
@@ -234,7 +239,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
-	mux.HandleFunc("POST /v1/relay/enroll", s.handleRelayEnroll)
+	mux.HandleFunc("POST /v1/relay/join", s.handleRelayJoin)
 	mux.HandleFunc("POST /v1/relay/pairing", s.handleRelayPairing)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /v1/runtime/refresh", s.handleRuntimeRefresh)
@@ -364,21 +369,23 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-var relayHostIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-
-// handleRelayEnroll consumes a one-time Relay ticket with the daemon's
-// canonical token. The token never comes from the request body and is not
-// written to settings; only the Relay URL, Host identity, and signing key are
-// persisted after the remote enrollment succeeds.
-func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http.Request) {
+// handleRelayJoin asks the daemon-owned Relay supervisor to claim a Host
+// identity using a short-lived enrollment key. The daemon token authenticates
+// this local API call; the supervisor sends it only to the configured Relay
+// origin over the validated transport.
+func (s *HTTPServer) handleRelayJoin(writer http.ResponseWriter, request *http.Request) {
 	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if s.RelayEnroll == nil {
+		http.Error(writer, "Relay enrollment is unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	var body struct {
-		RelayURL         string `json:"relayUrl"`
-		HostID           string `json:"hostId"`
-		EnrollmentTicket string `json:"enrollmentTicket"`
+		RelayURL      string `json:"relayUrl"`
+		EnrollmentKey string `json:"enrollmentKey"`
+		HostName      string `json:"hostName"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
@@ -387,72 +394,20 @@ func (s *HTTPServer) handleRelayEnroll(writer http.ResponseWriter, request *http
 		return
 	}
 	relayURL := strings.TrimSpace(body.RelayURL)
-	hostID := strings.ToLower(strings.TrimSpace(body.HostID))
-	ticket := strings.TrimSpace(body.EnrollmentTicket)
-	if !relayHostIDPattern.MatchString(hostID) || ticket == "" {
+	enrollmentKey := strings.TrimSpace(body.EnrollmentKey)
+	if relayURL == "" || enrollmentKey == "" {
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
 	}
-	base, err := normalizeRelayEnrollmentURL(relayURL)
-	if err != nil {
-		http.Error(writer, "invalid relay URL", http.StatusBadRequest)
-		return
-	}
-	endpoint := base + "/v1/hosts/" + url.PathEscape(hostID) + "/enroll"
-	payload, _ := json.Marshal(map[string]string{
-		"enrollment_ticket": ticket,
-		"host_secret":       s.Token,
-	})
-	upstream, err := http.NewRequestWithContext(request.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
-		return
-	}
-	upstream.Header.Set("Content-Type", "application/json")
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		// The enrollment payload contains the canonical daemon token. Never
-		// follow a redirect supplied by a Relay endpoint, otherwise an
-		// operator typo or a compromised endpoint could receive that secret.
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	result, err := client.Do(upstream)
-	if err != nil {
-		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
-		return
-	}
-	defer result.Body.Close()
-	data, readErr := io.ReadAll(io.LimitReader(result.Body, 64*1024))
-	if readErr != nil || result.StatusCode < 200 || result.StatusCode >= 300 {
-		http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
-		return
-	}
-	var response struct {
-		RelayKeyID     string `json:"relay_key_id"`
-		RelayPublicKey string `json:"relay_public_key"`
-	}
-	if json.Unmarshal(data, &response) != nil || strings.TrimSpace(response.RelayKeyID) == "" || strings.TrimSpace(response.RelayPublicKey) == "" {
-		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
-		return
-	}
-	key, err := decodeRelayPublicKey(response.RelayPublicKey)
-	if err != nil {
-		http.Error(writer, "Relay enrollment returned an invalid key", http.StatusBadGateway)
+	if err := s.RelayEnroll(request.Context(), relayURL, enrollmentKey, strings.TrimSpace(body.HostName)); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "relay url") {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+		} else {
+			http.Error(writer, "Relay enrollment failed", http.StatusBadGateway)
+		}
 		return
 	}
 	value := s.Service.RelaySettingsSnapshot()
-	value.Enabled = true
-	value.URL = base
-	value.HostID = hostID
-	value.RelayKeyID = strings.TrimSpace(response.RelayKeyID)
-	value.RelayKey = base64.RawStdEncoding.EncodeToString(key)
-	value.LastError = ""
-	if err := s.Service.UpdateRelaySettings(value); err != nil {
-		http.Error(writer, "Relay settings could not be saved", http.StatusInternalServerError)
-		return
-	}
 	if err := s.syncRelayLifecycle(); err != nil {
 		http.Error(writer, "Relay connector could not start", http.StatusBadGateway)
 		return
@@ -730,6 +685,11 @@ func (s *HTTPServer) resetRelayEnrollment(ctx context.Context) error {
 	}
 	if s.RelayStop != nil {
 		s.RelayStop()
+	}
+	if s.RelayReset != nil {
+		if err := s.RelayReset(); err != nil {
+			return err
+		}
 	}
 	return s.Service.UpdateRelaySettings(settings.RelaySettings{})
 }

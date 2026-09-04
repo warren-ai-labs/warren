@@ -19,20 +19,13 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	hostID, ticket := provisionHostTicket(t, httpServer.URL)
-	body, _ := json.Marshal(map[string]string{"enrollment_ticket": ticket, "host_secret": "daemon-secret"})
-	request, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/hosts/"+hostID+"/enroll", bytes.NewReader(body))
-	response, err := http.DefaultClient.Do(request)
-	if err != nil || response.StatusCode != http.StatusOK {
-		t.Fatalf("enroll: %v %v", response, err)
-	}
-	response.Body.Close()
-	if !server.registry.authenticateHost(hostID, "daemon-secret") {
-		t.Fatal("enrollment did not replace the bootstrap credential")
+	hostID, credential := provisionHost(t, httpServer.URL)
+	if !server.registry.authenticateHost(hostID, credential) {
+		t.Fatal("claim did not register the Host credential")
 	}
 	// Seed a live tunnel so pairing can be consumed.
 	tunnel := &hostTunnel{clients: make(map[connectionID]*clientRoute), closed: make(chan struct{})}
-	if !server.registry.connectHost(hostID, "Mac", "daemon-secret", tunnel) {
+	if !server.registry.connectHost(hostID, "Mac", credential, tunnel) {
 		t.Fatal("connect")
 	}
 	code, err := server.registry.beginPairing(hostID, time.Minute)

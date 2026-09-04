@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -89,9 +92,7 @@ func main() {
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
 	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
 	relayURL := flag.String("relay-url", env("WARREN_RELAY_URL", ""), "owned Relay URL (optional)")
-	relayHostID := flag.String("relay-host-id", env("WARREN_RELAY_HOST_ID", ""), "Relay Host UUID (optional)")
-	relayKeyID := flag.String("relay-key-id", env("WARREN_RELAY_KEY_ID", ""), "pinned Relay signing key ID (optional)")
-	relayKey := flag.String("relay-key", env("WARREN_RELAY_KEY", ""), "pinned Relay signing public key (base64, optional)")
+	relayEnrollmentKey := flag.String("relay-enrollment-key", env("WARREN_RELAY_ENROLLMENT_KEY", ""), "short-lived Relay enrollment key (optional)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
@@ -132,15 +133,6 @@ func main() {
 	// available. The Host Secret itself is still read only from tokenPath.
 	if strings.TrimSpace(*relayURL) != "" {
 		loadedSettings.Relay.URL = strings.TrimSpace(*relayURL)
-	}
-	if strings.TrimSpace(*relayHostID) != "" {
-		loadedSettings.Relay.HostID = strings.TrimSpace(*relayHostID)
-	}
-	if strings.TrimSpace(*relayKeyID) != "" {
-		loadedSettings.Relay.RelayKeyID = strings.TrimSpace(*relayKeyID)
-	}
-	if strings.TrimSpace(*relayKey) != "" {
-		loadedSettings.Relay.RelayKey = strings.TrimSpace(*relayKey)
 	}
 
 	logger := newLogger(*logFile)
@@ -264,15 +256,22 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), strings.TrimSpace(*relayHostID), logger)
+	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), "", logger)
 	service.SetLiveActivityPublisher(func(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
 		return relaySupervisor.PublishLiveActivity(ctx, snapshot)
 	})
 	httpHandler.RelayStart = relaySupervisor.Start
 	httpHandler.RelayStop = relaySupervisor.Stop
+	httpHandler.RelayEnroll = relaySupervisor.Enroll
+	httpHandler.RelayReset = relaySupervisor.Reset
 	httpHandler.RelayRouteClient = relaySupervisor.RouteClient
 	httpHandler.RelayPairing = relaySupervisor.Pairing
 	httpHandler.RelayState = relaySupervisor.State
+	if strings.TrimSpace(*relayURL) != "" && strings.TrimSpace(*relayEnrollmentKey) != "" && strings.TrimSpace(service.RelaySettingsSnapshot().HostID) == "" {
+		if err := relaySupervisor.Enroll(context.Background(), strings.TrimSpace(*relayURL), strings.TrimSpace(*relayEnrollmentKey), state.Snapshot().Host.Name); err != nil {
+			logger.Warn("relay enrollment failed", "error", err)
+		}
+	}
 	if service.Settings.Relay.Enabled || service.Settings.PublicTunnel.Enabled || strings.TrimSpace(*relayURL) != "" {
 		if err := relaySupervisor.Start(); err != nil {
 			logger.Warn("relay connector disabled", "error", err)
@@ -439,6 +438,87 @@ func (supervisor *relaySupervisor) Stop() {
 	if connector != nil {
 		connector.Stop()
 	}
+}
+
+// Enroll asks the configured Relay to allocate a Host identity for this
+// daemon. The short enrollment key is consumed by Relay; the daemon token is
+// the long-lived Host credential and never appears in Desktop/CLI settings.
+func (supervisor *relaySupervisor) Enroll(ctx context.Context, relayURL, enrollmentKey, hostName string) error {
+	relayURL, err := normalizeRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	enrollmentKey = strings.TrimSpace(enrollmentKey)
+	if enrollmentKey == "" {
+		return errors.New("Relay enrollment key is required")
+	}
+	if strings.TrimSpace(hostName) == "" {
+		hostName = supervisor.hostName
+	}
+	payload, err := json.Marshal(map[string]string{
+		"enrollment_key": enrollmentKey,
+		"host_secret":    supervisor.token,
+		"name":           strings.TrimSpace(hostName),
+	})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL+"/v1/hosts/claim", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("Relay enrollment request: %w", err)
+	}
+	defer response.Body.Close()
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	if readErr != nil {
+		return fmt.Errorf("read Relay enrollment response: %w", readErr)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message := strings.TrimSpace(string(data))
+		if message == "" {
+			message = response.Status
+		}
+		return fmt.Errorf("Relay enrollment returned HTTP %d: %s", response.StatusCode, message)
+	}
+	var result struct {
+		HostID         string `json:"host_id"`
+		RelayKeyID     string `json:"relay_key_id"`
+		RelayPublicKey string `json:"relay_public_key"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || strings.TrimSpace(result.HostID) == "" || strings.TrimSpace(result.RelayKeyID) == "" || strings.TrimSpace(result.RelayPublicKey) == "" {
+		return errors.New("Relay enrollment returned an invalid response")
+	}
+	key, err := decodeRelayPublicKey(result.RelayPublicKey)
+	if err != nil {
+		return fmt.Errorf("Relay enrollment returned an invalid signing key: %w", err)
+	}
+	value := supervisor.service.RelaySettingsSnapshot()
+	value.Enabled = true
+	value.URL = relayURL
+	value.HostID = strings.ToLower(strings.TrimSpace(result.HostID))
+	value.RelayKeyID = strings.TrimSpace(result.RelayKeyID)
+	value.RelayKey = base64.RawStdEncoding.EncodeToString(key)
+	value.LastError = ""
+	if err := supervisor.service.UpdateRelaySettings(value); err != nil {
+		return fmt.Errorf("save Relay settings: %w", err)
+	}
+	return supervisor.Start()
+}
+
+// Reset removes the local Relay connection metadata. The daemon token remains
+// the local Host API credential and is intentionally not rotated here.
+func (supervisor *relaySupervisor) Reset() error {
+	return nil
 }
 
 // State reports the supervised connector's current health for /healthz. It
@@ -827,4 +907,36 @@ func relayPublicKeys(value settings.RelaySettings) map[string]ed25519.PublicKey 
 		keyID = base64.RawURLEncoding.EncodeToString(digest[:8])
 	}
 	return map[string]ed25519.PublicKey{keyID: ed25519.PublicKey(data)}
+}
+
+func normalizeRelayURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.Opaque != "" {
+		return "", errors.New("invalid Relay URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("Relay URL must use http or https")
+	}
+	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\x00") || strings.HasPrefix(parsed.Path, "//") {
+		return "", errors.New("invalid Relay URL")
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return "", errors.New("Relay URL path traversal is not allowed")
+		}
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func decodeRelayPublicKey(value string) ([]byte, error) {
+	data, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		data, err = base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	}
+	if err != nil || len(data) != ed25519.PublicKeySize {
+		return nil, errors.New("invalid Relay public key")
+	}
+	return data, nil
 }

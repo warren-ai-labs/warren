@@ -59,9 +59,7 @@ var daemonEnvironmentKeys = map[string]struct{}{
 	"WARREN_WORKTREE_ROOT":              {},
 	"WARREN_OUTPUT_DIR":                 {},
 	"WARREN_RELAY_URL":                  {},
-	"WARREN_RELAY_HOST_ID":              {},
-	"WARREN_RELAY_KEY_ID":               {},
-	"WARREN_RELAY_KEY":                  {},
+	"WARREN_RELAY_ENROLLMENT_KEY":       {},
 }
 
 var supportedShellNames = map[string]struct{}{
