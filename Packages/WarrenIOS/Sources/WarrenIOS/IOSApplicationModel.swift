@@ -600,7 +600,7 @@ public final class IOSApplicationModel: ObservableObject {
         connectionError = nil
         // Keep the persisted navigation as a restore hint, but do not expose
         // resources from the previous Host while the new roster is loading.
-        roster = nil
+        roster = localStore.cachedRoster(endpointName: configuration.name, endpointURL: configuration.url)
         currentSessionID = nil
         sessionDeletionDestination = nil
         pendingSessionDeletion = nil

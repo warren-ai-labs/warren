@@ -339,6 +339,18 @@ public final class IOSLocalStore: @unchecked Sendable {
         }
     }
 
+    /// Last roster received from a Host. This is a display cache only; a
+    /// fresh roster remains authoritative before any remote mutation.
+    public func cachedRoster(endpointName: String, endpointURL: String) -> WarrenRemoteRoster? {
+        guard let data = defaults.data(forKey: rosterKey(name: endpointName, url: endpointURL)) else { return nil }
+        return try? JSONDecoder().decode(WarrenRemoteRoster.self, from: data)
+    }
+
+    public func cacheRoster(_ roster: WarrenRemoteRoster, endpointName: String, endpointURL: String) {
+        guard let data = try? JSONEncoder().encode(roster) else { return }
+        defaults.set(data, forKey: rosterKey(name: endpointName, url: endpointURL))
+    }
+
     /// The last Session kind chosen in the creation sheet. Keeping this small
     /// preference local makes repeated mobile Session creation predictable
     /// without persisting any Host data or credentials.
@@ -367,6 +379,10 @@ public final class IOSLocalStore: @unchecked Sendable {
         static let activeEndpoint = "warren.ios.active-endpoint"
         static let navigation = "warren.ios.navigation"
         static let lastSessionKind = "warren.ios.last-session-kind"
+    }
+
+    private func rosterKey(name: String, url: String) -> String {
+        "warren.ios.roster.\(name)|\(url)"
     }
 
     private struct StoredEndpoint: Codable, Sendable {
