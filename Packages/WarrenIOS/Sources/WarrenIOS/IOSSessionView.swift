@@ -547,19 +547,16 @@ private struct SessionTabRail: View {
                             } label: {
                                 HStack(spacing: 6) {
                                     SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 20)
+                                        .opacity(session.id == activeSessionID ? 1.0 : 0.65)
                                     Text(session.displayTitle.isEmpty ? "Untitled" : session.displayTitle)
                                         .font(IOSTypography.label)
+                                        .fontWeight(session.id == activeSessionID ? .semibold : .regular)
                                         .foregroundStyle(session.id == activeSessionID ? IOSTheme.text : IOSTheme.secondaryText)
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
                                 .padding(.horizontal, 12)
                                 .frame(minHeight: 44)
-                                .overlay(alignment: .bottom) {
-                                    Rectangle()
-                                        .fill(session.id == activeSessionID ? IOSTheme.accent : .clear)
-                                        .frame(height: 2)
-                                }
                             }
                             .buttonStyle(.plain)
                             .disabled(pendingSessionID != nil || model.isMutating)
@@ -582,6 +579,7 @@ private struct SessionTabRail: View {
                         SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
                         Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
                             .font(IOSTypography.label)
+                            .fontWeight(.medium)
                             .foregroundStyle(IOSTheme.text)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -597,11 +595,6 @@ private struct SessionTabRail: View {
                     }
                     .padding(.horizontal, 12)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(IOSTheme.accent)
-                            .frame(height: 2)
-                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(pendingSessionID != nil || model.isMutating)
