@@ -191,22 +191,33 @@ public final class IOSLiveActivityCoordinator {
             return
         }
 
+        let attributes = WarrenLiveActivityAttributes(
+            sessionID: normalizedSessionID,
+            sessionTitle: resolvedTitle,
+            hostName: normalizedHostName,
+        )
         do {
             let requestedActivity = try Activity.request(
-                attributes: WarrenLiveActivityAttributes(
-                    sessionID: normalizedSessionID,
-                    sessionTitle: resolvedTitle,
-                    hostName: normalizedHostName,
-                ),
+                attributes: attributes,
                 content: content,
                 pushType: .token
             )
             activity = requestedActivity
             observePushTokenUpdates(for: requestedActivity, sessionID: normalizedSessionID)
         } catch {
-            // Live Activities are optional UI. A denied authorization or a
-            // system quota must never affect Relay connection handling.
-            activity = nil
+            // Live Activities are optional UI. If pushType: .token fails (e.g. lack of APNs entitlement
+            // on free personal developer accounts), fallback to local ActivityKit without APNs push updates
+            // so Lock Screen and Dynamic Island still render directly from the running app.
+            do {
+                let requestedActivity = try Activity.request(
+                    attributes: attributes,
+                    content: content,
+                    pushType: nil
+                )
+                activity = requestedActivity
+            } catch {
+                activity = nil
+            }
         }
 #else
         _ = sessionID

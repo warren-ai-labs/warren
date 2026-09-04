@@ -1119,8 +1119,14 @@ private struct IOSEndpointPickerSheet: View {
                         .padding(.top, 16)
                         .padding(.bottom, 14)
 
-                    VStack(spacing: 1) {
-                        ForEach(displayHosts, id: \.name) { host in
+                    VStack(spacing: 0) {
+                        ForEach(Array(displayHosts.enumerated()), id: \.element.name) { index, host in
+                            if index > 0 {
+                                Rectangle()
+                                    .fill(IOSTheme.separator.opacity(0.35))
+                                    .frame(height: 0.5)
+                                    .padding(.leading, 48)
+                            }
                             Button {
                                 model.selectEndpoint(named: host.name)
                                 dismiss()
@@ -1164,14 +1170,14 @@ private struct IOSEndpointPickerSheet: View {
                                             .foregroundStyle(IOSTheme.green)
                                     }
                                 }
-                                .padding(.horizontal, 13)
-                                .frame(minHeight: 76)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 72)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                    .iosSurface(color: IOSTheme.chrome)
+                    .iosCardSurface()
                 }
                 .padding(.horizontal, IOSTheme.pagePadding)
                 .padding(.bottom, 28)
@@ -2273,8 +2279,8 @@ public struct IOSEndpointConfigurationView: View {
                                     Text("Active")
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(IOSTheme.green)
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1.5)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
                                         .background(IOSTheme.green.opacity(0.12), in: Capsule())
                                 }
                                 Text(model.endpointMetadata.isRelay ? "Relay" : model.endpointMetadata.url)
@@ -2284,7 +2290,7 @@ public struct IOSEndpointConfigurationView: View {
                                     .truncationMode(.middle)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            HStack(spacing: 5) {
+                            HStack(spacing: 6) {
                                 IOSStatusDot(color: connectionColor, size: 6)
                                 Text(IOSCopy.connectionTitle(for: model.connectionState))
                                     .font(IOSTypography.status)
@@ -2299,7 +2305,7 @@ public struct IOSEndpointConfigurationView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .iosSurface(color: IOSTheme.chrome)
+                    .iosCardSurface()
                     .accessibilityLabel("Switch Host")
 
                     IOSSectionLabel("Add a Host")
@@ -2309,9 +2315,9 @@ public struct IOSEndpointConfigurationView: View {
                     Button {
                         showingRelayScanner = true
                     } label: {
-                        HStack(spacing: 11) {
+                        HStack(spacing: 12) {
                             Image(systemName: "qrcode.viewfinder")
-                                .font(.system(size: 19, weight: .medium))
+                                .font(.system(size: 18, weight: .medium))
                                 .foregroundStyle(IOSTheme.background)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Scan Relay QR")
@@ -2327,11 +2333,11 @@ public struct IOSEndpointConfigurationView: View {
                                 .foregroundStyle(IOSTheme.background.opacity(0.8))
                         }
                         .padding(.horizontal, 14)
-                        .frame(minHeight: 62)
+                        .frame(minHeight: 60)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                    .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
                     .accessibilityLabel("Scan Relay QR to add a Host")
                     .disabled(model.isPairingRelay)
                     .padding(.bottom, 8)
@@ -2339,9 +2345,9 @@ public struct IOSEndpointConfigurationView: View {
                     NavigationLink {
                         IOSEndpointEditorView(model: model, endpoint: nil)
                     } label: {
-                        HStack(spacing: 11) {
+                        HStack(spacing: 12) {
                             Image(systemName: "server.rack")
-                                .font(.system(size: 18, weight: .medium))
+                                .font(.system(size: 17, weight: .medium))
                                 .foregroundStyle(IOSTheme.accent)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Add direct Host")
@@ -2357,11 +2363,11 @@ public struct IOSEndpointConfigurationView: View {
                                 .foregroundStyle(IOSTheme.tertiaryText)
                         }
                         .padding(.horizontal, 14)
-                        .frame(minHeight: 62)
+                        .frame(minHeight: 60)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .iosSurface(color: IOSTheme.chrome)
+                    .iosCardSurface()
                     .accessibilityLabel("Add a direct Host")
 
                     IOSSectionLabel("Saved Hosts", count: hosts.isEmpty ? nil : hosts.count)
@@ -2374,14 +2380,20 @@ public struct IOSEndpointConfigurationView: View {
                             message: "Add a Warren Host to connect from this device."
                         )
                     } else {
-                        VStack(spacing: 1) {
-                            ForEach(hosts, id: \.name) { host in
+                        VStack(spacing: 0) {
+                            ForEach(Array(hosts.enumerated()), id: \.element.name) { index, host in
+                                if index > 0 {
+                                    Rectangle()
+                                        .fill(IOSTheme.separator.opacity(0.35))
+                                        .frame(height: 0.5)
+                                        .padding(.leading, 48)
+                                }
                                 HStack(spacing: 0) {
                                     Button {
                                         IOSHaptics.selection()
                                         model.selectEndpoint(named: host.name)
                                     } label: {
-                                        HStack(spacing: 11) {
+                                        HStack(spacing: 12) {
                                             Image(systemName: host.name == model.endpointMetadata.name
                                                 ? "checkmark"
                                                 : host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
@@ -2409,8 +2421,8 @@ public struct IOSEndpointConfigurationView: View {
                                                     .foregroundStyle(IOSTheme.tertiaryText)
                                             }
                                         }
-                                        .padding(.leading, 13)
-                                        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+                                        .padding(.leading, 14)
+                                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
@@ -2422,22 +2434,17 @@ public struct IOSEndpointConfigurationView: View {
                                         IOSEndpointDetailView(model: model, endpoint: host)
                                     } label: {
                                         Image(systemName: "chevron.forward")
-                                            .font(.system(size: 13, weight: .semibold))
+                                            .font(.system(size: 12, weight: .semibold))
                                             .foregroundStyle(IOSTheme.tertiaryText)
-                                            .frame(width: 44, height: 62)
+                                            .frame(width: 44, height: 60)
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel("Details for \(host.name)")
                                 }
-                                .background(IOSTheme.chrome)
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
-                                .stroke(IOSTheme.ring.opacity(0.72), lineWidth: 1)
-                        }
+                        .iosCardSurface()
                     }
 
                     if let error = model.endpointError {
@@ -2543,23 +2550,35 @@ private struct IOSEndpointDetailView: View {
                     IOSSectionLabel("Connection")
                         .padding(.top, 25)
                         .padding(.bottom, 9)
-                    VStack(spacing: 1) {
+                    VStack(spacing: 0) {
                         if endpoint.isRelay {
                             endpointDetailRow("Type", value: "Relay")
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
                             endpointDetailRow(
                                 "Access",
                                 value: endpoint.hasToken ? "Saved in Keychain" : "Needs pairing"
                             )
                         } else {
                             endpointDetailRow("Address", value: endpoint.url, machineText: true)
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
                             endpointDetailRow("Type", value: "Direct Host")
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
                             endpointDetailRow(
                                 "Token",
                                 value: endpoint.hasToken ? "Saved in Keychain" : "Not saved"
                             )
                         }
                     }
-                    .iosSurface(color: IOSTheme.chrome)
+                    .iosCardSurface()
 
                     Button {
                         model.selectEndpoint(named: endpoint.name)
@@ -2570,7 +2589,7 @@ private struct IOSEndpointDetailView: View {
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .background(
                                 isActive ? IOSTheme.muted : IOSTheme.accent,
-                                in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
                             )
                     }
                     .buttonStyle(.plain)
@@ -2665,12 +2684,20 @@ private struct IOSEndpointEditorView: View {
                         .foregroundStyle(IOSTheme.secondaryText)
                         .padding(.top, 25)
                         .padding(.bottom, 9)
-                    VStack(spacing: 1) {
+                    VStack(spacing: 0) {
                         endpointField("Name", placeholder: "Warren Host", text: $name, field: .name)
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.35))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
                         endpointField("URL", placeholder: IOSDevelopmentEndpoint.url, text: $url, field: .url)
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.35))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
                         endpointSecureField("Token", placeholder: "Host token", text: $token, field: .token)
                     }
-                    .iosSurface(color: IOSTheme.chrome)
+                    .iosCardSurface()
 
                     Text(hasToken
                         ? "Token saved in Keychain. Leave it blank to keep it."
@@ -2715,7 +2742,7 @@ private struct IOSEndpointEditorView: View {
                             .font(IOSTypography.button)
                             .foregroundStyle(IOSTheme.background)
                             .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                            .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
