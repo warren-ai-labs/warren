@@ -1072,6 +1072,27 @@ final class IOSPersistenceTests: XCTestCase {
             return Data(bytes)
         }
     }
+
+    func testDashboardAllCardsCollapseLogic() {
+        let ws1 = sessionScopeID(kind: "workspace", id: "ws-1")
+        let ws2 = sessionScopeID(kind: "workspace", id: "ws-2")
+        let grp1 = sessionScopeID(kind: "group", id: "grp-1")
+        let allIDs: Set<String> = [ws1, ws2, grp1]
+
+        var collapsedIDs: Set<String> = []
+        let isAllCollapsedInitial = !allIDs.isEmpty && allIDs.isSubset(of: collapsedIDs)
+        XCTAssertFalse(isAllCollapsedInitial)
+
+        // Collapse all
+        collapsedIDs.formUnion(allIDs)
+        let isAllCollapsedAfter = !allIDs.isEmpty && allIDs.isSubset(of: collapsedIDs)
+        XCTAssertTrue(isAllCollapsedAfter)
+
+        // Expand all
+        collapsedIDs.removeAll()
+        let isAllCollapsedCleared = !allIDs.isEmpty && allIDs.isSubset(of: collapsedIDs)
+        XCTAssertFalse(isAllCollapsedCleared)
+    }
 }
 
 private enum IOSScriptedWebSocketTaskError: Error {

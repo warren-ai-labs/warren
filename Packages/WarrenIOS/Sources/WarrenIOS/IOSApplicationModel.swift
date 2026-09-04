@@ -2321,6 +2321,63 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
+    public func createWorkspaceAndSession(
+        projectID: String,
+        branch: String,
+        workspaceName: String? = nil,
+        workspacePath: String? = nil,
+        command: String? = nil,
+        kind: String? = nil,
+        agentHandler: String? = nil,
+        title: String? = nil,
+        runtimeKind: String? = nil
+    ) {
+        let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !projectID.isEmpty, !normalizedBranch.isEmpty, !isMutating else { return }
+        mutationError = nil
+        isMutating = true
+        mutationGeneration &+= 1
+        let generation = mutationGeneration
+        let client = client
+        Task { [weak self] in
+            do {
+                let wsResult = try await client.createWorkspace(
+                    projectID: projectID,
+                    branch: normalizedBranch,
+                    name: workspaceName,
+                    path: workspacePath
+                )
+                let session = try await client.createSession(
+                    workspaceID: wsResult.workspace.id,
+                    terminalGroupID: nil,
+                    command: command,
+                    kind: kind,
+                    agentHandler: agentHandler,
+                    title: title,
+                    runtimeKind: runtimeKind
+                )
+                await MainActor.run {
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    let preferredMode: IOSSessionDisplayMode = session.isAgentBacked ? .agent : .terminal
+                    self.displayModeBySessionID[session.id] = preferredMode
+                    self.displayMode = preferredMode
+                    self.navigation.displayMode = preferredMode
+                    self.persistNavigation()
+                    self.pendingSessionSelectionID = session.id
+                    self.selectPendingSessionIfPresent()
+                    self.restoreNavigationIfNeeded()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self, self.mutationGeneration == generation else { return }
+                    self.isMutating = false
+                    self.mutationError = error.localizedDescription
+                }
+            }
+        }
+    }
+
     public var canSendAgent: Bool {
         guard hasControlLease,
               let sessionID = currentSessionID,
