@@ -2105,11 +2105,12 @@ struct WarrenDesktopSettingsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
             HStack(alignment: .top, spacing: WarrenSpacing.large) {
-                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                     Text(title).font(WarrenTypography.settingsSectionTitle)
                     Text(section.detail)
-                        .font(WarrenTypography.settingsBody)
+                        .font(WarrenTypography.settingsSupporting)
                         .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: WarrenSpacing.standard)
                 if section != .relay {
@@ -2136,7 +2137,7 @@ struct WarrenDesktopSettingsView: View {
                     .accessibilityIdentifier("settings.section.\(section.deepLinkValue).deeplink")
                 }
             }
-            .padding(.bottom, WarrenSpacing.small)
+            .padding(.bottom, WarrenSpacing.medium)
             content()
         }
     }
