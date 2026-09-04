@@ -55,7 +55,8 @@ public struct SessionView: View {
             SessionHeader(
                 model: model,
                 session: session,
-                hasSiblings: siblings.count > 1,
+                siblings: siblings,
+                selectSession: selectSession,
                 openSwitcher: { showingSessionSwitcher = true },
                 openNewSession: { showingNewSession = true },
                 deleteSession: { showingDeleteConfirmation = true },
@@ -336,42 +337,77 @@ public struct SessionView: View {
 private struct SessionHeader: View {
     @ObservedObject var model: IOSApplicationModel
     let session: WarrenRemoteRoster.Session?
-    let hasSiblings: Bool
+    let siblings: [WarrenRemoteRoster.Session]
+    let selectSession: (String) -> Bool
     let openSwitcher: () -> Void
     let openNewSession: () -> Void
     let deleteSession: () -> Void
     let onBack: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             IOSIconButton("chevron.backward", label: "Back to sessions", action: onBack)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(sessionTitle)
-                    .font(IOSTypography.sessionBarTitle)
-                    .foregroundStyle(IOSTheme.text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .iosMachineText()
-                    .layoutPriority(1)
-                HStack(spacing: 5) {
-                    IOSStatusDot(color: connectionColor, size: 6)
-                    Text(connectionTitle)
-                        .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                    if let scopeTitle {
-                        Text("·")
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                        Text(scopeTitle)
-                            .font(IOSTypography.status)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .iosMachineText()
+            
+            if siblings.count > 1 {
+                Menu {
+                    Section(scopeTitle ?? "Sessions") {
+                        ForEach(siblings) { sibling in
+                            Button {
+                                IOSHaptics.selection()
+                                _ = selectSession(sibling.id)
+                            } label: {
+                                HStack {
+                                    Text(sibling.displayTitle.isEmpty ? (sibling.process ?? sibling.kind.capitalized) : sibling.displayTitle)
+                                    if sibling.id == session?.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
                     }
+                    Divider()
+                    Button {
+                        openNewSession()
+                    } label: {
+                        Label("New session", systemImage: "plus")
+                    }
+                    Button(role: .destructive) {
+                        deleteSession()
+                    } label: {
+                        Label("Delete session", systemImage: "trash")
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(sessionTitle)
+                                .font(IOSTypography.sessionBarTitle)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .iosMachineText()
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(IOSTheme.secondaryText)
+                        }
+                        contextSubtitle
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .lineLimit(1)
+                .menuStyle(.automatic)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sessionTitle)
+                        .font(IOSTypography.sessionBarTitle)
+                        .foregroundStyle(IOSTheme.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .iosMachineText()
+                    contextSubtitle
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
             let sessionHasAttention = session.flatMap { model.agentStatusBySessionID[$0.id] ?? $0.agentStatus }?.attention != nil
             IOSModeToggle(
                 selection: Binding(
@@ -381,10 +417,8 @@ private struct SessionHeader: View {
                 isAgentSession: session?.isAgentBacked ?? false,
                 hasAttention: sessionHasAttention
             )
+            
             Menu {
-                if hasSiblings {
-                    Button("Switch session", systemImage: "rectangle.stack") { openSwitcher() }
-                }
                 Button("New session", systemImage: "plus") {
                     openNewSession()
                 }
@@ -393,22 +427,42 @@ private struct SessionHeader: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(IOSTypography.button)
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .menuStyle(.automatic)
             .accessibilityLabel("Session actions")
         }
         .padding(.horizontal, WarrenSpacing.xs)
-        .frame(minHeight: 56)
-        .background(IOSTheme.chrome)
+        .frame(minHeight: 52)
+        .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(IOSTheme.separator)
-                .frame(height: 1)
+                .fill(IOSTheme.separator.opacity(0.35))
+                .frame(height: 0.5)
         }
+    }
+
+    private var contextSubtitle: some View {
+        HStack(spacing: 5) {
+            IOSStatusDot(color: connectionColor, size: 6)
+            Text(connectionTitle)
+                .font(IOSTypography.status)
+                .foregroundStyle(IOSTheme.secondaryText)
+            if let scopeTitle {
+                Text("·")
+                    .foregroundStyle(IOSTheme.tertiaryText)
+                Text(scopeTitle)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .iosMachineText()
+            }
+        }
+        .lineLimit(1)
     }
 
     private var sessionTitle: String {
@@ -456,7 +510,7 @@ private struct SessionHeader: View {
 /// shell remains a branch/workspace resource; only an Agent-backed
 /// Session gets an AI provider mark. A shell that Warren later binds to an
 /// Agent can still resolve its provider from the newest normalized event.
-private func sessionProviderID(
+func sessionProviderID(
     for session: WarrenRemoteRoster.Session,
     events: [WarrenRemoteAgentEvent]? = nil
 ) -> String {
@@ -476,7 +530,7 @@ private func sessionProviderID(
     }
 }
 
-private struct SessionProviderMark: View {
+struct SessionProviderMark: View {
     @ObservedObject var model: IOSApplicationModel
     @ObservedObject var agentState: IOSAgentLiveState
     let session: WarrenRemoteRoster.Session
@@ -539,29 +593,31 @@ private struct SessionTabRail: View {
         HStack(spacing: 0) {
             if sessions.count <= 2 {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 0) {
+                    HStack(spacing: 6) {
                         ForEach(sessions) { session in
                             Button {
                                 IOSHaptics.selection()
-                                selectSession(session.id)
+                                _ = selectSession(session.id)
                             } label: {
                                 HStack(spacing: 6) {
-                                    SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 20)
+                                    SessionProviderMark(model: model, agentState: agentState, session: session, slotSize: 18)
                                     Text(session.displayTitle.isEmpty ? "Untitled" : session.displayTitle)
                                         .font(IOSTypography.label)
                                         .foregroundStyle(session.id == activeSessionID ? IOSTheme.text : IOSTheme.secondaryText)
-                                        // Tabs are a deliberate compact contract;
-                                        // the switcher sheet exposes the full
-                                        // title when it cannot fit here.
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
                                 .padding(.horizontal, 12)
-                                .frame(minHeight: 44)
-                                .overlay(alignment: .bottom) {
-                                    Rectangle()
-                                        .fill(session.id == activeSessionID ? IOSTheme.accent : .clear)
-                                        .frame(height: 2)
+                                .frame(height: 32)
+                                .background(
+                                    session.id == activeSessionID ? IOSTheme.raised : Color.clear,
+                                    in: Capsule()
+                                )
+                                .overlay {
+                                    if session.id == activeSessionID {
+                                        Capsule()
+                                            .stroke(IOSTheme.ring.opacity(0.35), lineWidth: 0.5)
+                                    }
                                 }
                             }
                             .buttonStyle(.plain)
@@ -575,58 +631,53 @@ private struct SessionTabRail: View {
                             .accessibilityAddTraits(session.id == activeSessionID ? .isSelected : [])
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
                 }
             } else if let currentSession = sessions.first(where: { $0.id == activeSessionID }) ?? sessions.first {
                 Button {
                     IOSHaptics.selection()
                     showSwitcher()
                 } label: {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "rectangle.stack")
-                                .font(.system(size: 10, weight: .medium))
-                            Text("\(sessions.count)")
-                                .font(IOSTypography.metadata)
-                        }
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(IOSTheme.muted.opacity(0.4), in: Capsule())
-
-                        HStack(spacing: 6) {
-                            SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 20)
-                            Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
-                                .font(IOSTypography.label)
-                                .foregroundStyle(IOSTheme.text)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
+                    HStack(spacing: 6) {
+                        SessionProviderMark(model: model, agentState: agentState, session: currentSession, slotSize: 18)
+                        Text(currentSession.displayTitle.isEmpty ? "Untitled" : currentSession.displayTitle)
+                            .font(IOSTypography.label)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text("\(sessions.count)")
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(IOSTheme.muted.opacity(0.35), in: Capsule())
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(IOSTheme.secondaryText)
                     }
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(IOSTheme.accent)
-                            .frame(height: 2)
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                    .background(IOSTheme.raised, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .stroke(IOSTheme.ring.opacity(0.35), lineWidth: 0.5)
                     }
                 }
                 .buttonStyle(.plain)
                 .disabled(pendingSessionID != nil || model.isMutating)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
                 .accessibilityLabel("Session \(currentSession.displayTitle), \(sessions.count) sessions")
                 .accessibilityValue("Selected · Switcher")
             }
         }
-        .background(IOSTheme.chrome)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(IOSTheme.separator)
-                .frame(height: 1)
+                .fill(IOSTheme.separator.opacity(0.3))
+                .frame(height: 0.5)
         }
     }
 }
