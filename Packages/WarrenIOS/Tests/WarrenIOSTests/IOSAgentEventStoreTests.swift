@@ -88,7 +88,7 @@ final class IOSAgentEventStoreTests: XCTestCase {
         let epoch: UInt64 = 400
 
         let longOutput = String(repeating: "A", count: 10000)
-        let longContent = String(repeating: "B", count: 10000)
+        let longContent = String(repeating: "B", count: 50000)
         let events = [
             WarrenRemoteAgentEvent(sequence: 1, type: "tool_output", output: longOutput),
             WarrenRemoteAgentEvent(sequence: 2, type: "assistant", role: "assistant", content: longContent),
@@ -100,7 +100,8 @@ final class IOSAgentEventStoreTests: XCTestCase {
         XCTAssertEqual(loaded.count, 2)
         XCTAssertTrue((loaded[0].output?.count ?? 0) <= 4097)
         XCTAssertTrue(loaded[0].output?.hasSuffix("…") == true)
-        // Content must NEVER be clipped
-        XCTAssertEqual(loaded[1].content?.count, 10000)
+        // Conversational messages must NEVER be clipped regardless of size
+        XCTAssertEqual(loaded[1].content?.count, 50000)
+        XCTAssertEqual(loaded[1].content, longContent)
     }
 }

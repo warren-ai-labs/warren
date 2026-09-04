@@ -285,31 +285,44 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     func testAgentEventClipped() {
         let longOutput = String(repeating: "A", count: 10000)
-        let longContent = String(repeating: "B", count: 10000)
-        let event = WarrenRemoteAgentEvent(
+        let toolOutputEvent = WarrenRemoteAgentEvent(
             sequence: 1,
             type: "tool_output",
-            content: longContent,
-            toolInput: .object([
-                "cmd": .string(String(repeating: "C", count: 5000))
-            ]),
             output: longOutput
         )
 
-        let clipped = event.clipped(limit: 100)
-        XCTAssertEqual(clipped.output?.count, 101) // 100 chars + "…"
-        XCTAssertTrue(clipped.output?.hasSuffix("…") == true)
-        // Content must NEVER be clipped
-        XCTAssertEqual(clipped.content?.count, 10000)
+        let clippedOutput = toolOutputEvent.clipped(limit: 100)
+        XCTAssertEqual(clippedOutput.output?.count, 101) // 100 chars + "…"
+        XCTAssertTrue(clippedOutput.output?.hasSuffix("…") == true)
 
-        // Tool input clipped
-        if case .object(let dict) = clipped.toolInput,
+        let toolCallEvent = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "tool_call",
+            toolName: "execute",
+            toolInput: .object([
+                "cmd": .string(String(repeating: "C", count: 5000))
+            ])
+        )
+
+        let clippedCall = toolCallEvent.clipped(limit: 100)
+        if case .object(let dict) = clippedCall.toolInput,
            case .string(let str) = dict["cmd"] {
             XCTAssertEqual(str.count, 101)
             XCTAssertTrue(str.hasSuffix("…"))
         } else {
             XCTFail("toolInput was not clipped as expected")
         }
+
+        // Conversational message must NEVER be clipped regardless of size
+        let messageEvent = WarrenRemoteAgentEvent(
+            sequence: 3,
+            type: "assistant",
+            role: "assistant",
+            content: String(repeating: "M", count: 50000)
+        )
+        let messageClipped = messageEvent.clipped(limit: 100)
+        XCTAssertEqual(messageClipped.content?.count, 50000)
+        XCTAssertEqual(messageClipped, messageEvent)
     }
 
     private func connectedClient() async throws -> (

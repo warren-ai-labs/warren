@@ -1575,8 +1575,13 @@ public extension WarrenRemoteAgentEvent {
 
     func clipped(limit: Int = 4096) -> WarrenRemoteAgentEvent {
         guard limit > 0 else { return self }
-        let needsOutputClip = (output != nil && output!.count > limit)
-        let needsInputClip = (toolInput != nil)
+        // Conversational messages (user, assistant, system) and their Content text are
+        // intentionally NEVER clipped regardless of length.
+        // Clipping is strictly confined to tool executions: tool_output (output) and tool_call (toolInput).
+        let isToolOutput = (type == "tool_output" || type == "tool")
+        let isToolCall = (type == "tool_call" || type == "tool_use")
+        let needsOutputClip = isToolOutput && (output != nil && output!.count > limit)
+        let needsInputClip = isToolCall && (toolInput != nil)
         if !needsOutputClip && !needsInputClip {
             return self
         }

@@ -2040,9 +2040,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
 		maxOutput := intParam(params, "maxOutput")
-		if maxOutput == 0 {
-			maxOutput = intParam(params, "contentLimit")
-		}
 		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithOptions(
 			sessionID,
@@ -2322,6 +2319,31 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, value)
+	case "relay.devices.list":
+		if p.server.RelayRouteClient == nil {
+			return errors.New("Relay device management is unavailable")
+		}
+		client, err := p.server.RelayRouteClient()
+		if err != nil {
+			return err
+		}
+		devices, err := client.Devices(ctx)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]any{"devices": devices})
+	case "relay.devices.revoke":
+		if p.server.RelayRouteClient == nil {
+			return errors.New("Relay device management is unavailable")
+		}
+		client, err := p.server.RelayRouteClient()
+		if err != nil {
+			return err
+		}
+		if err := client.RevokeDevice(ctx, stringParam(params, "deviceID")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"revoked": true})
 	case "settings.get":
 		value := p.server.Service.SettingsSnapshot()
 		return p.writeResult(command.ID, map[string]any{
