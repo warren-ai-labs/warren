@@ -462,9 +462,62 @@ final class IOSPersistenceTests: XCTestCase {
             agentStatus: working
         )
 
+        let antigravity = WarrenRemoteRoster.Session(
+            id: "antigravity",
+            kind: "antigravity",
+            agentStatus: working
+        )
+        let trae = WarrenRemoteRoster.Session(
+            id: "trae",
+            kind: "trae",
+            agentStatus: working
+        )
+        let claude = WarrenRemoteRoster.Session(
+            id: "claude",
+            kind: "claude",
+            agentStatus: working
+        )
+        let opencode = WarrenRemoteRoster.Session(
+            id: "opencode",
+            kind: "opencode",
+            agentStatus: working
+        )
+        let pi = WarrenRemoteRoster.Session(
+            id: "pi",
+            kind: "pi",
+            agentStatus: working
+        )
+        let qoder = WarrenRemoteRoster.Session(
+            id: "qoder",
+            kind: "qoder",
+            agentStatus: working
+        )
+        let shellWithAgyCommand = WarrenRemoteRoster.Session(
+            id: "shell-agy",
+            kind: "shell",
+            command: "agy --model auto"
+        )
+
         XCTAssertFalse(shell.isAgentBacked)
         XCTAssertTrue(codex.isAgentBacked)
         XCTAssertTrue(boundShell.isAgentBacked)
+        XCTAssertTrue(antigravity.isAgentBacked)
+        XCTAssertTrue(trae.isAgentBacked)
+        XCTAssertTrue(claude.isAgentBacked)
+        XCTAssertTrue(opencode.isAgentBacked)
+        XCTAssertTrue(pi.isAgentBacked)
+        XCTAssertTrue(qoder.isAgentBacked)
+        XCTAssertTrue(shellWithAgyCommand.isAgentBacked)
+
+        XCTAssertEqual(sessionProviderID(for: antigravity), "antigravity")
+        XCTAssertEqual(sessionProviderID(for: codex), "codex")
+        XCTAssertEqual(sessionProviderID(for: claude), "claude")
+        XCTAssertEqual(sessionProviderID(for: opencode), "opencode")
+        XCTAssertEqual(sessionProviderID(for: pi), "pi")
+        XCTAssertEqual(sessionProviderID(for: qoder), "qoder")
+        XCTAssertEqual(sessionProviderID(for: trae), "trae")
+        XCTAssertEqual(sessionProviderID(for: shellWithAgyCommand), "antigravity")
+        XCTAssertEqual(sessionProviderID(for: shell), "shell")
     }
 
     @MainActor
