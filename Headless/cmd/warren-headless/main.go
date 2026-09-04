@@ -170,7 +170,7 @@ func main() {
 	})
 	if runtimeSet {
 		switch *runtimeMode {
-		case settings.RuntimeGhostline, "pty": // "pty" is the historical alias.
+		case settings.RuntimeGhostline:
 			defaultKind = settings.RuntimeGhostline
 		default:
 			fatal(fmt.Errorf("unknown runtime %q (supported: ghostline)", *runtimeMode))
