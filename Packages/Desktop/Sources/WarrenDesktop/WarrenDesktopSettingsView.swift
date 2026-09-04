@@ -9,10 +9,10 @@ import WarrenObservation
 public struct WarrenDesktopRelayDevice: Identifiable, Equatable, Sendable {
     public let id: String
     public let clientID: String
-    public let createdAt: Date
-    public let lastSeenAt: Date
+    public let createdAt: Date?
+    public let lastSeenAt: Date?
 
-    public init(id: String, clientID: String, createdAt: Date, lastSeenAt: Date) {
+    public init(id: String, clientID: String, createdAt: Date?, lastSeenAt: Date?) {
         self.id = id
         self.clientID = clientID
         self.createdAt = createdAt
@@ -1369,9 +1369,15 @@ struct WarrenDesktopSettingsView: View {
                                 Text(device.clientID.isEmpty ? "Native device" : device.clientID)
                                     .font(WarrenTypography.settingsBody)
                                     .foregroundStyle(tokens.foreground)
-                                Text("Last active \(device.lastSeenAt, style: .relative)")
-                                    .font(WarrenTypography.settingsMeta)
-                                    .foregroundStyle(tokens.mutedForeground)
+                                if let lastSeenAt = device.lastSeenAt {
+                                    Text("Last active \(lastSeenAt, style: .relative)")
+                                        .font(WarrenTypography.settingsMeta)
+                                        .foregroundStyle(tokens.mutedForeground)
+                                } else {
+                                    Text("Last active unavailable")
+                                        .font(WarrenTypography.settingsMeta)
+                                        .foregroundStyle(tokens.mutedForeground)
+                                }
                             }
                             Spacer()
                             Button("Revoke", role: .destructive) {

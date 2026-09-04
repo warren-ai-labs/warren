@@ -38,6 +38,26 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRemoteDateParserAcceptsFractionalAndPlainRFC3339Values() throws {
+        let fractional = try XCTUnwrap(
+            WarrenRemoteApplicationModel.parseISO8601Date(
+                "2026-09-04T20:38:48.743185884+08:00"
+            )
+        )
+        let plain = try XCTUnwrap(
+            WarrenRemoteApplicationModel.parseISO8601Date("2026-09-04T12:38:48Z")
+        )
+
+        XCTAssertEqual(
+            fractional.timeIntervalSince1970,
+            plain.timeIntervalSince1970 + 0.743185884,
+            accuracy: 0.001
+        )
+        XCTAssertNil(WarrenRemoteApplicationModel.parseISO8601Date("not-a-date"))
+        XCTAssertNil(WarrenRemoteApplicationModel.parseISO8601Date("  "))
+    }
+
+    @MainActor
     func testPublicAccessBrowserOpenAddsAuthFragmentOnlyForCurrentEndpoint() throws {
         let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
         let opened = WarrenRemoteApplicationModel.publicAccessBrowserURL(
