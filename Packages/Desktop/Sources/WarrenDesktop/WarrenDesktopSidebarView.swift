@@ -194,8 +194,8 @@ struct WarrenDesktopSidebar: View {
                 }
             }
             .foregroundStyle(tokens.mutedForeground)
-            .frame(maxWidth: showsLabel ? .infinity : nil, minHeight: 36, alignment: .leading)
-            .frame(width: showsLabel ? nil : 36)
+            .frame(maxWidth: showsLabel ? .infinity : nil, minHeight: 32, alignment: .leading)
+            .frame(width: showsLabel ? nil : 32)
             .contentShape(.rect)
         }
         .buttonStyle(WarrenInteractiveRowStyle())
@@ -209,7 +209,7 @@ struct WarrenDesktopSidebar: View {
         Button(action: onSettings) {
             Image(systemName: "gearshape")
                 .font(.system(size: 13, weight: .regular))
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 32)
                 .foregroundStyle(tokens.mutedForeground)
                 .contentShape(.rect)
         }
@@ -235,7 +235,7 @@ struct WarrenDesktopSidebar: View {
             }
             .font(.system(size: 13, weight: .regular))
             .foregroundStyle(updateStatus == .failed ? tokens.destructive : tokens.info)
-            .frame(width: 36, height: 36)
+            .frame(width: 32, height: 32)
             .contentShape(.rect)
         }
         .buttonStyle(WarrenInteractiveRowStyle())

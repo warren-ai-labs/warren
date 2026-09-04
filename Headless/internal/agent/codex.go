@@ -369,16 +369,7 @@ func codexFallbackContent(payload codexPayload, raw json.RawMessage, limit int) 
 }
 
 func normalizeToolStatus(status string) string {
-	switch status {
-	case "completed":
-		return "success"
-	case "failed":
-		return "error"
-	case "interrupted", "cancelled":
-		return "interrupted"
-	default:
-		return "running"
-	}
+	return canonicalToolStatus(status)
 }
 
 func isSystemInjectedUserContext(content string) bool {
