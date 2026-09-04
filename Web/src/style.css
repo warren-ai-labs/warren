@@ -1768,11 +1768,18 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
-.agent-input-controls > code {
+.agent-input-controls > code,
+.agent-model-chip {
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
+  max-width: 320px;
   overflow: hidden;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--fill-agent-chip);
   color: var(--color-text-secondary);
-  font: var(--text-sm) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1927,11 +1934,79 @@ button:disabled {
   border-radius: var(--radius-sm);
 }
 .agent-attachment-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
-.agent-attachment-list { display: flex; gap: 4px; flex-wrap: wrap; padding: 3px 0; }
-.agent-attachment-chip { display: inline-flex; align-items: center; gap: var(--space-xs); padding: var(--space-xxs) var(--space-sm); border-radius: var(--radius-xs); background: var(--fill-agent-chip); font-size: var(--text-sm); }
-.agent-attachment-chip.uploading { color: var(--color-status-warning); }
-.agent-attachment-chip.failed { color: var(--color-agent-danger); }
-.agent-attachment-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 2px; }
+.agent-attachment-tray,
+.agent-attachment-list {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  width: 100%;
+  margin-bottom: var(--space-xs);
+  padding: 0 4px;
+}
+.agent-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-full);
+  background: var(--color-card-surface, var(--color-input-surface));
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.agent-attachment-chip .agent-attachment-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+.agent-attachment-chip .agent-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.agent-attachment-chip.uploading {
+  border-color: var(--color-status-warning);
+  color: var(--color-status-warning);
+}
+.agent-attachment-chip.failed {
+  border-color: var(--color-agent-danger);
+  color: var(--color-agent-danger);
+}
+.agent-attachment-chip .agent-attachment-ready {
+  color: var(--color-status-success);
+  font-weight: bold;
+}
+.agent-attachment-chip button,
+.agent-attachment-chip .agent-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.agent-attachment-chip .agent-attachment-remove {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  margin-inline-start: 2px;
+  border-radius: var(--radius-circle);
+  background: var(--fill-agent-chip);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1;
+}
+.agent-attachment-chip .agent-attachment-remove:hover {
+  background: var(--color-agent-danger);
+  color: #fff;
+}
 .agent-attachment-chip button:focus-visible {
   color: var(--color-text-primary);
   outline: 2px solid var(--color-focus-ring);
@@ -3878,6 +3953,27 @@ button:disabled {
     height: 44px;
   }
 
+  .agent-model-chip {
+    max-width: 180px;
+  }
+
+  .agent-attachment-tray {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .agent-attachment-tray::-webkit-scrollbar {
+    display: none;
+  }
+
+  .agent-attachment-chip {
+    flex-shrink: 0;
+    max-width: 180px;
+  }
+
   .agent-tool-summary {
     max-width: 42vw;
   }
@@ -4243,6 +4339,13 @@ button:disabled {
 
   .agent-message-actions button {
     width: 44px;
+  }
+
+  .agent-attachment-chip .agent-attachment-remove {
+    min-width: unset;
+    min-height: unset;
+    width: 20px;
+    height: 20px;
   }
 
   .agent-structured-options button,

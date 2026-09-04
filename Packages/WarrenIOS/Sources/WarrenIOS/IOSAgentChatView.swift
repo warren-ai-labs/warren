@@ -685,7 +685,7 @@ public struct AgentChatView: View {
                     .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
             }
 
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
                 if !attachmentFeedback.isEmpty {
                     Text(attachmentFeedback)
                         .font(IOSTypography.status)
@@ -693,6 +693,19 @@ public struct AgentChatView: View {
                         .padding(.horizontal, 13)
                         .padding(.top, 4)
                         .accessibilityLabel(attachmentFeedback)
+                }
+
+                if !localAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(localAttachments) { attachment in
+                                attachmentChip(attachment)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                    }
+                    .accessibilityLabel("Selected attachments")
                 }
 
                 VStack(spacing: 0) {
@@ -737,10 +750,23 @@ public struct AgentChatView: View {
                     .frame(minWidth: 0, maxWidth: .infinity)
                     .padding(.horizontal, 8)
 
-                    // Row 2: Attachment and model controls. These controls
-                    // stay on one compact toolbar row below the message.
+                    // Row 2: Attachment, model, keyboard dismiss, and send controls.
                     HStack(alignment: .center, spacing: 4) {
                         attachmentControlsWithPlus
+
+                        if let metadata = agentComposerMetadata {
+                            Text(metadata)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
+                                .accessibilityLabel("Agent model: \(metadata)")
+                        }
+
+                        Spacer(minLength: 0)
 
                         if composerFocused {
                             IOSKeyboardDismissButton {
@@ -750,32 +776,6 @@ public struct AgentChatView: View {
                             }
                             .transition(.opacity)
                         }
-
-                        if !localAttachments.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 3) {
-                                    ForEach(localAttachments) { attachment in
-                                        attachmentChip(attachment)
-                                    }
-                                }
-                                .padding(.horizontal, 2)
-                            }
-                            .frame(minWidth: 0, maxWidth: 120, minHeight: 44, maxHeight: 44)
-                        }
-
-                        if let metadata = agentComposerMetadata {
-                            Text(metadata)
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.text)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .padding(.horizontal, 8)
-                                .frame(minWidth: 0, maxWidth: 116)
-                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
-                                .accessibilityLabel("Agent type and model: \(metadata)")
-                        }
-
-                        Spacer(minLength: 0)
 
                         Button {
                             sendComposerMessage()
@@ -886,10 +886,18 @@ public struct AgentChatView: View {
     }
 
     private func attachmentChip(_ attachment: IOSAgentLocalAttachment) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
+            Image(systemName: attachment.mime.starts(with: "image/") ? "photo.fill" : "doc.fill")
+                .font(IOSTypography.metadata)
+                .foregroundStyle(IOSTheme.secondaryText)
+
             Text(attachment.name)
                 .font(IOSTypography.metadata)
+                .foregroundStyle(IOSTheme.text)
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 180, alignment: .leading)
+
             switch attachment.state {
             case .selected:
                 EmptyView()
@@ -899,35 +907,41 @@ public struct AgentChatView: View {
                     .foregroundStyle(IOSTheme.amber)
             case .ready:
                 Image(systemName: "checkmark.circle.fill")
+                    .font(IOSTypography.metadata)
                     .foregroundStyle(IOSTheme.green)
             case .failed:
                 Button("Retry") { retryAttachment(attachment.id) }
                     .font(IOSTypography.metadata)
                     .foregroundStyle(IOSTheme.red)
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(minHeight: 32)
             case .aborted:
                 Text("Aborted")
+                    .font(IOSTypography.metadata)
                     .foregroundStyle(IOSTheme.secondaryText)
             }
+
             Button {
                 localAttachments.removeAll { $0.id == attachment.id }
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(IOSTypography.label)
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .frame(width: 44, height: 44)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(width: 18, height: 18)
+                    .background(IOSTheme.muted.opacity(0.4), in: Circle())
             }
             .buttonStyle(.plain)
             .disabled(isUploadingAttachments)
             .opacity(isUploadingAttachments ? 0.52 : 1)
             .accessibilityLabel("Remove \(attachment.name)")
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .frame(minHeight: 44)
-        // The inset keeps the visual pill compact while its layout frame
-        // remains large enough for both Retry and Remove on iPhone.
-        .background(IOSTheme.muted.opacity(0.6), in: Capsule().inset(by: 6))
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(IOSTheme.raised, in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(IOSTheme.ring.opacity(0.85), lineWidth: 1)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityValue(attachment.state.rawValue)
     }
@@ -1160,14 +1174,10 @@ public struct AgentChatView: View {
     /// mode, and control state belong to the surrounding navigation chrome and
     /// are intentionally not repeated beside the input.
     private var agentComposerMetadata: String? {
-        let type = agentTypeLabel
-        let modelName = formatAgentModel(model.agentModel(for: sessionID))
-        let values = [type, modelName].compactMap { value -> String? in
-            guard let value else { return nil }
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+        if let modelName = formatAgentModel(model.agentModel(for: sessionID)), !modelName.isEmpty {
+            return modelName
         }
-        return values.isEmpty ? nil : values.joined(separator: " · ")
+        return agentTypeLabel
     }
 
     private var agentTypeLabel: String? {

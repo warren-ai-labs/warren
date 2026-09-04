@@ -23,6 +23,14 @@ test("formatAgentModel turns wire names into readable labels", () => {
   assert.equal(formatAgentModel("openai/gpt-5.4"), "GPT 5.4");
   assert.equal(formatAgentModel("z-ai/xxx-xxx-xx"), "Xxx Xxx Xx");
   assert.equal(formatAgentModel("z-ai/glm-4-flash"), "Glm 4 Flash");
+  assert.equal(formatAgentModel("anthropic/claude-3-7-sonnet-20250219"), "Claude 3.7 Sonnet");
+  assert.equal(formatAgentModel("claude-3-5-haiku-20241022"), "Claude 3.5 Haiku");
+  assert.equal(formatAgentModel("openai/gpt-4o"), "GPT 4o");
+  assert.equal(formatAgentModel("deepseek/deepseek-r1"), "DeepSeek R1");
+  assert.equal(formatAgentModel("deepseek-chat"), "DeepSeek Chat");
+  assert.equal(formatAgentModel("google/gemini-2-5-pro"), "Gemini 2.5 Pro");
+  assert.equal(formatAgentModel("qwen/qwen-2.5-coder-32b-instruct"), "Qwen 2.5 Coder 32B Instruct");
+  assert.equal(formatAgentModel("o1-mini"), "o1 Mini");
   assert.equal(formatAgentModel(""), "");
 });
 
