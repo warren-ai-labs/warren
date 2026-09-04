@@ -1055,7 +1055,7 @@ func TestAgentTranscriptChunkOverWebSocketStreamsOnlyBoundJSONL(t *testing.T) {
 	}
 	if err := state.Update(func(value *api.State) error {
 		value.Sessions = []api.Session{{
-			ID: "session-raw", Kind: "codex", Lifecycle: "ended",
+			ID: "session-raw", Kind: "codex", Lifecycle: "running",
 			TranscriptPath: transcriptPath, CreatedAt: time.Now().UTC(),
 		}}
 		return nil

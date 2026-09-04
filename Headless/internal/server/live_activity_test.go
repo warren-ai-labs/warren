@@ -37,13 +37,11 @@ func TestLiveActivitySnapshotProjectsRunningSessionsAndAttention(t *testing.T) {
 	if snapshot.Connection != "connected" || snapshot.ActiveSessionCount != 1 || snapshot.WorkingSessionCount != 1 || snapshot.AttentionSessionCount != 1 {
 		t.Fatalf("snapshot counts = %+v", snapshot)
 	}
-	if len(snapshot.Sessions) != 2 {
+	// After filtering out ended sessions, only the running session should appear.
+	if len(snapshot.Sessions) != 1 {
 		t.Fatalf("snapshot sessions = %+v", snapshot.Sessions)
 	}
 	if snapshot.Sessions[0].ID != "running" || snapshot.Sessions[0].Connection != "connected" || snapshot.Sessions[0].Title != "Build" || !snapshot.Sessions[0].Attention {
 		t.Fatalf("running projection = %+v", snapshot.Sessions[0])
-	}
-	if snapshot.Sessions[1].ID != "ended" || snapshot.Sessions[1].Connection != "stopped" {
-		t.Fatalf("ended projection = %+v", snapshot.Sessions[1])
 	}
 }

@@ -1587,8 +1587,9 @@ func TestRosterProjectionDoesNotProbeOrMutateRuntimeLifecycle(t *testing.T) {
 	if lists, exists := runtime.probeCounts(); lists != 1 || exists != 0 {
 		t.Fatalf("lifecycle runtime probes: lists=%d exists=%d", lists, exists)
 	}
-	if roster.Sessions[0].Lifecycle != "running" || roster.Sessions[1].Lifecycle != "ended" {
-		t.Fatalf("lifecycle reconciliation was not projected: %#v", roster.Sessions)
+	// After filtering out ended sessions, only the running session should remain.
+	if len(roster.Sessions) != 1 || roster.Sessions[0].Lifecycle != "running" {
+		t.Fatalf("ended sessions filtered from roster: %#v", roster.Sessions)
 	}
 }
 
@@ -1641,8 +1642,9 @@ func TestRosterProjectionDoesNotProbeEndedSessions(t *testing.T) {
 
 	for range 10 {
 		roster := service.Roster(context.Background())
-		if roster.Sessions[0].RuntimeKind != "" || roster.Sessions[0].Lifecycle != "ended" {
-			t.Fatalf("legacy session projection changed: %#v", roster.Sessions[0])
+		// After filtering out ended sessions, the roster should be empty.
+		if len(roster.Sessions) != 0 {
+			t.Fatalf("ended sessions filtered from roster: %#v", roster.Sessions)
 		}
 	}
 	if lists, exists := ghostlineRuntime.probeCounts(); lists != 0 || exists != 0 {
