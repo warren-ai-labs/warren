@@ -4,13 +4,18 @@ import remarkGfm from "remark-gfm";
 
 import {
   agentDraftMaximumBytes,
+  displayToolName,
+  extractExecCommands,
   formatAgentModel,
   groupAgentEvents,
+  latestAgentAction,
   loadAgentDraft,
   normalizeAgentEventType,
   projectAgentEvents,
   removeAgentDraft,
   saveAgentDraft,
+  toolSummary,
+  truncatePreview,
   validateAgentAttachment,
 } from "./agent.js";
 import { sessionDisplayTitle } from "./title.js";
@@ -110,6 +115,7 @@ export function AgentView({
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
   const showWorking = shouldShowWorking(agentStatus, events);
+  const latestAction = useMemo(() => latestAgentAction(events), [events]);
   const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
   const lastUserEvent = useMemo(() => {
@@ -497,6 +503,7 @@ export function AgentView({
       {showWorking && (
         <div className="agent-working" role="status" aria-live="polite">
           <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
+          {latestAction && <span className="agent-working-action">{latestAction}</span>}
           <span className="agent-working-provider">{displayTitle}</span>
         </div>
       )}
@@ -654,19 +661,19 @@ function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
   const reason = String(attention.reason || "").trim().toLowerCase();
   const labels = {
     input: ["text-bubble", "Question · Reply in the composer to continue."],
-    approval: ["shield-check", "Permission · Review the request here."],
-    warning: ["triangle-exclamation", "Check the Agent view."],
+    approval: ["shield-check", "Permission · Review the request in Terminal."],
+    warning: ["triangle-exclamation", "Check the Agent in Terminal."],
   };
   const [icon, fallback] = labels[kind] || labels.warning;
   const reasonLabel = {
     question: "Question · Reply in the composer to continue.",
-    permission: "Permission · Review the request here.",
-    approval: "Permission · Review the request here.",
-    stalled: "No progress detected · Check the Agent view.",
-    no_progress: "No progress detected · Check the Agent view.",
-    no_progress_detected: "No progress detected · Check the Agent view.",
-    unexpectedabort: "Unexpected interruption · Check the Agent view.",
-    unexpected_abort: "Unexpected interruption · Check the Agent view.",
+    permission: "Permission · Review the request in Terminal.",
+    approval: "Permission · Review the request in Terminal.",
+    stalled: "No progress detected · Check the Agent in Terminal.",
+    no_progress: "No progress detected · Check the Agent in Terminal.",
+    no_progress_detected: "No progress detected · Check the Agent in Terminal.",
+    unexpectedabort: "Unexpected interruption · Check the Agent in Terminal.",
+    unexpected_abort: "Unexpected interruption · Check the Agent in Terminal.",
   }[reason] || fallback;
   return (
     <div className={`agent-attention ${kind}`} role="status">
@@ -676,13 +683,13 @@ function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
         <span>{reasonLabel}</span>
       </span>
       {kind === "input" && onFocusComposer && (
-        <button type="button" className="agent-attention-action" onClick={onFocusComposer}>
-          Reply
+        <button type="button" className="agent-attention-action" onClick={onFocusComposer} title="Focus composer to reply">
+          Reply ↵
         </button>
       )}
-      {kind === "approval" && onOpenTerminal && (
-        <button type="button" className="agent-attention-action" onClick={onOpenTerminal}>
-          Terminal
+      {kind !== "input" && onOpenTerminal && (
+        <button type="button" className="agent-attention-action" onClick={onOpenTerminal} title="Open Terminal to resolve">
+          Terminal ↗
         </button>
       )}
     </div>
@@ -1330,109 +1337,12 @@ function isInterrupted(event) {
   return Boolean(event) && event.stopReason === "interrupted";
 }
 
-// displayToolName maps a canonical tool name (already normalized by the
-// parser) to a human-friendly label. The parser canonicalizes every
-// provider's vocabulary into the same set of keys, so this map does not
-// need per-provider entries.
-function displayToolName(name) {
-  const labels = {
-    shell: "Shell",
-    edit: "Edit file",
-    write: "Write file",
-    read: "Read file",
-    grep: "Search files",
-    glob: "Find files",
-    web_search: "Web search",
-    fetch: "Web fetch",
-    subagent: "Subagent",
-    ask_user_question: "Question",
-    permission_request: "Permission",
-    apply_patch: "Apply patch",
-  };
-  return labels[name] || name || "Tool";
-}
-
-function EditIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="m4 16.5-.8 4.3 4.3-.8L19 8.5a2.1 2.1 0 0 0-3-3z" />
-      <path d="m14.5 7.5 2 2" />
-    </svg>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <path d="M4 20.5 21 12 4 3.5l1.8 6.9 8.5 1.6-8.5 1.6z" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg className="agent-lock-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
-      <rect x="3.5" y="7" width="9" height="6" rx="1.2" />
-      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
-    </svg>
-  );
-}
-
 function ChevronRightIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
       <path d="m9 6 6 6-6 6" />
     </svg>
   );
-}
-
-function toolSummary(call) {
-  const input = call.toolInput;
-  if (!input || typeof input !== "object") return "";
-  // Codex's exec tool wraps commands in a JavaScript payload; extract the
-  // actual commands so the preview answers "what did it run?" instead of
-  // showing nothing.
-  if (typeof input.raw === "string") {
-    const commands = extractExecCommands(input.raw);
-    if (commands.length > 0) {
-      const first = truncatePreview(commands[0]);
-      return commands.length > 1
-        ? `${first}  (+${commands.length - 1} more)`
-        : first;
-    }
-    return input.raw.length > 200
-      ? `${input.raw.slice(0, 200)}…`
-      : input.raw;
-  }
-  if (typeof input.command === "string") return truncatePreview(input.command);
-  if (typeof input.cmd === "string") return truncatePreview(input.cmd);
-  if (typeof input.file_path === "string") return input.file_path;
-  if (typeof input.path === "string") return input.path;
-  if (typeof input.query === "string") return input.query;
-  if (typeof input.pattern === "string") return input.pattern;
-  if (typeof input.prompt === "string") return input.prompt;
-  if (typeof input.url === "string") return input.url;
-  if (Array.isArray(input.queries)) return input.queries.join(", ");
-  return "";
-}
-
-function truncatePreview(value, maxLength = 140) {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength)}…`;
-}
-
-function extractExecCommands(raw) {
-  const commands = [];
-  const pattern = /exec_command\(\s*\{\s*cmd\s*:\s*"(?:[^"\\]|\\.)*"/g;
-  let match;
-  while ((match = pattern.exec(raw))) {
-    const body = match[0];
-    const value = body.match(/cmd\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (value) {
-      commands.push(value[1].replace(/\\(["\\])/g, "$1"));
-    }
-  }
-  return commands;
 }
 
 function toolDisplay(call, status) {

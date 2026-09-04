@@ -12,6 +12,7 @@ import {
   enqueueAgentMessage,
   formatAgentModel,
   groupAgentEvents,
+  latestAgentAction,
   mergeAgentEvents,
   moveAgentQueueItem,
   projectAgentEvents,
@@ -249,4 +250,32 @@ test("groupAgentEvents replaces a rewritten OpenCode part", () => {
   ]);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].event.content, "final");
+});
+
+test("latestAgentAction extracts recent tool call and output summaries", () => {
+  assert.equal(latestAgentAction([]), "");
+  assert.equal(latestAgentAction([{ seq: 1, type: "user", content: "hi" }]), "");
+
+  assert.equal(
+    latestAgentAction([
+      { seq: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
+    ]),
+    "Shell npm test",
+  );
+
+  assert.equal(
+    latestAgentAction([
+      { seq: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
+      { seq: 2, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
+    ]),
+    "Edit file src/math.ts",
+  );
+
+  assert.equal(
+    latestAgentAction([
+      { seq: 1, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
+      { seq: 2, type: "tool_output", toolName: "edit" },
+    ]),
+    "Edit file",
+  );
 });

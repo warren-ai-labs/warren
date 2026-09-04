@@ -372,10 +372,15 @@ private struct SessionHeader: View {
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            IOSModeToggle(selection: Binding(
-                get: { model.displayMode },
-                set: { model.setDisplayMode($0) }
-            ), isAgentSession: session?.isAgentBacked ?? false)
+            let sessionHasAttention = session.flatMap { model.agentStatusBySessionID[$0.id] ?? $0.agentStatus }?.attention != nil
+            IOSModeToggle(
+                selection: Binding(
+                    get: { model.displayMode },
+                    set: { model.setDisplayMode($0) }
+                ),
+                isAgentSession: session?.isAgentBacked ?? false,
+                hasAttention: sessionHasAttention
+            )
             Menu {
                 if hasSiblings {
                     Button("Switch session", systemImage: "rectangle.stack") { openSwitcher() }
