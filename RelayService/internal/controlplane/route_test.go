@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -109,12 +110,16 @@ func TestIPRelayAllowsDistinctPathRoutesAndRejectsOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const hostOne = "00000000-0000-4000-8000-000000000021"
-	const hostTwo = "00000000-0000-4000-8000-000000000022"
-	if err := registry.provisionHost(hostOne, "one"); err != nil {
+	keys, err := registry.createEnrollmentKeys(2, time.Hour, 1, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.provisionHost(hostTwo, "two"); err != nil {
+	hostOne, _, err := registry.claimHost(keys[0].Code, "one-secret", "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostTwo, _, err := registry.claimHost(keys[1].Code, "two-secret", "two")
+	if err != nil {
 		t.Fatal(err)
 	}
 	one := routeRecord{ID: "route-one", PublicHostname: "192.0.2.10", HostID: hostOne, Generation: 1, PathPrefix: "/t/route-one", AuthMode: "public", Enabled: true}

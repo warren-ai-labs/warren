@@ -45,7 +45,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebTest: ((String, String) -> Void)?
     private let onWebStop: () -> Void
     private let onWebReset: (() -> Void)?
-    private let onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    private let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
     private let relaySettings: WarrenDesktopRelaySettings
     private let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -150,7 +150,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebTest: ((String, String) -> Void)? = nil,
         onWebStop: @escaping () -> Void = {},
         onWebReset: (() -> Void)? = nil,
-        onRelayEnroll: ((String, String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,

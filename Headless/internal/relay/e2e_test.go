@@ -18,8 +18,8 @@ import (
 )
 
 // TestRelayE2E exercises the full Relay lifecycle: stand up a fresh
-// warren-relay on a loopback port, register a host, enroll it via the
-// enrollment ticket, wait for the supervised connector to come online,
+// warren-relay on a loopback port, mint a short enrollment key, let the
+// headless daemon actively claim a Host, wait for the supervised connector to come online,
 // generate a pairing code, exchange it for a web URL, and verify the
 // web URL resolves to a working authenticated endpoint.
 //
@@ -68,7 +68,6 @@ func TestRelayE2E(t *testing.T) {
 			"WARREN_RELAY_ADMIN_TOKEN="+adminToken,
 			"WARREN_RELAY_SIGNING_KEY="+signingKey,
 			"WARREN_RELAY_DATA="+filepath.Join(tmp, "registry.json"),
-			"WARREN_RELAY_PRINT_SETUP_LINK=0",
 		)
 		logFile := filepath.Join(tmp, "relay.log")
 		logF, err := os.Create(logFile)
@@ -97,18 +96,20 @@ func TestRelayE2E(t *testing.T) {
 		}
 	})
 
-	// Register a host with the relay. The relay returns an enrollment ticket
-	// and a pinned public key that the headless daemon needs to dial in.
-	registerResponse := postJSON(t, relayURL+"/v1/hosts", map[string]string{
-		"name": "E2E Test Host",
+	// Relay administrators mint a short-lived enrollment key. The Host claims
+	// its identity itself; no Host ID or Relay signing key is pre-created.
+	keyResponse := postJSON(t, relayURL+"/v1/admin/enrollment-keys", map[string]any{
+		"count": 1, "ttl": "10m", "max_uses": 1, "label": "e2e",
 	}, adminToken)
-	hostID := stringField(t, registerResponse, "host_id")
-	enrollmentTicket := stringField(t, registerResponse, "enrollment_ticket")
-	relayKeyID := stringField(t, registerResponse, "relay_key_id")
-	relayKey := stringField(t, registerResponse, "relay_public_key")
-	if hostID == "" || enrollmentTicket == "" || relayKeyID == "" || relayKey == "" {
-		t.Fatalf("incomplete register response: %+v", registerResponse)
+	keys, ok := keyResponse["keys"].([]any)
+	if !ok || len(keys) != 1 {
+		t.Fatalf("incomplete enrollment key response: %+v", keyResponse)
 	}
+	keyObject, ok := keys[0].(map[string]any)
+	if !ok {
+		t.Fatalf("invalid enrollment key object: %+v", keys[0])
+	}
+	enrollmentKey := stringField(t, keyObject, "key")
 
 	// Pick a loopback port for the headless daemon. The daemon serves its
 	// /healthz, /v1/state, and WebSocket on this port; the host only needs
@@ -130,11 +131,10 @@ func TestRelayE2E(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"WARREN_LISTEN=127.0.0.1:"+fmt.Sprint(headlessPort),
 		"WARREN_RELAY_URL="+relayURL,
-		"WARREN_RELAY_HOST_ID="+hostID,
-		"WARREN_RELAY_KEY_ID="+relayKeyID,
-		"WARREN_RELAY_KEY="+relayKey,
+		"WARREN_RELAY_ENROLLMENT_KEY="+enrollmentKey,
 		"WARREN_TOKEN_FILE="+tokenFile,
 		"WARREN_STATE="+filepath.Join(hostData, "state.json"),
+		"WARREN_SETTINGS_FILE="+filepath.Join(hostData, "settings.json"),
 		"WARREN_GHOSTLINE_SOCKET="+filepath.Join(hostData, "ghostline.sock"),
 		"WARREN_OUTPUT_DIR="+filepath.Join(hostData, "output"),
 		"WARREN_HEADLESS_LOG=info",
@@ -159,28 +159,30 @@ func TestRelayE2E(t *testing.T) {
 		t.Fatalf("headless did not become healthy; log:\n%s", tail)
 	}
 
-	// Enroll the host by exchanging the ticket for a permanent host secret
-	// registration. After this the relay knows the host is authorized to
-	// dial in.
-	enrollResponse := postJSON(t, relayURL+"/v1/hosts/"+hostID+"/enroll", map[string]string{
-		"enrollment_ticket": enrollmentTicket,
-		"host_secret":       hostToken,
-	}, "")
-	if enrolled, _ := enrollResponse["enrolled"].(bool); !enrolled {
-		t.Fatalf("enroll response missing enrolled=true: %+v", enrollResponse)
+	settingsResponse := getJSON(t, fmt.Sprintf("http://127.0.0.1:%d/v1/settings", headlessPort), hostToken)
+	relaySettings, ok := settingsResponse["relay"].(map[string]any)
+	if !ok {
+		t.Fatalf("headless settings missing relay metadata: %+v", settingsResponse)
+	}
+	hostID := stringField(t, relaySettings, "hostID")
+	if hostID == "" || relaySettings["relayKeyID"] == nil || relaySettings["relayKey"] == nil {
+		t.Fatalf("headless did not persist Relay claim metadata: %+v", relaySettings)
+	}
+	if _, present := relaySettings["enrollmentKey"]; present {
+		t.Fatal("headless persisted the one-time enrollment key")
 	}
 
 	// Wait for the supervised connector to dial in. The relay marks the
 	// host online when the BRLY/2 control stream is open.
 	onlineDeadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(onlineDeadline) {
-		body := getJSON(t, relayURL+"/v1/hosts/"+hostID, hostToken)
+		body := getJSON(t, relayURL+"/v1/hosts/"+hostID, adminToken)
 		if online, _ := body["online"].(bool); online {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	body := getJSON(t, relayURL+"/v1/hosts/"+hostID, hostToken)
+	body := getJSON(t, relayURL+"/v1/hosts/"+hostID, adminToken)
 	if online, _ := body["online"].(bool); !online {
 		tail, _ := os.ReadFile(hostLog)
 		t.Fatalf("host did not come online within 15s; relay body=%+v host log:\n%s", body, tail)
@@ -202,7 +204,7 @@ func TestRelayE2E(t *testing.T) {
 		t.Fatalf("pair response missing web_url: %+v", pairResponse)
 	}
 
-	// The web URL is a one-shot credential. Treat it like a signed ticket:
+	// The web URL is a reusable, short-lived invite. Treat it like a signed link:
 	// it must resolve to a working HTTP page, and the relay's roster
 	// endpoint must accept the host secret the same way the headless uses.
 	webReq, err := http.NewRequest("GET", webURL, nil)

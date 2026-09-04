@@ -8,7 +8,7 @@ in the daemon credential store.
 
 ## Workflow
 
-1. Enroll the Host with a one-time Relay ticket.
+1. Enroll the Host with a bounded-use Relay enrollment key.
 2. Validate or configure the route with Save & Test.
 3. Enable or disable the route explicitly.
 4. Report only the canonical public endpoint and credential-free status.

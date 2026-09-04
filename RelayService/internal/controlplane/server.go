@@ -52,13 +52,17 @@ type Config struct {
 	// valid after the code is exchanged. A ticket can be exchanged repeatedly
 	// during this window; each exchange gets its own refresh-capability family.
 	PairingTicketTTL time.Duration
-	AccessTTL        time.Duration
-	AllowedOrigin    string
-	TunnelBaseDomain string
+	// EnrollmentKeyTTL and EnrollmentKeyMaxUses are the defaults used by the
+	// administrator batch key endpoint when a request omits those fields.
+	EnrollmentKeyTTL     time.Duration
+	EnrollmentKeyMaxUses int
+	AccessTTL            time.Duration
+	AllowedOrigin        string
+	TunnelBaseDomain     string
 	// RefreshTTL controls optional expiry. Zero means the capability remains
 	// valid until its device association or Host is explicitly revoked.
-	RefreshTTL time.Duration
-	MaxBodyBytes     int64
+	RefreshTTL   time.Duration
+	MaxBodyBytes int64
 	// RateLimitWindow and the operation limits are fixed-window admission
 	// controls. A zero operation limit selects the secure default; negative
 	// values are rejected rather than silently disabling abuse protection.
@@ -166,6 +170,18 @@ func NewServer(config Config) (*Server, error) {
 	if config.PairingTicketTTL < 0 {
 		return nil, errors.New("pairing ticket TTL must be positive")
 	}
+	if config.EnrollmentKeyTTL == 0 {
+		config.EnrollmentKeyTTL = defaultEnrollmentKeyTTL
+	}
+	if config.EnrollmentKeyTTL < 0 {
+		return nil, errors.New("enrollment key TTL must be positive")
+	}
+	if config.EnrollmentKeyMaxUses == 0 {
+		config.EnrollmentKeyMaxUses = defaultEnrollmentKeyUses
+	}
+	if config.EnrollmentKeyMaxUses < 0 || config.EnrollmentKeyMaxUses > maxEnrollmentKeyUses {
+		return nil, fmt.Errorf("enrollment key uses must be between 1 and %d", maxEnrollmentKeyUses)
+	}
 	if config.AccessTTL == 0 {
 		config.AccessTTL = 15 * time.Minute
 	}
@@ -260,8 +276,8 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 
 func (server *Server) routes() {
 	server.mux.HandleFunc("GET /healthz", server.health)
-	server.mux.HandleFunc("POST /v1/hosts", server.provisionHost)
-	server.mux.HandleFunc("POST /v1/hosts/{hostID}/enroll", server.enrollHost)
+	server.mux.HandleFunc("POST /v1/admin/enrollment-keys", server.createEnrollmentKeys)
+	server.mux.HandleFunc("POST /v1/hosts/claim", server.claimHost)
 	server.mux.HandleFunc("GET /v1/host/connect", server.connectHost)
 	server.mux.HandleFunc("POST /v1/hosts/{hostID}/pairing", server.beginPairing)
 	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}", server.revokeHost)
@@ -486,78 +502,78 @@ func canonicalChallenge(challenge relayChallenge, hostID string) string {
 	return strings.Join([]string{challenge.Version, challenge.RelayID, challenge.Nonce, hostID, strings.Join(challenge.Capabilities, ",")}, "|")
 }
 
-func (server *Server) provisionHost(response http.ResponseWriter, request *http.Request) {
+func (server *Server) createEnrollmentKeys(response http.ResponseWriter, request *http.Request) {
 	if !secureEqual(bearerToken(request), server.config.AdminToken) {
 		http.Error(response, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Count   int    `json:"count"`
+		TTL     string `json:"ttl"`
+		MaxUses int    `json:"max_uses"`
+		Label   string `json:"label"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&body) != nil {
+	if err := decoder.Decode(&body); err != nil {
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
-	hostID, err := server.registry.provisionGeneratedHost(strings.TrimSpace(body.Name))
+	if body.Count == 0 {
+		body.Count = 1
+	}
+	if strings.TrimSpace(body.TTL) == "" {
+		body.TTL = server.config.EnrollmentKeyTTL.String()
+	}
+	ttl, err := time.ParseDuration(strings.TrimSpace(body.TTL))
 	if err != nil {
-		http.Error(response, "provision failed", http.StatusInternalServerError)
+		http.Error(response, "invalid enrollment key TTL", http.StatusBadRequest)
 		return
 	}
-	ticket, expires, _ := server.registry.enrollmentTicket(hostID)
-	keyID, publicKey := server.signer.currentPublicKey()
-	settingsURL := server.relaySettingsURL(hostID, ticket, keyID, publicKey)
-	writeJSON(response, http.StatusCreated, map[string]any{
-		"host_id":           hostID,
-		"enrollment_ticket": ticket,
-		"expires_at":        expires.UTC().Format(time.RFC3339),
-		"relay_key_id":      keyID,
-		"relay_public_key":  base64.RawStdEncoding.EncodeToString(publicKey),
-		// The setup link contains only the one-time enrollment ticket and
-		// public Relay metadata. It never carries the Host Secret.
-		"settings_url": settingsURL,
-	})
-}
-
-// NewSetupLink creates the initial operator setup link for a Relay. The first
-// pending Host is reused across restarts; once a Host has enrolled, no second
-// implicit Host is created and the empty string is returned. Additional Hosts
-// are provisioned through the Relay service's administrative API.
-func (server *Server) NewSetupLink(name string) (string, error) {
-	hostID, ticket, _, created, err := server.registry.bootstrapHost(strings.TrimSpace(name))
-	if err != nil || !created {
-		return "", err
+	if body.MaxUses == 0 {
+		body.MaxUses = server.config.EnrollmentKeyMaxUses
 	}
-	keyID, publicKey := server.signer.currentPublicKey()
-	return server.relaySettingsURL(hostID, ticket, keyID, publicKey), nil
+	keys, err := server.registry.createEnrollmentKeys(body.Count, ttl, body.MaxUses, body.Label)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	values := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		values = append(values, map[string]any{
+			"id":           key.ID,
+			"key":          key.Code,
+			"label":        key.Label,
+			"created_at":   key.CreatedAt.UTC().Format(time.RFC3339),
+			"expires_at":   key.ExpiresAt.UTC().Format(time.RFC3339),
+			"max_uses":     key.MaxUses,
+			"used_uses":    key.UsedUses,
+			"settings_url": server.relaySettingsURL(key.Code),
+		})
+	}
+	// The response contains bearer enrollment keys and matching settings URLs;
+	// prevent intermediary caches from retaining them beyond this request.
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusCreated, map[string]any{"keys": values})
 }
 
-// relaySettingsURL builds the canonical Warren desktop setup link. The
-// configured PublicURL may include a reverse-proxy path prefix; preserve that
-// prefix while dropping query and fragment components so deployment metadata
-// can never accidentally smuggle a secret into the link.
-func (server *Server) relaySettingsURL(hostID, enrollmentTicket, keyID string, publicKey []byte) string {
+// relaySettingsURL builds a Warren Desktop shortcut containing only the
+// Relay origin and a short-lived enrollment key. It never carries a Host ID,
+// daemon token, or Relay administrator credential.
+func (server *Server) relaySettingsURL(enrollmentKey string) string {
 	base := strings.TrimRight(relayPublicOrigin(server.config.PublicURL), "/") + strings.TrimRight(server.basePath, "/")
 	values := url.Values{}
 	values.Set("section", "relay")
 	values.Set("relayUrl", base)
-	values.Set("hostId", hostID)
-	values.Set("enrollmentTicket", enrollmentTicket)
-	values.Set("relayKeyId", keyID)
-	values.Set("relayPublicKey", base64.RawStdEncoding.EncodeToString(publicKey))
+	values.Set("enrollmentKey", enrollmentKey)
 	return (&url.URL{Scheme: "warren", Host: "settings", RawQuery: values.Encode()}).String()
 }
 
-func (server *Server) enrollHost(response http.ResponseWriter, request *http.Request) {
-	hostID := request.PathValue("hostID")
-	if !server.pairingLimiter.allow("enroll-ip:"+requestClientIP(request), "enroll-host:"+hostID) {
-		writeRateLimit(response, server.config.RateLimitWindow)
-		return
-	}
+func (server *Server) claimHost(response http.ResponseWriter, request *http.Request) {
 	var body struct {
-		EnrollmentTicket string `json:"enrollment_ticket"`
-		HostSecret       string `json:"host_secret"`
+		EnrollmentKey string `json:"enrollment_key"`
+		HostSecret    string `json:"host_secret"`
+		Name          string `json:"name"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
@@ -565,15 +581,26 @@ func (server *Server) enrollHost(response http.ResponseWriter, request *http.Req
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
+	keyDigest := hashCredential(strings.TrimSpace(body.EnrollmentKey))
+	if !server.pairingLimiter.allow("claim-ip:"+requestClientIP(request), "claim-key:"+keyDigest) {
+		writeRateLimit(response, server.config.RateLimitWindow)
+		return
+	}
 	secret := strings.TrimSpace(body.HostSecret)
-	generation, err := server.registry.enrollment(hostID, body.EnrollmentTicket, secret)
+	hostID, generation, err := server.registry.claimHost(body.EnrollmentKey, secret, body.Name)
 	if err != nil {
 		http.Error(response, "invalid enrollment", http.StatusUnauthorized)
 		return
 	}
 	server.clearLiveActivityRegistrations(hostID)
 	keyID, publicKey := server.signer.currentPublicKey()
-	writeJSON(response, http.StatusOK, map[string]any{"host_id": hostID, "generation": generation, "enrolled": true, "relay_key_id": keyID, "relay_public_key": base64.RawStdEncoding.EncodeToString(publicKey)})
+	writeJSON(response, http.StatusOK, map[string]any{
+		"host_id":          hostID,
+		"generation":       generation,
+		"enrolled":         true,
+		"relay_key_id":     keyID,
+		"relay_public_key": base64.RawStdEncoding.EncodeToString(publicKey),
+	})
 }
 
 func (server *Server) revokeHost(response http.ResponseWriter, request *http.Request) {

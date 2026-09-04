@@ -23,7 +23,9 @@ Do not edit `Web/dist/` directly. It is Vite build output and is cleared and reg
 Runtime parameters are injected through meta placeholders in `index.html`:
 
 - `__WARREN_INJECTED_PARAMS__`: local Web host and token parameters.
-- `__WARREN_RELAY_HOST_ID__`: target Host ID for the central Relay.
+- `__WARREN_RELAY_HOST_ID__`: Host ID injected when Relay renders a
+  host-scoped Web page (the Host ID is allocated during Headless claim, not by
+  this client).
 
 SSH, the WebSocket protocol, and the Host resource model do not belong to the Vite project; they are maintained by the Go server side.
 

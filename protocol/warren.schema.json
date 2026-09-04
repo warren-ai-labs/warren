@@ -391,7 +391,7 @@
     },
     "httpRoutes": {
       "type": "array",
-      "description": "HTTP routes exposed by the Host. WebSocket upgrades live under /v1/ws; the public Relay-facing endpoints cover health, settings, public access, and Relay enrollment/pairing.",
+      "description": "HTTP routes exposed by the Host. WebSocket upgrades live under /v1/ws; the public Relay-facing endpoints cover health, settings, public access, and Relay join/pairing.",
       "items": {
         "type": "object",
         "required": ["method", "path"],
@@ -407,7 +407,7 @@
         { "method": "GET", "path": "/v1/ws", "purpose": "Main WebSocket upgrade; the full RPC surface lives here." },
         { "method": "GET", "path": "/v1/settings", "purpose": "Read settings (token, model, etc)." },
         { "method": "PUT", "path": "/v1/settings", "purpose": "Update settings." },
-        { "method": "POST", "path": "/v1/relay/enroll", "purpose": "Redeem a Relay enrollment ticket and bind this Host to its Relay key." },
+        { "method": "POST", "path": "/v1/relay/join", "purpose": "Ask Headless to claim this Host with a Relay enrollment key and bind the returned Relay signing key." },
         { "method": "POST", "path": "/v1/relay/pairing", "purpose": "Issue a short-lived pairing code for a Web client." },
         { "method": "POST", "path": "/v1/maintenance", "purpose": "Toggle maintenance mode." },
         { "method": "POST", "path": "/v1/runtime/refresh", "purpose": "Recompute runtime sizes for terminal sessions." },

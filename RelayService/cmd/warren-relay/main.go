@@ -29,34 +29,27 @@ func main() {
 		log.Fatal(err)
 	}
 	server, err := controlplane.NewServer(controlplane.Config{
-		PublicURL:        env("WARREN_RELAY_PUBLIC_URL", "http://127.0.0.1:8080"),
-		AdminToken:       os.Getenv("WARREN_RELAY_ADMIN_TOKEN"),
-		SigningKey:       []byte(os.Getenv("WARREN_RELAY_SIGNING_KEY")),
-		APNsKeyID:        os.Getenv("WARREN_RELAY_APNS_KEY_ID"),
-		APNsTeamID:       os.Getenv("WARREN_RELAY_APNS_TEAM_ID"),
-		APNsBundleID:     os.Getenv("WARREN_RELAY_APNS_BUNDLE_ID"),
-		APNsPrivateKey:   apnsPrivateKey,
-		APNsProduction:   apnsProduction,
-		APNsEndpoint:     os.Getenv("WARREN_RELAY_APNS_ENDPOINT"),
-		DataURL:          env("WARREN_RELAY_DATA", "./data/registry.json"),
-		AllowedOrigin:    allowedOrigin,
-		TunnelBaseDomain: env("WARREN_RELAY_TUNNEL_BASE_DOMAIN", "tunnel.local"),
-		PairingTTL:       durationEnv("WARREN_RELAY_PAIRING_TTL", 7*24*time.Hour),
-		PairingTicketTTL: durationEnv("WARREN_RELAY_PAIRING_TICKET_TTL", 7*24*time.Hour),
-		AccessTTL:        durationEnv("WARREN_RELAY_ACCESS_TTL", 15*time.Minute),
-		Logger:           slog.Default(),
+		PublicURL:            env("WARREN_RELAY_PUBLIC_URL", "http://127.0.0.1:8080"),
+		AdminToken:           os.Getenv("WARREN_RELAY_ADMIN_TOKEN"),
+		SigningKey:           []byte(os.Getenv("WARREN_RELAY_SIGNING_KEY")),
+		APNsKeyID:            os.Getenv("WARREN_RELAY_APNS_KEY_ID"),
+		APNsTeamID:           os.Getenv("WARREN_RELAY_APNS_TEAM_ID"),
+		APNsBundleID:         os.Getenv("WARREN_RELAY_APNS_BUNDLE_ID"),
+		APNsPrivateKey:       apnsPrivateKey,
+		APNsProduction:       apnsProduction,
+		APNsEndpoint:         os.Getenv("WARREN_RELAY_APNS_ENDPOINT"),
+		DataURL:              env("WARREN_RELAY_DATA", "./data/registry.json"),
+		AllowedOrigin:        allowedOrigin,
+		TunnelBaseDomain:     env("WARREN_RELAY_TUNNEL_BASE_DOMAIN", "tunnel.local"),
+		PairingTTL:           durationEnv("WARREN_RELAY_PAIRING_TTL", 7*24*time.Hour),
+		PairingTicketTTL:     durationEnv("WARREN_RELAY_PAIRING_TICKET_TTL", 7*24*time.Hour),
+		EnrollmentKeyTTL:     durationEnv("WARREN_RELAY_ENROLLMENT_KEY_TTL", 24*time.Hour),
+		EnrollmentKeyMaxUses: intEnv("WARREN_RELAY_ENROLLMENT_KEY_MAX_USES", 1),
+		AccessTTL:            durationEnv("WARREN_RELAY_ACCESS_TTL", 15*time.Minute),
+		Logger:               slog.Default(),
 	})
 	if err != nil {
 		log.Fatal(err)
-	}
-	if env("WARREN_RELAY_PRINT_SETUP_LINK", "1") != "0" {
-		setupLink, setupErr := server.NewSetupLink(env("WARREN_RELAY_SETUP_NAME", "Warren Host"))
-		if setupErr != nil {
-			log.Fatal("create Relay setup link: ", setupErr)
-		}
-		if setupLink != "" {
-			slog.Info("Warren Relay setup link", "setup_link", setupLink)
-		}
 	}
 	slog.Info("Warren Relay listening", "address", address)
 	httpServer := &http.Server{
@@ -93,6 +86,18 @@ func durationEnv(name string, fallback time.Duration) time.Duration {
 		log.Fatalf("%s must be a valid duration: %v", name, err)
 	}
 	return duration
+}
+
+func intEnv(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Fatalf("%s must be an integer: %v", name, err)
+	}
+	return parsed
 }
 
 func boolEnv(name string, fallback bool) (bool, error) {

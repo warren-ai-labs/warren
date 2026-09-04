@@ -10,7 +10,19 @@ From the repository root:
 mise run relay:dev
 ```
 
-This command automatically generates a local development secret, starts Relay, registers the current Mac, builds and starts Warren, waits for the Host to come online, creates a seven-day opaque `/invite/<opaque>/` pairing link, and opens the Web/PWA. Generated development state is stored in the git-ignored `.build/relay-dev/8080` directory, and secret files use `0600` permissions. The local Relay listens on all LAN interfaces by default and writes the Mac's LAN address into the pairing URL, so phones on the same network as the Mac can reach it. Use `WARREN_RELAY_DEV_HOST=192.168.1.23` to specify an address reachable from the phone, or `WARREN_RELAY_DEV_BIND_HOST=192.168.1.23` to restrict listening to a single interface. This development mode is only suitable for a trusted LAN; do not expose the port to the public internet.
+This command automatically generates a local development secret, starts Relay,
+creates a short-lived enrollment key through the admin API, builds and starts
+Warren, waits for Headless to claim the Host identity, creates a seven-day
+opaque `/invite/<opaque>/` pairing link, and opens the Web/PWA. The generated
+Desktop `warren://settings` URL is printed for manual connection as well.
+Generated development state is stored in the git-ignored
+`.build/relay-dev/8080` directory, and secret files use `0600` permissions. The
+local Relay listens on all LAN interfaces by default and writes the Mac's LAN
+address into the pairing URL, so phones on the same network as the Mac can
+reach it. Use `WARREN_RELAY_DEV_HOST=192.168.1.23` to specify an address
+reachable from the phone, or `WARREN_RELAY_DEV_BIND_HOST=192.168.1.23` to
+restrict listening to a single interface. This development mode is only
+suitable for a trusted LAN; do not expose the port to the public internet.
 
 Daily commands:
 
@@ -20,20 +32,27 @@ mise run relay:status  # show Relay and Host status
 mise run relay:stop    # stop only the Relay; keep Warren running and terminal sessions alive
 ```
 
-For a deployed public Relay, the service startup log gives the first operator
-the setup link. For every later Host, the Relay Administrator creates a Host
-record in the service-owned API and gives the operator the returned setup
-link. The operator opens that link in Warren Desktop (or uses the client
-shortcut):
+For a deployed public Relay, the Relay Administrator creates one or more
+enrollment keys in the service-owned API and gives a key (or its settings
+shortcut) to each Host operator. The operator opens the shortcut in Warren
+Desktop, or uses the client shortcut directly:
 
 ```bash
+curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
+  -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"team hosts"}' \
+  | jq -r '.keys[] | [.key, .settings_url] | @tsv'
+
+warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'
 warren relay connect '<settings-url>'
 ```
 
-Afterwards, the daemon keeps the Host ID and pinned Relay key in its protected
-settings, reconnects automatically, and never exposes the Host Secret. A
-managed Warren build may provide the Relay URL by default; enrollment still
-comes from the service-owned setup invitation.
+The settings shortcut only fills the Relay URL and enrollment key; Desktop does
+not consume the key until the operator presses **Connect Relay**. Headless then
+calls `POST /v1/hosts/claim`, lets Relay allocate the Host ID, and stores the
+Host ID and pinned Relay key locally. A daemon can perform the same active step
+at startup with `WARREN_RELAY_URL` and `WARREN_RELAY_ENROLLMENT_KEY`.
 
 The installed CLI also provides the short path for sharing one link with
 several devices from an already enrolled Host:
@@ -66,6 +85,10 @@ export WARREN_RELAY_TUNNEL_BASE_DOMAIN='tunnel.example.com'
 # duration such as 72h when a shorter sharing window is appropriate.
 export WARREN_RELAY_PAIRING_TTL='168h'
 export WARREN_RELAY_PAIRING_TICKET_TTL='168h'
+# Enrollment keys default to 24 hours and one Host claim. The administrator
+# can override these defaults with Go durations and a bounded use count.
+export WARREN_RELAY_ENROLLMENT_KEY_TTL='24h'
+export WARREN_RELAY_ENROLLMENT_KEY_MAX_USES='1'
 # Optional Live Activity forwarding. Use the production endpoint for App Store
 # builds and the sandbox endpoint for development builds.
 export WARREN_RELAY_APNS_KEY_ID='XXXXXXXXXX'
@@ -130,70 +153,65 @@ must terminate TLS instead.
 ## Host Registration and Connection
 
 The daemon token in `~/.warren/token` is the canonical Host Secret. The Relay
-creates a Host record and one-time enrollment ticket, then enrolls that
-existing token; Relay stores only `sha256(Host Secret)`. Re-enrollment or
-revocation bumps the Host generation, disconnects the old socket, and
-invalidates capabilities from the previous generation.
+administrator creates short-lived enrollment keys; each key is a 16-letter
+`XXXX-XXXX-XXXX-XXXX` code with an expiry and a maximum use count. The Relay
+stores only a hash of each key and of each Host Secret. A key is consumed when
+Headless claims a Host, and the Relay allocates the Host UUID at that point.
+Claim retries with the same Host Secret are idempotent, so a lost response does
+not consume another use or create another Host. Re-enrollment or revocation
+bumps the Host generation, disconnects the old socket, and invalidates
+capabilities from the previous generation.
 
-### Generate a Warren setup URL
+### Generate enrollment keys
 
-On a fresh Relay (or while its first Host is still pending), the Relay prints
-an initial setup link at startup. Copy the value after `setup_link=` from
-`docker logs` (or the service log) and open it in Warren Desktop on the Host
-that should connect. The link provisions the first Host; the Relay generates
-its UUID automatically. Once a Host has enrolled, restarts do not create a new
-implicit Host; use the service-owned API below for additional Hosts.
-
-The setup link is a bearer credential. Restrict access to the container/service
-logs and remove the link from copied logs or chat after enrollment.
+The administrator can create one key or a batch. Defaults are 24 hours and one
+use; `ttl` accepts a Go duration and `max_uses` is bounded by the service:
 
 ```bash
-docker logs warren-relay 2>&1 | sed -n 's/.*setup_link=\([^ ]*\).*/\1/p' | tail -n 1
-```
-
-Send the printed `warren://settings?...` value to the Host operator. It is a
-one-time credential, expires after ten minutes, and should be removed from
-shell history or chat after the Host connects. The generated URL always uses
-`WARREN_RELAY_PUBLIC_URL`, which must be reachable by the Host.
-
-For additional Hosts, the Relay administrator can call the service-owned API.
-The request contains only an optional display name; the Relay still generates
-the Host UUID and returns it in `host_id` and `settings_url`:
-
-```bash
-curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/hosts" \
+curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"My Mac"}' | jq -er '.settings_url'
+  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"team hosts"}' \
+  | jq -r '.keys[] | [.key, .expires_at, .settings_url] | @tsv'
 ```
 
-The production image is distroless and intentionally has no shell, `curl`, or
-admin subcommand, so `docker exec warren-relay ...` is not available. The
-container command above publishes the Relay port; run the request from the
-Docker host with `WARREN_RELAY_PUBLIC_URL=http://127.0.0.1:8080` when that is
-the address reachable from the admin shell. The setup link itself continues to
-use the public URL configured in the Relay container.
+The response contains the clear-text key exactly once and a matching
+`warren://settings` URL. Treat both as bearer credentials. The settings URL
+only fills Desktop's Relay URL and key fields; it does not consume the key
+until the operator presses **Connect Relay**.
 
-If the admin machine cannot reach a published port, run a one-shot `curl`
-helper on the Relay container's network instead of using `docker exec`:
+The production image is distroless and intentionally has no shell, `curl`, or
+admin subcommand, so `docker exec warren-relay ...` is not available. Publish
+the Relay port and run the request from the Docker host (or a one-shot helper
+on the Relay network):
 
 ```bash
 docker run --rm --network container:warren-relay curlimages/curl:8.12.1 \
-  -fsS -X POST http://127.0.0.1:8080/v1/hosts \
+  -fsS -X POST http://127.0.0.1:8080/v1/admin/enrollment-keys \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"My Mac"}' \
-  | jq -er '.settings_url'
+  -d '{"count":1}' \
+  | jq -r '.keys[0] | [.key, .settings_url] | @tsv'
 ```
 
-The response contains the generated `host_id`, `enrollment_ticket`, the Relay
-signing public key, and a canonical `settings_url`. Give that
-`warren://settings` link to the Warren Host operator. Opening it in Warren
-Desktop consumes the one-time ticket through the local daemon, pins the Relay
-key, and starts the connector. The link contains no daemon token and should be
-discarded after enrollment; the ticket is valid for ten minutes and cannot be
-reused. A managed deployment may use `warren relay connect` with the same link,
-but the Host Secret remains inside the daemon.
+Give the key or settings URL to the Host operator. Headless actively claims the
+Host and pins the Relay signing key:
+
+```bash
+WARREN_RELAY_URL="$WARREN_RELAY_PUBLIC_URL" \
+WARREN_RELAY_ENROLLMENT_KEY='<enrollment-key>' \
+warren-headless
+```
+
+The client-side equivalent is:
+
+```bash
+warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'
+warren relay connect '<settings-url>'
+```
+
+Headless supplies the daemon token itself; the Relay administrator token never
+enters Desktop, CLI, or a `warren://settings` URL.
 
 The daemon stores the Relay URL, Host ID, and signing key in its settings and
 opens exactly one outbound `wss://.../v1/host/connect` socket. Control-plane
@@ -211,11 +229,11 @@ Relay then forwards those snapshots to APNs. Relay does not parse BRLY/2
 terminal frames, and an Activity never grants an indefinite background
 WebSocket.
 
-Desktop and other local clients can use the equivalent Headless endpoint
-`POST /v1/relay/enroll` with `relayUrl`, `hostId`, and `enrollmentTicket`.
-Headless supplies the daemon token itself, validates the returned signing key,
-and persists the Relay metadata. This endpoint is intentionally unrelated to
-Public Access route settings.
+Desktop and other local clients use the token-protected Headless endpoint
+`POST /v1/relay/join` with `relayUrl` and `enrollmentKey`. Headless calls the
+Relay claim endpoint, validates the returned signing key, persists the Relay
+metadata, and starts the outbound connector. This endpoint is intentionally
+unrelated to Public Access route settings.
 
 ## Pairing, Discovery, and Revocation
 
@@ -257,8 +275,9 @@ curl -sS -X DELETE https://relay.example.com/v1/hosts/<host-uuid> \
 ## Security Boundaries
 
 - The admin API uses a separate bootstrap token; the Host Secret remains the daemon token and is never sent to a browser.
-- Enrollment tickets remain one-time and short-lived. Pairing codes and client
-  pairing links are reusable for their configured seven-day sharing window.
+- Enrollment keys are short-lived and bounded by their configured use count.
+  Pairing codes and client pairing links are reusable for their configured
+  seven-day sharing window.
   Access capabilities are Ed25519-signed and include scope, route, client, JTI,
   expiry, and generation claims.
 - Client capabilities appear only in the first WebSocket auth frame (or an `Authorization` header for an owner route), never in query strings or normal access logs.

@@ -75,11 +75,11 @@ description = "Run the remote Relay control plane"
 run = "go run ./RelayService/cmd/warren-relay"
 
 [tasks."relay:dev"]
-description = "One command: start local Relay, connect Warren, and open Remote Web"
+description = "Start local Relay, create an enrollment key, claim Warren, and open Remote Web"
 run = "bash scripts/relay-dev.sh up"
 
 [tasks."relay:connect"]
-description = "Connect this Mac to WARREN_RELAY_URL and open Remote Web"
+description = "Use WARREN_RELAY_URL plus an enrollment key to claim this Host and open Remote Web"
 run = "bash scripts/relay-dev.sh up"
 
 [tasks."relay:start"]
@@ -107,7 +107,7 @@ description = "Run Relay auth, persistence and forwarding tests"
 run = "go test -race ./RelayService/..."
 
 [tasks."relay:e2e"]
-description = "Run the full Relay end-to-end test (relay up, host enroll, web pair, roster)"
+description = "Run the full Relay end-to-end test (key claim, host connect, web pair, roster)"
 run = "go test -race -run TestRelayE2E -timeout 90s -v ./Headless/internal/relay/..."
 
 [tasks.accept]

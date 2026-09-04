@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -16,32 +15,21 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
 
-func TestRelayEnrollmentUsesDaemonTokenAndPersistsOnlyPinnedMetadata(t *testing.T) {
-	const (
-		daemonToken = "daemon-token-for-test"
-		hostID      = "00000000-0000-4000-8000-000000000031"
-		ticket      = "one-time-enrollment-ticket"
-	)
-	var seenSecret atomic.Bool
-	relay := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/v1/hosts/"+hostID+"/enroll" {
-			http.NotFound(writer, request)
-			return
-		}
-		var body map[string]string
-		if json.NewDecoder(request.Body).Decode(&body) != nil || body["enrollment_ticket"] != ticket || body["host_secret"] != daemonToken {
-			http.Error(writer, "invalid enrollment payload", http.StatusUnauthorized)
-			return
-		}
-		seenSecret.Store(true)
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"relay_key_id":"key-1","relay_public_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}`)
-	}))
-	defer relay.Close()
-
+func TestRelayJoinUsesDaemonOwnedEnrollmentAndPersistsOnlyPinnedMetadata(t *testing.T) {
+	const daemonToken = "daemon-token-for-test"
+	const hostID = "00000000-0000-4000-8000-000000000031"
+	var seenURL, seenKey, seenName string
 	service := &Service{Settings: settings.Settings{}}
 	var starts atomic.Int32
 	httpServer := NewHTTPServer(service, daemonToken, nil)
+	httpServer.RelayEnroll = func(ctx context.Context, relayURL, enrollmentKey, hostName string) error {
+		if ctx == nil {
+			t.Fatal("join callback received a nil context")
+		}
+		seenURL, seenKey, seenName = relayURL, enrollmentKey, hostName
+		service.Settings.Relay = settings.RelaySettings{Enabled: true, URL: relayURL, HostID: hostID, RelayKeyID: "key-1", RelayKey: "pinned-key"}
+		return nil
+	}
 	httpServer.RelayStart = func() error {
 		starts.Add(1)
 		return nil
@@ -50,37 +38,41 @@ func TestRelayEnrollmentUsesDaemonTokenAndPersistsOnlyPinnedMetadata(t *testing.
 	defer server.Close()
 
 	body, _ := json.Marshal(map[string]string{
-		"relayUrl":         relay.URL + "/",
-		"hostId":           hostID,
-		"enrollmentTicket": ticket,
+		"relayUrl":      "https://relay.example.test/",
+		"enrollmentKey": "AAAA-BBBB-CCCC-DDDD",
+		"hostName":      "Mac",
 	})
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/enroll", bytes.NewReader(body))
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/join", bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+daemonToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response.StatusCode != http.StatusOK {
-		t.Fatalf("relay enrollment: response=%v err=%v", response, err)
+		t.Fatalf("relay join: response=%v err=%v", response, err)
 	}
 	response.Body.Close()
-	if !seenSecret.Load() {
-		t.Fatal("daemon token was not used for Relay enrollment")
+	if seenURL != "https://relay.example.test/" || seenKey != "AAAA-BBBB-CCCC-DDDD" || seenName != "Mac" {
+		t.Fatalf("join callback values = %q %q %q", seenURL, seenKey, seenName)
 	}
 	value := service.RelaySettingsSnapshot()
-	if !value.Enabled || value.URL != relay.URL || value.HostID != hostID || value.RelayKeyID != "key-1" || value.RelayKey == "" {
+	if !value.Enabled || value.URL != seenURL || value.HostID != hostID || value.RelayKeyID != "key-1" || value.RelayKey == "" {
 		t.Fatalf("unexpected Relay settings: %#v", value)
 	}
 	if starts.Load() != 1 {
 		t.Fatalf("Relay lifecycle start count = %d, want 1", starts.Load())
 	}
 	encoded, _ := json.Marshal(value)
-	if strings.Contains(string(encoded), ticket) || strings.Contains(string(encoded), daemonToken) {
+	if strings.Contains(string(encoded), seenKey) || strings.Contains(string(encoded), daemonToken) {
 		t.Fatalf("credential leaked into persisted Relay settings: %s", encoded)
 	}
 }
 
-func TestRelayEnrollmentRejectsUnauthorizedAndUnsafeInput(t *testing.T) {
+func TestRelayJoinRejectsUnauthorizedAndUnsafeInput(t *testing.T) {
 	service := &Service{Settings: settings.Settings{}}
 	httpServer := NewHTTPServer(service, "daemon-token", nil)
+	httpServer.RelayEnroll = func(_ context.Context, relayURL, _, _ string) error {
+		_, err := normalizeRelayEnrollmentURL(relayURL)
+		return err
+	}
 	server := httptest.NewServer(httpServer.Handler())
 	defer server.Close()
 
@@ -89,14 +81,14 @@ func TestRelayEnrollmentRejectsUnauthorizedAndUnsafeInput(t *testing.T) {
 		body string
 		want int
 	}{
-		{name: "unauthorized", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusUnauthorized},
-		{name: "invalid host", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"not-a-host","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
-		{name: "unsafe URL", body: `{"relayUrl":"https://relay.example/../private","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
-		{name: "legacy URL field", body: `{"url":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","enrollmentTicket":"ticket"}`, want: http.StatusBadRequest},
-		{name: "legacy ticket field", body: `{"relayUrl":"http://127.0.0.1:1","hostId":"00000000-0000-4000-8000-000000000031","ticket":"ticket"}`, want: http.StatusBadRequest},
+		{name: "unauthorized", body: `{"relayUrl":"http://127.0.0.1:1","enrollmentKey":"AAAA-BBBB-CCCC-DDDD"}`, want: http.StatusUnauthorized},
+		{name: "missing key", body: `{"relayUrl":"http://127.0.0.1:1"}`, want: http.StatusBadRequest},
+		{name: "unsafe URL", body: `{"relayUrl":"https://relay.example/../private","enrollmentKey":"AAAA-BBBB-CCCC-DDDD"}`, want: http.StatusBadRequest},
+		{name: "legacy URL field", body: `{"url":"http://127.0.0.1:1","enrollmentKey":"AAAA-BBBB-CCCC-DDDD"}`, want: http.StatusBadRequest},
+		{name: "unknown field", body: `{"relayUrl":"http://127.0.0.1:1","unknown":"value","enrollmentKey":"AAAA-BBBB-CCCC-DDDD"}`, want: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/enroll", strings.NewReader(test.body))
+			request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/join", strings.NewReader(test.body))
 			if test.name != "unauthorized" {
 				request.Header.Set("Authorization", "Bearer daemon-token")
 			}
@@ -110,55 +102,6 @@ func TestRelayEnrollmentRejectsUnauthorizedAndUnsafeInput(t *testing.T) {
 				t.Fatalf("status=%d, want %d", response.StatusCode, test.want)
 			}
 		})
-	}
-}
-
-func TestRelayEnrollmentDoesNotFollowRedirectsWithDaemonToken(t *testing.T) {
-	const (
-		daemonToken = "daemon-token-for-redirect-test"
-		hostID      = "00000000-0000-4000-8000-000000000032"
-	)
-	var redirected atomic.Bool
-	var leaked atomic.Bool
-	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		redirected.Store(true)
-		if request.Header.Get("Authorization") != "" {
-			leaked.Store(true)
-		}
-		http.Error(writer, "unexpected redirect target", http.StatusBadRequest)
-	}))
-	defer target.Close()
-	redirect := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		http.Redirect(writer, request, target.URL, http.StatusFound)
-	}))
-	defer redirect.Close()
-
-	service := &Service{Settings: settings.Settings{}}
-	httpServer := NewHTTPServer(service, daemonToken, nil)
-	server := httptest.NewServer(httpServer.Handler())
-	defer server.Close()
-
-	body, _ := json.Marshal(map[string]string{
-		"relayUrl":         redirect.URL,
-		"hostId":           hostID,
-		"enrollmentTicket": "redirect-ticket",
-	})
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/relay/enroll", bytes.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+daemonToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status=%d, want %d", response.StatusCode, http.StatusBadGateway)
-	}
-	if redirected.Load() {
-		t.Fatal("enrollment followed a redirect to a different host")
-	}
-	if leaked.Load() {
-		t.Fatal("enrollment leaked the daemon token to a redirect target")
 	}
 }
 

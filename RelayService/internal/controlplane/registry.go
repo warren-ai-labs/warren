@@ -23,17 +23,15 @@ var errHostNotFound = errors.New("host not found")
 var errRouteConflict = errors.New("route hostname already owned")
 
 type hostRecord struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Online          bool      `json:"online"`
-	ConnectedAt     time.Time `json:"connected_at,omitempty"`
-	LastSeenAt      time.Time `json:"last_seen_at,omitempty"`
-	CredentialHash  string    `json:"credential_hash,omitempty"`
-	Generation      uint64    `json:"generation"`
-	PairingToken    string    `json:"-"`
-	PairingUntil    time.Time `json:"-"`
-	EnrollmentToken string    `json:"-"`
-	EnrollmentUntil time.Time `json:"-"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Online         bool      `json:"online"`
+	ConnectedAt    time.Time `json:"connected_at,omitempty"`
+	LastSeenAt     time.Time `json:"last_seen_at,omitempty"`
+	CredentialHash string    `json:"credential_hash,omitempty"`
+	Generation     uint64    `json:"generation"`
+	PairingToken   string    `json:"-"`
+	PairingUntil   time.Time `json:"-"`
 	// PairingVersion fences invites issued by an older code when a new code is
 	// generated. The version is persisted so a shareable invite remains valid
 	// across Relay restarts while still being invalidated by rotation.
@@ -67,24 +65,27 @@ type routeRecord struct {
 }
 
 type persistedRegistry struct {
-	Hosts   []*hostRecord          `json:"hosts"`
-	Invites []*pairingInviteRecord `json:"invites,omitempty"`
+	Hosts          []*hostRecord          `json:"hosts"`
+	Invites        []*pairingInviteRecord `json:"invites,omitempty"`
+	EnrollmentKeys []*enrollmentKeyRecord `json:"enrollment_keys,omitempty"`
 }
 
 type registry struct {
-	mu      sync.RWMutex
-	hosts   map[string]*hostRecord
-	invites map[string]pairingInviteRecord
-	now     func() time.Time
-	dataURL string
+	mu             sync.RWMutex
+	hosts          map[string]*hostRecord
+	invites        map[string]pairingInviteRecord
+	enrollmentKeys map[string]*enrollmentKeyRecord
+	now            func() time.Time
+	dataURL        string
 }
 
 func newRegistry(dataURL string) (*registry, error) {
 	registry := &registry{
-		hosts:   make(map[string]*hostRecord),
-		invites: make(map[string]pairingInviteRecord),
-		now:     time.Now,
-		dataURL: dataURL,
+		hosts:          make(map[string]*hostRecord),
+		invites:        make(map[string]pairingInviteRecord),
+		enrollmentKeys: make(map[string]*enrollmentKeyRecord),
+		now:            time.Now,
+		dataURL:        dataURL,
 	}
 	if dataURL == "" {
 		return registry, nil
@@ -112,8 +113,6 @@ func newRegistry(dataURL string) (*registry, error) {
 		record.Tunnel = nil
 		record.PairingToken = ""
 		record.PairingUntil = time.Time{}
-		record.EnrollmentToken = ""
-		record.EnrollmentUntil = time.Time{}
 		if record.Route != nil {
 			route := *record.Route
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
@@ -121,6 +120,13 @@ func newRegistry(dataURL string) (*registry, error) {
 			record.Route = &route
 		}
 		registry.hosts[record.ID] = record
+	}
+	for _, key := range stored.EnrollmentKeys {
+		if key == nil || strings.TrimSpace(key.ID) == "" || strings.TrimSpace(key.Hash) == "" || key.ExpiresAt.IsZero() || key.MaxUses <= 0 || key.UsedUses < 0 || key.UsedUses > key.MaxUses {
+			continue
+		}
+		copy := *key
+		registry.enrollmentKeys[copy.ID] = &copy
 	}
 	now := registry.now()
 	for _, invite := range stored.Invites {
@@ -136,110 +142,8 @@ func newRegistry(dataURL string) (*registry, error) {
 	return registry, nil
 }
 
-func (registry *registry) provisionHost(id, name string) error {
-	if !validHostID(id) {
-		return errors.New("invalid host ID")
-	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	return registry.provisionHostLocked(id, name)
-}
-
-// provisionGeneratedHost creates a new Host identity inside the Relay. Host
-// UUIDs are Relay-owned identifiers; callers never choose or submit them.
-func (registry *registry) provisionGeneratedHost(name string) (string, error) {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	for attempts := 0; attempts < 3; attempts++ {
-		id, err := newHostID()
-		if err != nil {
-			return "", err
-		}
-		if _, exists := registry.hosts[id]; exists {
-			continue
-		}
-		err = registry.provisionHostLocked(id, name)
-		if err != nil {
-			return "", err
-		}
-		return id, nil
-	}
-	return "", errors.New("could not allocate a unique host ID")
-}
-
-// bootstrapHost provisions the first Host used by the operator-facing setup
-// link. A pending, not-yet-enrolled Host is reused after a Relay restart so
-// startup does not accumulate orphaned Host records. Once at least one Host
-// has enrolled, startup does not create another implicit Host.
-func (registry *registry) bootstrapHost(name string) (string, string, time.Time, bool, error) {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	for id, record := range registry.hosts {
-		if record == nil || record.CredentialHash != "" {
-			continue
-		}
-		if err := registry.provisionHostLocked(id, name); err != nil {
-			return "", "", time.Time{}, false, err
-		}
-		fresh := registry.hosts[id]
-		return id, fresh.EnrollmentToken, fresh.EnrollmentUntil, true, nil
-	}
-	if len(registry.hosts) > 0 {
-		return "", "", time.Time{}, false, nil
-	}
-	id, err := newHostID()
-	if err != nil {
-		return "", "", time.Time{}, false, err
-	}
-	if err := registry.provisionHostLocked(id, name); err != nil {
-		return "", "", time.Time{}, false, err
-	}
-	fresh := registry.hosts[id]
-	return id, fresh.EnrollmentToken, fresh.EnrollmentUntil, true, nil
-}
-
-// provisionHostLocked replaces or creates a Host record. The caller must hold
-// registry.mu for writing.
-func (registry *registry) provisionHostLocked(id, name string) error {
-	previous := registry.hosts[id]
-	record := &hostRecord{ID: id}
-	if previous != nil {
-		copy := *previous
-		record = &copy
-	}
-	previousTunnel := record.Tunnel
-	record.Name = name
-	record.Online = false
-	record.Tunnel = nil
-	record.Generation++
-	record.CredentialHash = ""
-	var err error
-	record.EnrollmentToken, err = randomToken(32)
-	if err != nil {
-		return err
-	}
-	record.EnrollmentUntil = registry.now().Add(10 * time.Minute)
-	record.PairingToken = ""
-	record.PairingUntil = time.Time{}
-	record.PairingVersion = 0
-	registry.hosts[id] = record
-	if err := registry.persistLocked(); err != nil {
-		if previous == nil {
-			delete(registry.hosts, id)
-		} else {
-			registry.hosts[id] = previous
-		}
-		return err
-	}
-	if previousTunnel != nil {
-		previousTunnel.close()
-	}
-	return nil
-}
-
 // newHostID returns a lower-case RFC 4122 version-4 UUID. The Relay is the
-// sole authority for this identifier; no user-provided value is accepted by
-// the provisioning API.
+// sole authority for Host identity allocation; callers never submit an ID.
 func newHostID() (string, error) {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
@@ -251,49 +155,139 @@ func newHostID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[0:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:32]), nil
 }
 
-func (registry *registry) enrollment(id, ticket, secret string) (uint64, error) {
-	if strings.TrimSpace(secret) == "" || strings.TrimSpace(ticket) == "" {
-		return 0, errors.New("invalid enrollment")
+func (registry *registry) createEnrollmentKeys(count int, ttl time.Duration, maxUses int, label string) ([]enrollmentKey, error) {
+	if count <= 0 || count > maxEnrollmentKeyBatch {
+		return nil, fmt.Errorf("enrollment key count must be between 1 and %d", maxEnrollmentKeyBatch)
 	}
+	if ttl <= 0 {
+		return nil, errors.New("enrollment key TTL must be positive")
+	}
+	if maxUses <= 0 || maxUses > maxEnrollmentKeyUses {
+		return nil, fmt.Errorf("enrollment key uses must be between 1 and %d", maxEnrollmentKeyUses)
+	}
+	label = strings.TrimSpace(label)
+	if len(label) > 256 {
+		return nil, errors.New("enrollment key label is too long")
+	}
+
 	registry.mu.Lock()
-	record := registry.hosts[id]
-	if record == nil || record.EnrollmentToken == "" || registry.now().After(record.EnrollmentUntil) ||
-		!secureEqual(record.EnrollmentToken, ticket) {
-		registry.mu.Unlock()
-		return 0, errors.New("invalid enrollment")
+	defer registry.mu.Unlock()
+	now := registry.now().UTC()
+	created := make([]enrollmentKey, 0, count)
+	added := make([]string, 0, count)
+	for len(created) < count {
+		code, err := newEnrollmentCode()
+		if err != nil {
+			return nil, err
+		}
+		hash := hashCredential(code)
+		duplicate := false
+		for _, value := range registry.enrollmentKeys {
+			if value != nil && secureEqual(value.Hash, hash) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		id, err := newEnrollmentKeyID()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := registry.enrollmentKeys[id]; exists {
+			continue
+		}
+		record := &enrollmentKeyRecord{
+			ID: id, Hash: hash, Label: label, CreatedAt: now,
+			ExpiresAt: now.Add(ttl), MaxUses: maxUses,
+		}
+		registry.enrollmentKeys[id] = record
+		added = append(added, id)
+		created = append(created, enrollmentKey{
+			ID: id, Code: formatEnrollmentCode(code), Label: label,
+			CreatedAt: record.CreatedAt, ExpiresAt: record.ExpiresAt,
+			MaxUses: maxUses,
+		})
 	}
-	previous := *record
-	previousTunnel := record.Tunnel
-	record.CredentialHash = hashCredential(secret)
-	record.EnrollmentToken = ""
-	record.EnrollmentUntil = time.Time{}
-	record.Generation++
-	record.Online = false
-	record.Tunnel = nil
-	record.PairingVersion = 0
 	if err := registry.persistLocked(); err != nil {
-		registry.hosts[id] = &previous
-		registry.mu.Unlock()
-		return 0, err
+		for _, id := range added {
+			delete(registry.enrollmentKeys, id)
+		}
+		return nil, err
 	}
-	generation := record.Generation
-	registry.mu.Unlock()
-	if previousTunnel != nil {
-		previousTunnel.close()
-	}
-	return generation, nil
+	return created, nil
 }
 
-func (registry *registry) enrollmentTicket(id string) (string, time.Time, bool) {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	record := registry.hosts[id]
-	if record == nil || record.EnrollmentToken == "" {
-		return "", time.Time{}, false
+// claimHost consumes an enrollment key and creates the Host identity. The
+// daemon's Host Secret is supplied by the daemon itself and is stored only as
+// a hash. Repeating a claim with the same Host Secret is idempotent, which
+// lets a daemon safely retry when a response is lost after the Relay commit.
+func (registry *registry) claimHost(code, secret, name string) (string, uint64, error) {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return "", 0, errors.New("Host Secret is required")
 	}
-	return record.EnrollmentToken, record.EnrollmentUntil, true
-}
+	name = strings.TrimSpace(name)
+	if len(name) > 256 {
+		return "", 0, errors.New("host name is too long")
+	}
+	canonical, err := normalizeEnrollmentCode(code)
+	if err != nil {
+		return "", 0, err
+	}
+	secretHash := hashCredential(secret)
 
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	// A retry after a successful claim must not consume another key or create a
+	// second Host for the same daemon identity.
+	for id, record := range registry.hosts {
+		if record != nil && record.CredentialHash != "" && secureEqual(record.CredentialHash, secretHash) {
+			if name != "" && record.Name != name {
+				previous := *record
+				record.Name = name
+				if err := registry.persistLocked(); err != nil {
+					*record = previous
+					return "", 0, err
+				}
+			}
+			return id, record.Generation, nil
+		}
+	}
+
+	hash := hashCredential(canonical)
+	var key *enrollmentKeyRecord
+	for _, candidate := range registry.enrollmentKeys {
+		if candidate == nil || candidate.RevokedAt.IsZero() == false || candidate.UsedUses >= candidate.MaxUses || !registry.now().Before(candidate.ExpiresAt) {
+			continue
+		}
+		if secureEqual(candidate.Hash, hash) {
+			key = candidate
+			break
+		}
+	}
+	if key == nil {
+		return "", 0, errors.New("invalid or expired enrollment key")
+	}
+	id, err := newHostID()
+	if err != nil {
+		return "", 0, err
+	}
+	record := &hostRecord{
+		ID: id, Name: name, CredentialHash: secretHash,
+		Generation: 1, Online: false,
+	}
+	previousUses := key.UsedUses
+	key.UsedUses++
+	registry.hosts[id] = record
+	if err := registry.persistLocked(); err != nil {
+		delete(registry.hosts, id)
+		key.UsedUses = previousUses
+		return "", 0, err
+	}
+	return id, record.Generation, nil
+}
 func validHostID(id string) bool { return hostIDPattern.MatchString(id) }
 
 func (registry *registry) authenticateHost(id, credential string) bool {
@@ -332,8 +326,6 @@ func (registry *registry) revokeHost(id string) error {
 	record.PairingToken = ""
 	record.PairingUntil = time.Time{}
 	record.PairingVersion = 0
-	record.EnrollmentToken = ""
-	record.EnrollmentUntil = time.Time{}
 	record.Route = nil
 	registry.hosts[id] = record
 	if err := registry.persistLocked(); err != nil {
@@ -642,8 +634,6 @@ func (registry *registry) host(id string) (hostRecord, bool) {
 	copy.Tunnel = nil
 	copy.PairingToken = ""
 	copy.PairingUntil = time.Time{}
-	copy.EnrollmentToken = ""
-	copy.EnrollmentUntil = time.Time{}
 	if copy.Route != nil {
 		route := *copy.Route
 		route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
@@ -668,8 +658,6 @@ func (registry *registry) persistLocked() error {
 		copy.Tunnel = nil
 		copy.PairingToken = ""
 		copy.PairingUntil = time.Time{}
-		copy.EnrollmentToken = ""
-		copy.EnrollmentUntil = time.Time{}
 		if copy.Route != nil {
 			route := *copy.Route
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
@@ -681,6 +669,10 @@ func (registry *registry) persistLocked() error {
 	for _, invite := range registry.invites {
 		copy := invite
 		stored.Invites = append(stored.Invites, &copy)
+	}
+	for _, key := range registry.enrollmentKeys {
+		copy := *key
+		stored.EnrollmentKeys = append(stored.EnrollmentKeys, &copy)
 	}
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {

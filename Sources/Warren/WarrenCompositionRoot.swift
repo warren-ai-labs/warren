@@ -143,11 +143,10 @@ struct WarrenCompositionRoot: View {
             },
             onWebStop: { remoteModel.stopWeb() },
             onWebReset: { remoteModel.resetPublicAccess() },
-            onRelayEnroll: { relayURL, hostID, enrollmentTicket, completion in
+            onRelayEnroll: { relayURL, enrollmentKey, completion in
                 remoteModel.enrollRelay(
                     relayURL: relayURL,
-                    hostID: hostID,
-                    enrollmentTicket: enrollmentTicket,
+                    enrollmentKey: enrollmentKey,
                     completion: completion
                 )
             },

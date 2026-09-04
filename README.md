@@ -177,23 +177,40 @@ stable `section` value, for example:
 warren://settings?section=public-access
 ```
 
-The Relay startup log (or provisioning response for an additional Host)
-includes a one-time Warren setup link with the Relay URL, generated Host UUID,
-enrollment ticket, and pinned Relay signing key. Open it in Warren Desktop to
-connect the local Host automatically, or pass the same link to the client-side
-shortcut:
-
-```text
-warren://settings?section=relay&relayUrl=<RELAY_URL>&hostId=<HOST_ID>&enrollmentTicket=<TICKET>&relayKeyId=<KEY_ID>&relayPublicKey=<PUBLIC_KEY>
-```
+The Relay administrator creates short-lived enrollment keys in batches. Each
+key is a 16-letter code in `XXXX-XXXX-XXXX-XXXX` form and has a bounded lifetime
+and use count. The response includes a `warren://settings` shortcut containing
+only the Relay URL and key:
 
 ```sh
+curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
+  -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"developer laptops"}' \
+  | jq -r '.keys[] | [.key, .settings_url] | @tsv'
+```
+
+Open the settings URL in Warren Desktop. It only prefills and expands the Relay
+form; the key is consumed when the operator presses **Connect Relay**. Headless
+then calls `POST /v1/hosts/claim`, creates the Host identity on the Relay, and
+stores the resulting Host ID and signing-key pin locally. A headless install can
+perform the same active step without Desktop:
+
+```sh
+WARREN_RELAY_URL="$WARREN_RELAY_PUBLIC_URL" \
+WARREN_RELAY_ENROLLMENT_KEY='<enrollment-key>' \
+warren-headless
+```
+
+The CLI accepts either the two values or the same settings shortcut:
+
+```sh
+warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'
 warren relay connect '<settings-url>'
 ```
 
-Because this link contains a one-time enrollment ticket, treat it like a
-credential. Browser history, chat systems, and macOS LaunchServices may retain
-it; share it only with the intended developer and discard it after enrollment.
+Enrollment keys are bearer credentials. Share them only with the intended Host
+operator and remove them from shell history, chat, and copied logs after use.
 
 Warren checks GitHub Releases in the background at launch, no more than once
 every three hours. When a newer

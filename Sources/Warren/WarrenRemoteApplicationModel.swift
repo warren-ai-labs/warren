@@ -2458,13 +2458,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         webStatus.publicAccessError = nil
     }
 
-    /// Enrolls the selected local Headless daemon into an owned Relay using a
-    /// one-time setup ticket. The daemon supplies its canonical token to the
-    /// Relay; Desktop never receives or forwards that Host Secret.
+    /// Asks the selected local Headless daemon to claim a Host identity using a
+    /// short-lived Relay enrollment key. The daemon owns the Host credential;
+    /// Desktop only forwards the URL and bootstrap key.
     func enrollRelay(
         relayURL: String,
-        hostID: String,
-        enrollmentTicket: String,
+        enrollmentKey: String,
         completion: @escaping (Result<Void, Error>) -> Void = { _ in }
     ) {
         guard let configuration = endpointConfiguration else {
@@ -2487,8 +2486,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 try await self.relayEnrollmentRequest(
                     configuration: configuration,
                     relayURL: relayURL,
-                    hostID: hostID,
-                    enrollmentTicket: enrollmentTicket
+                    enrollmentKey: enrollmentKey
                 )
                 self.settingsLoaded = false
                 self.loadSettings()
@@ -2520,13 +2518,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func relayEnrollmentRequest(
         configuration: WarrenRemoteEndpointConfiguration,
         relayURL: String,
-        hostID: String,
-        enrollmentTicket: String
+        enrollmentKey: String
     ) async throws {
         let base = configuration.url.hasSuffix("/")
             ? String(configuration.url.dropLast())
             : configuration.url
-        guard let url = URL(string: base + "/v1/relay/enroll") else {
+        guard let url = URL(string: base + "/v1/relay/join") else {
             throw URLError(.badURL)
         }
         var request = URLRequest(url: url)
@@ -2536,8 +2533,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(RelayEnrollmentRequest(
             relayURL: relayURL,
-            hostID: hostID,
-            enrollmentTicket: enrollmentTicket
+            enrollmentKey: enrollmentKey
         ))
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -2553,13 +2549,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private struct RelayEnrollmentRequest: Encodable {
         let relayURL: String
-        let hostID: String
-        let enrollmentTicket: String
+        let enrollmentKey: String
 
         enum CodingKeys: String, CodingKey {
             case relayURL = "relayUrl"
-            case hostID = "hostId"
-            case enrollmentTicket
+            case enrollmentKey
         }
     }
 

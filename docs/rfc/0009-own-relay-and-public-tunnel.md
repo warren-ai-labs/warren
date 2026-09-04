@@ -18,19 +18,24 @@ product model.
 
 ## Host enrollment
 
-The Relay generates a Host UUID and gives its operator a canonical one-time
-setup link. Warren Desktop (or `warren relay connect`) sends the existing
-daemon token through the local Headless daemon once over HTTPS:
+The Relay administrator creates one or more short-lived enrollment keys with
+the admin API. A key is a bounded-use `XXXX-XXXX-XXXX-XXXX` code. Warren
+Desktop can receive a `warren://settings` shortcut containing the Relay URL
+and key, or the operator can provide both values to Headless/CLI. The shortcut
+only prefills the form; it is consumed when the operator explicitly connects.
+
+Headless then actively claims the Host over HTTPS:
 
 ```text
-POST /v1/hosts/{hostID}/enroll
-{"enrollment_ticket":"...","host_secret":"..."}
+POST /v1/hosts/claim
+{"enrollment_key":"XXXX-XXXX-XXXX-XXXX","host_secret":"...","name":"..."}
 ```
 
-Relay stores only a credential hash. Headless persists the Relay URL, Host ID,
-signing-key pin, and non-secret route metadata; the daemon token remains in its
-protected token file. The Host opens one outbound WSS connection at
-`/v1/host/connect` and authenticates with BRLY/2.
+Relay allocates the Host UUID and stores only credential hashes. Claim retries
+with the same Host Secret are idempotent. Headless persists the Relay URL,
+Host ID, signing-key pin, and non-secret route metadata; the daemon token
+remains in its protected token file. The Host opens one outbound WSS
+connection at `/v1/host/connect` and authenticates with BRLY/2.
 
 ## Pairing and native clients
 
@@ -84,14 +89,15 @@ enrollment.
 Warren exposes only the operations a Host operator needs:
 
 ```text
-warren relay connect [SETUP_URL] [--share] [--qr [PATH]] [--open]
+warren relay connect [SETTINGS_URL] [--url RELAY_URL --key ENROLLMENT_KEY]
+warren relay join [SETTINGS_URL] [--url RELAY_URL --key ENROLLMENT_KEY]
 warren relay share [--qr [PATH]] [--open]
 ```
 
-The setup URL is issued by the Relay Administrator. Warren consumes it through
-the selected local Headless daemon, which supplies the Host Secret and starts
-the outbound connector. `relay connect` is the only enrollment command; it
-does not create a Host record or accept a Relay administrator token.
+The settings URL or URL/key pair is passed to the selected local Headless
+daemon. The daemon supplies the Host Secret, calls `/v1/hosts/claim`, and
+starts the outbound connector. These commands never create a Host directly or
+accept a Relay administrator token.
 
 `relay share` asks the local daemon for an opaque client-facing link and can
 write a QR image. The daemon performs the pairing-code exchange internally and

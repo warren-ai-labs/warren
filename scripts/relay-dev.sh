@@ -35,13 +35,12 @@ else
         )"
     fi
     if [[ -z "$relay_public_host" ]]; then
-        echo "无法发现 Mac 的局域网 IPv4 地址。请设置 WARREN_RELAY_DEV_HOST，例如 192.168.1.23。" >&2
+        echo "Unable to discover the Mac LAN IPv4 address. Set WARREN_RELAY_DEV_HOST, for example 192.168.1.23." >&2
         exit 69
     fi
     relay_url="http://$relay_public_host:$relay_port"
-    # Host connector stays on loopback; only the browser-facing URL uses the
-    # LAN address. This avoids local-network routing/firewall differences on
-    # macOS while keeping the phone URL reachable.
+    # Headless stays on loopback; only the browser-facing URL uses the LAN
+    # address. This keeps the local connector independent of LAN routing.
     relay_local_url="http://127.0.0.1:$relay_port"
     default_state_directory="$repository_root/.build/relay-dev/$relay_port"
 fi
@@ -50,10 +49,8 @@ app_executable="$repository_root/Warren.app/Contents/MacOS/Warren"
 
 admin_token_file="$state_directory/admin-token"
 signing_key_file="$state_directory/signing-key"
-host_id_file="$state_directory/host-id"
-enrollment_ticket_file="$state_directory/enrollment-ticket"
-relay_key_id_file="$state_directory/relay-key-id"
-relay_key_file="$state_directory/relay-public-key"
+enrollment_key_file="$state_directory/enrollment-key"
+enrollment_settings_url_file="$state_directory/enrollment-settings-url"
 pid_file="$state_directory/relay.pid"
 log_file="$state_directory/relay.log"
 registry_file="$state_directory/registry.json"
@@ -61,14 +58,18 @@ relay_binary="$state_directory/warren-relay"
 daemon_token_file="${WARREN_TOKEN_FILE:-$HOME/.warren/token}"
 settings_file="${WARREN_SETTINGS_FILE:-$HOME/.warren/settings.json}"
 
+relay_enrollment_key=""
+enrollment_settings_url=""
+
 usage() {
     cat <<'EOF'
 Usage: scripts/relay-dev.sh [up|start|pair|status|stop|logs]
 
-  up      Start a local Relay, register this Mac, launch Warren, and pair.
+  up      Start a local Relay when needed, obtain an enrollment key, launch
+          Warren, wait for headless to claim its Host, and pair a client.
   start   Start the Relay without launching or restarting Warren.
   pair    Generate and open another shareable Web/PWA URL.
-  status  Show Relay health and Host presence.
+  status  Show Relay health and the enrolled Host status.
   stop    Stop the local Relay. Warren and its Ghostline sessions keep running.
   logs    Follow the local Relay log.
 
@@ -77,8 +78,9 @@ For phone access, the local Relay listens on all interfaces and publishes the
 Mac LAN address. Set WARREN_RELAY_DEV_HOST when the default route is not the
 network reachable by your phone; set WARREN_RELAY_DEV_BIND_HOST to restrict
 the bind address.
-Set WARREN_RELAY_URL=https://relay.example.com to connect to a deployed Relay.
-The first remote connection also needs WARREN_RELAY_ADMIN_TOKEN for provisioning.
+Set WARREN_RELAY_URL=https://relay.example.com to use a deployed Relay.
+Provide WARREN_RELAY_ENROLLMENT_KEY, or provide WARREN_RELAY_ADMIN_TOKEN once
+so this helper can create one through /v1/admin/enrollment-keys.
 EOF
 }
 
@@ -107,57 +109,43 @@ write_secret() {
     (umask 077 && printf '%s\n' "$value" >"$path")
 }
 
-read_host_token() {
-    # The daemon token is the single Host Secret. Keep no Relay-specific copy
-    # in the development state directory.
-    read_secret "$daemon_token_file"
-}
-
 ensure_daemon_token() {
-	local token
-	token="$(read_secret "$daemon_token_file" 2>/dev/null || true)"
-	if [[ -z "$token" ]]; then
-		token="$(openssl rand -hex 32)"
-		write_secret "$daemon_token_file" "$token"
-	fi
-}
-
-save_relay_settings() {
-	local host_id="$1" relay_key_id="$2" relay_key="$3"
-	/usr/bin/python3 - "$settings_file" "$relay_url" "$host_id" "$relay_key_id" "$relay_key" <<'PY'
-import json, os, sys, tempfile
-
-path, relay_url, host_id, key_id, key = sys.argv[1:]
-try:
-    with open(path, "r", encoding="utf-8") as handle:
-        value = json.load(handle)
-except FileNotFoundError:
-    value = {}
-except (OSError, json.JSONDecodeError) as error:
-    raise SystemExit(f"unable to read Warren settings: {error}")
-relay = value.setdefault("relay", {})
-relay.update({"enabled": True, "url": relay_url, "hostID": host_id,
-              "relayKeyID": key_id, "relayKey": key})
-directory = os.path.dirname(path) or "."
-os.makedirs(directory, mode=0o700, exist_ok=True)
-fd, temporary = tempfile.mkstemp(prefix=".warren-settings-", dir=directory)
-try:
-    os.chmod(temporary, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2)
-        handle.write("\n")
-    os.replace(temporary, path)
-finally:
-    try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
-PY
+    local token
+    token="$(read_secret "$daemon_token_file" 2>/dev/null || true)"
+    if [[ -z "$token" ]]; then
+        token="$(openssl rand -hex 32)"
+        write_secret "$daemon_token_file" "$token"
+    fi
 }
 
 json_field() {
     local field="$1"
     /usr/bin/python3 -c 'import json,sys; value=json.load(sys.stdin); print(value[sys.argv[1]])' "$field"
+}
+
+settings_field() {
+    local field="$1"
+    /usr/bin/python3 - "$settings_file" "$field" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+except (FileNotFoundError, OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+for part in sys.argv[2].split("."):
+    if not isinstance(value, dict) or part not in value:
+        raise SystemExit(1)
+    value = value[part]
+if value is None:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+relay_host_id() {
+    settings_field relay.hostID 2>/dev/null || true
 }
 
 relay_pid() {
@@ -228,15 +216,12 @@ start_relay() {
     env -u GOROOT -u GOBIN go build -o "$relay_binary" ./RelayService/cmd/warren-relay
     # Detach from the mise/terminal process group so the Relay remains alive
     # after `relay:dev` finishes and can serve a phone browser.
-    # This helper provisions its own Host below, so avoid creating a separate
-    # bootstrap Host just to print a setup link.
     WARREN_RELAY_LISTEN="$relay_bind_host:$relay_port" \
         WARREN_RELAY_PUBLIC_URL="$relay_url" \
         WARREN_RELAY_ALLOWED_ORIGIN="$relay_url" \
         WARREN_RELAY_ADMIN_TOKEN="$admin_token" \
         WARREN_RELAY_SIGNING_KEY="$signing_key" \
         WARREN_RELAY_DATA="$registry_file" \
-        WARREN_RELAY_PRINT_SETUP_LINK=0 \
         nohup "$relay_binary" </dev/null >>"$log_file" 2>&1 &
     local pid=$!
     write_secret "$pid_file" "$pid"
@@ -246,65 +231,61 @@ start_relay() {
     fi
 }
 
-ensure_host() {
-	local host_id host_token admin_token response enrollment_ticket relay_key_id relay_key
-	ensure_daemon_token
-	host_id="$(read_secret "$host_id_file" 2>/dev/null || true)"
-	host_token="$(read_host_token "$host_id" 2>/dev/null || true)"
-	enrollment_ticket="$(read_secret "$enrollment_ticket_file" 2>/dev/null || true)"
-	relay_key_id="$(read_secret "$relay_key_id_file" 2>/dev/null || true)"
-	relay_key="$(read_secret "$relay_key_file" 2>/dev/null || true)"
-	if [[ -n "$host_id" && -n "$host_token" && -n "$relay_key_id" && -n "$relay_key" ]]; then
-		local status
-		status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-		    "$relay_local_url/v1/hosts/$host_id" \
-		    -H "Authorization: Bearer $host_token" || true)"
-		if [[ "$status" == "200" ]]; then
-			save_relay_settings "$host_id" "$relay_key_id" "$relay_key"
-			return
-		fi
-	fi
-	if [[ "$manages_local_relay" == "1" ]]; then
-		admin_token="$(read_secret "$admin_token_file")"
-    else
-        admin_token="${WARREN_RELAY_ADMIN_TOKEN:-}"
+build_settings_url() {
+    /usr/bin/python3 - "$relay_url" "$relay_enrollment_key" <<'PY'
+from urllib.parse import urlencode
+import sys
+
+print("warren://settings?" + urlencode({
+    "section": "relay",
+    "relayUrl": sys.argv[1],
+    "enrollmentKey": sys.argv[2],
+}))
+PY
+}
+
+ensure_enrollment_key() {
+    prepare_state
+    relay_enrollment_key="${WARREN_RELAY_ENROLLMENT_KEY:-}"
+    if [[ -z "$relay_enrollment_key" && "${WARREN_RELAY_NEW_ENROLLMENT_KEY:-0}" != "1" ]]; then
+        relay_enrollment_key="$(read_secret "$enrollment_key_file" 2>/dev/null || true)"
+    fi
+    if [[ -z "$relay_enrollment_key" ]]; then
+        local admin_token response
+        if [[ "$manages_local_relay" == "1" ]]; then
+            admin_token="$(read_secret "$admin_token_file" 2>/dev/null || true)"
+        else
+            admin_token="${WARREN_RELAY_ADMIN_TOKEN:-}"
+        fi
         if [[ -z "$admin_token" ]]; then
-            echo "This Host is not registered with $relay_url." >&2
-            echo "Set WARREN_RELAY_ADMIN_TOKEN once, then rerun relay:connect." >&2
+            echo "No Relay enrollment key is configured." >&2
+            echo "Set WARREN_RELAY_ENROLLMENT_KEY, or set WARREN_RELAY_ADMIN_TOKEN once to create one." >&2
             exit 64
         fi
+        response="$(curl --fail --silent --show-error \
+            -X POST "$relay_local_url/v1/admin/enrollment-keys" \
+            -H "Authorization: Bearer $admin_token" \
+            -H 'Content-Type: application/json' \
+            -d '{"count":1}')"
+        relay_enrollment_key="$(printf '%s' "$response" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["keys"][0]["key"])')"
+        write_secret "$enrollment_key_file" "$relay_enrollment_key"
+        enrollment_settings_url="$(printf '%s' "$response" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["keys"][0]["settings_url"])')"
+        write_secret "$enrollment_settings_url_file" "$enrollment_settings_url"
     fi
-	if [[ -z "$enrollment_ticket" || -z "$relay_key_id" || -z "$relay_key" ]]; then
-		response="$(curl --fail --silent --show-error \
-		    -X POST "$relay_local_url/v1/hosts" \
-		    -H "Authorization: Bearer $admin_token" \
-		    -H 'Content-Type: application/json' \
-		    -d '{"name":"Local Mac"}')"
-		host_id="$(printf '%s' "$response" | json_field host_id)"
-		enrollment_ticket="$(printf '%s' "$response" | json_field enrollment_ticket)"
-		relay_key_id="$(printf '%s' "$response" | json_field relay_key_id)"
-		relay_key="$(printf '%s' "$response" | json_field relay_public_key)"
-		write_secret "$host_id_file" "$host_id"
-		write_secret "$enrollment_ticket_file" "$enrollment_ticket"
-		write_secret "$relay_key_id_file" "$relay_key_id"
-		write_secret "$relay_key_file" "$relay_key"
-	fi
-	write_secret "$host_id_file" "$host_id"
-	host_token="$(read_host_token "$host_id")"
-	if [[ -n "$enrollment_ticket" ]]; then
-		curl --fail --silent --show-error \
-		    -X POST "$relay_local_url/v1/hosts/$host_id/enroll" \
-		    -H 'Content-Type: application/json' \
-		    -d "{\"enrollment_ticket\":\"$enrollment_ticket\",\"host_secret\":\"$host_token\"}" >/dev/null
-		rm -f "$enrollment_ticket_file"
-	fi
-	save_relay_settings "$host_id" "$relay_key_id" "$relay_key"
+    if [[ -z "$relay_enrollment_key" ]]; then
+        echo "Relay enrollment key is empty." >&2
+        exit 64
+    fi
+    if [[ -z "$enrollment_settings_url" ]]; then
+        enrollment_settings_url="$(read_secret "$enrollment_settings_url_file" 2>/dev/null || true)"
+    fi
+    if [[ -z "$enrollment_settings_url" ]]; then
+        enrollment_settings_url="$(build_settings_url)"
+    fi
 }
 
 launch_warren() {
-    local host_id host_token
-    host_id="$(read_secret "$host_id_file")"
-    host_token="$(read_host_token "$host_id")"
+    ensure_daemon_token
     bash "$repository_root/scripts/build-app.sh" debug
 
     if pgrep -f "$app_executable$" >/dev/null 2>&1; then
@@ -317,7 +298,7 @@ launch_warren() {
     if pgrep -f "$app_executable$" >/dev/null 2>&1; then
         # `open`/AppleScript can fail when a previous debug app is hung or was
         # launched from a dead GUI session. This is the exact Warren binary we
-        # own, so terminate it before importing the new Relay credentials.
+        # own, so terminate it before importing the new Relay key.
         while read -r stale_pid; do
             [[ "$stale_pid" =~ ^[0-9]+$ ]] || continue
             kill -TERM "$stale_pid" 2>/dev/null || true
@@ -338,15 +319,14 @@ launch_warren() {
         done
     fi
     if pgrep -f "$app_executable$" >/dev/null 2>&1; then
-        echo "Warren is already running and could not be restarted for credential import." >&2
+        echo "Warren is already running and could not be restarted for Relay key import." >&2
         exit 1
     fi
-	open --env "WARREN_RELAY_URL=$relay_local_url" \
-	    --env "WARREN_RELAY_HOST_ID=$host_id" \
-	    --env "WARREN_RELAY_KEY_ID=$(read_secret "$relay_key_id_file")" \
-	    --env "WARREN_RELAY_KEY=$(read_secret "$relay_key_file")" \
-	    --env "WARREN_TOKEN_FILE=$daemon_token_file" \
-	    "$repository_root/Warren.app"
+    open --env "WARREN_RELAY_URL=$relay_local_url" \
+        --env "WARREN_RELAY_ENROLLMENT_KEY=$relay_enrollment_key" \
+        --env "WARREN_SETTINGS_FILE=$settings_file" \
+        --env "WARREN_TOKEN_FILE=$daemon_token_file" \
+        "$repository_root/Warren.app"
 }
 
 host_is_online() {
@@ -362,14 +342,14 @@ host_is_online() {
 wait_for_host() {
     local attempts="${1:-150}"
     local host_id host_token
-    host_id="$(read_secret "$host_id_file")"
-    host_token="$(read_host_token "$host_id")"
     for ((attempt = 0; attempt < attempts; attempt++)); do
-        if host_is_online "$host_id" "$host_token"; then
+        host_id="$(relay_host_id)"
+        host_token="$(read_secret "$daemon_token_file" 2>/dev/null || true)"
+        if [[ -n "$host_id" && -n "$host_token" ]] && host_is_online "$host_id" "$host_token"; then
             return 0
         fi
         if ((attempt % 10 == 0)) && ! pgrep -f "$app_executable$" >/dev/null 2>&1; then
-            echo "Warren exited before connecting to Relay. See Console logs and $log_file" >&2
+            echo "Warren exited before headless connected to Relay. See Console logs and $log_file" >&2
             return 1
         fi
         sleep 0.1
@@ -380,8 +360,12 @@ wait_for_host() {
 
 pair_host() {
     local host_id host_token pairing_response pairing_code paired_response web_url
-    host_id="$(read_secret "$host_id_file")"
-    host_token="$(read_host_token "$host_id")"
+    host_id="$(relay_host_id)"
+    host_token="$(read_secret "$daemon_token_file" 2>/dev/null || true)"
+    if [[ -z "$host_id" || -z "$host_token" ]]; then
+        echo "No enrolled Host is available. Run relay:dev (or relay:connect) first." >&2
+        exit 64
+    fi
     pairing_response="$(curl --fail --silent --show-error \
         -X POST "$relay_url/v1/hosts/$host_id/pairing" \
         -H "Authorization: Bearer $host_token")"
@@ -394,11 +378,8 @@ pair_host() {
     echo "Warren Remote is ready:"
     echo "$web_url"
     if [[ "$manages_local_relay" == "1" ]]; then
-        # Brace variables before Chinese punctuation; bash may otherwise treat
-        # the adjacent Unicode characters as part of the variable name under
-        # a UTF-8 locale when `set -u` is enabled.
-        echo "手机请与 Mac 处于同一网络，并访问上面的地址（Mac: ${relay_public_host}:${relay_port}）。"
-        echo "若仍无法访问，请检查 macOS 防火墙是否允许 Warren Relay 接收入站连接。"
+        echo "Keep the phone and Mac on the same network (Mac: ${relay_public_host}:${relay_port})."
+        echo "If the URL is unreachable, check that the macOS firewall allows Warren Relay inbound connections."
     fi
     if [[ "${WARREN_RELAY_NO_OPEN:-0}" != "1" ]]; then
         open "$web_url"
@@ -408,15 +389,15 @@ pair_host() {
 show_status() {
     wait_for_health
     local host_id host_token
-    host_id="$(read_secret "$host_id_file" 2>/dev/null || true)"
-    host_token="$(read_host_token "$host_id" 2>/dev/null || true)"
+    host_id="$(relay_host_id)"
+    host_token="$(read_secret "$daemon_token_file" 2>/dev/null || true)"
     echo "Relay: healthy at $relay_url"
     if [[ -n "$host_id" && -n "$host_token" ]]; then
         curl --fail --silent --show-error \
-        "$relay_local_url/v1/hosts/$host_id" \
+            "$relay_local_url/v1/hosts/$host_id" \
             -H "Authorization: Bearer $host_token" | /usr/bin/python3 -m json.tool
     else
-        echo "Host: not registered"
+        echo "Host: not enrolled"
     fi
 }
 
@@ -447,6 +428,7 @@ require_command /usr/bin/python3
 require_command openssl
 require_command /usr/sbin/lsof
 require_command ps
+require_command pgrep
 
 case "$command_name" in
     up)
@@ -454,7 +436,9 @@ case "$command_name" in
             require_command go
         fi
         start_relay
-        ensure_host
+        ensure_enrollment_key
+        echo "Relay enrollment settings URL (Desktop):"
+        echo "$enrollment_settings_url"
         if ! wait_for_host 20 >/dev/null 2>&1; then
             launch_warren
             wait_for_host
