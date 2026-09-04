@@ -189,16 +189,10 @@ except Exception:
     fi
 fi
 
-# Verify team cert exists when possible, or auto-detect if default team is missing.
-if ! security find-identity -v -p codesigning 2>&1 | grep -q "$team"; then
-    detected_team="$(security find-identity -v -p codesigning 2>&1 | sed -nE 's/.*Apple Development:.*\(([A-Z0-9]{10})\).*/\1/p' | head -n 1)"
-    if [[ -n "$detected_team" ]]; then
-        echo "Default team $team not found; using keychain Apple Development team: $detected_team"
-        team="$detected_team"
-    else
-        echo "Warning: Team $team not found in keychain identities; build may fail. Available:" >&2
-        security find-identity -v -p codesigning 2>&1 | head -n 20 >&2 || true
-    fi
+# Verify team cert exists when possible, or auto-detect from certificate OU.
+cert_ou="$(security find-certificate -c "Apple Development" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -n 1)"
+if [[ -n "$cert_ou" ]]; then
+    team="$cert_ou"
 fi
 
 echo "==> Warren iOS install"
