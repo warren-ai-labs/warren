@@ -18,6 +18,7 @@ struct WarrenDesktopSidebar: View {
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let onAction: (WarrenDesktopAction) -> Void
     let onCommandPalette: () -> Void
+    let onSettings: () -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
@@ -102,6 +103,7 @@ struct WarrenDesktopSidebar: View {
                     }
                 }
             }
+            sidebarFooter(tokens: tokens)
         }
         .frame(maxHeight: .infinity)
         .background(tokens.sidebarSurface)
@@ -135,6 +137,38 @@ struct WarrenDesktopSidebar: View {
             if sidebarTree.showsActiveOnly {
                 sidebarTree.expandedProjectIDs.formUnion(projection.groups.map(\.project.id))
             }
+        }
+    }
+
+    private func sidebarFooter(tokens: WarrenColorTokens) -> some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(tokens.border)
+                .frame(height: WarrenSpacing.hairline)
+
+            Button(action: onSettings) {
+                HStack(spacing: WarrenSpacing.compact) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .regular))
+                        .frame(width: 18)
+                        .accessibilityHidden(true)
+                    if !sidebarState.isCollapsed {
+                        Text("Settings")
+                            .font(WarrenTypography.navigationItem)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .foregroundStyle(tokens.mutedForeground)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: sidebarState.isCollapsed ? .center : .leading)
+                .contentShape(.rect)
+            }
+            .buttonStyle(WarrenInteractiveRowStyle())
+            .padding(.horizontal, sidebarState.isCollapsed ? WarrenSpacing.compact : WarrenSpacing.standard)
+            .padding(.vertical, WarrenSpacing.xs)
+            .help("Open Warren settings")
+            .accessibilityLabel("Open Warren settings")
+            .accessibilityIdentifier("sidebar.settings")
         }
     }
 

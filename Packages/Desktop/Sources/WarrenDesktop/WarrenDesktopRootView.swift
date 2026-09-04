@@ -310,6 +310,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             endpointCapabilities: endpointCapabilities,
             onAction: dispatch,
             onCommandPalette: presentCommandPalette,
+            onSettings: openSettings,
             onRequestRename: presentRename,
             onRequestDeletion: presentDeletion,
             onRequestTerminalGroupCreate: presentTerminalGroupCreate,
