@@ -271,6 +271,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertEqual(params["before"] as? String, "42")
         XCTAssertEqual(params["limit"] as? String, "12")
         XCTAssertEqual(params["priority"] as? String, "conversation")
+        XCTAssertEqual(params["maxOutput"] as? String, "4096")
         let id = try XCTUnwrap(object["id"] as? String)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + id + "\",\"ok\":true,\"result\":{\"epoch\":1,\"events\":[],\"hasMore\":false}}"
@@ -280,6 +281,35 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertFalse(page.hasMore)
         await client.stop()
         consuming.cancel()
+    }
+
+    func testAgentEventClipped() {
+        let longOutput = String(repeating: "A", count: 10000)
+        let longContent = String(repeating: "B", count: 10000)
+        let event = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_output",
+            content: longContent,
+            toolInput: .object([
+                "cmd": .string(String(repeating: "C", count: 5000))
+            ]),
+            output: longOutput
+        )
+
+        let clipped = event.clipped(limit: 100)
+        XCTAssertEqual(clipped.output?.count, 101) // 100 chars + "…"
+        XCTAssertTrue(clipped.output?.hasSuffix("…") == true)
+        // Content must NEVER be clipped
+        XCTAssertEqual(clipped.content?.count, 10000)
+
+        // Tool input clipped
+        if case .object(let dict) = clipped.toolInput,
+           case .string(let str) = dict["cmd"] {
+            XCTAssertEqual(str.count, 101)
+            XCTAssertTrue(str.hasSuffix("…"))
+        } else {
+            XCTFail("toolInput was not clipped as expected")
+        }
     }
 
     private func connectedClient() async throws -> (

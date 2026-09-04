@@ -82,4 +82,25 @@ final class IOSAgentEventStoreTests: XCTestCase {
         let maxSeq = await store.maxSequence(sessionID: sessionID, epoch: epoch)
         XCTAssertEqual(maxSeq, 0)
     }
+
+    func testSaveOversizedToolOutputIsClipped() async throws {
+        let sessionID = "test-session-clip"
+        let epoch: UInt64 = 400
+
+        let longOutput = String(repeating: "A", count: 10000)
+        let longContent = String(repeating: "B", count: 10000)
+        let events = [
+            WarrenRemoteAgentEvent(sequence: 1, type: "tool_output", output: longOutput),
+            WarrenRemoteAgentEvent(sequence: 2, type: "assistant", role: "assistant", content: longContent),
+        ]
+
+        try await store.saveEvents(events, sessionID: sessionID, epoch: epoch)
+
+        let loaded = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertTrue((loaded[0].output?.count ?? 0) <= 4097)
+        XCTAssertTrue(loaded[0].output?.hasSuffix("…") == true)
+        // Content must NEVER be clipped
+        XCTAssertEqual(loaded[1].content?.count, 10000)
+    }
 }

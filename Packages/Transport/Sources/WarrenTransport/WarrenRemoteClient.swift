@@ -1043,11 +1043,13 @@ public actor WarrenRemoteClient {
         since: UInt64? = nil,
         before: UInt64? = nil,
         limit: Int = 100,
-        conversationOnly: Bool = false
+        conversationOnly: Bool = false,
+        maxOutput: Int? = 4096
     ) async throws -> WarrenRemoteAgentHistoryPage {
         var params = ["session": sessionID, "limit": String(limit)]
         if let since { params["since"] = String(since) }
         if let before { params["before"] = String(before) }
+        if let maxOutput { params["maxOutput"] = String(maxOutput) }
         if conversationOnly { params["priority"] = "conversation" }
         return try await request("agent.history", params: params, decoding: WarrenRemoteAgentHistoryPage.self)
     }

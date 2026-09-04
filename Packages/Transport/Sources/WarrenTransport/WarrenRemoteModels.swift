@@ -985,6 +985,24 @@ public enum WarrenRemoteJSONValue: Codable, Equatable, Hashable, Sendable {
         case .object(let value): try container.encode(value)
         }
     }
+
+    public func clipped(limit: Int = 4096) -> WarrenRemoteJSONValue {
+        guard limit > 0 else { return self }
+        switch self {
+        case .string(let str):
+            if str.count > limit {
+                let index = str.index(str.startIndex, offsetBy: limit)
+                return .string(String(str[..<index]) + "…")
+            }
+            return self
+        case .array(let arr):
+            return .array(arr.map { $0.clipped(limit: limit) })
+        case .object(let obj):
+            return .object(obj.mapValues { $0.clipped(limit: limit) })
+        default:
+            return self
+        }
+    }
 }
 
 public enum WarrenRemoteAgentActivity: String, Codable, CaseIterable, Sendable {
@@ -1554,6 +1572,48 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
 
 public extension WarrenRemoteAgentEvent {
     var idForSwiftUI: String { identifiableID }
+
+    func clipped(limit: Int = 4096) -> WarrenRemoteAgentEvent {
+        guard limit > 0 else { return self }
+        let needsOutputClip = (output != nil && output!.count > limit)
+        let needsInputClip = (toolInput != nil)
+        if !needsOutputClip && !needsInputClip {
+            return self
+        }
+        var nextOutput = output
+        if needsOutputClip, let output {
+            let index = output.index(output.startIndex, offsetBy: limit)
+            nextOutput = String(output[..<index]) + "…"
+        }
+        var nextInput = toolInput
+        if needsInputClip {
+            nextInput = toolInput?.clipped(limit: limit)
+        }
+        return WarrenRemoteAgentEvent(
+            sequence: sequence,
+            turn: turn,
+            id: id,
+            provider: provider,
+            type: type,
+            role: role,
+            content: content,
+            contentDelta: contentDelta,
+            model: model,
+            stopReason: stopReason,
+            toolName: toolName,
+            toolInput: nextInput,
+            toolStatus: toolStatus,
+            callID: callID,
+            output: nextOutput,
+            files: files,
+            error: error,
+            usage: usage,
+            durationMs: durationMs,
+            sidechain: sidechain,
+            timestamp: timestamp,
+            payload: payload
+        )
+    }
 }
 
 public struct WarrenRemoteAgentHistoryPage: Codable, Equatable, Sendable {
