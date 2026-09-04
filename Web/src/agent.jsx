@@ -10,6 +10,7 @@ import {
   basename,
   formatFileList,
   groupAgentEvents,
+  isCommandTool,
   latestAgentAction,
   loadAgentDraft,
   normalizeAgentEventType,
@@ -1254,7 +1255,8 @@ function CoalescedToolCard({ group, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const status = groupStatus(group.blocks);
   const count = group.blocks.length;
-  const name = displayToolName(group.toolName);
+  const isCommand = isCommandTool(group.toolName);
+  const name = isCommand ? `$ × ${count}` : `${displayToolName(group.toolName)} × ${count}`;
   const summaries = group.blocks
     .map(b => toolSummary(b.call))
     .filter(Boolean);
@@ -1265,7 +1267,7 @@ function CoalescedToolCard({ group, defaultOpen = false }) {
     <div className={`agent-tool-card ${status}`}>
       <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-tool-name">{name} × {count}</span>
+        <span className="agent-tool-name">{name}</span>
         {preview && <code className="agent-tool-summary">{preview}</code>}
         <span className="agent-tool-status">{statusText(status)}</span>
       </button>
@@ -1278,14 +1280,22 @@ function CoalescedToolCard({ group, defaultOpen = false }) {
               return (
                 <div key={blockKindKey(block, idx)} className="agent-tool-subitem">
                   <div className="agent-tool-subitem-head">
-                    <span className="agent-tool-bullet">•</span>
+                    {isCommand ? (
+                      <span className="agent-tool-prompt">$ </span>
+                    ) : (
+                      <span className="agent-tool-bullet">•</span>
+                    )}
                     {summary && <code className="agent-tool-summary">{summary}</code>}
                     <span className="agent-tool-status">{statusText(bStatus)}</span>
                   </div>
-                  {block.outputs.map((out, oIdx) => (
-                    <ToolOutputBody key={out.seq ?? oIdx} event={out} />
-                  ))}
-                  {block.call.files?.length > 0 && <FileList files={block.call.files} />}
+                  {!isCommand && (
+                    <>
+                      {block.outputs.map((out, oIdx) => (
+                        <ToolOutputBody key={out.seq ?? oIdx} event={out} />
+                      ))}
+                      {block.call.files?.length > 0 && <FileList files={block.call.files} />}
+                    </>
+                  )}
                 </div>
               );
             })}
@@ -1302,13 +1312,8 @@ function ToolCard({ block, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const summary = toolDisplay(call, status);
   const isWebSearch = call.toolName === "web_search";
-  const isShell = call.toolName === "shell" || call.toolName === "exec";
-  const shellCommand = isShell ? (call.toolInput?.command || call.toolInput?.cmd || call.toolInput?.CommandLine) : null;
-  const isCommand = Boolean(
-    shellCommand
-    || (call.toolInput && typeof call.toolInput === "object" && (call.toolInput.cmd || call.toolInput.command || call.toolInput.CommandLine)),
-  );
-  const preview = shellCommand || summary;
+  const isCommand = isCommandTool(call.toolName, call.toolInput);
+  const preview = summary || "exec";
   if (isCommand) {
     return (
       <div className={`agent-tool-card command ${status}`}>
@@ -1333,12 +1338,7 @@ function ToolCard({ block, defaultOpen = false }) {
       </button>
       {open && (
         <div className="agent-tool-detail">
-          {shellCommand ? (
-            <pre className="agent-tool-code agent-tool-shell">
-              <span className="agent-tool-prompt">$ </span>
-              {shellCommand}
-            </pre>
-          ) : summary ? (
+          {summary ? (
             <pre className="agent-tool-code">{summary}</pre>
           ) : (
             <span className="agent-tool-waiting">Waiting for output…</span>

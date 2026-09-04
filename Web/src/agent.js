@@ -621,6 +621,17 @@ export function displayToolName(name) {
   return labels[name] || name || "Tool";
 }
 
+export function isCommandTool(toolName, toolInput = null) {
+  const name = (toolName || "").toLowerCase().trim();
+  if (["shell", "exec", "execute", "run_command", "bash", "local_shell_call"].includes(name)) {
+    return true;
+  }
+  if (toolInput && typeof toolInput === "object") {
+    return Boolean(toolInput.command || toolInput.cmd || toolInput.CommandLine);
+  }
+  return false;
+}
+
 export function basename(path) {
   if (typeof path !== "string") return "";
   const clean = path.replace(/^["']|["']$/g, "").trim();

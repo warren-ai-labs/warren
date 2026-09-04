@@ -90,4 +90,33 @@ final class IOSToolFormattingTests: XCTestCase {
         )
         XCTAssertEqual(toolSummary(for: editEvent), "Editing file: main.go")
     }
+
+    func testIsCommandTool() {
+        XCTAssertTrue(isCommandTool("shell"))
+        XCTAssertTrue(isCommandTool("exec"))
+        XCTAssertTrue(isCommandTool("execute"))
+        XCTAssertTrue(isCommandTool("run_command"))
+        XCTAssertTrue(isCommandTool("bash"))
+        XCTAssertTrue(isCommandTool("local_shell_call"))
+        XCTAssertFalse(isCommandTool("read"))
+        XCTAssertFalse(isCommandTool("view_file"))
+        XCTAssertFalse(isCommandTool("apply_patch"))
+        XCTAssertFalse(isCommandTool(nil))
+
+        let cmdEvent = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "custom_tool",
+            toolInput: .object(["command": .string("pytest")])
+        )
+        XCTAssertTrue(isCommandTool(call: cmdEvent))
+
+        let nonCmdEvent = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "tool_call",
+            toolName: "view_file",
+            toolInput: .object(["AbsolutePath": .string("/a/b.txt")])
+        )
+        XCTAssertFalse(isCommandTool(call: nonCmdEvent))
+    }
 }

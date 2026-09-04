@@ -2883,91 +2883,122 @@ private struct AgentToolBlockView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
+    private var isCommand: Bool {
+        isCommandTool(call: tool.call)
+    }
+
     init(tool: AgentToolBlock) {
         self.tool = tool
         _expanded = State(initialValue: tool.status == "error" || tool.status == "failed" || tool.status == "interrupted")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button {
-                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10, alignment: .center)
-                    Image(systemName: toolIconName(tool.call.toolName))
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 14, height: 14, alignment: .center)
-                    Text(displayToolName(tool.call.toolName))
-                        .font(IOSTypography.status)
+        if isCommand {
+            HStack(spacing: 5) {
+                Text("$")
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.tertiaryText)
+                if let summary = toolSummary(for: tool.call) {
+                    Text(summary)
+                        .font(IOSTypography.metadata)
                         .foregroundStyle(tool.status == "running" ? IOSTheme.text : (tool.status == "error" || tool.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
                         .lineLimit(1)
-                    if let summary = toolSummary(for: tool.call) {
-                        Text(summary)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 4)
-                    AgentToolStatusMark(status: tool.status)
-                        .frame(width: 14, height: 14, alignment: .trailing)
+                        .truncationMode(.middle)
+                } else {
+                    Text("exec")
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.secondaryText)
                 }
-                .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 26)
-                .contentShape(Rectangle())
+                Spacer(minLength: 4)
+                AgentToolStatusMark(status: tool.status)
+                    .frame(width: 14, height: 14, alignment: .trailing)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(displayToolName(tool.call.toolName))
-            .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(tool.status))")
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let summary = toolSummary(for: tool.call) {
-                        Text(summary)
-                            .font(IOSTypography.code)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .textSelection(.enabled)
+            .foregroundStyle(IOSTheme.secondaryText)
+            .frame(minHeight: 26)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Command: \(toolSummary(for: tool.call) ?? "exec")")
+            .accessibilityValue(toolStatusTitle(tool.status))
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
+                        expanded.toggle()
                     }
-                    ForEach(Array(tool.outputs.enumerated()), id: \.offset) { _, output in
-                        if let value = output.output, !value.isEmpty {
-                            Text(value)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .frame(width: 10, alignment: .center)
+                        Image(systemName: toolIconName(tool.call.toolName))
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .frame(width: 14, height: 14, alignment: .center)
+                        Text(displayToolName(tool.call.toolName))
+                            .font(IOSTypography.status)
+                            .foregroundStyle(tool.status == "running" ? IOSTheme.text : (tool.status == "error" || tool.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
+                            .lineLimit(1)
+                        if let summary = toolSummary(for: tool.call) {
+                            Text(summary)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 4)
+                        AgentToolStatusMark(status: tool.status)
+                            .frame(width: 14, height: 14, alignment: .trailing)
+                    }
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(minHeight: 26)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(displayToolName(tool.call.toolName))
+                .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(tool.status))")
+
+                if expanded {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let summary = toolSummary(for: tool.call) {
+                            Text(summary)
                                 .font(IOSTypography.code)
                                 .foregroundStyle(IOSTheme.secondaryText)
                                 .textSelection(.enabled)
                         }
-                        if let error = output.error, !error.isEmpty {
-                            Text(error)
-                                .font(IOSTypography.code)
-                                .foregroundStyle(IOSTheme.red)
-                                .textSelection(.enabled)
+                        ForEach(Array(tool.outputs.enumerated()), id: \.offset) { _, output in
+                            if let value = output.output, !value.isEmpty {
+                                Text(value)
+                                    .font(IOSTypography.code)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .textSelection(.enabled)
+                            }
+                            if let error = output.error, !error.isEmpty {
+                                Text(error)
+                                    .font(IOSTypography.code)
+                                    .foregroundStyle(IOSTheme.red)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        if tool.outputs.isEmpty, tool.call.toolStatus?.isEmpty ?? true {
+                            Text("Waiting for output…")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.tertiaryText)
                         }
                     }
-                    if tool.outputs.isEmpty, tool.call.toolStatus?.isEmpty ?? true {
-                        Text("Waiting for output…")
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.tertiaryText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
+                            .stroke(IOSTheme.ring.opacity(0.45), lineWidth: 1)
                     }
+                    .padding(.leading, 15)
+                    .padding(.bottom, 2)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous)
-                        .stroke(IOSTheme.ring.opacity(0.45), lineWidth: 1)
-                }
-                .padding(.leading, 15)
-                .padding(.bottom, 2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3015,6 +3046,10 @@ private struct AgentCoalescedToolBlockView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
+    private var isCommand: Bool {
+        isCommandTool(group.toolName)
+    }
+
     init(group: AgentCoalescedToolGroup) {
         self.group = group
         _expanded = State(initialValue: group.status == "error" || group.status == "failed" || group.status == "interrupted")
@@ -3033,14 +3068,21 @@ private struct AgentCoalescedToolBlockView: View {
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .frame(width: 10, alignment: .center)
-                    Image(systemName: toolIconName(group.toolName))
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 14, height: 14, alignment: .center)
-                    Text("\(displayToolName(group.toolName)) × \(group.tools.count)")
-                        .font(IOSTypography.status)
-                        .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
-                        .lineLimit(1)
+                    if isCommand {
+                        Text("$ × \(group.tools.count)")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
+                            .lineLimit(1)
+                    } else {
+                        Image(systemName: toolIconName(group.toolName))
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .frame(width: 14, height: 14, alignment: .center)
+                        Text("\(displayToolName(group.toolName)) × \(group.tools.count)")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
+                            .lineLimit(1)
+                    }
                     if let summary = group.summary {
                         Text(summary)
                             .font(IOSTypography.metadata)
@@ -3057,7 +3099,7 @@ private struct AgentCoalescedToolBlockView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(displayToolName(group.toolName)) × \(group.tools.count)")
+            .accessibilityLabel(isCommand ? "$ × \(group.tools.count)" : "\(displayToolName(group.toolName)) × \(group.tools.count)")
             .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(group.status))")
 
             if expanded {
@@ -3201,6 +3243,26 @@ func displayToolName(_ name: String?) -> String {
     case "reasoning": return "Thinking"
     default: return name
     }
+}
+
+func isCommandTool(_ name: String?) -> Bool {
+    guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !name.isEmpty else {
+        return false
+    }
+    switch name {
+    case "shell", "exec", "execute", "run_command", "bash", "local_shell_call":
+        return true
+    default:
+        return false
+    }
+}
+
+func isCommandTool(call: WarrenRemoteAgentEvent) -> Bool {
+    if isCommandTool(call.toolName) { return true }
+    if let input = call.toolInput, case .object(let obj) = input {
+        return obj["command"] != nil || obj["cmd"] != nil || obj["CommandLine"] != nil
+    }
+    return false
 }
 
 func toolIconName(_ name: String?) -> String {
