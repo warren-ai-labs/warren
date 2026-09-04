@@ -48,7 +48,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
     private let relaySettings: WarrenDesktopRelaySettings
-    private let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let relayDevices: [WarrenDesktopRelayDevice]
     private let onLoadRelayDevices: (() -> Void)?
@@ -153,7 +152,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
-        onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         relayDevices: [WarrenDesktopRelayDevice] = [],
         onLoadRelayDevices: (() -> Void)? = nil,
@@ -217,7 +215,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onRelayEnroll = onRelayEnroll
         self.onRelayPairing = onRelayPairing
         self.relaySettings = relaySettings
-        self.onSetRelaySettings = onSetRelaySettings
         self.onResetRelay = onResetRelay
         self.relayDevices = relayDevices
         self.onLoadRelayDevices = onLoadRelayDevices
@@ -844,7 +841,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onRelayEnroll: onRelayEnroll,
                 onRelayPairing: onRelayPairing,
                 relaySettings: relaySettings,
-                onSetRelaySettings: onSetRelaySettings,
                 onResetRelay: onResetRelay,
                 relayDevices: relayDevices,
                 onLoadRelayDevices: onLoadRelayDevices,

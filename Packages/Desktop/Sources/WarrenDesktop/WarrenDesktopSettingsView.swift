@@ -107,7 +107,6 @@ struct WarrenDesktopSettingsView: View {
     let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
     let relaySettings: WarrenDesktopRelaySettings
-    let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let relayDevices: [WarrenDesktopRelayDevice]
     let onLoadRelayDevices: (() -> Void)?
@@ -164,21 +163,16 @@ struct WarrenDesktopSettingsView: View {
     @State private var openAITestStatus: OpenAITestStatus = .idle
     @State private var publicAccessHostname = ""
     @State private var publicAccessPathPrefix = ""
-    @State private var relayURLDraft = ""
-    @State private var relayEnabledDraft = false
     @State private var relayRegistrationURL = ""
     @State private var relayEnrollmentKey = ""
-    @State private var relaySettingsBusy = false
     @State private var relayResetBusy = false
-    @State private var relaySettingsError: String?
+    @State private var relayResetError: String?
     @State private var relayEnrollmentBusy = false
     @State private var relayEnrollmentError: String?
     @State private var relayInvite: WarrenDesktopRelayInvite?
     @State private var relayInviteBusy = false
     @State private var relayInviteError: String?
     @State private var relayInviteQRPresented = false
-    @State private var relayRegistrationExpanded = false
-    @State private var relayDetailsExpanded = false
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -220,7 +214,6 @@ struct WarrenDesktopSettingsView: View {
         onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
-        onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         relayDevices: [WarrenDesktopRelayDevice] = [],
         onLoadRelayDevices: (() -> Void)? = nil,
@@ -251,7 +244,6 @@ struct WarrenDesktopSettingsView: View {
         self.onRelayEnroll = onRelayEnroll
         self.onRelayPairing = onRelayPairing
         self.relaySettings = relaySettings
-        self.onSetRelaySettings = onSetRelaySettings
         self.onResetRelay = onResetRelay
         self.relayDevices = relayDevices
         self.onLoadRelayDevices = onLoadRelayDevices
@@ -1118,7 +1110,7 @@ struct WarrenDesktopSettingsView: View {
                 HStack(spacing: WarrenSpacing.small) {
                     WarrenStatusIndicator(
                         color: relayStatusColor(tokens: tokens),
-                        isActive: relaySettingsBusy,
+                        isActive: relayEnrollmentBusy || relayResetBusy,
                         accessibilityLabel: relayStatusLabel
                     )
                     VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
@@ -1134,6 +1126,8 @@ struct WarrenDesktopSettingsView: View {
                     }
                     Spacer(minLength: 0)
                 }
+
+                relayConnectionForm(tokens: tokens)
 
                 if relaySettings.isEnrolled {
                     relayDevicesSection(tokens: tokens)
@@ -1204,228 +1198,6 @@ struct WarrenDesktopSettingsView: View {
                         }
                     }
                 }
-
-                DisclosureGroup(isExpanded: $relayDetailsExpanded) {
-                    VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                        Text("These settings control the Relay endpoint. Use the Connect this Host form below to claim a new identity.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text("Relay URL")
-                            .font(WarrenTypography.settingsBody)
-                            .foregroundStyle(tokens.mutedForeground)
-                        TextField("https://relay.example.com", text: $relayURLDraft)
-                            .textFieldStyle(.roundedBorder)
-                            .font(WarrenTypography.settingsControl)
-                            .accessibilityLabel("Relay URL")
-                            .accessibilityIdentifier("settings.relay.url")
-
-                        Toggle("Enable Relay connection", isOn: $relayEnabledDraft)
-                            .toggleStyle(.switch)
-                            .disabled(relaySettingsBusy || relayResetBusy)
-                            .accessibilityIdentifier("settings.relay.enabled")
-
-                        HStack(spacing: WarrenSpacing.compact) {
-                            Button(relaySettingsBusy ? "Saving…" : "Save connection") {
-                                saveRelaySettings()
-                            }
-                            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                            .disabled(relaySettingsBusy || relayResetBusy || onSetRelaySettings == nil)
-                            .accessibilityIdentifier("settings.relay.save")
-                            .warrenSemanticElement(
-                                id: "settings.relay.save",
-                                role: .button,
-                                label: "Save Relay settings",
-                                isEnabled: !relaySettingsBusy && !relayResetBusy && onSetRelaySettings != nil,
-                                action: saveRelaySettings
-                            )
-
-                            if relaySettingsBusy {
-                                WarrenStatusIndicator(
-                                    color: tokens.info,
-                                    isActive: true,
-                                    accessibilityLabel: "Saving Relay settings"
-                                )
-                            }
-                        }
-
-                        if !relaySettings.isEnrolled {
-                            Text("No connection is configured yet. Enter a Relay URL and enrollment key below.")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        if !relaySettings.lastError.isEmpty {
-                            Text(relaySettings.lastError)
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.warning)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityLabel("Relay error: \(relaySettings.lastError)")
-                        }
-
-                        if hasRelayDetails {
-                            Text("Host identity and signing keys are managed automatically and are hidden from this page.")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("settings.relay.details")
-                        }
-
-                        HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
-                            Button("Reset local enrollment", role: .destructive) {
-                                resetRelay()
-                            }
-                            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                            .disabled(relaySettingsBusy || relayResetBusy || onResetRelay == nil)
-                            .accessibilityIdentifier("settings.relay.reset")
-                            .warrenSemanticElement(
-                                id: "settings.relay.reset",
-                                role: .button,
-                                label: "Reset local Relay enrollment",
-                                isEnabled: !relaySettingsBusy && !relayResetBusy && onResetRelay != nil,
-                                action: resetRelay
-                            )
-
-                            Text("Clears this device's connection. The shared Relay record is not revoked.")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .padding(.top, WarrenSpacing.small)
-                } label: {
-                    VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                        Text("Advanced connection settings")
-                            .font(WarrenTypography.settingsBody)
-                            .foregroundStyle(tokens.foreground)
-                        Text("For managed setups and troubleshooting")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                    }
-                }
-                .accessibilityIdentifier("settings.relay.details")
-                .warrenSemanticElement(
-                    id: "settings.relay.details",
-                    role: .button,
-                    label: "Advanced connection settings",
-                    isSelected: relayDetailsExpanded,
-                    action: { relayDetailsExpanded.toggle() }
-                )
-            }
-
-            if let relaySettingsError, !relaySettingsError.isEmpty {
-                Text(relaySettingsError)
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Relay settings error: \(relaySettingsError)")
-            }
-
-            if !relaySettings.isEnrolled || relayPrefill != nil {
-                DisclosureGroup(isExpanded: $relayRegistrationExpanded) {
-                    VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-                        Text("Enter a Relay URL and a short-lived enrollment key. Warren creates this Host identity locally and keeps its credential in the daemon.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text("Relay URL")
-                            .font(WarrenTypography.settingsBody)
-                            .foregroundStyle(tokens.mutedForeground)
-                        TextField("https://relay.example.com", text: $relayRegistrationURL)
-                            .textFieldStyle(.roundedBorder)
-                            .font(WarrenTypography.settingsControl)
-                            .accessibilityLabel("Relay URL")
-                            .accessibilityIdentifier("settings.relay.join-url")
-                            .warrenSemanticElement(
-                                id: "settings.relay.join-url",
-                                role: .text,
-                                label: "Relay URL"
-                            )
-
-                        Text("Enrollment key")
-                            .font(WarrenTypography.settingsBody)
-                            .foregroundStyle(tokens.mutedForeground)
-                        SecureField("XXXX-XXXX-XXXX-XXXX", text: $relayEnrollmentKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(WarrenTypography.settingsControl)
-                            .textContentType(.oneTimeCode)
-                            .accessibilityLabel("Relay enrollment key")
-                            .accessibilityIdentifier("settings.relay.enrollment-key")
-                            .warrenSemanticElement(
-                                id: "settings.relay.enrollment-key",
-                                role: .text,
-                                label: "Relay enrollment key"
-                            )
-
-                        HStack(spacing: WarrenSpacing.compact) {
-                            Button(relayEnrollmentBusy
-                                ? "Connecting…"
-                                : (relaySettings.isEnrolled ? "Replace connection" : "Connect Relay")) {
-                                enrollRelay()
-                            }
-                            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                            .disabled(
-                                relayEnrollmentBusy
-                                    || relaySettingsBusy
-                                    || onRelayEnroll == nil
-                                    || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    || relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            )
-                            .accessibilityIdentifier("settings.relay.reregister")
-                            .warrenSemanticElement(
-                                id: "settings.relay.reregister",
-                                role: .button,
-                                label: relaySettings.isEnrolled ? "Replace Relay connection" : "Connect Relay",
-                                isEnabled: !relayEnrollmentBusy
-                                    && !relaySettingsBusy
-                                    && onRelayEnroll != nil
-                                    && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    && !relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                                action: enrollRelay
-                            )
-
-                            if relayEnrollmentBusy {
-                                WarrenStatusIndicator(
-                                    color: tokens.info,
-                                    isActive: true,
-                                    accessibilityLabel: "Connecting to Relay"
-                                )
-                            }
-                        }
-
-                        if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
-                            Text(relayEnrollmentError)
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.warning)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityLabel("Relay enrollment error: \(relayEnrollmentError)")
-                        }
-                    }
-                    .padding(.top, WarrenSpacing.small)
-                } label: {
-                    VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-                        Text(relaySettings.isEnrolled ? "Replace connection manually" : "Connect this Host")
-                            .font(WarrenTypography.settingsSectionTitle)
-                            .foregroundStyle(tokens.foreground)
-                        Text(relaySettings.isEnrolled
-                            ? "Use a new enrollment key to replace this Host's Relay identity."
-                            : "An administrator can send a settings link that fills these fields for you.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .accessibilityIdentifier("settings.relay.registration")
-                .warrenSemanticElement(
-                    id: "settings.relay.registration",
-                    role: .button,
-                    label: relaySettings.isEnrolled ? "Replace connection manually" : "Connect this Host",
-                    isSelected: relayRegistrationExpanded,
-                    action: { relayRegistrationExpanded.toggle() }
-                )
             }
         }
         .onAppear(perform: seedRelayFields)
@@ -1433,6 +1205,131 @@ struct WarrenDesktopSettingsView: View {
         .popover(isPresented: $relayInviteQRPresented) {
             relayInviteQRPopover()
         }
+    }
+
+    private func relayConnectionForm(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+            Text("Relay connection")
+                .font(WarrenTypography.settingsSectionTitle)
+                .foregroundStyle(tokens.foreground)
+            Text("Enter a Relay URL and a short-lived enrollment key. Warren creates this Host identity locally and keeps its credential in the daemon.")
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Relay URL")
+                .font(WarrenTypography.settingsBody)
+                .foregroundStyle(tokens.mutedForeground)
+            TextField("https://relay.example.com", text: $relayRegistrationURL)
+                .textFieldStyle(.roundedBorder)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityLabel("Relay URL")
+                .accessibilityIdentifier("settings.relay.join-url")
+                .warrenSemanticElement(
+                    id: "settings.relay.join-url",
+                    role: .text,
+                    label: "Relay URL"
+                )
+
+            Text("Enrollment key")
+                .font(WarrenTypography.settingsBody)
+                .foregroundStyle(tokens.mutedForeground)
+            SecureField("XXXX-XXXX-XXXX-XXXX", text: $relayEnrollmentKey)
+                .textFieldStyle(.roundedBorder)
+                .font(WarrenTypography.settingsControl)
+                .textContentType(.oneTimeCode)
+                .accessibilityLabel("Relay enrollment key")
+                .accessibilityIdentifier("settings.relay.enrollment-key")
+                .warrenSemanticElement(
+                    id: "settings.relay.enrollment-key",
+                    role: .text,
+                    label: "Relay enrollment key"
+                )
+
+            HStack(spacing: WarrenSpacing.compact) {
+                Button(relayEnrollmentBusy ? "Connecting…" : "Connect Relay") {
+                    enrollRelay()
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                .disabled(
+                    relayEnrollmentBusy
+                        || relayResetBusy
+                        || onRelayEnroll == nil
+                        || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+                .accessibilityIdentifier("settings.relay.connect")
+                .warrenSemanticElement(
+                    id: "settings.relay.connect",
+                    role: .button,
+                    label: "Connect Relay",
+                    isEnabled: !relayEnrollmentBusy
+                        && !relayResetBusy
+                        && onRelayEnroll != nil
+                        && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && !relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    action: enrollRelay
+                )
+
+                if relayEnrollmentBusy {
+                    WarrenStatusIndicator(
+                        color: tokens.info,
+                        isActive: true,
+                        accessibilityLabel: "Connecting to Relay"
+                    )
+                }
+            }
+
+            if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
+                Text(relayEnrollmentError)
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Relay enrollment error: \(relayEnrollmentError)")
+            }
+
+            if !relaySettings.lastError.isEmpty {
+                Text(relaySettings.lastError)
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Relay error: \(relaySettings.lastError)")
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.compact) {
+                Button("Reset local enrollment", role: .destructive) {
+                    resetRelay()
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                .disabled(relayEnrollmentBusy || relayResetBusy || onResetRelay == nil)
+                .accessibilityIdentifier("settings.relay.reset")
+                .warrenSemanticElement(
+                    id: "settings.relay.reset",
+                    role: .button,
+                    label: "Reset local Relay enrollment",
+                    isEnabled: !relayEnrollmentBusy && !relayResetBusy && onResetRelay != nil,
+                    action: resetRelay
+                )
+
+                Text("Clears this device's connection. The shared Relay record is not revoked.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let relayResetError, !relayResetError.isEmpty {
+                Text(relayResetError)
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Relay reset error: \(relayResetError)")
+            }
+        }
+        .warrenSemanticElement(
+            id: "settings.relay.connection",
+            role: .group,
+            label: "Relay connection"
+        )
     }
 
     private func relayDevicesSection(tokens: WarrenColorTokens) -> some View {
@@ -1588,26 +1485,6 @@ struct WarrenDesktopSettingsView: View {
         return image
     }
 
-    private func saveRelaySettings() {
-        guard !relaySettingsBusy, let onSetRelaySettings else { return }
-        var value = relaySettings
-        value.enabled = relayEnabledDraft
-        value.relayURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        relaySettingsBusy = true
-        relaySettingsError = nil
-        onSetRelaySettings(value) { result in
-            Task { @MainActor in
-                relaySettingsBusy = false
-                switch result {
-                case .success:
-                    relaySettingsError = nil
-                case let .failure(error):
-                    relaySettingsError = error.localizedDescription
-                }
-            }
-        }
-    }
-
     private func enrollRelay() {
         guard !relayEnrollmentBusy,
               let onRelayEnroll else { return }
@@ -1635,39 +1512,28 @@ struct WarrenDesktopSettingsView: View {
     private func resetRelay() {
         guard !relayResetBusy, let onResetRelay else { return }
         relayResetBusy = true
-        relaySettingsError = nil
+        relayResetError = nil
         onResetRelay { result in
             Task { @MainActor in
                 relayResetBusy = false
                 switch result {
                 case .success:
-                    relayURLDraft = ""
-                    relayEnabledDraft = false
                     relayRegistrationURL = ""
                     relayEnrollmentKey = ""
                     relayEnrollmentError = nil
-                    relaySettingsError = nil
+                    relayResetError = nil
                 case let .failure(error):
-                    relaySettingsError = error.localizedDescription
+                    relayResetError = error.localizedDescription
                 }
             }
         }
     }
 
     private func seedRelayFields() {
-        relayURLDraft = relaySettings.relayURL
-        relayEnabledDraft = relaySettings.enabled
         guard relayPrefill == nil else { return }
         if relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             relayRegistrationURL = relaySettings.relayURL
         }
-    }
-
-    private var hasRelayDetails: Bool {
-        !relaySettings.hostID.isEmpty
-            || !relaySettings.routeID.isEmpty
-            || !relaySettings.relayKeyID.isEmpty
-            || !relaySettings.relayPublicKey.isEmpty
     }
 
     private var relayStatusLabel: String {
@@ -1870,7 +1736,6 @@ struct WarrenDesktopSettingsView: View {
             // A settings link is a convenience for filling the form. Never
             // consume its bearer key merely by opening the link; the user must
             // explicitly press Connect.
-            relayRegistrationExpanded = true
         } else {
             seedRelayFields()
         }

@@ -177,10 +177,8 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     @MainActor
-    func testRelaySettingsShowCurrentConfigurationAndLifecycleActions() throws {
-        let save = expectation(description: "relay settings save")
+    func testRelaySettingsShowSingleConnectionFormAndLifecycleActions() throws {
         let reset = expectation(description: "relay settings reset")
-        var saved: WarrenDesktopRelaySettings?
         let recorder = WarrenSemanticRecorder()
         let settings = WarrenDesktopSettingsView(
             onBack: {},
@@ -198,11 +196,6 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
                 relayKeyID: "key-1",
                 relayPublicKey: "pinned-public-key"
             ),
-            onSetRelaySettings: { value, completion in
-                saved = value
-                completion(.success(()))
-                save.fulfill()
-            },
             onResetRelay: { completion in
                 completion(.success(()))
                 reset.fulfill()
@@ -232,20 +225,15 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         let snapshot = recorder.snapshot()
         XCTAssertNotNil(snapshot.node(id: "settings.relay.share"))
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.details"))
-        XCTAssertNil(snapshot.node(id: "settings.relay.registration"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.connection"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.join-url"))
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.enrollment-key"))
+        XCTAssertEqual(snapshot.node(id: "settings.relay.connect")?.label, "Connect Relay")
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.reset"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.details"))
         XCTAssertNil(snapshot.node(id: "settings.relay.save"))
-        XCTAssertNil(snapshot.node(id: "settings.relay.reset"))
-
-        try recorder.perform(.press, on: "settings.relay.details")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.save"))
-        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reset"))
-
-        try recorder.perform(.press, on: "settings.relay.save")
-        wait(for: [save], timeout: 1)
-        XCTAssertEqual(saved?.relayURL, "https://relay.example.test")
-        XCTAssertTrue(saved?.enabled == true)
+        XCTAssertNil(snapshot.node(id: "settings.relay.reregister"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.registration"))
 
         try recorder.perform(.press, on: "settings.relay.reset")
         wait(for: [reset], timeout: 1)
@@ -298,8 +286,8 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNil(received)
 
         XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.enrollment-key"))
-        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.reregister"))
-        try recorder.perform(.press, on: "settings.relay.reregister")
+        XCTAssertEqual(recorder.snapshot().node(id: "settings.relay.connect")?.label, "Connect Relay")
+        try recorder.perform(.press, on: "settings.relay.connect")
         wait(for: [enrolled], timeout: 1)
 
         XCTAssertEqual(received?.0, "https://relay.example.test")
@@ -307,7 +295,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     @MainActor
-    func testRelayManualFallbackAcceptsOneSetupLinkInsteadOfRelayFields() throws {
+    func testRelaySettingsAlwaysShowSingleConnectionForm() throws {
         let recorder = WarrenSemanticRecorder()
         let settings = WarrenDesktopSettingsView(
             onBack: {},
@@ -341,13 +329,13 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        XCTAssertNotNil(recorder.snapshot().node(id: "settings.relay.registration"))
-        try recorder.perform(.press, on: "settings.relay.registration")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         let snapshot = recorder.snapshot()
+        XCTAssertNotNil(snapshot.node(id: "settings.relay.connection"))
         XCTAssertNotNil(snapshot.node(id: "settings.relay.join-url"))
         XCTAssertNotNil(snapshot.node(id: "settings.relay.enrollment-key"))
-        XCTAssertNotNil(snapshot.node(id: "settings.relay.reregister"))
+        XCTAssertEqual(snapshot.node(id: "settings.relay.connect")?.label, "Connect Relay")
+        XCTAssertNil(snapshot.node(id: "settings.relay.details"))
+        XCTAssertNil(snapshot.node(id: "settings.relay.registration"))
     }
 
     func testPublicAccessSetupLinkRoundTripsEncodedConfiguration() throws {

@@ -1127,23 +1127,6 @@ private actor WarrenRemoteWire {
         )
     }
 
-    func requestRelaySettings(_ settings: WarrenDesktopRelaySettings) async throws -> Data {
-        let relay: [String: Any] = [
-            "enabled": settings.enabled,
-            "url": settings.relayURL,
-            "hostID": settings.hostID,
-            "routeID": settings.routeID,
-            "relayKeyID": settings.relayKeyID,
-            "relayKey": settings.relayPublicKey,
-            "lastError": settings.lastError,
-        ]
-        return try await requestJSON(
-            "settings.put",
-            params: ["relay": relay],
-            contextParams: ["relay": "settings"]
-        )
-    }
-
     func requestRelayReset() async throws -> Data {
         try await requestJSON(
             "relay.reset",
@@ -2270,47 +2253,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 }
             } catch {
                 self?.present(error)
-            }
-        }
-    }
-
-    /// Persists editable Relay metadata without exposing the daemon's Host
-    /// Secret to Desktop. The pinned public key is carried through unchanged
-    /// so a URL or enabled-state edit cannot invalidate enrollment.
-    func setRelaySettings(
-        _ value: WarrenDesktopRelaySettings,
-        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
-    ) {
-        guard let configuration = endpointConfiguration else {
-            let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "No daemon endpoint is selected.",
-            ])
-            completion(.failure(error))
-            return
-        }
-        guard configuration.type.lowercased() != "relay" else {
-            let error = NSError(domain: "WarrenRemote", code: 400, userInfo: [
-                NSLocalizedDescriptionKey: "Relay settings must be changed from the Host daemon, not a Relay endpoint.",
-            ])
-            completion(.failure(error))
-            return
-        }
-        guard let wire else {
-            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
-            ])
-            completion(.failure(error))
-            return
-        }
-        Task { @MainActor [weak self] in
-            do {
-                let data = try await wire.requestRelaySettings(value)
-                self?.settingsLoaded = true
-                self?.applySettingsResponse(data)
-                completion(.success(()))
-            } catch {
-                self?.present(error)
-                completion(.failure(error))
             }
         }
     }

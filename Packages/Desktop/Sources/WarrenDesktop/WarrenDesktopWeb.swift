@@ -15,9 +15,8 @@ public enum WarrenPublicAccessCopy {
 /// The non-secret Relay enrollment metadata reported by a Host daemon.
 ///
 /// The daemon token remains in the Host credential store and is never part of
-/// this projection. `relayPublicKey` is a pinned public signing key; it is
-/// carried through settings updates so editing the URL or enabled state does
-/// not accidentally discard the pin.
+/// this projection. `relayPublicKey` is a pinned public signing key reported by
+/// the daemon for diagnostics and route trust decisions.
 public struct WarrenDesktopRelaySettings: Hashable, Sendable {
     public var enabled: Bool
     public var relayURL: String

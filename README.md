@@ -190,8 +190,8 @@ curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
   | jq -r '.keys[] | [.key, .settings_url] | @tsv'
 ```
 
-Open the settings URL in Warren Desktop. It only prefills and expands the Relay
-form; the key is consumed when the operator presses **Connect Relay**. Headless
+Open the settings URL in Warren Desktop. It only prefills the Relay URL and
+enrollment key; the key is consumed when the operator presses **Connect Relay**. Headless
 then calls `POST /v1/hosts/claim`, creates the Host identity on the Relay, and
 stores the resulting Host ID and signing-key pin locally. A headless install can
 perform the same active step without Desktop:
