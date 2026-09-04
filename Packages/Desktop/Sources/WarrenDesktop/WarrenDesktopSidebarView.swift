@@ -146,30 +146,102 @@ struct WarrenDesktopSidebar: View {
                 .fill(tokens.border)
                 .frame(height: WarrenSpacing.hairline)
 
-            Button(action: onSettings) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .regular))
-                        .frame(width: 18)
-                        .accessibilityHidden(true)
-                    if !sidebarState.isCollapsed {
-                        Text("Settings")
-                            .font(WarrenTypography.navigationItem)
-                            .lineLimit(1)
+            if sidebarState.isCollapsed {
+                VStack(spacing: WarrenSpacing.xs) {
+                    if endpointCapabilities.canAddProject {
+                        addProjectButton(tokens: tokens, showsLabel: false)
+                    }
+                    if updateStatus != .none {
+                        updateButton(tokens: tokens)
+                    }
+                    settingsButton(tokens: tokens)
+                }
+                .padding(.vertical, WarrenSpacing.xs)
+            } else {
+                HStack(spacing: WarrenSpacing.xs) {
+                    if endpointCapabilities.canAddProject {
+                        addProjectButton(tokens: tokens, showsLabel: true)
+                    } else {
                         Spacer(minLength: 0)
                     }
+                    if updateStatus != .none {
+                        WarrenDesktopBuildBadge(
+                            updateStatus: updateStatus,
+                            showsBuildMarker: false,
+                            onUpdateAction: onUpdateAction
+                        )
+                    }
+                    settingsButton(tokens: tokens)
                 }
-                .foregroundStyle(tokens.mutedForeground)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: sidebarState.isCollapsed ? .center : .leading)
-                .contentShape(.rect)
+                .padding(.horizontal, WarrenSpacing.compact)
+                .padding(.vertical, WarrenSpacing.xs)
             }
-            .buttonStyle(WarrenInteractiveRowStyle())
-            .padding(.horizontal, sidebarState.isCollapsed ? WarrenSpacing.compact : WarrenSpacing.standard)
-            .padding(.vertical, WarrenSpacing.xs)
-            .help("Open Warren settings")
-            .accessibilityLabel("Open Warren settings")
-            .accessibilityIdentifier("sidebar.settings")
         }
+    }
+
+    private func addProjectButton(tokens: WarrenColorTokens, showsLabel: Bool) -> some View {
+        Button { onAction(.addProject) } label: {
+            HStack(spacing: WarrenSpacing.compact) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13, weight: .regular))
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
+                if showsLabel {
+                    Text("Add project")
+                        .font(WarrenTypography.navigationItem)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+            .foregroundStyle(tokens.mutedForeground)
+            .frame(maxWidth: showsLabel ? .infinity : nil, minHeight: 36, alignment: .leading)
+            .frame(width: showsLabel ? nil : 36)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle())
+        .disabled(!endpointCapabilities.canAddProject || !projection.isConnected)
+        .help("Add project")
+        .accessibilityLabel("Add project")
+        .accessibilityIdentifier("sidebar.add-project")
+    }
+
+    private func settingsButton(tokens: WarrenColorTokens) -> some View {
+        Button(action: onSettings) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 13, weight: .regular))
+                .frame(width: 36, height: 36)
+                .foregroundStyle(tokens.mutedForeground)
+                .contentShape(.rect)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle())
+        .help("Open Warren settings")
+        .accessibilityLabel("Open Warren settings")
+        .accessibilityIdentifier("sidebar.settings")
+    }
+
+    private func updateButton(tokens: WarrenColorTokens) -> some View {
+        Button(action: onUpdateAction) {
+            Group {
+                switch updateStatus {
+                case .updating:
+                    WarrenBrailleSpinner(size: 10, accessibilityLabel: "Updating Warren")
+                case .failed:
+                    Image(systemName: "exclamationmark.triangle")
+                case .available:
+                    Image(systemName: "arrow.down.circle")
+                case .none:
+                    EmptyView()
+                }
+            }
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(updateStatus == .failed ? tokens.destructive : tokens.info)
+            .frame(width: 36, height: 36)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle())
+        .disabled(!updateStatus.isActionable)
+        .help(updateStatus.helpText ?? "Warren is up to date")
+        .accessibilityLabel(updateStatus.accessibilityLabel ?? "Warren update")
     }
 
 }

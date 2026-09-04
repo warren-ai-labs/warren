@@ -80,10 +80,10 @@ struct WarrenDesktopSidebarHeader: View {
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .accessibilityHidden(true)
 
-            if WarrenBuildVariant.isBuild || updateStatus != .none {
+            if WarrenBuildVariant.isBuild {
                 WarrenDesktopBuildBadge(
-                    updateStatus: updateStatus,
-                    showsBuildMarker: WarrenBuildVariant.isBuild,
+                    updateStatus: .none,
+                    showsBuildMarker: true,
                     onUpdateAction: onUpdateAction
                 )
                 .padding(.trailing, WarrenSpacing.compact)

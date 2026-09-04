@@ -255,12 +255,8 @@ struct WarrenDesktopSidebarRows: View {
         return WarrenDesktopSidebarSectionHeader(
             title: "Projects",
             disclosureExpanded: !tree.projectsCollapsed,
-            actionImage: "folder.badge.plus",
-            actionLabel: "Add project",
-            actionVisible: endpointCapabilities.canAddProject,
-            actionEnabled: !isInteractionDisabled,
+            actionVisible: false,
             onToggle: toggleProjects,
-            onAction: onAddProject,
             additionalActions: [
                 WarrenDesktopSidebarSectionAction(
                     id: "toggle-all-projects",
