@@ -78,7 +78,10 @@ test("opaque Relay invite exchanges before opening a Host-scoped socket", async 
     requests[0].url,
     "/relay/invite/Abc_123-def/v1/session/exchange",
   );
-  assert.deepEqual(JSON.parse(requests[0].options.body), { invite_id: inviteID });
+  const exchangeBody = JSON.parse(requests[0].options.body);
+  assert.equal(exchangeBody.invite_id, inviteID);
+  assert.equal(typeof exchangeBody.client_id, "string");
+  assert.ok(exchangeBody.client_id.length > 0);
   assert.equal(runtime.runtime.relayHostID, "00000000-0000-4000-8000-000000000001");
   assert.equal(
     runtime.webSocketURL(),

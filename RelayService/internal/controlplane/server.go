@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +55,9 @@ type Config struct {
 	AccessTTL        time.Duration
 	AllowedOrigin    string
 	TunnelBaseDomain string
-	RefreshTTL       time.Duration
+	// RefreshTTL controls optional expiry. Zero means the capability remains
+	// valid until its device association or Host is explicitly revoked.
+	RefreshTTL time.Duration
 	MaxBodyBytes     int64
 	// RateLimitWindow and the operation limits are fixed-window admission
 	// controls. A zero operation limit selects the secure default; negative
@@ -92,7 +96,16 @@ type refreshRecord struct {
 	HostID     string
 	Generation uint64
 	ClientID   string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
 	Expires    time.Time
+}
+
+type relayDevice struct {
+	ID         string    `json:"id"`
+	ClientID   string    `json:"client_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
 type persistedSessions struct {
@@ -161,9 +174,6 @@ func NewServer(config Config) (*Server, error) {
 	}
 	if config.AccessTTL > time.Hour {
 		config.AccessTTL = time.Hour
-	}
-	if config.RefreshTTL == 0 {
-		config.RefreshTTL = 30 * 24 * time.Hour
 	}
 	if config.RefreshTTL < 0 {
 		return nil, errors.New("refresh TTL must be positive")
@@ -260,9 +270,13 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /v1/session/refresh", server.refreshSession)
+	server.mux.HandleFunc("GET /v1/hosts/{hostID}/devices", server.listDevices)
+	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}/devices/{deviceID}", server.revokeDevice)
 	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/refresh", server.refreshSession)
+	server.mux.HandleFunc("GET /h/{hostID}/v1/relay/devices", server.listDevices)
+	server.mux.HandleFunc("DELETE /h/{hostID}/v1/relay/devices/{deviceID}", server.revokeDevice)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/live-activities", server.registerLiveActivity)
 	server.mux.HandleFunc("DELETE /h/{hostID}/v1/live-activities", server.unregisterLiveActivity)
 	server.mux.HandleFunc("POST /v1/hosts/{hostID}/live-activities", server.publishLiveActivity)
@@ -582,13 +596,89 @@ func (server *Server) revokeHost(response http.ResponseWriter, request *http.Req
 
 func (server *Server) revokeRefreshFamilies(hostID string) {
 	server.sessionMu.Lock()
-	defer server.sessionMu.Unlock()
 	for hash, entry := range server.refreshTokens {
 		if entry.HostID == hostID {
 			server.revokedFamilies[entry.Family] = true
 			delete(server.refreshTokens, hash)
 		}
 	}
+	server.sessionMu.Unlock()
+	_ = server.persistSessions()
+}
+
+func (server *Server) authorizeHost(request *http.Request, hostID string) bool {
+	credential := bearerToken(request)
+	return secureEqual(credential, server.config.AdminToken) || server.registry.authenticateHost(hostID, credential)
+}
+
+func deviceIDForFamily(family string) string {
+	digest := sha256.Sum256([]byte("warren-device:" + family))
+	return hex.EncodeToString(digest[:8])
+}
+
+func (server *Server) listDevices(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	if !server.authorizeHost(request, hostID) {
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	server.sessionMu.Lock()
+	devices := make([]relayDevice, 0)
+	seen := make(map[string]struct{})
+	for _, entry := range server.refreshTokens {
+		if entry.HostID != hostID || server.revokedFamilies[entry.Family] {
+			continue
+		}
+		id := deviceIDForFamily(entry.Family)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		created := entry.CreatedAt
+		if created.IsZero() {
+			created = entry.LastSeenAt
+		}
+		lastSeen := entry.LastSeenAt
+		if lastSeen.IsZero() {
+			lastSeen = created
+		}
+		devices = append(devices, relayDevice{ID: id, ClientID: entry.ClientID, CreatedAt: created, LastSeenAt: lastSeen})
+	}
+	server.sessionMu.Unlock()
+	sort.Slice(devices, func(i, j int) bool { return devices[i].LastSeenAt.After(devices[j].LastSeenAt) })
+	writeJSON(response, http.StatusOK, map[string]any{"devices": devices})
+}
+
+func (server *Server) revokeDevice(response http.ResponseWriter, request *http.Request) {
+	hostID := request.PathValue("hostID")
+	if !server.authorizeHost(request, hostID) {
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	deviceID := strings.TrimSpace(request.PathValue("deviceID"))
+	if deviceID == "" {
+		http.Error(response, "device not found", http.StatusNotFound)
+		return
+	}
+	server.sessionMu.Lock()
+	found := false
+	for hash, entry := range server.refreshTokens {
+		if entry.HostID == hostID && deviceIDForFamily(entry.Family) == deviceID {
+			server.revokedFamilies[entry.Family] = true
+			delete(server.refreshTokens, hash)
+			found = true
+		}
+	}
+	server.sessionMu.Unlock()
+	if !found {
+		http.Error(response, "device not found", http.StatusNotFound)
+		return
+	}
+	if err := server.persistSessions(); err != nil {
+		http.Error(response, "device revoke failed", http.StatusInternalServerError)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (server *Server) beginPairing(response http.ResponseWriter, request *http.Request) {
@@ -785,7 +875,7 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 	}
 	server.sessionMu.Unlock()
 	_ = server.persistSessions()
-	if !ok || familyRevoked || refresh == "" || time.Now().After(entry.Expires) {
+	if !ok || familyRevoked || refresh == "" || (!entry.Expires.IsZero() && time.Now().After(entry.Expires)) {
 		http.Error(response, "invalid refresh capability", http.StatusUnauthorized)
 		return
 	}
@@ -803,6 +893,17 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		http.Error(response, "refresh issue failed", http.StatusInternalServerError)
 		return
 	}
+	server.sessionMu.Lock()
+	if nextEntry, ok := server.refreshTokens[hashRefresh(next)]; ok {
+		nextEntry.CreatedAt = entry.CreatedAt
+		if nextEntry.CreatedAt.IsZero() {
+			nextEntry.CreatedAt = time.Now()
+		}
+		nextEntry.LastSeenAt = time.Now()
+		server.refreshTokens[hashRefresh(next)] = nextEntry
+	}
+	server.sessionMu.Unlock()
+	_ = server.persistSessions()
 	server.setRefreshCookie(response, request, entry.HostID, next)
 	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds()), "refresh_token": next}
 	if route, ok := server.registry.route(entry.HostID); ok {
@@ -841,9 +942,20 @@ func (server *Server) newRefreshInFamily(hostID string, generation uint64, famil
 	if len(clientID) > 0 {
 		id = clientID[0]
 	}
-	server.refreshTokens[hashRefresh(value)] = refreshRecord{Family: family, HostID: hostID, Generation: generation, ClientID: id, Expires: time.Now().Add(server.config.RefreshTTL)}
+	now := time.Now()
+	expires := time.Time{}
+	if server.config.RefreshTTL > 0 {
+		expires = now.Add(server.config.RefreshTTL)
+	}
+	hash := hashRefresh(value)
+	server.refreshTokens[hash] = refreshRecord{Family: family, HostID: hostID, Generation: generation, ClientID: id, CreatedAt: now, LastSeenAt: now, Expires: expires}
 	server.sessionMu.Unlock()
-	_ = server.persistSessions()
+	if err := server.persistSessions(); err != nil {
+		server.sessionMu.Lock()
+		delete(server.refreshTokens, hash)
+		server.sessionMu.Unlock()
+		return "", err
+	}
 	return value, nil
 }
 
@@ -873,6 +985,12 @@ func (server *Server) loadSessions() error {
 	server.refreshTokens = state.RefreshTokens
 	if server.refreshTokens == nil {
 		server.refreshTokens = make(map[string]refreshRecord)
+	}
+	if server.config.RefreshTTL == 0 {
+		for hash, entry := range server.refreshTokens {
+			entry.Expires = time.Time{}
+			server.refreshTokens[hash] = entry
+		}
 	}
 	server.usedRefresh = state.UsedRefresh
 	if server.usedRefresh == nil {
@@ -917,7 +1035,14 @@ func (server *Server) setRefreshCookie(response http.ResponseWriter, request *ht
 	if validHostID(hostID) && strings.TrimSpace(request.PathValue("hostID")) != "" {
 		cookiePath = server.publicPath("/h/" + url.PathEscape(hostID) + "/")
 	}
-	http.SetCookie(response, &http.Cookie{Name: "warren_refresh", Value: value, Path: cookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, MaxAge: int(server.config.RefreshTTL.Seconds())})
+	maxAge := int(server.config.RefreshTTL.Seconds())
+	if server.config.RefreshTTL == 0 {
+		// A zero Relay refresh TTL means revocation-controlled lifetime. Keep
+		// the browser credential across restarts with a long-lived HttpOnly
+		// cookie; native clients persist the same capability in Keychain.
+		maxAge = 10 * 365 * 24 * 60 * 60
+	}
+	http.SetCookie(response, &http.Cookie{Name: "warren_refresh", Value: value, Path: cookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
 }
 
 func (server *Server) setTunnelCookie(response http.ResponseWriter, request *http.Request, value string) {

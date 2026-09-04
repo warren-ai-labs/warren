@@ -43,6 +43,21 @@ const memoryToken = { value: "" };
 if (!usesControlPlane) memoryToken.value = suppliedToken;
 let resolvedRelayHostID = hasRelayHostID ? relayHostID : "";
 
+const relayClientID = (() => {
+  const fallback = () => globalThis.crypto?.randomUUID?.() || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const storageKey = "warren.relay.client-id";
+    if (!globalThis.localStorage?.getItem || !globalThis.localStorage?.setItem) return fallback();
+    const existing = globalThis.localStorage?.getItem(storageKey);
+    if (existing) return existing;
+    const value = fallback();
+    globalThis.localStorage?.setItem(storageKey, value);
+    return value;
+  } catch {
+    return fallback();
+  }
+})();
+
 const relaySessionBase = () => usesControlPlane
   ? relayPath(`${relayScopePath}/v1/session`)
   : "";
@@ -58,7 +73,7 @@ export const tokenReady = usesControlPlane
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ invite_id: relayInviteID }),
+          body: JSON.stringify({ invite_id: relayInviteID, client_id: relayClientID }),
         })
           .then(response => (response.ok ? response.json() : Promise.reject(new Error("invite exchange failed"))))
           .then(result => {
@@ -76,7 +91,7 @@ export const tokenReady = usesControlPlane
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ pairing_ticket: suppliedToken }),
+          body: JSON.stringify({ pairing_ticket: suppliedToken, client_id: relayClientID }),
         })
           .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
           .then(result => {
@@ -116,6 +131,7 @@ export const runtime = {
     memoryToken.value = value || "";
   },
   tokenReady,
+  get clientID() { return relayClientID; },
   refresh: refreshRelayToken,
 };
 

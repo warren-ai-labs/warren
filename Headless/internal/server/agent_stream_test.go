@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -1831,5 +1832,36 @@ func TestClipWireEvents(t *testing.T) {
 	}
 	if arr[1] != "YYYYY…" {
 		t.Fatalf("inner array item = %v, want YYYYY…", arr[1])
+	}
+}
+
+func TestProjectWireEventsOmitsRequestedFields(t *testing.T) {
+	original := []api.AgentEvent{{
+		Sequence:  1,
+		Type:      "tool_output",
+		Output:    "secret output",
+		ToolInput: map[string]any{"cmd": "pwd"},
+		Files:     []string{"result.txt"},
+		Payload:   map[string]any{"state": "done"},
+		Usage:     &api.AgentUsage{TotalTokens: 3},
+	}}
+
+	projected := projectWireEvents(original, wireOptions{omitFields: map[string]struct{}{
+		"output": {}, "toolInput": {}, "files": {}, "payload": {}, "usage": {},
+	}})
+	if projected[0].Output != "" || projected[0].ToolInput != nil || projected[0].Files != nil || projected[0].Payload != nil || projected[0].Usage != nil {
+		t.Fatalf("requested fields were not omitted: %#v", projected[0])
+	}
+	if original[0].Output == "" || original[0].ToolInput == nil || original[0].Files == nil || original[0].Payload == nil || original[0].Usage == nil {
+		t.Fatalf("wire projection mutated the source event: %#v", original[0])
+	}
+	encoded, err := json.Marshal(projected[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"output", "toolInput", "files", "payload", "usage"} {
+		if bytes.Contains(encoded, []byte(`"`+field+`"`)) {
+			t.Fatalf("JSON contains omitted field %q: %s", field, encoded)
+		}
 	}
 }

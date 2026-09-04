@@ -4657,12 +4657,32 @@ func limitToolInput(value any, limit int) any {
 // clipWireEvents restricts oversized tool output and tool call arguments on the wire.
 // Conversational messages (user, assistant, system) and their Content text are
 // intentionally NEVER clipped regardless of length.
-func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
+type wireOptions struct {
+	omitFields map[string]struct{}
+}
+
+func projectWireEvents(events []api.AgentEvent, options wireOptions) []api.AgentEvent {
+	maxOutput := defaultWireToolOutputLimit
 	if maxOutput <= 0 {
 		return events
 	}
 	result := make([]api.AgentEvent, len(events))
 	for i, e := range events {
+		if _, ok := options.omitFields["output"]; ok {
+			e.Output = ""
+		}
+		if _, ok := options.omitFields["toolInput"]; ok {
+			e.ToolInput = nil
+		}
+		if _, ok := options.omitFields["files"]; ok {
+			e.Files = nil
+		}
+		if _, ok := options.omitFields["payload"]; ok {
+			e.Payload = nil
+		}
+		if _, ok := options.omitFields["usage"]; ok {
+			e.Usage = nil
+		}
 		typeName := normalizedAgentEventType(e)
 		if typeName == "tool_output" && len(e.Output) > maxOutput {
 			e.Output = truncateString(e.Output, maxOutput)
@@ -4672,6 +4692,32 @@ func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
 		}
 		result[i] = e
 	}
+	return result
+}
+
+func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
+	if maxOutput <= 0 {
+		return events
+	}
+	result := projectWireEvents(events, wireOptions{})
+	if maxOutput == defaultWireToolOutputLimit {
+		return result
+	}
+	for i, e := range result {
+		if normalizedAgentEventType(e) == "tool_output" && len(e.Output) > maxOutput {
+			e.Output = truncateString(e.Output, maxOutput)
+		}
+		if normalizedAgentEventType(e) == "tool_call" && e.ToolInput != nil {
+			e.ToolInput = limitToolInput(e.ToolInput, maxOutput)
+		}
+		result[i] = e
+	}
+	return result
+}
+
+func (s *Service) agentHistoryPageWithWireOptions(sessionID string, since, before uint64, limit int, conversationOnly bool, options wireOptions) api.AgentHistoryResult {
+	result := s.agentHistoryPageWithOptions(sessionID, since, before, limit, conversationOnly)
+	result.Events = projectWireEvents(result.Events, options)
 	return result
 }
 

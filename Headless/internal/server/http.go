@@ -1560,9 +1560,10 @@ type wsPeer struct {
 	// surface so background sessions keep consuming output; legacy web and
 	// mobile clients keep exactly the one implicit subscription created by
 	// their attach. Guarded by enqueueMu.
-	outputs        map[string]struct{}
-	controlSession string
-	agentSession   string
+	outputs          map[string]struct{}
+	controlSession   string
+	agentSession     string
+	agentWireOptions wireOptions
 	// terminalStateFormat is negotiated once during protocol-2 authentication.
 	// Every client must install its selected format behind a presentation gate.
 	terminalStateFormat string
@@ -1753,6 +1754,7 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 // exactly once. It returns every terminal subscription ID and the
 // agent-only subscription ID so the caller can unregister after releasing
 // the lock, keeping registry lock ordering acyclic.
+
 func (p *wsPeer) closeLocked() ([]string, string) {
 	if p.closeFlag {
 		agentSessionID := p.agentSession
@@ -1850,11 +1852,14 @@ func (p *wsPeer) enqueueSynced(sessionID string, epoch, sequence uint64) error {
 }
 
 func (p *wsPeer) enqueueAgentEvents(sessionID string, events []api.AgentEvent) error {
+	p.enqueueMu.Lock()
+	options := p.agentWireOptions
+	p.enqueueMu.Unlock()
 	return p.writeJSON(api.AgentMessage{
 		Type:    "agent",
 		Session: sessionID,
 		Epoch:   p.server.Service.currentAgentEpoch(),
-		Events:  clipWireEvents(events, defaultWireToolOutputLimit),
+		Events:  projectWireEvents(events, options),
 	})
 }
 
@@ -2039,15 +2044,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		since, _ := uint64Param(params, "since")
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
-		maxOutput := intParam(params, "maxOutput")
+		wire := parseWireOptions(params)
 		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
-		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithOptions(
+		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithWireOptions(
 			sessionID,
 			since,
 			before,
 			limit,
 			priority == "conversation" || priority == "messages",
-			maxOutput,
+			wire,
 		))
 	case "agent.transcript":
 		sessionID := stringParam(params, "session")
@@ -2290,6 +2295,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		snapshot := p.server.Service.agentSnapshot(sessionID)
+		wire := parseWireOptions(params)
+		p.enqueueMu.Lock()
+		p.agentWireOptions = wire
+		p.enqueueMu.Unlock()
 		err = p.subscribeAgent(sessionID)
 		lock.Unlock()
 		if err != nil {
@@ -2299,10 +2308,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		epoch, _ := uint64Param(params, "epoch")
 		var gapEvents []api.AgentEvent
 		if (epoch == 0 || epoch == snapshot.Epoch) && lastSeq > 0 && lastSeq < snapshot.Sequence && snapshot.Sequence-lastSeq <= 100 {
-			res := p.server.Service.agentHistoryPageWithOptions(sessionID, lastSeq+1, 0, 100, false)
+			res := p.server.Service.agentHistoryPageWithWireOptions(sessionID, lastSeq+1, 0, 100, false, wire)
 			gapEvents = res.Events
 		} else if lastSeq == 0 && snapshot.Sequence > 0 {
-			res := p.server.Service.agentHistoryPageWithOptions(sessionID, 0, 0, 64, false)
+			res := p.server.Service.agentHistoryPageWithWireOptions(sessionID, 0, 0, 64, false, wire)
 			gapEvents = res.Events
 		}
 		return p.writeResult(command.ID, api.AgentSubscriptionResult{
@@ -3148,6 +3157,22 @@ func (p *wsPeer) subscribeAgent(sessionID string) error {
 		return errors.New("connection closed while subscribing to agent")
 	}
 	return nil
+}
+
+func parseWireOptions(params map[string]any) wireOptions {
+	options := wireOptions{omitFields: make(map[string]struct{})}
+	raw, ok := params["wireOptions"].(map[string]any)
+	if !ok {
+		return options
+	}
+	if fields, ok := raw["omitFields"].([]any); ok {
+		for _, value := range fields {
+			if field, ok := value.(string); ok {
+				options.omitFields[strings.TrimSpace(field)] = struct{}{}
+			}
+		}
+	}
+	return options
 }
 
 func (p *wsPeer) detach() {

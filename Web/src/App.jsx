@@ -921,7 +921,7 @@ export default function App() {
   }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
-    const params = { session: sessionID, limit: "200", priority: "conversation", maxOutput: "4096" };
+    const params = { session: sessionID, limit: "200", priority: "conversation", wireOptions: { omitFields: ["output"] } };
     if (before > 0) params.before = String(before);
     const token = {
       id: ++agentHistoryRequestSequenceRef.current,
@@ -3024,6 +3024,7 @@ export default function App() {
       connection = new WarrenConnection({
         url: webSocketURL(),
         token: runtime.token,
+        clientID: runtime.clientID,
         getToken: () => runtime.token,
         capabilities: ["roster-delta", ...agentCapabilities],
         onMessage: event => messageHandlerRef.current(event),
@@ -3703,7 +3704,7 @@ export default function App() {
 
     const state = agentStateBySession[sessionID];
     getAgentMaxSequence(sessionID, state?.epoch).then(lastSeq => {
-      const params = { session: sessionID };
+      const params = { session: sessionID, wireOptions: { omitFields: ["output"] } };
       if (lastSeq > 0) params.lastSequence = String(lastSeq);
       if (state?.epoch) params.epoch = String(state.epoch);
       request("agent.subscribe", params, result => {

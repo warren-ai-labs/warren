@@ -161,6 +161,13 @@ struct WarrenCompositionRoot: View {
             onResetRelay: { completion in
                 remoteModel.resetRelay(completion: completion)
             },
+            relayDevices: remoteModel.relayDevices,
+            onLoadRelayDevices: {
+                remoteModel.loadRelayDevices()
+            },
+            onRevokeRelayDevice: { deviceID, completion in
+                remoteModel.revokeRelayDevice(deviceID, completion: completion)
+            },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,

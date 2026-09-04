@@ -207,7 +207,7 @@
       },
       "examples": [
         { "method": "roster", "paramsRef": "free", "resultRef": "api.State (via makeRoster)" },
-        { "method": "agent.history", "paramsRef": "{session?: string, workspace?: string, project?: string, command?: string, kind?: string, title?: string}", "resultRef": "api.AgentHistoryResult" },
+        { "method": "agent.history", "paramsRef": "{session: string, since?: string, before?: string, limit?: number, priority?: string, wireOptions?: {omitFields?: string[]}}", "resultRef": "api.AgentHistoryResult" },
         { "method": "agent.transcript", "paramsRef": "{session?: string}", "resultRef": "[]api.AgentTranscriptChunk" },
         { "method": "agent.snapshot", "paramsRef": "{session?: string}", "resultRef": "api.AgentSnapshotResult" },
         { "method": "agent.turn.events", "paramsRef": "{session?: string}", "resultRef": "api.AgentEvent[]" },
@@ -218,7 +218,7 @@
         { "method": "agent.attachment.chunk", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
         { "method": "agent.attachment.complete", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
         { "method": "agent.attachment.abort", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
-        { "method": "agent.subscribe", "paramsRef": "{session?: string, ...}", "resultRef": "api.AgentSubscriptionResult" },
+        { "method": "agent.subscribe", "paramsRef": "{session: string, epoch?: string, lastSequence?: string, wireOptions?: {omitFields?: string[]}}", "resultRef": "api.AgentSubscriptionResult" },
         { "method": "relay.pairing", "paramsRef": "free", "resultRef": "{pairingCode, expiresAt}" },
         { "method": "settings.get", "paramsRef": "free", "resultRef": "api.Settings" },
         { "method": "relay.reset", "paramsRef": "free", "resultRef": "void" },

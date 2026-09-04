@@ -162,6 +162,23 @@ public final class IOSLocalStore: @unchecked Sendable {
         self.keychain = keychain
     }
 
+    /// Stable client identity used by Relay to name this installation's
+    /// association. It lives in Keychain so an app reinstall keeps the same
+    /// device entry until the user or Host owner revokes it.
+    public var deviceID: String {
+        if let value = keychain.read(account: Keys.deviceID), !value.isEmpty {
+            return value
+        }
+        if let value = defaults.string(forKey: Keys.deviceID), !value.isEmpty {
+            _ = keychain.write(value, account: Keys.deviceID)
+            return value
+        }
+        let value = UUID().uuidString.lowercased()
+        _ = keychain.write(value, account: Keys.deviceID)
+        defaults.set(value, forKey: Keys.deviceID)
+        return value
+    }
+
     /// All configured Hosts in display order. The first release of the iOS
     /// client persisted one endpoint under `warren.ios.endpoint`; reading
     /// that key as a one-item list keeps existing installs intact while the
@@ -388,6 +405,7 @@ public final class IOSLocalStore: @unchecked Sendable {
         static let endpoints = "warren.ios.endpoints"
         static let activeEndpoint = "warren.ios.active-endpoint"
         static let endpointMetadata = "warren.ios.endpoint-metadata"
+        static let deviceID = "warren.ios.device-id"
         static let navigation = "warren.ios.navigation"
         static let lastSessionKind = "warren.ios.last-session-kind"
     }

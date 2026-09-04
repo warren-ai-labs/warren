@@ -271,7 +271,8 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertEqual(params["before"] as? String, "42")
         XCTAssertEqual(params["limit"] as? String, "12")
         XCTAssertEqual(params["priority"] as? String, "conversation")
-        XCTAssertEqual(params["maxOutput"] as? String, "4096")
+        let wireOptions = try XCTUnwrap(params["wireOptions"] as? [String: Any])
+        XCTAssertEqual(wireOptions["omitFields"] as? [String], ["output"])
         let id = try XCTUnwrap(object["id"] as? String)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + id + "\",\"ok\":true,\"result\":{\"epoch\":1,\"events\":[],\"hasMore\":false}}"

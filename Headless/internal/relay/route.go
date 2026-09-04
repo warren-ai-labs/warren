@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Route is the Relay-owned public HTTP/Upgrade route for one Host.
@@ -26,6 +27,15 @@ type Route struct {
 	AllowCredentials bool     `json:"allow_credentials,omitempty"`
 	AllowedMethods   []string `json:"allowed_methods,omitempty"`
 	AllowedPaths     []string `json:"allowed_paths,omitempty"`
+}
+
+// Device is a client association issued by Relay for one Host. The ID is an
+// opaque, non-secret handle suitable for display and revocation.
+type Device struct {
+	ID         string    `json:"id"`
+	ClientID   string    `json:"client_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
 // RouteClient performs authenticated route lifecycle calls against Relay.
@@ -75,6 +85,56 @@ func NewRouteClient(baseURL, hostID, token string) (*RouteClient, error) {
 
 func (client *RouteClient) endpoint() string {
 	return client.baseURL + "/v1/hosts/" + url.PathEscape(client.hostID) + "/route"
+}
+
+func (client *RouteClient) devicesEndpoint() string {
+	return client.baseURL + "/v1/hosts/" + url.PathEscape(client.hostID) + "/devices"
+}
+
+// Devices returns the currently active client associations for this Host.
+func (client *RouteClient) Devices(ctx context.Context) ([]Device, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.devicesEndpoint(), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, responseError(response)
+	}
+	var value struct {
+		Devices []Device `json:"devices"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 256*1024)).Decode(&value); err != nil {
+		return nil, fmt.Errorf("decode Relay devices: %w", err)
+	}
+	return value.Devices, nil
+}
+
+// RevokeDevice permanently invalidates one client association.
+func (client *RouteClient) RevokeDevice(ctx context.Context, deviceID string) error {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return errors.New("Relay device ID is required")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, client.devicesEndpoint()+"/"+url.PathEscape(deviceID), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return responseError(response)
+	}
+	return nil
 }
 
 // Configure creates or updates the Host route. Nil fields preserve Relay's

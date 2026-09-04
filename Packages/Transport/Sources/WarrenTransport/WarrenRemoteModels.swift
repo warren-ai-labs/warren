@@ -37,6 +37,13 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let hostID: String?
     public let routeID: String?
     public let refreshToken: String?  // OAuth2 refresh token for Relay
+
+    /// Returns a copy with a rotated Relay capability. Native clients use
+    /// this when restoring a persisted endpoint after an app reinstall.
+    public func withTokens(token: String, refreshToken: String?) -> Self {
+        Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
+             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken)
+    }
     
     public init(
         name: String,
@@ -138,6 +145,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         case name, url, token, ssh, sshRemote, type
         case hostID = "host_id"
         case routeID = "route_id"
+        case refreshToken = "refresh_token"
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,7 +158,8 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
             sshRemote: try values.decodeIfPresent(String.self, forKey: .sshRemote),
             type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
             hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
-            routeID: try values.decodeIfPresent(String.self, forKey: .routeID)
+            routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
+            refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken)
         )
     }
 }
@@ -313,7 +322,8 @@ public enum WarrenRelayPairingClient {
 
     public static func exchange(
         _ pairing: WarrenRelayPairing,
-        urlSession: URLSession = WarrenRemoteNetworking.session
+        urlSession: URLSession = WarrenRemoteNetworking.session,
+        clientID: String? = nil
     ) async throws -> WarrenRelaySessionExchange {
         guard var components = URLComponents(string: pairing.relayURL),
               let scheme = components.scheme?.lowercased(),
@@ -347,11 +357,14 @@ public enum WarrenRelayPairingClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String]
+        var body: [String: String]
         if let inviteID = pairing.inviteID {
             body = ["invite_id": inviteID]
         } else {
             body = ["pairing_ticket": pairing.pairingTicket]
+        }
+        if let clientID, !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["client_id"] = clientID
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await urlSession.data(for: request)
