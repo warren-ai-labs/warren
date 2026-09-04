@@ -75,8 +75,8 @@ public enum WarrenLayoutMetrics {
     // Superset settings and command-palette measurements.
     /// Superset's settings sidebar is `w-56`.
     public static let settingsNavigationWidth: CGFloat = 224
-    /// Superset's settings content column is `max-w-5xl`.
-    public static let settingsContentMaxWidth: CGFloat = 1024
+    /// Superset's settings content column is `max-w-4xl`.
+    public static let settingsContentMaxWidth: CGFloat = 896
     /// Superset's command dialog uses `max-w-[720px]`.
     public static let commandPaletteWidth: CGFloat = 720
     public static let commandPaletteResultsMaxHeight: CGFloat = 560

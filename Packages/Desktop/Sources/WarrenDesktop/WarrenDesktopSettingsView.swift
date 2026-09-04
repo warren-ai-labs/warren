@@ -395,6 +395,11 @@ struct WarrenDesktopSettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(tokens.border)
+                    .frame(height: WarrenSpacing.hairline)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(tokens.sidebarSurface)
@@ -527,7 +532,7 @@ struct WarrenDesktopSettingsView: View {
                 .accessibilityIdentifier("settings.restore-defaults")
             }
             .frame(maxWidth: WarrenLayoutMetrics.settingsContentMaxWidth, alignment: .leading)
-            .padding(.horizontal, WarrenSpacing.xlarge)
+            .padding(.horizontal, WarrenSpacing.large)
             .padding(.vertical, WarrenSpacing.xxlarge)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .id(selectedSection)
