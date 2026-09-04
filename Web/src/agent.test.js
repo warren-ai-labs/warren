@@ -14,6 +14,7 @@ import {
   extractPatchFiles,
   formatAgentModel,
   groupAgentEvents,
+  isCommandTool,
   latestAgentAction,
   mergeAgentEvents,
   moveAgentQueueItem,
@@ -372,5 +373,23 @@ test("groupAgentEvents coalesces adjacent activity groups", () => {
   assert.equal(blocks[1].tools.length, 2);
   assert.equal(blocks[1].tools[0].call.toolName, "view_file");
   assert.equal(blocks[1].tools[1].call.toolName, "grep_search");
+});
+
+test("isCommandTool identifies shell and command executions across providers", () => {
+  assert.equal(isCommandTool("shell"), true);
+  assert.equal(isCommandTool("exec"), true);
+  assert.equal(isCommandTool("execute"), true);
+  assert.equal(isCommandTool("run_command"), true);
+  assert.equal(isCommandTool("bash"), true);
+  assert.equal(isCommandTool("local_shell_call"), true);
+  assert.equal(isCommandTool("read"), false);
+  assert.equal(isCommandTool("view_file"), false);
+  assert.equal(isCommandTool("apply_patch"), false);
+  assert.equal(isCommandTool(null), false);
+
+  assert.equal(isCommandTool("custom", { command: "pytest" }), true);
+  assert.equal(isCommandTool("custom", { cmd: "npm test" }), true);
+  assert.equal(isCommandTool("custom", { CommandLine: "go test ./..." }), true);
+  assert.equal(isCommandTool("custom", { query: "foo" }), false);
 });
 
