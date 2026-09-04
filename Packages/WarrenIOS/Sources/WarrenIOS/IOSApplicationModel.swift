@@ -235,9 +235,16 @@ public final class IOSApplicationModel: ObservableObject {
         self.init(
             client: WarrenRemoteClient(
                 configuration: configuration,
+                clientID: localStore.deviceID,
                 refreshTokenHandler: { [localStore] token in
                     guard !token.isEmpty else { return }
                     _ = localStore.keychain.write(token, account: "\(configuration.name).refresh")
+                },
+                tokenUpdateHandler: { [localStore] accessToken, refreshToken in
+                    _ = localStore.keychain.write(accessToken, account: configuration.name)
+                    if let refreshToken, !refreshToken.isEmpty {
+                        _ = localStore.keychain.write(refreshToken, account: "\(configuration.name).refresh")
+                    }
                 }
             ),
             localStore: localStore,
@@ -587,9 +594,16 @@ public final class IOSApplicationModel: ObservableObject {
         }
         client = WarrenRemoteClient(
             configuration: configuration,
+            clientID: localStore.deviceID,
             refreshTokenHandler: { [localStore] token in
                 guard !token.isEmpty else { return }
                 _ = localStore.keychain.write(token, account: "\(configuration.name).refresh")
+            },
+            tokenUpdateHandler: { [localStore] accessToken, refreshToken in
+                _ = localStore.keychain.write(accessToken, account: configuration.name)
+                if let refreshToken, !refreshToken.isEmpty {
+                    _ = localStore.keychain.write(refreshToken, account: "\(configuration.name).refresh")
+                }
             }
         )
         endpointToken = configuration.token
@@ -649,12 +663,14 @@ public final class IOSApplicationModel: ObservableObject {
         guard !isPairingRelay else { return }
         isPairingRelay = true
         endpointError = nil
+        let deviceID = localStore.deviceID
         Task { [weak self] in
             do {
                 let pairing = try WarrenRelayPairingClient.parse(url)
                 let exchange = try await WarrenRelayPairingClient.exchange(
                     pairing,
-                    urlSession: WarrenRemoteNetworking.session
+                    urlSession: WarrenRemoteNetworking.session,
+                    clientID: deviceID
                 )
                 await MainActor.run {
                     guard let self else { return }
@@ -2381,8 +2397,7 @@ public final class IOSApplicationModel: ObservableObject {
                 let page = try await client.agentHistory(
                     sessionID: sessionID,
                     before: before,
-                    conversationOnly: true,
-                    maxOutput: 4096
+                    conversationOnly: true
                 )
                 await MainActor.run {
                     guard let self,
@@ -2442,8 +2457,7 @@ public final class IOSApplicationModel: ObservableObject {
                     since: since,
                     before: before,
                     limit: 100,
-                    conversationOnly: false,
-                    maxOutput: 4096
+                    conversationOnly: false
                 )
                 if !page.events.isEmpty {
                     await MainActor.run {

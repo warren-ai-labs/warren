@@ -331,7 +331,7 @@ func (c *Client) AgentSnapshot(ctx context.Context, sessionID string) (api.Agent
 
 func (c *Client) SubscribeAgent(ctx context.Context, sessionID string) (api.AgentSubscriptionResult, error) {
 	var value api.AgentSubscriptionResult
-	err := c.Request(ctx, "agent.subscribe", map[string]any{"session": sessionID}, &value)
+	err := c.Request(ctx, "agent.subscribe", map[string]any{"session": sessionID, "wireOptions": map[string]any{"omitFields": []string{"output"}}}, &value)
 	return value, err
 }
 

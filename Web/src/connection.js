@@ -34,6 +34,7 @@ export class WarrenConnection {
     url,
     token,
     getToken,
+    clientID,
     WebSocketClass = WebSocket,
     onMessage = () => {},
     onState = () => {},
@@ -45,6 +46,7 @@ export class WarrenConnection {
     this.url = url;
     this.token = token;
     this.getToken = typeof getToken === "function" ? getToken : null;
+    this.clientID = typeof clientID === "string" ? clientID : "";
     this.WebSocketClass = WebSocketClass;
     this.onMessage = onMessage;
     this.onState = onState;
@@ -143,7 +145,7 @@ export class WarrenConnection {
       const currentToken = this.getToken ? this.getToken() : this.token;
       if (this.url.includes("/v1/client/connect")) {
         auth.access_token = currentToken;
-        auth.client_id = globalThis.crypto?.randomUUID?.() || `web-${Date.now()}`;
+        auth.client_id = this.clientID || globalThis.crypto?.randomUUID?.() || `web-${Date.now()}`;
       } else {
         auth.token = currentToken;
       }

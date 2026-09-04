@@ -510,6 +510,7 @@ public actor WarrenRemoteClient {
     private let advertisedCapabilities: [String]
     private var refreshToken: String?  // OAuth2-style refresh token for Relay
     private let refreshTokenHandler: (@Sendable (String) -> Void)?
+    private let tokenUpdateHandler: (@Sendable (String, String?) -> Void)?
     /// A native pairing intentionally leaves the Relay capability's client_id
     /// empty. Keeping this optional also lets a future enrollment flow pin a
     /// stable client identity without changing the WebSocket protocol.
@@ -534,7 +535,9 @@ public actor WarrenRemoteClient {
         configuration: WarrenRemoteEndpointConfiguration,
         urlSession: URLSession = WarrenRemoteNetworking.session,
         codec: WarrenWireCodec = WarrenWireCodec(),
-        refreshTokenHandler: (@Sendable (String) -> Void)? = nil
+        clientID: String? = nil,
+        refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession
@@ -542,6 +545,7 @@ public actor WarrenRemoteClient {
         // Extract refresh_token from endpoint metadata if available
         self.refreshToken = configuration.refreshToken
         self.refreshTokenHandler = refreshTokenHandler
+        self.tokenUpdateHandler = tokenUpdateHandler
         self.advertisedCapabilities = [
             "roster-delta",
             WarrenRemoteAgentCapability.timeline,
@@ -549,7 +553,7 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
         ]
-        self.clientID = nil
+        self.clientID = clientID
         self.codec = codec
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
         self.eventStream = pair.stream
@@ -563,15 +567,18 @@ public actor WarrenRemoteClient {
         codec: WarrenWireCodec = WarrenWireCodec(),
         capabilities: [String] = ["roster-delta"],
         urlSession: URLSession = WarrenRemoteNetworking.session,
-        refreshTokenHandler: (@Sendable (String) -> Void)? = nil
+        clientID: String? = nil,
+        refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
         self.refreshToken = configuration.refreshToken
         self.refreshTokenHandler = refreshTokenHandler
+        self.tokenUpdateHandler = tokenUpdateHandler
         self.advertisedCapabilities = capabilities
-        self.clientID = nil
+        self.clientID = clientID
         self.injectedTask = task
         self.codec = codec
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
@@ -1032,10 +1039,11 @@ public actor WarrenRemoteClient {
         epoch: UInt64? = nil,
         lastSequence: UInt64? = nil
     ) async throws -> WarrenRemoteAgentSubscriptionResult {
-        var params = ["session": sessionID]
+        var params: [String: Any] = ["session": sessionID]
         if let epoch { params["epoch"] = String(epoch) }
         if let lastSequence { params["lastSequence"] = String(lastSequence) }
-        return try await request("agent.subscribe", params: params, decoding: WarrenRemoteAgentSubscriptionResult.self)
+        params["wireOptions"] = ["omitFields": ["output"]]
+        return try await request("agent.subscribe", jsonParams: params, decoding: WarrenRemoteAgentSubscriptionResult.self)
     }
 
     public func agentHistory(
@@ -1043,15 +1051,14 @@ public actor WarrenRemoteClient {
         since: UInt64? = nil,
         before: UInt64? = nil,
         limit: Int = 100,
-        conversationOnly: Bool = false,
-        maxOutput: Int? = 4096
+        conversationOnly: Bool = false
     ) async throws -> WarrenRemoteAgentHistoryPage {
-        var params = ["session": sessionID, "limit": String(limit)]
+        var params: [String: Any] = ["session": sessionID, "limit": String(limit)]
         if let since { params["since"] = String(since) }
         if let before { params["before"] = String(before) }
-        if let maxOutput { params["maxOutput"] = String(maxOutput) }
+        params["wireOptions"] = ["omitFields": ["output"]]
         if conversationOnly { params["priority"] = "conversation" }
-        return try await request("agent.history", params: params, decoding: WarrenRemoteAgentHistoryPage.self)
+        return try await request("agent.history", jsonParams: params, decoding: WarrenRemoteAgentHistoryPage.self)
     }
 
     /// A deterministic exponential backoff shared by mobile and desktop
@@ -1174,7 +1181,13 @@ public actor WarrenRemoteClient {
                       !value.accessToken.isEmpty else { return false }
                 
                 accessToken = value.accessToken
-                if let next = value.refreshToken, !next.isEmpty { self.refreshToken = next; refreshTokenHandler?(next) }
+                if let next = value.refreshToken, !next.isEmpty {
+                    self.refreshToken = next
+                    refreshTokenHandler?(next)
+                    tokenUpdateHandler?(value.accessToken, next)
+                } else {
+                    tokenUpdateHandler?(value.accessToken, nil)
+                }
                 return true
             } catch {
                 // OAuth2 refresh failed, fall back to cookie-based approach
@@ -1194,7 +1207,13 @@ public actor WarrenRemoteClient {
             guard value.hostID == configuration.hostID,
                   !value.accessToken.isEmpty else { return false }
             accessToken = value.accessToken
-            if let next = value.refreshToken, !next.isEmpty { refreshToken = next; refreshTokenHandler?(next) }
+            if let next = value.refreshToken, !next.isEmpty {
+                refreshToken = next
+                refreshTokenHandler?(next)
+                tokenUpdateHandler?(value.accessToken, next)
+            } else {
+                tokenUpdateHandler?(value.accessToken, nil)
+            }
             return true
         } catch {
             return false

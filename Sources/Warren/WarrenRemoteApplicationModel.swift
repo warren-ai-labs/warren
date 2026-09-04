@@ -873,6 +873,9 @@ private actor WarrenRemoteWire {
     private static let connectTimeout: Duration = .seconds(10)
     private static let requestTimeout: Duration = .seconds(15)
     private let configuration: WarrenRemoteEndpointConfiguration
+    private var accessToken: String
+    private var refreshToken: String?
+    private let tokenUpdateHandler: (@Sendable (String, String?) -> Void)?
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var continuations: [String: CheckedContinuation<Data, Error>] = [:]
@@ -904,11 +907,36 @@ private actor WarrenRemoteWire {
         return value
     }
 
-    init(configuration: WarrenRemoteEndpointConfiguration) { self.configuration = configuration }
+    init(
+        configuration: WarrenRemoteEndpointConfiguration,
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
+    ) {
+        self.configuration = configuration
+        self.accessToken = configuration.token
+        self.refreshToken = configuration.refreshToken
+        self.tokenUpdateHandler = tokenUpdateHandler
+    }
 
     nonisolated func events() -> AsyncStream<RemoteWireEvent> { eventBuffer.stream }
 
     func connect() async throws {
+        if configuration.isRelay, accessToken.isEmpty {
+            guard await refreshRelayAccessToken() else {
+                throw NSError(domain: "WarrenRemote", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "Relay authentication failed.",
+                ])
+            }
+        }
+        do {
+            try await connectOnce()
+        } catch let error as NSError
+            where configuration.isRelay && error.domain == "WarrenRemote" && error.code == 3 {
+            guard await refreshRelayAccessToken() else { throw error }
+            try await connectOnce()
+        }
+    }
+
+    private func connectOnce() async throws {
         guard task == nil else { return }
         guard var components = URLComponents(string: configuration.url) else {
             throw URLError(.badURL)
@@ -953,7 +981,7 @@ private actor WarrenRemoteWire {
         guard let url = components.url else { throw URLError(.badURL) }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = Self.maximumWebSocketMessageBytes
-        let token = configuration.token
+        let token = accessToken
         task = socket
         socket.resume()
         do {
@@ -1008,6 +1036,30 @@ private actor WarrenRemoteWire {
             throw error
         }
         receiveTask = Task { [weak self] in await self?.receiveLoop(socket) }
+    }
+
+    private func refreshRelayAccessToken() async -> Bool {
+        guard configuration.isRelay,
+              let url = configuration.relaySessionRefreshURL else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let refreshToken, !refreshToken.isEmpty {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken])
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let value = try? JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data),
+                  value.hostID == configuration.hostID,
+                  !value.accessToken.isEmpty else { return false }
+            accessToken = value.accessToken
+            if let next = value.refreshToken, !next.isEmpty { refreshToken = next }
+            tokenUpdateHandler?(accessToken, refreshToken)
+            return true
+        } catch { return false }
     }
 
     private func acceptWelcome(_ message: URLSessionWebSocketTask.Message) throws {
@@ -1492,6 +1544,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Non-secret Relay enrollment metadata owned by the selected Host
     /// daemon. The Host Secret remains in the daemon credential store.
     @Published private(set) var relaySettings = WarrenDesktopRelaySettings()
+    @Published private(set) var relayDevices: [WarrenDesktopRelayDevice] = []
     /// Default engine for new sessions, owned by the headless daemon.
     @Published private(set) var defaultRuntime: String?
     /// Whether opening an empty workspace creates a default Shell session.
@@ -1849,7 +1902,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 return
             }
             activeEndpointConfiguration = wireConfiguration
-            let wire = WarrenRemoteWire(configuration: wireConfiguration)
+            let persistedConfiguration = wireConfiguration
+            let wire = WarrenRemoteWire(
+                configuration: wireConfiguration,
+                tokenUpdateHandler: { accessToken, refreshToken in
+                    let updated = persistedConfiguration.withTokens(
+                        token: accessToken,
+                        refreshToken: refreshToken
+                    )
+                    try? WarrenEndpointCatalog.upsert(
+                        updated,
+                        current: persistedConfiguration.name
+                    )
+                }
+            )
             self.wire = wire
             let events = wire.events()
             do {
@@ -2137,6 +2203,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         if let relay = result["relay"] as? [String: Any] {
             relaySettings = Self.relaySettings(from: relay)
+            loadRelayDevices()
         }
     }
 
@@ -2245,6 +2312,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self?.present(error)
                 completion(.failure(error))
             }
+        }
+    }
+
+    func loadRelayDevices() {
+        guard let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request("relay.devices.list")
+                guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let values = object["devices"] as? [[String: Any]] else { return }
+                self?.relayDevices = values.compactMap { value in
+                    guard let id = value["id"] as? String else { return nil }
+                    let created = (value["created_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? .distantPast
+                    let lastSeen = (value["last_seen_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? created
+                    return WarrenDesktopRelayDevice(id: id, clientID: value["client_id"] as? String ?? "", createdAt: created, lastSeenAt: lastSeen)
+                }
+            } catch { self?.present(error) }
+        }
+    }
+
+    func revokeRelayDevice(_ deviceID: String, completion: @escaping (Result<Void, Error>) -> Void = { _ in }) {
+        guard let wire else { completion(.failure(NSError(domain: "WarrenRemote", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected daemon is not connected."]))); return }
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await wire.request("relay.devices.revoke", params: ["deviceID": deviceID])
+                self?.relayDevices.removeAll { $0.id == deviceID }
+                completion(.success(()))
+            } catch { self?.present(error); completion(.failure(error)) }
         }
     }
 

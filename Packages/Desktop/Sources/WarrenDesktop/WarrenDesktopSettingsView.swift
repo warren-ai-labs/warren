@@ -6,6 +6,20 @@ import WarrenDesignSystem
 import WarrenDomain
 import WarrenObservation
 
+public struct WarrenDesktopRelayDevice: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let clientID: String
+    public let createdAt: Date
+    public let lastSeenAt: Date
+
+    public init(id: String, clientID: String, createdAt: Date, lastSeenAt: Date) {
+        self.id = id
+        self.clientID = clientID
+        self.createdAt = createdAt
+        self.lastSeenAt = lastSeenAt
+    }
+}
+
 private enum WarrenSetupScriptContract {
     struct EnvironmentVariable: Identifiable {
         let name: String
@@ -95,6 +109,9 @@ struct WarrenDesktopSettingsView: View {
     let relaySettings: WarrenDesktopRelaySettings
     let onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
+    let relayDevices: [WarrenDesktopRelayDevice]
+    let onLoadRelayDevices: (() -> Void)?
+    let onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -209,6 +226,9 @@ struct WarrenDesktopSettingsView: View {
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onSetRelaySettings: ((WarrenDesktopRelaySettings, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        relayDevices: [WarrenDesktopRelayDevice] = [],
+        onLoadRelayDevices: (() -> Void)? = nil,
+        onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         defaultRuntime: String?,
         onSetRuntime: @escaping (String) -> Void,
         autoOpenShell: Bool,
@@ -237,6 +257,9 @@ struct WarrenDesktopSettingsView: View {
         self.relaySettings = relaySettings
         self.onSetRelaySettings = onSetRelaySettings
         self.onResetRelay = onResetRelay
+        self.relayDevices = relayDevices
+        self.onLoadRelayDevices = onLoadRelayDevices
+        self.onRevokeRelayDevice = onRevokeRelayDevice
         self.defaultRuntime = defaultRuntime
         self.onSetRuntime = onSetRuntime
         self.autoOpenShell = autoOpenShell
@@ -1112,6 +1135,8 @@ struct WarrenDesktopSettingsView: View {
                 }
 
                 if relaySettings.isEnrolled {
+                    relayDevicesSection(tokens: tokens)
+
                     VStack(alignment: .leading, spacing: WarrenSpacing.small) {
                         Text("Share with iPhone")
                             .font(WarrenTypography.settingsSectionTitle)
@@ -1387,6 +1412,71 @@ struct WarrenDesktopSettingsView: View {
         .popover(isPresented: $relayInviteQRPresented) {
             relayInviteQRPopover()
         }
+    }
+
+    private func relayDevicesSection(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+            HStack {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                    Text("Connected devices")
+                        .font(WarrenTypography.settingsSectionTitle)
+                        .foregroundStyle(tokens.foreground)
+                    Text("Manage phones and browsers that have access to this Host.")
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                Spacer()
+                Button {
+                    onLoadRelayDevices?()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                .accessibilityLabel("Refresh connected devices")
+            }
+
+            if relayDevices.isEmpty {
+                Text("No other devices are currently associated.")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .padding(.vertical, WarrenSpacing.small)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(relayDevices) { device in
+                        HStack(spacing: WarrenSpacing.compact) {
+                            Image(systemName: "iphone.and.arrow.forward")
+                                .foregroundStyle(tokens.primary)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                                Text(device.clientID.isEmpty ? "Native device" : device.clientID)
+                                    .font(WarrenTypography.settingsBody)
+                                    .foregroundStyle(tokens.foreground)
+                                Text("Last active \(device.lastSeenAt, style: .relative)")
+                                    .font(WarrenTypography.settingsMeta)
+                                    .foregroundStyle(tokens.mutedForeground)
+                            }
+                            Spacer()
+                            Button("Revoke", role: .destructive) {
+                                onRevokeRelayDevice?(device.id) { _ in
+                                    onLoadRelayDevices?()
+                                }
+                            }
+                            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                            .disabled(onRevokeRelayDevice == nil)
+                            .accessibilityIdentifier("settings.relay.device.revoke.\(device.id)")
+                        }
+                        .padding(.vertical, WarrenSpacing.compact)
+                        if device.id != relayDevices.last?.id {
+                            Divider().overlay(tokens.border)
+                        }
+                    }
+                }
+                .padding(.horizontal, WarrenSpacing.compact)
+                .background(tokens.fillHover.opacity(0.45))
+                .clipShape(.rect(cornerRadius: WarrenRadius.small))
+            }
+        }
+        .onAppear { onLoadRelayDevices?() }
     }
 
     private func createRelayInvite() {
