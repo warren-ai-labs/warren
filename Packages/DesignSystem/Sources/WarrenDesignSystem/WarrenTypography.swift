@@ -15,10 +15,10 @@ public enum WarrenTypography {
     /// navigation readable at a larger size and never use a light weight for
     /// labels that users must scan or select.
     public static let settingsNavigationItem = Font.system(size: 14, weight: .regular)
-    public static let settingsNavigationItemActive = Font.system(size: 14, weight: .regular)
-    public static let settingsGroupLabel = Font.system(size: 12, weight: .regular)
+    public static let settingsNavigationItemActive = Font.system(size: 14, weight: .medium)
+    public static let settingsGroupLabel = Font.system(size: 11, weight: .medium)
     public static let settingsScreenTitle = Font.system(size: 22, weight: .light)
-    public static let settingsSectionTitle = Font.system(size: 20, weight: .regular)
+    public static let settingsSectionTitle = Font.system(size: 22, weight: .light)
     public static let settingsBody = Font.system(size: 14, weight: .regular)
     public static let settingsBodyEmphasis = Font.system(size: 14, weight: .regular)
     public static let settingsSupporting = Font.system(size: 13, weight: .regular)
