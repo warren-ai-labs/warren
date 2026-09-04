@@ -1519,16 +1519,7 @@ func openCodeDelta(previous, current string, existed bool) (string, bool) {
 }
 
 func normalizeOpenCodeToolStatus(status string) string {
-	switch strings.ToLower(status) {
-	case "completed", "success":
-		return "success"
-	case "error", "failed":
-		return "error"
-	case "interrupted", "cancelled", "canceled":
-		return "interrupted"
-	default:
-		return "running"
-	}
+	return canonicalToolStatus(status)
 }
 
 func openCodeToolTerminal(status string) bool {

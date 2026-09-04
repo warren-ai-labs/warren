@@ -114,14 +114,14 @@ func TestAntigravityParser_Fixture(t *testing.T) {
 		t.Errorf("event 1: got type %q content %q, want reasoning", allEvents[1].Type, allEvents[1].Content)
 	}
 
-	// Third event: tool_call (find_by_name)
-	if allEvents[2].Type != "tool_call" || allEvents[2].ToolName != "find_by_name" {
-		t.Errorf("event 2: got type %q tool %q, want tool_call find_by_name", allEvents[2].Type, allEvents[2].ToolName)
+	// Third event: tool_call (glob)
+	if allEvents[2].Type != "tool_call" || allEvents[2].ToolName != "glob" || allEvents[2].ToolStatus != "running" {
+		t.Errorf("event 2: got type %q tool %q status %q, want tool_call glob running", allEvents[2].Type, allEvents[2].ToolName, allEvents[2].ToolStatus)
 	}
 
 	// Fourth event: tool_output
-	if allEvents[3].Type != "tool_output" || !strings.Contains(allEvents[3].Output, "main.go") {
-		t.Errorf("event 3: got type %q output %q, want tool_output", allEvents[3].Type, allEvents[3].Output)
+	if allEvents[3].Type != "tool_output" || !strings.Contains(allEvents[3].Output, "main.go") || allEvents[3].ToolStatus != "success" {
+		t.Errorf("event 3: got type %q output %q status %q, want tool_output success", allEvents[3].Type, allEvents[3].Output, allEvents[3].ToolStatus)
 	}
 
 	// Fifth event: reasoning before question
@@ -247,5 +247,69 @@ func TestFindAntigravityTranscript(t *testing.T) {
 	foundDB := FindAntigravityTranscript("", "/Users/dev/workspace/repo")
 	if foundDB != transcriptPath {
 		t.Errorf("FindAntigravityTranscript by DB = %q, want %q", foundDB, transcriptPath)
+	}
+}
+
+func TestAntigravityParser_QueueResetAndErrors(t *testing.T) {
+	parser := newAntigravityParser(1024)
+
+	// Step 1: Tool call in step 1
+	step1 := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-09-04T10:00:00Z","tool_calls":[{"name":"find_by_name","args":{"Pattern":"*.go"}}]}`
+	events1 := parser.Parse([]byte(step1))
+	if len(events1) != 1 || events1[0].Type != "tool_call" || events1[0].CallID != "1_0" || events1[0].ToolStatus != "running" {
+		t.Fatalf("unexpected events1: %+v", events1)
+	}
+
+	// Step 3: Skipped step 2! Another tool call arrives without step 1 ever receiving GENERIC.
+	step3 := `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-09-04T10:00:01Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"go test"}}]}`
+	events3 := parser.Parse([]byte(step3))
+	if len(events3) != 1 || events3[0].Type != "tool_call" || events3[0].CallID != "3_0" || events3[0].ToolName != "shell" {
+		t.Fatalf("unexpected events3: %+v", events3)
+	}
+
+	// Step 4: GENERIC output for step 3. Should match callID "3_0", not stale "1_0"!
+	step4 := `{"step_index":4,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-09-04T10:00:02Z","content":"PASS"}`
+	events4 := parser.Parse([]byte(step4))
+	if len(events4) != 1 || events4[0].Type != "tool_output" || events4[0].CallID != "3_0" || events4[0].ToolStatus != "success" || events4[0].ToolName != "shell" {
+		t.Fatalf("unexpected events4: %+v", events4)
+	}
+
+	// Step 5: Tool call that encounters an ERROR_MESSAGE
+	step5 := `{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-09-04T10:00:03Z","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/foo.txt"}}]}`
+	parser.Parse([]byte(step5))
+
+	// Step 6: ERROR_MESSAGE should resolve pending call "5_0" with error status
+	step6 := `{"step_index":6,"source":"SYSTEM","type":"ERROR_MESSAGE","created_at":"2026-09-04T10:00:04Z","content":"file not found"}`
+	events6 := parser.Parse([]byte(step6))
+	if len(events6) != 1 || events6[0].Type != "tool_output" || events6[0].CallID != "5_0" || events6[0].ToolStatus != "error" || events6[0].ToolName != "read" {
+		t.Fatalf("unexpected events6: %+v", events6)
+	}
+}
+
+func TestCanonicalToolStatus(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"completed", "success"},
+		{"success", "success"},
+		{"done", "success"},
+		{"ok", "success"},
+		{"failed", "error"},
+		{"error", "error"},
+		{"interrupted", "interrupted"},
+		{"cancelled", "interrupted"},
+		{"running", "running"},
+		{"in_progress", "running"},
+		{"pending", "running"},
+		{"working", "running"},
+		{"", ""},
+		{"custom_unknown", "success"},
+	}
+	for _, tc := range tests {
+		got := canonicalToolStatus(tc.input)
+		if got != tc.want {
+			t.Errorf("canonicalToolStatus(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }

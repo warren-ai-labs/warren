@@ -1641,7 +1641,7 @@ private struct AgentHistoryLoadMoreRow: View {
     }
 }
 
-private enum AgentDisplayBlock: Identifiable {
+enum AgentDisplayBlock: Identifiable {
     case event(WarrenRemoteAgentEvent)
     case activity(AgentActivityGroup)
 
@@ -1653,8 +1653,8 @@ private enum AgentDisplayBlock: Identifiable {
     }
 }
 
-private struct AgentActivityGroup {
-    let entries: [AgentActivityEntry]
+struct AgentActivityGroup {
+    var entries: [AgentActivityEntry]
 
     var id: String {
         let first = entries.first?.sequence ?? 0
@@ -1759,14 +1759,14 @@ private struct AgentActivityGroup {
     }
 }
 
-private enum AgentActivityStatus {
+enum AgentActivityStatus {
     case running
     case completed
     case failed
     case interrupted
 }
 
-private enum AgentActivityEntry {
+enum AgentActivityEntry {
     case reasoning(WarrenRemoteAgentEvent)
     case tool(AgentToolBlock)
 
@@ -1785,7 +1785,7 @@ private enum AgentActivityEntry {
     }
 }
 
-private struct AgentToolBlock {
+struct AgentToolBlock {
     let call: WarrenRemoteAgentEvent
     var outputs: [WarrenRemoteAgentEvent]
 
@@ -1806,10 +1806,21 @@ private struct AgentToolBlock {
     }
 }
 
-private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayBlock] {
+func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayBlock] {
     var result: [AgentDisplayBlock] = []
     var activityEntries: [AgentActivityEntry] = []
-    var pendingTools: [String: Int] = [:]
+
+    enum ToolLocation {
+        case inCurrentActivity(index: Int)
+        case inResultActivity(blockIndex: Int, entryIndex: Int)
+    }
+    var toolLocations: [String: ToolLocation] = [:]
+
+    func toolKey(for event: WarrenRemoteAgentEvent) -> String? {
+        if let key = event.correlationID, !key.isEmpty { return key }
+        if let callID = event.callID, !callID.isEmpty { return callID }
+        return event.id.isEmpty ? nil : event.id
+    }
 
     // Structured objects are append-only updates keyed by their provider ID.
     // Keep the latest complete payload in the projection while preserving
@@ -1834,9 +1845,14 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
     /// one disclosure row.
     func flushActivity() {
         guard !activityEntries.isEmpty else { return }
+        let blockIndex = result.count
+        for (entryIndex, entry) in activityEntries.enumerated() {
+            if case .tool(let tool) = entry, let key = toolKey(for: tool.call) {
+                toolLocations[key] = .inResultActivity(blockIndex: blockIndex, entryIndex: entryIndex)
+            }
+        }
         result.append(.activity(AgentActivityGroup(entries: activityEntries)))
         activityEntries.removeAll(keepingCapacity: true)
-        pendingTools.removeAll(keepingCapacity: true)
     }
 
     for event in renderEvents {
@@ -1847,16 +1863,35 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
         } else if event.isToolCallEvent {
             let tool = AgentToolBlock(call: event, outputs: [])
             activityEntries.append(.tool(tool))
-            if let key = event.correlationID {
-                pendingTools[key] = activityEntries.count - 1
+            if let key = toolKey(for: event) {
+                toolLocations[key] = .inCurrentActivity(index: activityEntries.count - 1)
             }
-        } else if event.isToolOutputEvent,
-                  let key = event.correlationID,
-                  let index = pendingTools[key],
-                  index < activityEntries.count,
-                  case .tool(var tool) = activityEntries[index] {
-            tool.outputs.append(event)
-            activityEntries[index] = .tool(tool)
+        } else if event.isToolOutputEvent {
+            let key = toolKey(for: event)
+            var matched = false
+            if let key, let loc = toolLocations[key] {
+                switch loc {
+                case .inCurrentActivity(let idx):
+                    if idx < activityEntries.count, case .tool(var tool) = activityEntries[idx] {
+                        tool.outputs.append(event)
+                        activityEntries[idx] = .tool(tool)
+                        matched = true
+                    }
+                case .inResultActivity(let blockIdx, let entryIdx):
+                    if blockIdx < result.count, case .activity(var group) = result[blockIdx] {
+                        if entryIdx < group.entries.count, case .tool(var tool) = group.entries[entryIdx] {
+                            tool.outputs.append(event)
+                            group.entries[entryIdx] = .tool(tool)
+                            result[blockIdx] = .activity(group)
+                            matched = true
+                        }
+                    }
+                }
+            }
+            if !matched {
+                flushActivity()
+                result.append(.event(event))
+            }
         } else if event.isReasoningEvent && !event.hasRenderableActivityContent {
             // Providers sometimes emit an empty reasoning boundary before
             // the actual text. It is protocol metadata, not a useful mobile
@@ -1869,11 +1904,6 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
             continue
         } else if event.isReasoningEvent {
             activityEntries.append(.reasoning(event))
-        } else if event.isToolOutputEvent {
-            // Keep an unmatched output visible, but do not let it absorb a
-            // preceding activity segment whose call was not correlated.
-            flushActivity()
-            result.append(.event(event))
         } else {
             // Assistant replies, system markers, and other visible events
             // delimit the activity segment so the timeline keeps its source
@@ -3017,10 +3047,13 @@ private struct AgentToolBlockView: View {
                                     .textSelection(.enabled)
                             }
                         }
-                        if tool.outputs.isEmpty, tool.call.toolStatus?.isEmpty ?? true {
-                            Text("Waiting for output…")
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.tertiaryText)
+                        if tool.outputs.isEmpty, tool.status == "running" {
+                            HStack(spacing: 4) {
+                                IOSStatusDot(color: IOSTheme.yellow, size: 5)
+                                Text("Running…")
+                                    .font(IOSTypography.metadata)
+                                    .foregroundStyle(IOSTheme.tertiaryText)
+                            }
                         }
                     }
                     .padding(.horizontal, 8)
@@ -3248,6 +3281,16 @@ private struct AgentToolStatusMark: View {
                 .foregroundStyle(IOSTheme.yellow)
                 .frame(width: 14, height: 14, alignment: .center)
                 .accessibilityLabel("Tool interrupted")
+        case "running", "working", "pending":
+            IOSStatusDot(color: IOSTheme.yellow, size: 6)
+                .frame(width: 14, height: 14, alignment: .center)
+                .accessibilityLabel("Tool running")
+        case "success", "completed", "done":
+            Image(systemName: "checkmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(IOSTheme.secondaryText.opacity(0.65))
+                .frame(width: 14, height: 14, alignment: .center)
+                .accessibilityLabel("Tool completed")
         default:
             EmptyView()
         }

@@ -169,5 +169,50 @@ final class IOSToolFormattingTests: XCTestCase {
         XCTAssertEqual(latestAgentAction(from: [callEvent]), "Read file main.go")
         XCTAssertEqual(latestAgentAction(from: [callEvent, outputEvent]), "Read file main.go")
     }
+
+    func testToolOutputCorrelatesAcrossFlushedActivityBlocks() {
+        let call = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "find_by_name",
+            callID: "step_1_0"
+        )
+        let assistantReply = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "assistant",
+            content: "Searching files..."
+        )
+        let output = WarrenRemoteAgentEvent(
+            sequence: 3,
+            type: "tool_output",
+            toolName: "find_by_name",
+            toolStatus: "success",
+            callID: "step_1_0",
+            output: "main.go\nREADME.md"
+        )
+
+        let blocks = agentDisplayBlocks(from: [call, assistantReply, output])
+        // Verify: The tool output correlates into the existing activity group,
+        // and does NOT produce a second duplicate tool output block!
+        XCTAssertEqual(blocks.count, 2)
+        guard case .activity(let group) = blocks[0] else {
+            XCTFail("Expected first block to be activity group")
+            return
+        }
+        XCTAssertEqual(group.entries.count, 1)
+        guard case .tool(let toolBlock) = group.entries[0] else {
+            XCTFail("Expected entry to be tool block")
+            return
+        }
+        XCTAssertEqual(toolBlock.outputs.count, 1)
+        XCTAssertEqual(toolBlock.outputs[0].output, "main.go\nREADME.md")
+        XCTAssertEqual(toolBlock.status, "success")
+
+        guard case .event(let event) = blocks[1] else {
+            XCTFail("Expected second block to be assistant event")
+            return
+        }
+        XCTAssertEqual(event.content, "Searching files...")
+    }
 }
 

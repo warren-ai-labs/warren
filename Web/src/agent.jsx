@@ -1338,10 +1338,11 @@ function ToolCard({ block, defaultOpen = false }) {
       </button>
       {open && (
         <div className="agent-tool-detail">
-          {summary ? (
+          {summary && (
             <pre className="agent-tool-code">{summary}</pre>
-          ) : (
-            <span className="agent-tool-waiting">Waiting for output…</span>
+          )}
+          {status === "running" && block.outputs.length === 0 && !summary && (
+            <span className="agent-tool-waiting">Running…</span>
           )}
           {block.outputs.map((output, idx) => (
             <ToolOutputBody key={output.seq ?? idx} event={output} />

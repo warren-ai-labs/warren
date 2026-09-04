@@ -466,9 +466,31 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 				Timestamp: timestamp,
 			})
 		}
+		if strings.TrimSpace(record.Content) != "" {
+			stopReason := "stop"
+			if len(record.ToolCalls) > 0 {
+				stopReason = ""
+			}
+			events = append(events, api.AgentEvent{
+				Provider:   antigravityProvider,
+				Type:       "assistant",
+				Role:       "assistant",
+				Content:    p.clip(record.Content),
+				StopReason: stopReason,
+				Timestamp:  timestamp,
+			})
+		}
+		if len(record.ToolCalls) > 0 {
+			// In Antigravity, any tool calls from a previous planner response
+			// that never produced a generic output have been superseded or aborted.
+			// Reset pending calls before queuing the current step's calls to prevent
+			// FIFO drift across turns.
+			p.antigravityPendingCalls = p.antigravityPendingCalls[:0]
+		}
 		for i, tc := range record.ToolCalls {
 			callID := fmt.Sprintf("%d_%d", record.StepIndex, i)
-			p.antigravityCallTool[callID] = tc.Name
+			toolName := canonicalToolName(antigravityProvider, tc.Name)
+			p.antigravityCallTool[callID] = toolName
 			p.antigravityPendingCalls = append(p.antigravityPendingCalls, callID)
 
 			if tc.Name == "ask_question" {
@@ -477,9 +499,10 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 				p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, timestamp)
 				events = append(events, api.AgentEvent{
 					Provider:  antigravityProvider,
+					ID:        callID,
 					Type:      "question",
 					CallID:    callID,
-					ToolName:  tc.Name,
+					ToolName:  toolName,
 					Payload:   payload,
 					Timestamp: timestamp,
 				})
@@ -489,25 +512,17 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 					_ = json.Unmarshal(tc.Args, &parsedArgs)
 				}
 				events = append(events, api.AgentEvent{
-					Provider:  antigravityProvider,
-					Type:      "tool_call",
-					CallID:    callID,
-					ToolName:  tc.Name,
-					ToolInput: parsedArgs,
-					Files:     antigravityFiles(tc.Name, parsedArgs),
-					Timestamp: timestamp,
+					Provider:   antigravityProvider,
+					ID:         callID,
+					Type:       "tool_call",
+					CallID:     callID,
+					ToolName:   toolName,
+					ToolStatus: "running",
+					ToolInput:  parsedArgs,
+					Files:      antigravityFiles(tc.Name, parsedArgs),
+					Timestamp:  timestamp,
 				})
 			}
-		}
-		if strings.TrimSpace(record.Content) != "" {
-			events = append(events, api.AgentEvent{
-				Provider:   antigravityProvider,
-				Type:       "assistant",
-				Role:       "assistant",
-				Content:    p.clip(record.Content),
-				StopReason: "stop",
-				Timestamp:  timestamp,
-			})
 		}
 		return events
 
@@ -519,7 +534,7 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		p.antigravityPendingCalls = p.antigravityPendingCalls[1:]
 		toolName := p.antigravityCallTool[callID]
 
-		toolStatus := "completed"
+		toolStatus := "success"
 		if record.Status == "ERROR" {
 			toolStatus = "error"
 		}
@@ -528,17 +543,49 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		}
 		event := api.AgentEvent{
 			Provider:   antigravityProvider,
+			ID:         callID,
 			Type:       "tool_output",
 			CallID:     callID,
 			ToolName:   toolName,
 			Output:     p.clip(record.Content),
-			ToolStatus: toolStatus,
+			ToolStatus: canonicalToolStatus(toolStatus),
 			Timestamp:  timestamp,
 		}
 		if toolStatus == "error" {
 			event.Error = p.clip(record.Content)
 		}
 		return []api.AgentEvent{event}
+
+	case "ERROR_MESSAGE":
+		content := p.clip(record.Content)
+		if len(p.antigravityPendingCalls) > 0 {
+			var events []api.AgentEvent
+			for _, callID := range p.antigravityPendingCalls {
+				toolName := p.antigravityCallTool[callID]
+				events = append(events, api.AgentEvent{
+					Provider:   antigravityProvider,
+					ID:         callID,
+					Type:       "tool_output",
+					CallID:     callID,
+					ToolName:   toolName,
+					Output:     content,
+					ToolStatus: "error",
+					Error:      content,
+					Timestamp:  timestamp,
+				})
+			}
+			p.antigravityPendingCalls = p.antigravityPendingCalls[:0]
+			return events
+		} else if content != "" {
+			return []api.AgentEvent{{
+				Provider:  antigravityProvider,
+				Type:      "error",
+				Content:   content,
+				Error:     content,
+				Timestamp: timestamp,
+			}}
+		}
+		return nil
 
 	default:
 		return nil

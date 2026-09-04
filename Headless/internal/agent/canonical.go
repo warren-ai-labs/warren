@@ -63,6 +63,26 @@ func canonicalToolName(provider, raw string) string {
 	return name
 }
 
+// canonicalToolStatus normalizes raw tool statuses across all providers into
+// the canonical set: "running", "success", "error", "interrupted".
+func canonicalToolStatus(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "completed", "success", "done", "ok":
+		return "success"
+	case "failed", "error":
+		return "error"
+	case "interrupted", "cancelled", "canceled", "aborted":
+		return "interrupted"
+	case "in_progress", "running", "pending", "working":
+		return "running"
+	default:
+		if raw == "" {
+			return ""
+		}
+		return "success"
+	}
+}
+
 // eventIsRenderable reports whether the event carries enough payload to be
 // drawn. The provider parsers already drop most noise, but a defensive final
 // check at the parse entry keeps the UI from ever seeing an empty card. This
