@@ -968,7 +968,8 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.subscribe(
                     sessionID: sessionID,
                     anchor: anchor,
-                    claimControl: false
+                    claimControl: false,
+                    omitAgentOutput: true
                 )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")
@@ -1142,7 +1143,8 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.subscribe(
                     sessionID: sessionID,
                     anchor: anchor,
-                    claimControl: false
+                    claimControl: false,
+                    omitAgentOutput: true
                 )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")
@@ -2878,7 +2880,12 @@ public final class IOSApplicationModel: ObservableObject {
         let client = client
         Task { [weak self] in
             do {
-                let result = try await client.subscribe(sessionID: sessionID, anchor: nil, claimControl: false)
+                let result = try await client.subscribe(
+                    sessionID: sessionID,
+                    anchor: nil,
+                    claimControl: false,
+                    omitAgentOutput: true
+                )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")
                 }

@@ -13,7 +13,7 @@ export function attachTerminalMessage(session, terminal, anchor = null, claimCon
   // attach/replay fallback: every new Web/mobile client starts at a snapshot
   // boundary.
   const size = terminalSize(terminal);
-  const params = { id: session, claim: claimControl };
+  const params = { id: session, claim: claimControl, wireOptions: { omitFields: ["output"] } };
   if (size) {
     params.cols = size.cols;
     params.rows = size.rows;

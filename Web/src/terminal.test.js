@@ -21,18 +21,18 @@ test("attach requests an atomic subscription with the measured viewport", () => 
     attachTerminalMessage("session-1", { cols: 96, rows: 31 }),
     {
       method: "session.subscribe",
-      params: { id: "session-1", claim: true, cols: 96, rows: 31 },
+      params: { id: "session-1", claim: true, cols: 96, rows: 31, wireOptions: { omitFields: ["output"] } },
     },
   );
   assert.deepEqual(
     attachTerminalMessage("session-1", { cols: 0, rows: 31 }),
-    { method: "session.subscribe", params: { id: "session-1", claim: true } },
+    { method: "session.subscribe", params: { id: "session-1", claim: true, wireOptions: { omitFields: ["output"] } } },
   );
   assert.deepEqual(
     attachTerminalMessage("session-1", { cols: 96, rows: 31 }, null, false),
     {
       method: "session.subscribe",
-      params: { id: "session-1", claim: false, cols: 96, rows: 31 },
+      params: { id: "session-1", claim: false, cols: 96, rows: 31, wireOptions: { omitFields: ["output"] } },
     },
   );
 });

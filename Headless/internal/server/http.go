@@ -1563,7 +1563,7 @@ type wsPeer struct {
 	outputs          map[string]struct{}
 	controlSession   string
 	agentSession     string
-	agentWireOptions wireOptions
+	agentWireOptions map[string]wireOptions
 	// terminalStateFormat is negotiated once during protocol-2 authentication.
 	// Every client must install its selected format behind a presentation gate.
 	terminalStateFormat string
@@ -1853,7 +1853,7 @@ func (p *wsPeer) enqueueSynced(sessionID string, epoch, sequence uint64) error {
 
 func (p *wsPeer) enqueueAgentEvents(sessionID string, events []api.AgentEvent) error {
 	p.enqueueMu.Lock()
-	options := p.agentWireOptions
+	options := p.agentWireOptions[sessionID]
 	p.enqueueMu.Unlock()
 	return p.writeJSON(api.AgentMessage{
 		Type:    "agent",
@@ -2044,7 +2044,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		since, _ := uint64Param(params, "since")
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
-		wire := parseWireOptions(params)
+		wire, err := parseWireOptions(params)
+		if err != nil {
+			return err
+		}
 		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithWireOptions(
 			sessionID,
@@ -2096,7 +2099,11 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if turn == 0 {
 			return fmt.Errorf("turn parameter required")
 		}
-		return p.writeResult(command.ID, p.server.Service.agentTurnEvents(sessionID, turn))
+		wire, err := parseWireOptions(params)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, projectWireEvents(p.server.Service.agentTurnEvents(sessionID, turn), wire))
 	case "agent.interaction.respond":
 		if !p.supportsCapability(api.CapabilityAgentInteractions) {
 			return fmt.Errorf("capability %s is not available", api.CapabilityAgentInteractions)
@@ -2295,11 +2302,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		snapshot := p.server.Service.agentSnapshot(sessionID)
-		wire := parseWireOptions(params)
-		p.enqueueMu.Lock()
-		p.agentWireOptions = wire
-		p.enqueueMu.Unlock()
-		err = p.subscribeAgent(sessionID)
+		wire, err := parseWireOptions(params)
+		if err != nil {
+			lock.Unlock()
+			return err
+		}
+		err = p.subscribeAgent(sessionID, wire)
 		lock.Unlock()
 		if err != nil {
 			return err
@@ -2769,6 +2777,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if session.Lifecycle != "running" {
 			return fmt.Errorf("session is not running: %s", id)
 		}
+		wire, err := parseWireOptions(params)
+		if err != nil {
+			return err
+		}
 		// Control-only claims carry no output intent: the desktop promotes a
 		// retained warm surface by swapping its control lease without any
 		// replay, snapshot, or runtime I/O. Legacy clients omit the flag and
@@ -2796,6 +2808,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
 			p.server.Service.reservePeerCursorOutput(p, session.ID)
 		}
+		p.setAgentWireOptions(id, wire)
 		// Register before claiming focus so a disconnect cannot leave a stale
 		// focus owner behind while the initial snapshot is being prepared.
 		p.server.Service.registerPeer(session.ID, p)
@@ -2864,6 +2877,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return fmt.Errorf("session is not running: %s", id)
 		}
 		anchor := anchorFromParams(params)
+		wire, err := parseWireOptions(params)
+		if err != nil {
+			return err
+		}
 		anchorLabel := "none"
 		if anchor != nil {
 			anchorLabel = fmt.Sprintf("epoch=%d sequence=%d", anchor.Epoch, anchor.Sequence)
@@ -2891,6 +2908,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
 			p.server.Service.reservePeerCursorOutput(p, session.ID)
 		}
+		p.setAgentWireOptions(id, wire)
 		markStep("reservePeerCursorOutput")
 		if err := ctx.Err(); err != nil {
 			lock.Unlock()
@@ -3133,7 +3151,7 @@ func (p *wsPeer) claimControl(session api.Session) {
 	p.enqueueMu.Unlock()
 }
 
-func (p *wsPeer) subscribeAgent(sessionID string) error {
+func (p *wsPeer) subscribeAgent(sessionID string, options wireOptions) error {
 	p.enqueueMu.Lock()
 	if p.closeFlag {
 		p.enqueueMu.Unlock()
@@ -3141,9 +3159,19 @@ func (p *wsPeer) subscribeAgent(sessionID string) error {
 	}
 	previous := p.agentSession
 	p.agentSession = sessionID
+	if p.agentWireOptions == nil {
+		p.agentWireOptions = make(map[string]wireOptions)
+	}
+	p.agentWireOptions[sessionID] = options
+	_, previousHasOutput := p.outputs[previous]
 	p.enqueueMu.Unlock()
 	if previous != "" && previous != sessionID {
 		p.server.Service.detachAgentPeer(p, previous)
+		if !previousHasOutput {
+			p.enqueueMu.Lock()
+			delete(p.agentWireOptions, previous)
+			p.enqueueMu.Unlock()
+		}
 	}
 	p.server.Service.registerAgentPeer(sessionID, p)
 
@@ -3159,20 +3187,45 @@ func (p *wsPeer) subscribeAgent(sessionID string) error {
 	return nil
 }
 
-func parseWireOptions(params map[string]any) wireOptions {
+func parseWireOptions(params map[string]any) (wireOptions, error) {
 	options := wireOptions{omitFields: make(map[string]struct{})}
-	raw, ok := params["wireOptions"].(map[string]any)
+	value, specified := params["wireOptions"]
+	if !specified {
+		return options, nil
+	}
+	raw, ok := value.(map[string]any)
 	if !ok {
-		return options
+		return wireOptions{}, errors.New("wireOptions must be an object")
 	}
-	if fields, ok := raw["omitFields"].([]any); ok {
-		for _, value := range fields {
-			if field, ok := value.(string); ok {
-				options.omitFields[strings.TrimSpace(field)] = struct{}{}
-			}
+	value, specified = raw["omitFields"]
+	if !specified {
+		return options, nil
+	}
+	fields, ok := value.([]any)
+	if !ok {
+		return wireOptions{}, errors.New("wireOptions.omitFields must be an array")
+	}
+	for _, value := range fields {
+		field, ok := value.(string)
+		if !ok {
+			return wireOptions{}, errors.New("wireOptions.omitFields entries must be strings")
 		}
+		field = strings.TrimSpace(field)
+		if !supportedWireField(field) {
+			return wireOptions{}, fmt.Errorf("wire field cannot be omitted: %s", field)
+		}
+		options.omitFields[field] = struct{}{}
 	}
-	return options
+	return options, nil
+}
+
+func supportedWireField(field string) bool {
+	switch field {
+	case "output", "toolInput", "files", "payload", "usage":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *wsPeer) detach() {
@@ -3268,9 +3321,21 @@ func (p *wsPeer) addOutput(sessionID string) {
 	p.enqueueMu.Unlock()
 }
 
+func (p *wsPeer) setAgentWireOptions(sessionID string, options wireOptions) {
+	p.enqueueMu.Lock()
+	if p.agentWireOptions == nil {
+		p.agentWireOptions = make(map[string]wireOptions)
+	}
+	p.agentWireOptions[sessionID] = options
+	p.enqueueMu.Unlock()
+}
+
 func (p *wsPeer) removeOutput(sessionID string) {
 	p.enqueueMu.Lock()
 	delete(p.outputs, sessionID)
+	if p.agentSession != sessionID {
+		delete(p.agentWireOptions, sessionID)
+	}
 	p.enqueueMu.Unlock()
 }
 
