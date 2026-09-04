@@ -346,6 +346,17 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         workspaceActivitySummariesByID
     }
 
+    /// Workspace IDs that have at least one active or attached terminal session.
+    public var activeWorkspaceIDs: Set<WorkspaceID> {
+        var result = Set<WorkspaceID>()
+        for session in sessions where session.state.isActive {
+            if let workspaceID = sessionWorkspaceIDs[session.id] ?? session.workspaceID {
+                result.insert(workspaceID)
+            }
+        }
+        return result
+    }
+
     public var firstWorkspace: Workspace? {
         firstWorkspaceID.flatMap { workspacesByID[$0] }
     }

@@ -3164,7 +3164,8 @@ final class WarrenDesktopTests: XCTestCase {
             expandedProjectIDs: [ProjectID(), ProjectID()],
             tasksCollapsed: true,
             projectsCollapsed: true,
-            activeSessionsCollapsed: true
+            activeSessionsCollapsed: true,
+            showsActiveOnly: true
         )
 
         WarrenDesktopSidebarTreePersistence.save(state, scope: "local", defaults: defaults)
@@ -3177,6 +3178,89 @@ final class WarrenDesktopTests: XCTestCase {
             WarrenDesktopSidebarTreePersistence.restore(scope: "server", defaults: defaults),
             WarrenDesktopSidebarTreeState()
         )
+    }
+
+    func testProjectionActiveWorkspaceIDs() {
+        let host = WarrenDomain.Host(name: "TestHost")
+        let project = Project(hostID: host.id, name: "Repo", rootPath: "/repo")
+        let activeWorkspace = Workspace(projectID: project.id, name: "active", path: "/repo/active")
+        let idleWorkspace = Workspace(projectID: project.id, name: "idle", path: "/repo/idle")
+        let exitedWorkspace = Workspace(projectID: project.id, name: "exited", path: "/repo/exited")
+
+        let activeSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: activeWorkspace.id,
+            title: "active-shell",
+            state: .attached
+        )
+        let exitedSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: exitedWorkspace.id,
+            title: "exited-shell",
+            state: .exited
+        )
+
+        let projection = WarrenDesktopProjection(
+            host: host,
+            groups: [
+                WarrenDesktopProjectGroup(
+                    project: project,
+                    workspaces: [activeWorkspace, idleWorkspace, exitedWorkspace]
+                ),
+            ],
+            sessions: [activeSession, exitedSession]
+        )
+
+        XCTAssertEqual(projection.activeWorkspaceIDs, Set([activeWorkspace.id]))
+    }
+
+    @MainActor
+    func testSidebarRowsFiltersInactiveWorkspacesWhenShowsActiveOnlyIsTrue() {
+        let host = WarrenDomain.Host(name: "TestHost")
+        let project = Project(hostID: host.id, name: "Repo", rootPath: "/repo")
+        let activeWorkspace = Workspace(projectID: project.id, name: "active", path: "/repo/active")
+        let idleWorkspace = Workspace(projectID: project.id, name: "idle", path: "/repo/idle")
+
+        let groups = [WarrenDesktopProjectGroup(project: project, workspaces: [activeWorkspace, idleWorkspace])]
+        let recorder = WarrenSemanticRecorder()
+
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: [:],
+            activeWorkspaceIDs: [activeWorkspace.id],
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id],
+                showsActiveOnly: true
+            )),
+            isCollapsed: false,
+            selection: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        XCTAssertNotNil(snapshot.node(id: "workspace.project-list.\(activeWorkspace.id.description)"))
+        XCTAssertNil(snapshot.node(id: "workspace.project-list.\(idleWorkspace.id.description)"))
     }
 
     func testNavigationReducerIgnoresSidebarMoves() {
