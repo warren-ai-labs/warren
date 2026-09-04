@@ -23,7 +23,7 @@ func canonicalToolName(provider, raw string) string {
 	}
 	switch name {
 	// shell
-	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd", "run_command":
+	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd", "run_command", "exec", "execute":
 		return "shell"
 	// edit
 	case "edit", "edit_file", "str_replace_editor", "edit_file_v2", "replace_file_content":

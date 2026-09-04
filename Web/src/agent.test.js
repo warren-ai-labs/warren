@@ -8,8 +8,10 @@ import {
   agentComposerAction,
   composerHeightForText,
   deleteAgentQueueItem,
+  displayToolName,
   editAgentQueueItem,
   enqueueAgentMessage,
+  extractPatchFiles,
   formatAgentModel,
   groupAgentEvents,
   latestAgentAction,
@@ -17,6 +19,7 @@ import {
   moveAgentQueueItem,
   projectAgentEvents,
   retryAgentQueueItem,
+  toolSummary,
 } from "./agent.js";
 
 test("formatAgentModel turns wire names into readable labels", () => {
@@ -279,3 +282,95 @@ test("latestAgentAction extracts recent tool call and output summaries", () => {
     "Edit file",
   );
 });
+
+test("displayToolName maps provider tool names to human labels", () => {
+  assert.equal(displayToolName("shell"), "Shell");
+  assert.equal(displayToolName("exec"), "Shell");
+  assert.equal(displayToolName("run_command"), "Shell");
+  assert.equal(displayToolName("edit"), "Edit file");
+  assert.equal(displayToolName("replace_file_content"), "Edit file");
+  assert.equal(displayToolName("write_to_file"), "Write file");
+  assert.equal(displayToolName("view_file"), "Read file");
+  assert.equal(displayToolName("grep_search"), "Search files");
+  assert.equal(displayToolName("find_by_name"), "Find files");
+  assert.equal(displayToolName("search_web"), "Web search");
+  assert.equal(displayToolName("read_url_content"), "Web fetch");
+});
+
+test("toolSummary extracts rich details across Codex and Antigravity tool shapes", () => {
+  // Shell command with affected files
+  assert.equal(
+    toolSummary({
+      toolName: "shell",
+      toolInput: { command: "git checkout -b feature" },
+      files: ["src/a.go", "src/b.go"],
+    }),
+    "git checkout -b feature · a.go, b.go",
+  );
+
+  // Codex raw exec
+  assert.equal(
+    toolSummary({
+      toolName: "exec",
+      toolInput: { raw: 'exec_command({"cmd": "npm run check"})' },
+    }),
+    "npm run check",
+  );
+
+  // Antigravity file read with action
+  assert.equal(
+    toolSummary({
+      toolName: "view_file",
+      toolInput: { AbsolutePath: "/Users/user/workspace/src/agent.js", toolAction: "Viewing agent.js" },
+    }),
+    "Viewing agent.js: agent.js",
+  );
+
+  // Antigravity replace_file_content
+  assert.equal(
+    toolSummary({
+      toolName: "replace_file_content",
+      toolInput: { TargetFile: "/Users/user/workspace/src/agent.jsx" },
+    }),
+    "agent.jsx",
+  );
+
+  // Antigravity run_command
+  assert.equal(
+    toolSummary({
+      toolName: "run_command",
+      toolInput: { CommandLine: "swift test" },
+    }),
+    "swift test",
+  );
+
+  // Patch extraction
+  const patch = "*** Add File: src/new.ts\n+console.log('hi')\n*** Update File: src/old.ts\n-1\n+2";
+  assert.deepEqual(extractPatchFiles(patch), ["src/new.ts", "src/old.ts"]);
+  assert.equal(
+    toolSummary({
+      toolName: "apply_patch",
+      toolInput: { patch },
+    }),
+    "new.ts, old.ts",
+  );
+});
+
+test("groupAgentEvents coalesces adjacent activity groups", () => {
+  const blocks = groupAgentEvents([
+    { seq: 1, type: "user", content: "inspect" },
+    { seq: 2, type: "reasoning", content: "think step 1" },
+    { seq: 3, type: "tool_call", callId: "c1", toolName: "view_file", toolInput: { AbsolutePath: "/a.js" } },
+    { seq: 4, type: "tool_output", callId: "c1", output: "ok" },
+    { seq: 5, type: "reasoning", content: "think step 2" },
+    { seq: 6, type: "tool_call", callId: "c2", toolName: "grep_search", toolInput: { query: "foo" } },
+    { seq: 7, type: "tool_output", callId: "c2", output: "ok" },
+    { seq: 8, type: "assistant", content: "done" },
+  ]);
+  assert.deepEqual(blocks.map(b => b.kind), ["user", "activity_group", "assistant"]);
+  assert.equal(blocks[1].reasoning.length, 2);
+  assert.equal(blocks[1].tools.length, 2);
+  assert.equal(blocks[1].tools[0].call.toolName, "view_file");
+  assert.equal(blocks[1].tools[1].call.toolName, "grep_search");
+});
+

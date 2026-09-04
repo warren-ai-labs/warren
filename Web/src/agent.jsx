@@ -7,6 +7,8 @@ import {
   displayToolName,
   extractExecCommands,
   formatAgentModel,
+  basename,
+  formatFileList,
   groupAgentEvents,
   latestAgentAction,
   loadAgentDraft,
@@ -1196,7 +1198,8 @@ function ActivityGroup({ block }) {
   return (
     <div className={`agent-activity-group ${status}`}>
       <button type="button" className="agent-activity-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length)}</span>
+        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
+        <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length, tools)}</span>
         {!open && toolGroupSummary(tools) && <code className="agent-tool-summary">{toolGroupSummary(tools)}</code>}
         <span className="agent-tool-status">{statusText(status)}</span>
       </button>
@@ -1218,11 +1221,75 @@ function ActivityGroup({ block }) {
           })}
           {toolItems.length > 0 && (
             <div className="agent-tool-group">
-              {toolItems.map((item, index) => (
-                <ToolCard key={blockKindKey(item.block, index)} block={item.block} />
-              ))}
+              {coalesceToolBlocks(toolItems).map((group, index) => {
+                if (group.blocks.length === 1) {
+                  return <ToolCard key={blockKindKey(group.blocks[0], index)} block={group.blocks[0]} />;
+                }
+                return <CoalescedToolCard key={`coalesced-${group.toolName}-${index}`} group={group} />;
+              })}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function coalesceToolBlocks(toolItems = []) {
+  const groups = [];
+  for (const item of toolItems) {
+    const block = item.block;
+    const name = (block.call?.toolName || "").toLowerCase();
+    const prev = groups.at(-1);
+    if (prev && prev.toolName === name) {
+      prev.blocks.push(block);
+    } else {
+      groups.push({ toolName: name, blocks: [block] });
+    }
+  }
+  return groups;
+}
+
+function CoalescedToolCard({ group, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const status = groupStatus(group.blocks);
+  const count = group.blocks.length;
+  const name = displayToolName(group.toolName);
+  const summaries = group.blocks
+    .map(b => toolSummary(b.call))
+    .filter(Boolean);
+  const unique = [...new Set(summaries)];
+  const preview = unique.join(", ");
+
+  return (
+    <div className={`agent-tool-card ${status}`}>
+      <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
+        <span className="agent-tool-name">{name} × {count}</span>
+        {preview && <code className="agent-tool-summary">{preview}</code>}
+        <span className="agent-tool-status">{statusText(status)}</span>
+      </button>
+      {open && (
+        <div className="agent-tool-detail">
+          <div className="agent-tool-sublist">
+            {group.blocks.map((block, idx) => {
+              const summary = toolSummary(block.call);
+              const bStatus = block.call.toolStatus || (block.outputs.length ? "success" : "running");
+              return (
+                <div key={blockKindKey(block, idx)} className="agent-tool-subitem">
+                  <div className="agent-tool-subitem-head">
+                    <span className="agent-tool-bullet">•</span>
+                    {summary && <code className="agent-tool-summary">{summary}</code>}
+                    <span className="agent-tool-status">{statusText(bStatus)}</span>
+                  </div>
+                  {block.outputs.map((out, oIdx) => (
+                    <ToolOutputBody key={out.seq ?? oIdx} event={out} />
+                  ))}
+                  {block.call.files?.length > 0 && <FileList files={block.call.files} />}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -1235,12 +1302,11 @@ function ToolCard({ block, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const summary = toolDisplay(call, status);
   const isWebSearch = call.toolName === "web_search";
-  const isShell = call.toolName === "shell";
-  const shellCommand = isShell ? call.toolInput?.command : null;
+  const isShell = call.toolName === "shell" || call.toolName === "exec";
+  const shellCommand = isShell ? (call.toolInput?.command || call.toolInput?.cmd || call.toolInput?.CommandLine) : null;
   const isCommand = Boolean(
     shellCommand
-    || call.toolInput?.cmd
-    || call.toolInput?.command,
+    || (call.toolInput && typeof call.toolInput === "object" && (call.toolInput.cmd || call.toolInput.command || call.toolInput.CommandLine)),
   );
   const preview = shellCommand || summary;
   if (isCommand) {
@@ -1250,6 +1316,9 @@ function ToolCard({ block, defaultOpen = false }) {
           <span className="agent-tool-prompt">$ </span>
           {preview}
         </code>
+        {call.files?.length > 0 && (
+          <span className="agent-tool-files-preview">({formatFileList(call.files)})</span>
+        )}
         {!isWebSearch && <span className="agent-tool-status">{statusText(status)}</span>}
       </div>
     );
@@ -1269,11 +1338,14 @@ function ToolCard({ block, defaultOpen = false }) {
               <span className="agent-tool-prompt">$ </span>
               {shellCommand}
             </pre>
-          ) : preview ? (
-            <pre className="agent-tool-code">{preview}</pre>
+          ) : summary ? (
+            <pre className="agent-tool-code">{summary}</pre>
           ) : (
             <span className="agent-tool-waiting">Waiting for output…</span>
           )}
+          {block.outputs.map((output, idx) => (
+            <ToolOutputBody key={output.seq ?? idx} event={output} />
+          ))}
           {call.files?.length > 0 && <FileList files={call.files} />}
         </div>
       )}
@@ -1281,23 +1353,60 @@ function ToolCard({ block, defaultOpen = false }) {
   );
 }
 
-function activityTitle(reasoningCount, toolsCount) {
+function activityTitle(reasoningCount, toolsCount, tools = []) {
   const parts = [];
-  if (reasoningCount > 0) parts.push(`Thinking × ${reasoningCount}`);
-  if (toolsCount > 0) parts.push(`Tools × ${toolsCount}`);
+  if (reasoningCount > 0) parts.push(reasoningCount === 1 ? "Thinking" : `Thinking × ${reasoningCount}`);
+  if (toolsCount > 0) {
+    if (toolsCount === 1 && tools[0]?.call?.toolName) {
+      parts.push(displayToolName(tools[0].call.toolName));
+    } else {
+      const toolNames = new Set(tools.map(t => (t.call?.toolName || "").toLowerCase()));
+      if (toolNames.size === 1) {
+        const [singleType] = toolNames;
+        switch (singleType) {
+        case "read":
+        case "view_file":
+        case "viewfile":
+          parts.push(`Read ${toolsCount} files`);
+          break;
+        case "edit":
+        case "write":
+        case "apply_patch":
+        case "replace_file_content":
+        case "write_to_file":
+          parts.push(`Edited ${toolsCount} files`);
+          break;
+        case "grep":
+        case "glob":
+        case "find_by_name":
+        case "grep_search":
+        case "web_search":
+          parts.push(`Searched ${toolsCount} times`);
+          break;
+        case "shell":
+        case "exec":
+        case "run_command":
+          parts.push(`Ran ${toolsCount} commands`);
+          break;
+        default:
+          parts.push(`${displayToolName(singleType)} × ${toolsCount}`);
+        }
+      } else {
+        parts.push(`Tools × ${toolsCount}`);
+      }
+    }
+  }
   return parts.join(" · ") || "Activity";
 }
 
 function toolGroupSummary(items) {
-  const first = items[0]?.call;
-  if (!first) return "";
-  const summary = toolSummary(first);
-  if (summary) return summary;
-  if (items.length > 1) {
-    const second = items[1]?.call;
-    if (second) return toolSummary(second);
-  }
-  return "";
+  if (!Array.isArray(items) || items.length === 0) return "";
+  const summaries = items
+    .map(item => toolSummary(item?.call))
+    .filter(Boolean);
+  if (summaries.length === 0) return "";
+  const unique = [...new Set(summaries)];
+  return truncatePreview(unique.join(" · "), 140);
 }
 
 function groupStatus(items) {
@@ -1347,18 +1456,12 @@ function ChevronRightIcon() {
 
 function toolDisplay(call, status) {
   if (call.toolName !== "web_search") return toolSummary(call);
-  const input = call.toolInput || {};
   const target = toolSummary(call);
   if (status === "running") return `Searching the web${target ? ` for ${target}` : ""}…`;
   if (status === "success") return `Searched the web for ${target || "results"}`;
   if (status === "error") return `Web search failed${target ? ` · ${target}` : ""}`;
   if (status === "interrupted") return `Web search interrupted${target ? ` · ${target}` : ""}`;
   return target || "Web search";
-}
-
-function basename(path) {
-  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return index >= 0 ? path.slice(index + 1) : path;
 }
 
 const REMARK_PLUGINS = [remarkGfm];

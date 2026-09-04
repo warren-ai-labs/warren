@@ -494,6 +494,7 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 					CallID:    callID,
 					ToolName:  tc.Name,
 					ToolInput: parsedArgs,
+					Files:     antigravityFiles(tc.Name, parsedArgs),
 					Timestamp: timestamp,
 				})
 			}
@@ -542,4 +543,20 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 	default:
 		return nil
 	}
+}
+
+func antigravityFiles(toolName string, args any) []string {
+	m, ok := args.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"TargetFile", "AbsolutePath", "file_path", "path", "file"} {
+		if val, ok := m[key].(string); ok {
+			clean := strings.Trim(strings.TrimSpace(val), `"'`)
+			if clean != "" {
+				return []string{clean}
+			}
+		}
+	}
+	return nil
 }
