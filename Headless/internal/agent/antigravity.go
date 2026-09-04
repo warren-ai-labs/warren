@@ -212,6 +212,7 @@ func FindAntigravityTranscript(sessionID, workspacePath string) string {
 		if regularFileExists(path) {
 			return path
 		}
+		return ""
 	}
 	if strings.TrimSpace(workspacePath) != "" {
 		dbPath := filepath.Join(home, "conversation_summaries.db")

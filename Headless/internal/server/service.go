@@ -2970,7 +2970,7 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 
 func (s *Service) Session(id string) (api.Session, bool) {
 	for _, session := range s.Store.Snapshot().Sessions {
-		if session.ID == id {
+		if session.ID == id && session.Lifecycle != "ended" {
 			return session, true
 		}
 	}
@@ -3774,7 +3774,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				if transcriptPath == "" || !regularFileExists(transcriptPath) {
 					transcriptPath = agent.FindAntigravityTranscript(binding.SessionID, workspacePath)
 				}
-			} else {
+			} else if session.AgentSessionID != "" {
 				agentSessionID = session.AgentSessionID
 				transcriptPath = agent.FindAntigravityTranscript(session.AgentSessionID, workspacePath)
 			}
