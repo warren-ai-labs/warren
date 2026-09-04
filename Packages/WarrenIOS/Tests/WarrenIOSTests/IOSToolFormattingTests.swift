@@ -119,4 +119,55 @@ final class IOSToolFormattingTests: XCTestCase {
         )
         XCTAssertFalse(isCommandTool(call: nonCmdEvent))
     }
+
+    func testCodexArgsInToolSummary() {
+        let event = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "shell",
+            toolInput: .object(["args": .array([.string("npm"), .string("test")])])
+        )
+        XCTAssertEqual(toolSummary(for: event), "npm test")
+    }
+
+    func testLatestAgentActionCodexCommand() {
+        let callEvent = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "shell",
+            toolInput: .object(["command": .string("git status")]),
+            callID: "call-1"
+        )
+        let outputEvent = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "tool_output",
+            toolName: "shell",
+            callID: "call-1",
+            output: "On branch main"
+        )
+        // For tool_call: command tool shows command directly
+        XCTAssertEqual(latestAgentAction(from: [callEvent]), "git status")
+        // For tool_output: traces back to tool_call and shows command directly
+        XCTAssertEqual(latestAgentAction(from: [callEvent, outputEvent]), "git status")
+    }
+
+    func testLatestAgentActionNonCommandTool() {
+        let callEvent = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "view_file",
+            toolInput: .object(["AbsolutePath": .string("/Users/code/main.go")]),
+            callID: "call-2"
+        )
+        let outputEvent = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "tool_output",
+            toolName: "view_file",
+            callID: "call-2",
+            output: "package main"
+        )
+        XCTAssertEqual(latestAgentAction(from: [callEvent]), "Read file main.go")
+        XCTAssertEqual(latestAgentAction(from: [callEvent, outputEvent]), "Read file main.go")
+    }
 }
+

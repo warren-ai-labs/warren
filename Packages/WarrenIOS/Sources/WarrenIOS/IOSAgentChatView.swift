@@ -1498,20 +1498,32 @@ private struct AgentAttentionBanner: View {
 private struct AgentWorkingFooter: View {
     let phrase: String
     var action: String? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 7) {
-            IOSShimmerText(phrase, color: IOSTheme.accent, font: IOSTypography.working)
-            if let action, !action.isEmpty {
-                IOSShimmerText(
-                    action,
-                    color: .white,
-                    highlightColor: Color(white: 0.55),
-                    font: IOSTypography.working
-                )
-                .lineLimit(1)
-                .truncationMode(.tail)
-            }
+            contentView
+                .overlay {
+                    if !reduceMotion {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                            let phase = shimmerPhase(at: timeline.date)
+                            let start = -1.20 + phase * 2.40
+                            let end = start + 2.20
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .clear, location: 0.38),
+                                    .init(color: Color.white.opacity(0.85), location: 0.50),
+                                    .init(color: .clear, location: 0.62),
+                                    .init(color: .clear, location: 1),
+                                ],
+                                startPoint: UnitPoint(x: start, y: 0.5),
+                                endPoint: UnitPoint(x: end, y: 0.5)
+                            )
+                            .mask(contentView)
+                        }
+                    }
+                }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 18)
@@ -1524,6 +1536,28 @@ private struct AgentWorkingFooter: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Agent working: \(phrase)\(action.map { " " + $0 } ?? "")")
+    }
+
+    private var contentView: some View {
+        HStack(spacing: 7) {
+            Text(phrase)
+                .font(IOSTypography.working)
+                .foregroundStyle(IOSTheme.accent)
+            if let action, !action.isEmpty {
+                Text(action)
+                    .font(IOSTypography.working)
+                    .foregroundStyle(Color(white: 0.85))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
+    private func shimmerPhase(at date: Date) -> Double {
+        let duration = 3.2
+        let elapsed = date.timeIntervalSinceReferenceDate
+        return (elapsed.truncatingRemainder(dividingBy: duration) + duration)
+            .truncatingRemainder(dividingBy: duration) / duration
     }
 }
 
@@ -3260,7 +3294,7 @@ func isCommandTool(_ name: String?) -> Bool {
 func isCommandTool(call: WarrenRemoteAgentEvent) -> Bool {
     if isCommandTool(call.toolName) { return true }
     if let input = call.toolInput, case .object(let obj) = input {
-        return obj["command"] != nil || obj["cmd"] != nil || obj["CommandLine"] != nil
+        return obj["command"] != nil || obj["cmd"] != nil || obj["CommandLine"] != nil || obj["args"] != nil || obj["argv"] != nil
     }
     return false
 }
@@ -3333,7 +3367,7 @@ func extractExecCommands(_ raw: String) -> [String] {
         }
     }
     if commands.isEmpty {
-        let jsonPattern = #"["'](?:cmd|command)["']\s*:\s*"((?:[^"\\]|\\.)*)""#
+        let jsonPattern = #"["'](?:cmd|command|CommandLine|code|script)["']\s*:\s*"((?:[^"\\]|\\.)*)""#
         if let regex = try? NSRegularExpression(pattern: jsonPattern, options: []) {
             let nsString = raw as NSString
             let matches = regex.matches(in: raw, options: [], range: NSRange(location: 0, length: nsString.length))
@@ -3395,14 +3429,14 @@ func toolSummary(for event: WarrenRemoteAgentEvent) -> String? {
                 return ""
             }()
 
-            if let cmd = getString(["command", "cmd", "CommandLine"]) {
+            if let cmd = getString(["command", "cmd", "CommandLine", "code", "script", "input"]) {
                 let commandStr = truncateToolSummary(cmd)
                 if !files.isEmpty {
                     return "\(commandStr) · \(formatFileList(files))"
                 }
                 return commandStr
             }
-            for key in ["command", "cmd", "CommandLine"] {
+            for key in ["command", "cmd", "CommandLine", "args", "argv", "arguments"] {
                 if case .array(let arr) = object[key] {
                     let strings = arr.compactMap { val -> String? in
                         if case .string(let s) = val, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -3416,6 +3450,29 @@ func toolSummary(for event: WarrenRemoteAgentEvent) -> String? {
                             return "\(truncateToolSummary(joined)) · \(formatFileList(files))"
                         }
                         return truncateToolSummary(joined)
+                    }
+                }
+            }
+
+            if let rawArgs = getString(["arguments"]) {
+                if rawArgs.hasPrefix("{"),
+                   let data = rawArgs.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let cmd = json["command"] as? String ?? json["cmd"] as? String ?? json["CommandLine"] as? String {
+                        let commandStr = truncateToolSummary(cmd)
+                        if !files.isEmpty {
+                            return "\(commandStr) · \(formatFileList(files))"
+                        }
+                        return commandStr
+                    }
+                    if let arr = json["args"] as? [String] ?? json["argv"] as? [String] ?? json["command"] as? [String] {
+                        let joined = arr.joined(separator: " ")
+                        if !joined.isEmpty {
+                            if !files.isEmpty {
+                                return "\(truncateToolSummary(joined)) · \(formatFileList(files))"
+                            }
+                            return truncateToolSummary(joined)
+                        }
                     }
                 }
             }
@@ -3508,17 +3565,36 @@ private func toolStatusTitle(_ status: String) -> String {
     }
 }
 
-private func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
-    for event in events.reversed() {
+func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
+    for (index, event) in events.enumerated().reversed() {
         let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if type == "tool_call" || type == "toolcall" {
-            let name = displayToolName(event.toolName)
+            let isCmd = isCommandTool(call: event)
             if let summary = toolSummary(for: event), !summary.isEmpty {
-                return "\(name) \(summary)"
+                return isCmd ? summary : "\(displayToolName(event.toolName)) \(summary)"
             }
-            return name
+            return displayToolName(event.toolName)
         }
         if type == "tool_output" || type == "tooloutput" {
+            let matchingCall: WarrenRemoteAgentEvent? = {
+                if let callID = event.callID, !callID.isEmpty {
+                    return events.first(where: {
+                        let ct = $0.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        return (ct == "tool_call" || ct == "toolcall") && ($0.callID == callID || $0.id == callID)
+                    })
+                }
+                return events[0..<index].reversed().first(where: {
+                    let ct = $0.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    return (ct == "tool_call" || ct == "toolcall")
+                })
+            }()
+            if let callEvent = matchingCall {
+                let isCmd = isCommandTool(call: callEvent)
+                if let summary = toolSummary(for: callEvent), !summary.isEmpty {
+                    return isCmd ? summary : "\(displayToolName(callEvent.toolName)) \(summary)"
+                }
+                return displayToolName(callEvent.toolName)
+            }
             if let toolName = event.toolName, !toolName.isEmpty {
                 return displayToolName(toolName)
             }

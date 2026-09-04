@@ -191,6 +191,19 @@ public extension View {
         modifier(IOSSurfaceModifier(color: color, radius: radius, border: border))
     }
 
+    func iosCardSurface(
+        background: Color = IOSTheme.cardBackground,
+        radius: CGFloat = IOSTheme.cardRadius,
+        border: Color = IOSTheme.cardBorder
+    ) -> some View {
+        self
+            .background(background, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(border, lineWidth: 0.5)
+            }
+    }
+
     /// Lets natural-language content grow vertically instead of turning a
     /// translated string into an unexplained ellipsis. Use an explicit
     /// `lineLimit` only when the surrounding component has a deliberate
