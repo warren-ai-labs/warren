@@ -69,6 +69,9 @@ public enum IOSTheme {
     public static let controlHeight = WarrenLayoutMetrics.mobileActionRowHeight
     public static let radius = WarrenRadius.base
     public static let smallRadius = WarrenRadius.medium
+    public static let cardBackground = tokens.chromeSurface
+    public static let cardBorder = tokens.ring.opacity(0.35)
+    public static let cardRadius: CGFloat = 14
 
     public static func statusColor(_ activity: WarrenRemoteAgentActivity) -> Color {
         switch activity {
@@ -91,6 +94,11 @@ public enum IOSTheme {
         }
         return statusColor(status.activity)
     }
+}
+
+public enum IOSMotion {
+    public static let spring = Animation.spring(response: 0.32, dampingFraction: 0.82)
+    public static let quick = Animation.easeOut(duration: 0.16)
 }
 
 /// Deliberate type hierarchy for the compact mobile surface. SF Pro remains

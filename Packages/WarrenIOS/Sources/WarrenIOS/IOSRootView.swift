@@ -27,8 +27,7 @@ private func dashboardSectionID(kind: String, id: String) -> String {
 public struct IOSRootView: View {
     @ObservedObject private var model: IOSApplicationModel
     @State private var navigationPath: [IOSRoute] = []
-    @State private var collapsedSectionIDs: Set<String> = []
-    @State private var expandedWorkspaceIDs: Set<String> = []
+    @State private var collapsedCardIDs: Set<String> = []
     @State private var showingWorkspaceManager = false
     @State private var workspaceManagerProjectID: String?
 
@@ -40,8 +39,7 @@ public struct IOSRootView: View {
         NavigationStack(path: $navigationPath) {
             HostDashboardView(
                 model: model,
-                collapsedSectionIDs: $collapsedSectionIDs,
-                expandedWorkspaceIDs: $expandedWorkspaceIDs,
+                collapsedCardIDs: $collapsedCardIDs,
                 openWorkspace: { navigationPath.append(.workspace($0)) },
                 openTerminalGroup: { navigationPath.append(.terminalGroup($0)) },
                 openSession: { navigationPath.append(.session($0)) },
@@ -121,32 +119,71 @@ public struct IOSRootView: View {
         }
 
         if let workspaceID = session.workspaceID {
-            expandedWorkspaceIDs.insert(sessionScopeID(kind: "workspace", id: workspaceID))
-            if let workspace = model.roster?.workspaces.first(where: { $0.id == workspaceID }) {
-                if !workspace.projectID.isEmpty {
-                    let projectID = workspace.projectID
-                    collapsedSectionIDs.remove(dashboardSectionID(kind: "project", id: projectID))
-                } else {
-                    collapsedSectionIDs.remove(dashboardSectionID(kind: "unassigned", id: "workspaces"))
-                }
-            }
+            collapsedCardIDs.remove(sessionScopeID(kind: "workspace", id: workspaceID))
         }
         if let groupID = session.terminalGroupID {
-            expandedWorkspaceIDs.insert(sessionScopeID(kind: "group", id: groupID))
-            collapsedSectionIDs.remove(dashboardSectionID(kind: "groups", id: "terminal-groups"))
+            collapsedCardIDs.remove(sessionScopeID(kind: "group", id: groupID))
         }
     }
 }
 
+private enum IOSSessionFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case agents = "Agents"
+    case terminals = "Terminals"
+    case active = "Active"
+
+    var id: String { rawValue }
+}
+
+private struct SessionFilterBar: View {
+    @Binding var selected: IOSSessionFilter
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(IOSSessionFilter.allCases) { filter in
+                Button {
+                    selected = filter
+                } label: {
+                    Text(filter.rawValue)
+                        .font(IOSTypography.status)
+                        .fontWeight(selected == filter ? .semibold : .regular)
+                        .foregroundStyle(selected == filter ? IOSTheme.text : IOSTheme.tertiaryText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            selected == filter
+                                ? IOSTheme.muted.opacity(0.55)
+                                : Color.clear,
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct SessionCreationTarget: Identifiable {
+    let id: String
+    let workspaceID: String?
+    let terminalGroupID: String?
+    let title: String
+}
+
 private struct HostDashboardView: View {
     @ObservedObject var model: IOSApplicationModel
-    @Binding var collapsedSectionIDs: Set<String>
-    @Binding var expandedWorkspaceIDs: Set<String>
+    @Binding var collapsedCardIDs: Set<String>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let openWorkspace: (String) -> Void
     let openTerminalGroup: (String) -> Void
     let openSession: (String) -> Void
     let openWorkspaceManager: (String) -> Void
+
+    @State private var selectedFilter: IOSSessionFilter = .all
+    @State private var creationTarget: SessionCreationTarget?
 
     private var projects: [WarrenRemoteRoster.Project] {
         (model.roster?.projects ?? []).sorted { lhs, rhs in
@@ -172,227 +209,6 @@ private struct HostDashboardView: View {
         }
     }
 
-    /// Every directory-like section visible on the dashboard participates in
-    /// the one-tap collapse action. Prefixes keep IDs from different scopes
-    /// from colliding in the local view state.
-    private var collapsibleSectionIDs: [String] {
-        var ids = projects.map { sectionID(kind: "project", id: $0.id) }
-        let assigned = Set(projects.map(\.id))
-        if workspaces.contains(where: { !assigned.contains($0.projectID) }) {
-            ids.append(sectionID(kind: "unassigned", id: "workspaces"))
-        }
-        if !activeAgentSessions.isEmpty {
-            ids.append(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions"))
-        }
-        if !(model.roster?.terminalGroups ?? []).isEmpty {
-            ids.append(sectionID(kind: "groups", id: "terminal-groups"))
-        }
-        return ids
-    }
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                HomeHeader(
-                    model: model,
-                    hasCollapsibleSections: !collapsibleSectionIDs.isEmpty,
-                    isAllSectionsCollapsed: !collapsibleSectionIDs.isEmpty && collapsibleSectionIDs.allSatisfy { collapsedSectionIDs.contains($0) },
-                    toggleAllSections: {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                            let shouldCollapse = !collapsibleSectionIDs.isEmpty && !collapsibleSectionIDs.allSatisfy { collapsedSectionIDs.contains($0) }
-                            if shouldCollapse {
-                                collapsedSectionIDs.formUnion(collapsibleSectionIDs)
-                            } else {
-                                collapsedSectionIDs.subtract(collapsibleSectionIDs)
-                            }
-                        }
-                    }
-                )
-
-                if let message = model.maintenanceMessage {
-                    IOSInlineNotice(
-                        title: "Host updating",
-                        message: message,
-                        color: IOSTheme.amber,
-                        symbol: "arrow.triangle.2.circlepath"
-                    )
-                    .padding(.top, 14)
-                } else if let error = model.connectionError,
-                          model.connectionState != .connected {
-                    IOSInlineNotice(
-                        title: connectionTitle,
-                        message: error,
-                        color: IOSTheme.red,
-                        symbol: "wifi.exclamationmark"
-                    )
-                    .padding(.top, 14)
-                }
-
-                if model.roster == nil {
-                    IOSLoadingRow(state: model.connectionState)
-                        .padding(.top, 44)
-                } else if projects.isEmpty && workspaces.isEmpty && (model.roster?.terminalGroups.isEmpty ?? true) {
-                    IOSEmptyState(
-                        symbol: "rectangle.stack",
-                        title: "No sessions on this Host",
-                        message: "Create a Session from Warren on the Host."
-                    )
-                    .padding(.top, 42)
-                } else {
-                    // Active Agent Sessions as collapsible section
-                    if !activeAgentSessions.isEmpty {
-                        ActiveAgentSessionsSection(
-                            sessions: activeAgentSessions,
-                            workspaces: workspaces,
-                            projects: projects,
-                            agentStatusBySessionID: model.agentStatusBySessionID,
-                            activeSessionID: model.currentSessionID,
-                            isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")),
-                            toggle: {
-                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                                    let key = sectionID(kind: "active-agent-sessions", id: "active-agent-sessions")
-                                    if collapsedSectionIDs.contains(key) {
-                                        collapsedSectionIDs.remove(key)
-                                    } else {
-                                        collapsedSectionIDs.insert(key)
-                                    }
-                                }
-                            },
-                            openSession: openSession
-                        )
-                    }
-                    
-                    projectSections
-                    unassignedWorkspaceSection
-                    terminalGroupSection
-                }
-
-                if let error = model.mutationError {
-                    IOSInlineNotice(
-                        title: "Host action failed",
-                        message: error,
-                        color: IOSTheme.red,
-                        symbol: "exclamationmark.triangle"
-                    )
-                    .padding(.top, 16)
-                }
-            }
-            .padding(.horizontal, IOSTheme.pagePadding)
-            .padding(.bottom, 22)
-        }
-        .background(IOSTheme.background.ignoresSafeArea())
-        .scrollIndicators(.hidden)
-        #if os(iOS) || os(visionOS)
-        .toolbar(.hidden, for: .navigationBar)
-        #endif
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            IOSHostFooter(model: model)
-        }
-        .refreshable { model.reconnect() }
-        .task { model.start() }
-    }
-
-    @ViewBuilder
-    private var projectSections: some View {
-        ForEach(projects) { project in
-            let scopedWorkspaces = workspaces.filter { $0.projectID == project.id }
-            ProjectSection(
-                project: project,
-                workspaces: scopedWorkspaces,
-                sessionsByWorkspace: sessionsByWorkspace,
-                agentStatusBySessionID: model.agentStatusBySessionID,
-                activeSessionID: model.currentSessionID,
-                expandedWorkspaceIDs: expandedWorkspaceIDs,
-                isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "project", id: project.id)),
-                toggle: {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                        let key = sectionID(kind: "project", id: project.id)
-                        if collapsedSectionIDs.contains(key) {
-                            collapsedSectionIDs.remove(key)
-                        } else {
-                            collapsedSectionIDs.insert(key)
-                        }
-                    }
-                },
-                openWorkspace: openWorkspace,
-                openSession: openSession,
-                toggleWorkspace: toggleWorkspace,
-                openWorkspaceManager: { openWorkspaceManager(project.id) }
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var unassignedWorkspaceSection: some View {
-        let assigned = Set(projects.map(\.id))
-        let unassigned = workspaces.filter { !assigned.contains($0.projectID) }
-        if !unassigned.isEmpty {
-            ScopeRailSection(
-                title: "Workspaces",
-                symbol: "folder",
-                workspaces: unassigned,
-                sessionsByWorkspace: sessionsByWorkspace,
-                agentStatusBySessionID: model.agentStatusBySessionID,
-                activeSessionID: model.currentSessionID,
-                expandedWorkspaceIDs: expandedWorkspaceIDs,
-                isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "unassigned", id: "workspaces")),
-                toggle: {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                        toggleSection(kind: "unassigned", id: "workspaces")
-                    }
-                },
-                openWorkspace: openWorkspace,
-                openSession: openSession,
-                toggleWorkspace: toggleWorkspace
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var terminalGroupSection: some View {
-        let groups = (model.roster?.terminalGroups ?? []).sorted { lhs, rhs in
-            lhs.order == rhs.order
-                ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                : lhs.order < rhs.order
-        }
-        if !groups.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                CollapsibleSectionHeader(
-                    title: "Terminal groups",
-                    count: groups.count,
-                    symbol: "rectangle.split.3x1",
-                    isCollapsed: collapsedSectionIDs.contains(sectionID(kind: "groups", id: "terminal-groups")),
-                    toggle: {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                            toggleSection(kind: "groups", id: "terminal-groups")
-                        }
-                    }
-                )
-                if !collapsedSectionIDs.contains(sectionID(kind: "groups", id: "terminal-groups")) {
-                    ForEach(groups) { group in
-                        ScopeGroupRow(
-                            group: group,
-                            sessions: model.sessions(inTerminalGroup: group.id),
-                            agentStatusBySessionID: model.agentStatusBySessionID,
-                            activeSessionID: model.currentSessionID,
-                            isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "group", id: group.id)),
-                            openGroup: { openTerminalGroup(group.id) },
-                            openSession: openSession,
-                            toggleSessions: { toggleWorkspace(sessionScopeID(kind: "group", id: group.id)) }
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private var connectionTitle: LocalizedStringKey {
-        IOSCopy.connectionTitle(for: model.connectionState)
-    }
-
-    /// Keep the dashboard's high-signal area small: only live Agent-backed
-    /// Sessions that are currently working or ready are promoted here. Shell
-    /// Sessions and blocked/failed records remain in their normal scope rows.
     private var activeAgentSessions: [WarrenRemoteRoster.Session] {
         model.activeSessions
             .filter { session in
@@ -414,138 +230,314 @@ private struct HostDashboardView: View {
             }
     }
 
-    private func sectionID(kind: String, id: String) -> String {
-        "\(kind):\(id)"
-    }
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                HomeHeader(
+                    model: model,
+                    onNewSession: {
+                        creationTarget = SessionCreationTarget(
+                            id: "global",
+                            workspaceID: nil,
+                            terminalGroupID: nil,
+                            title: "Host"
+                        )
+                    }
+                )
 
-    private func toggleSection(kind: String, id: String) {
-        let key = sectionID(kind: kind, id: id)
-        if collapsedSectionIDs.contains(key) {
-            collapsedSectionIDs.remove(key)
-        } else {
-            collapsedSectionIDs.insert(key)
+                if let message = model.maintenanceMessage {
+                    IOSInlineNotice(
+                        title: "Host updating",
+                        message: message,
+                        color: IOSTheme.amber,
+                        symbol: "arrow.triangle.2.circlepath"
+                    )
+                    .padding(.top, 10)
+                } else if let error = model.connectionError,
+                          model.connectionState != .connected {
+                    IOSInlineNotice(
+                        title: connectionTitle,
+                        message: error,
+                        color: IOSTheme.red,
+                        symbol: "wifi.exclamationmark"
+                    )
+                    .padding(.top, 10)
+                }
+
+                if model.roster == nil {
+                    IOSLoadingRow(state: model.connectionState)
+                        .padding(.top, 44)
+                } else if projects.isEmpty && workspaces.isEmpty && (model.roster?.terminalGroups.isEmpty ?? true) {
+                    IOSEmptyState(
+                        symbol: "terminal",
+                        title: "No sessions",
+                        message: "Create a session to get started."
+                    )
+                    .padding(.top, 42)
+                } else {
+                    SessionFilterBar(selected: $selectedFilter)
+                        .padding(.top, 4)
+
+                    if selectedFilter != .terminals && !activeAgentSessions.isEmpty {
+                        ActiveAgentHeroSection(
+                            sessions: activeAgentSessions,
+                            workspaces: workspaces,
+                            projects: projects,
+                            agentStatusBySessionID: model.agentStatusBySessionID,
+                            openSession: openSession
+                        )
+                    }
+
+                    if hasMatchingSessions {
+                        projectSections
+                        unassignedWorkspaceSection
+                        terminalGroupSection
+                    } else {
+                        IOSEmptyState(
+                            symbol: "line.3.horizontal.decrease",
+                            title: "No matches",
+                            message: "No \(selectedFilter.rawValue.lowercased()) sessions found."
+                        )
+                        .padding(.top, 36)
+                    }
+                }
+
+                if let error = model.mutationError {
+                    IOSInlineNotice(
+                        title: "Action failed",
+                        message: error,
+                        color: IOSTheme.red,
+                        symbol: "exclamationmark.triangle"
+                    )
+                    .padding(.top, 16)
+                }
+            }
+            .padding(.horizontal, IOSTheme.pagePadding)
+            .padding(.bottom, 22)
+        }
+        .background(IOSTheme.background.ignoresSafeArea())
+        .scrollIndicators(.hidden)
+        #if os(iOS) || os(visionOS)
+        .toolbar(.hidden, for: .navigationBar)
+        #endif
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            IOSHostFooter(model: model)
+        }
+        .refreshable { model.reconnect() }
+        .task { model.start() }
+        .sheet(item: $creationTarget) { target in
+            IOSSessionCreationSheet(
+                model: model,
+                workspaceID: target.workspaceID,
+                terminalGroupID: target.terminalGroupID,
+                title: target.title
+            )
         }
     }
 
-    private func toggleWorkspace(_ workspaceID: String) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-            if expandedWorkspaceIDs.contains(workspaceID) {
-                expandedWorkspaceIDs.remove(workspaceID)
-            } else {
-                expandedWorkspaceIDs.insert(workspaceID)
+    private var hasMatchingSessions: Bool {
+        if selectedFilter == .all { return true }
+        let hasWs = workspaces.contains { ws in
+            !filter(sessions: sessionsByWorkspace[ws.id] ?? []).isEmpty
+        }
+        if hasWs { return true }
+        let hasTg = (model.roster?.terminalGroups ?? []).contains { grp in
+            !filter(sessions: model.sessions(inTerminalGroup: grp.id)).isEmpty
+        }
+        return hasTg
+    }
+
+    private func filter(sessions: [WarrenRemoteRoster.Session]) -> [WarrenRemoteRoster.Session] {
+        switch selectedFilter {
+        case .all:
+            return sessions
+        case .agents:
+            return sessions.filter { $0.isAgentBacked }
+        case .terminals:
+            return sessions.filter { !$0.isAgentBacked }
+        case .active:
+            return sessions.filter { session in
+                if session.isAgentBacked {
+                    let status = model.agentStatusBySessionID[session.id] ?? session.agentStatus
+                    return status?.activity == .working || status?.activity == .ready
+                }
+                return session.isRunning
             }
         }
     }
-}
 
-/// A compact cross-scope index for the sessions that are most likely to need
-/// attention. It deliberately uses value snapshots instead of observing the
-/// application model so terminal frames do not invalidate every row.
-private struct AgentActivitySummary: View {
-    let sessions: [WarrenRemoteRoster.Session]
-    let workspaces: [WarrenRemoteRoster.Workspace]
-    let projects: [WarrenRemoteRoster.Project]
-    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
-    let openSession: (String) -> Void
+    @ViewBuilder
+    private var projectSections: some View {
+        ForEach(projects) { project in
+            let scopedWorkspaces = workspaces.filter { $0.projectID == project.id }
+            let matchingWorkspaces = scopedWorkspaces.filter { ws in
+                if selectedFilter == .all { return true }
+                let sess = filter(sessions: sessionsByWorkspace[ws.id] ?? [])
+                return !sess.isEmpty
+            }
+            if !matchingWorkspaces.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(project.name.isEmpty ? pathLeaf(project.path) : project.name)
+                            .font(IOSTypography.sectionTitle)
+                            .foregroundStyle(IOSTheme.text)
+                        Spacer()
+                        Menu {
+                            Button("Manage workspaces", systemImage: "slider.horizontal.3") {
+                                openWorkspaceManager(project.id)
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                    .padding(.top, 12)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            IOSSectionLabel("Agent activity", count: sessions.count)
-                .padding(.top, 20)
-                .padding(.bottom, 5)
-            ForEach(sessions) { session in
-                Button { openSession(session.id) } label: {
-                    AgentActivitySummaryRow(
-                        session: session,
-                        subtitle: subtitle(for: session),
-                        status: agentStatusBySessionID[session.id] ?? session.agentStatus
+                    ForEach(matchingWorkspaces) { workspace in
+                        let cardID = sessionScopeID(kind: "workspace", id: workspace.id)
+                        let sess = filter(sessions: sessionsByWorkspace[workspace.id] ?? [])
+                        WorkspaceCard(
+                            model: model,
+                            workspace: workspace,
+                            projectName: nil,
+                            sessions: sess,
+                            activeSessionID: model.currentSessionID,
+                            isCollapsed: collapsedCardIDs.contains(cardID),
+                            toggle: { toggleCard(cardID) },
+                            openWorkspace: { openWorkspace(workspace.id) },
+                            openSession: openSession,
+                            openNewSession: {
+                                creationTarget = SessionCreationTarget(
+                                    id: "ws-\(workspace.id)",
+                                    workspaceID: workspace.id,
+                                    terminalGroupID: nil,
+                                    title: workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var unassignedWorkspaceSection: some View {
+        let assigned = Set(projects.map(\.id))
+        let unassigned = workspaces.filter { !assigned.contains($0.projectID) }
+        let matchingWorkspaces = unassigned.filter { ws in
+            if selectedFilter == .all { return true }
+            let sess = filter(sessions: sessionsByWorkspace[ws.id] ?? [])
+            return !sess.isEmpty
+        }
+        if !matchingWorkspaces.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Workspaces")
+                    .font(IOSTypography.sectionTitle)
+                    .foregroundStyle(IOSTheme.text)
+                    .padding(.horizontal, 2)
+                    .padding(.top, 12)
+
+                ForEach(matchingWorkspaces) { workspace in
+                    let cardID = sessionScopeID(kind: "workspace", id: workspace.id)
+                    let sess = filter(sessions: sessionsByWorkspace[workspace.id] ?? [])
+                    WorkspaceCard(
+                        model: model,
+                        workspace: workspace,
+                        projectName: nil,
+                        sessions: sess,
+                        activeSessionID: model.currentSessionID,
+                        isCollapsed: collapsedCardIDs.contains(cardID),
+                        toggle: { toggleCard(cardID) },
+                        openWorkspace: { openWorkspace(workspace.id) },
+                        openSession: openSession,
+                        openNewSession: {
+                            creationTarget = SessionCreationTarget(
+                                id: "ws-\(workspace.id)",
+                                workspaceID: workspace.id,
+                                terminalGroupID: nil,
+                                title: workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name
+                            )
+                        }
                     )
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
-    private func subtitle(for session: WarrenRemoteRoster.Session) -> String {
-        if let workspaceID = session.workspaceID,
-           let workspace = workspaces.first(where: { $0.id == workspaceID }) {
-            let workspaceName = workspace.branch?.isEmpty == false
-                ? workspace.branch!
-                : (workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
-            if let project = projects.first(where: { $0.id == workspace.projectID }),
-               !project.name.isEmpty,
-               !workspaceName.isEmpty {
-                return "\(project.name) · \(workspaceName)"
-            }
-            return workspaceName.isEmpty ? "Workspace" : workspaceName
+    @ViewBuilder
+    private var terminalGroupSection: some View {
+        let groups = (model.roster?.terminalGroups ?? []).sorted { lhs, rhs in
+            lhs.order == rhs.order
+                ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                : lhs.order < rhs.order
         }
-        if let groupID = session.terminalGroupID {
-            return "Terminal group · \(groupID)"
+        let matchingGroups = groups.filter { group in
+            if selectedFilter == .all { return true }
+            let sess = filter(sessions: model.sessions(inTerminalGroup: group.id))
+            return !sess.isEmpty
         }
-        return session.directory ?? "Host session"
-    }
-}
-
-private struct AgentActivitySummaryRow: View {
-    let session: WarrenRemoteRoster.Session
-    let subtitle: String
-    let status: WarrenRemoteAgentStatus?
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if let status {
-                IOSAgentActivityMark(
-                    activity: status.activity,
-                    attention: status.attention,
-                    slotSize: 22
-                )
-            } else {
-                IOSStatusDot(color: IOSTheme.secondaryText, size: 7)
-                    .frame(width: 22)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayTitle.isEmpty ? (session.process ?? session.kind.capitalized) : session.displayTitle)
-                    .font(IOSTypography.bodyEmphasis)
+        if !matchingGroups.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Terminal Groups")
+                    .font(IOSTypography.sectionTitle)
                     .foregroundStyle(IOSTheme.text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(subtitle)
-                    .font(IOSTypography.status)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .padding(.horizontal, 2)
+                    .padding(.top, 12)
+
+                ForEach(matchingGroups) { group in
+                    let cardID = sessionScopeID(kind: "group", id: group.id)
+                    let sess = filter(sessions: model.sessions(inTerminalGroup: group.id))
+                    TerminalGroupCard(
+                        model: model,
+                        group: group,
+                        sessions: sess,
+                        activeSessionID: model.currentSessionID,
+                        isCollapsed: collapsedCardIDs.contains(cardID),
+                        toggle: { toggleCard(cardID) },
+                        openSession: openSession,
+                        openNewSession: {
+                            creationTarget = SessionCreationTarget(
+                                id: "tg-\(group.id)",
+                                workspaceID: nil,
+                                terminalGroupID: group.id,
+                                title: group.name.isEmpty ? "Terminal Group" : group.name
+                            )
+                        }
+                    )
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Text(status?.activity == .working ? "Working" : "Ready")
-                .font(IOSTypography.status)
-                .foregroundStyle(status?.activity == .working ? IOSTheme.amber : IOSTheme.secondaryText)
         }
-        .padding(.horizontal, 2)
-        .frame(minHeight: 48)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.42))
-                .frame(height: 1)
-                .padding(.leading, 32)
+    }
+
+    private var connectionTitle: LocalizedStringKey {
+        IOSCopy.connectionTitle(for: model.connectionState)
+    }
+
+    private func toggleCard(_ cardID: String) {
+        withAnimation(reduceMotion ? nil : IOSMotion.spring) {
+            if collapsedCardIDs.contains(cardID) {
+                collapsedCardIDs.remove(cardID)
+            } else {
+                collapsedCardIDs.insert(cardID)
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(session.displayTitle.isEmpty ? "Agent session" : session.displayTitle)
-        .accessibilityValue("\(subtitle), \(status?.activity == .working ? "Working" : "Ready")")
     }
 }
 
 private struct HomeHeader: View {
     @ObservedObject var model: IOSApplicationModel
-    let hasCollapsibleSections: Bool
-    let isAllSectionsCollapsed: Bool
-    let toggleAllSections: () -> Void
+    let onNewSession: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 13) {
-            IOSBrandMark(size: 36)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Sessions")
+        HStack(alignment: .center, spacing: 12) {
+            IOSBrandMark(size: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Warren")
                     .font(IOSTypography.pageTitle)
                     .foregroundStyle(IOSTheme.text)
                 HStack(spacing: 6) {
@@ -563,38 +555,34 @@ private struct HomeHeader: View {
                 }
             }
             Spacer(minLength: 0)
-            if model.roster != nil && hasCollapsibleSections {
-                Button(action: toggleAllSections) {
-                    Image(systemName: isAllSectionsCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isAllSectionsCollapsed ? "Expand all sections" : "Collapse all sections")
+
+            Button(action: onNewSession) {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(IOSTheme.text)
+                    .frame(width: 34, height: 34)
+                    .background(IOSTheme.muted.opacity(0.45), in: Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New session")
+
             if model.connectionState != .connected {
                 Menu {
                     Button("Reconnect", systemImage: "arrow.clockwise") { model.reconnect() }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                        .frame(width: 34, height: 34)
+                        .background(IOSTheme.muted.opacity(0.3), in: Circle())
                 }
                 .menuStyle(.automatic)
                 .accessibilityLabel("Host actions")
             }
         }
-        .frame(minHeight: 76)
-        .padding(.top, 12)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IOSTheme.separator)
-                .frame(height: 1)
-        }
+        .frame(minHeight: 64)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
     }
 
     private var connectionTitle: LocalizedStringKey {
@@ -611,206 +599,88 @@ private struct HomeHeader: View {
     }
 }
 
-private struct ProjectSection: View {
-    let project: WarrenRemoteRoster.Project
-    let workspaces: [WarrenRemoteRoster.Workspace]
-    let sessionsByWorkspace: [String: [WarrenRemoteRoster.Session]]
-    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
-    let activeSessionID: String?
-    let expandedWorkspaceIDs: Set<String>
-    let isCollapsed: Bool
-    let toggle: () -> Void
-    let openWorkspace: (String) -> Void
-    let openSession: (String) -> Void
-    let toggleWorkspace: (String) -> Void
-    let openWorkspaceManager: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Button(action: toggle) {
-                    HStack(spacing: 10) {
-                        IOSProjectIcon(name: project.name.isEmpty ? pathLeaf(project.path) : project.name, size: 25)
-                        Text(project.name.isEmpty ? pathLeaf(project.path) : project.name)
-                            .font(IOSTypography.sectionTitle)
-                            .foregroundStyle(IOSTheme.text)
-                            .lineLimit(2)
-                            .iosNaturalWrap()
-                            .layoutPriority(1)
-                        Spacer(minLength: 8)
-                        if !workspaces.isEmpty {
-                            Text("\(workspaces.count)")
-                                .font(IOSTypography.metric)
-                                .foregroundStyle(IOSTheme.tertiaryText)
-                        }
-                        Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .frame(width: 24, height: 24)
-                    }
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel(isCollapsed ? "Expand \(project.name)" : "Collapse \(project.name)")
-                Menu {
-                    Button("Manage workspaces", systemImage: "folder") {
-                        openWorkspaceManager()
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.automatic)
-                .accessibilityLabel("Manage \(project.name) workspaces")
-            }
-
-            if !isCollapsed {
-                ForEach(workspaces) { workspace in
-                    WorkspaceRailRow(
-                        workspace: workspace,
-                        sessions: sessionsByWorkspace[workspace.id] ?? [],
-                        agentStatusBySessionID: agentStatusBySessionID,
-                        activeSessionID: activeSessionID,
-                        isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "workspace", id: workspace.id)),
-                        openWorkspace: { openWorkspace(workspace.id) },
-                        openSession: openSession,
-                        toggleSessions: { toggleWorkspace(sessionScopeID(kind: "workspace", id: workspace.id)) }
-                    )
-                }
-                if workspaces.isEmpty {
-                    Text("No workspaces")
-                        .font(IOSTypography.secondaryBody)
-                        .foregroundStyle(IOSTheme.tertiaryText)
-                        .padding(.leading, 39)
-                        .padding(.bottom, 8)
-                }
-            }
-        }
-        .padding(.top, 22)
-    }
-}
-
-private struct ScopeRailSection: View {
-    let title: String
-    let symbol: String
-    let workspaces: [WarrenRemoteRoster.Workspace]
-    let sessionsByWorkspace: [String: [WarrenRemoteRoster.Session]]
-    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
-    let activeSessionID: String?
-    let expandedWorkspaceIDs: Set<String>
-    let isCollapsed: Bool
-    let toggle: () -> Void
-    let openWorkspace: (String) -> Void
-    let openSession: (String) -> Void
-    let toggleWorkspace: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            CollapsibleSectionHeader(
-                title: title,
-                count: workspaces.count,
-                symbol: symbol,
-                isCollapsed: isCollapsed,
-                toggle: toggle
-            )
-            if !isCollapsed {
-                ForEach(workspaces) { workspace in
-                    WorkspaceRailRow(
-                        workspace: workspace,
-                        sessions: sessionsByWorkspace[workspace.id] ?? [],
-                        agentStatusBySessionID: agentStatusBySessionID,
-                        activeSessionID: activeSessionID,
-                        isExpanded: expandedWorkspaceIDs.contains(sessionScopeID(kind: "workspace", id: workspace.id)),
-                        openWorkspace: { openWorkspace(workspace.id) },
-                        openSession: openSession,
-                        toggleSessions: { toggleWorkspace(sessionScopeID(kind: "workspace", id: workspace.id)) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-private struct CollapsibleSectionHeader: View {
-    let title: String
-    let count: Int
-    let symbol: String
-    let isCollapsed: Bool
-    let toggle: () -> Void
-
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                    .frame(width: 16)
-                Text(title)
-                    .font(IOSTypography.eyebrow)
-                    .foregroundStyle(IOSTheme.secondaryText.opacity(0.74))
-                    .lineLimit(2)
-                    .iosNaturalWrap()
-                    .layoutPriority(1)
-                Text("\(count)")
-                    .font(IOSTypography.metric)
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                Rectangle()
-                    .fill(IOSTheme.separator.opacity(0.72))
-                    .frame(height: 1)
-                Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .frame(width: 24, height: 24)
-            }
-            .frame(minHeight: 36)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
-        .padding(.top, 20)
-        .padding(.bottom, 4)
-    }
-}
-
-private struct ActiveAgentSessionsSection: View {
+private struct ActiveAgentHeroSection: View {
     let sessions: [WarrenRemoteRoster.Session]
     let workspaces: [WarrenRemoteRoster.Workspace]
     let projects: [WarrenRemoteRoster.Project]
     let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
-    let activeSessionID: String?
-    let isCollapsed: Bool
-    let toggle: () -> Void
     let openSession: (String) -> Void
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            CollapsibleSectionHeader(
-                title: "Active agent sessions",
-                count: sessions.count,
-                symbol: "brain.head.profile",
-                isCollapsed: isCollapsed,
-                toggle: toggle
-            )
-            if !isCollapsed {
-                ForEach(sessions) { session in
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("IN FLIGHT")
+                    .font(IOSTypography.eyebrow)
+                    .foregroundStyle(IOSTheme.amber)
+                    .tracking(0.8)
+                Spacer()
+                Text("\(sessions.count)")
+                    .font(IOSTypography.metric)
+                    .foregroundStyle(IOSTheme.amber.opacity(0.8))
+            }
+            .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.2))
+                            .frame(height: 0.5)
+                            .padding(.leading, 42)
+                    }
+
                     Button { openSession(session.id) } label: {
-                        AgentActivitySummaryRow(
-                            session: session,
-                            subtitle: subtitle(for: session),
-                            status: agentStatusBySessionID[session.id] ?? session.agentStatus
-                        )
+                        HStack(spacing: 10) {
+                            let status = agentStatusBySessionID[session.id] ?? session.agentStatus
+                            if let status {
+                                IOSAgentActivityMark(
+                                    activity: status.activity,
+                                    attention: status.attention,
+                                    slotSize: 20
+                                )
+                            } else {
+                                IOSStatusDot(color: IOSTheme.amber, size: 6)
+                                    .frame(width: 20)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.displayTitle.isEmpty ? (session.process ?? session.kind.capitalized) : session.displayTitle)
+                                    .font(IOSTypography.bodyEmphasis)
+                                    .foregroundStyle(IOSTheme.text)
+                                    .lineLimit(1)
+                                    .iosMachineText()
+
+                                Text(subtitle(for: session))
+                                    .font(IOSTypography.status)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(status?.activity == .working ? "Working" : "Ready")
+                                .font(IOSTypography.status)
+                                .foregroundStyle(status?.activity == .working ? IOSTheme.amber : IOSTheme.secondaryText)
+
+                            Image(systemName: "chevron.forward")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(IOSTheme.tertiaryText)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 50)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .background(IOSTheme.cardBackground, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                    .stroke(IOSTheme.amber.opacity(0.35), lineWidth: 0.8)
+            }
         }
+        .padding(.bottom, 14)
     }
-    
+
     private func subtitle(for session: WarrenRemoteRoster.Session) -> String {
         if let workspaceID = session.workspaceID,
            let workspace = workspaces.first(where: { $0.id == workspaceID }) {
@@ -825,180 +695,297 @@ private struct ActiveAgentSessionsSection: View {
             return workspaceName.isEmpty ? "Workspace" : workspaceName
         }
         if let groupID = session.terminalGroupID {
-            return "Terminal group · \(groupID)"
+            return "Group · \(groupID)"
         }
-        return session.directory ?? "Host session"
+        return session.directory ?? "Host"
     }
 }
 
-private struct WorkspaceRailRow: View {
+private struct WorkspaceCard: View {
+    @ObservedObject var model: IOSApplicationModel
     let workspace: WarrenRemoteRoster.Workspace
+    let projectName: String?
     let sessions: [WarrenRemoteRoster.Session]
-    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
     let activeSessionID: String?
-    let isExpanded: Bool
+    let isCollapsed: Bool
+    let toggle: () -> Void
     let openWorkspace: () -> Void
     let openSession: (String) -> Void
-    let toggleSessions: () -> Void
+    let openNewSession: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                Button(action: openWorkspace) {
-                    HStack(spacing: 11) {
-                        WorkspaceGlyph(workspace: workspace, agentStatus: agentStatus)
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 5) {
-                                Text(workspaceTitle)
-                                    .font(IOSTypography.body)
-                                    .foregroundStyle(IOSTheme.text)
-                                    .lineLimit(2)
-                                    .iosNaturalWrap()
-                                    .iosMachineText()
-                                    .layoutPriority(1)
-                                if !sessions.isEmpty {
-                                    Text("\(sessions.count)")
-                                        .font(IOSTypography.metric)
-                                        .foregroundStyle(IOSTheme.tertiaryText)
-                                        .accessibilityLabel(sessionSummary)
-                                }
+            HStack(spacing: 6) {
+                Button(action: toggle) {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            if let projectName, !projectName.isEmpty {
+                                Text(projectName)
+                                    .font(IOSTypography.eyebrow)
+                                    .foregroundStyle(IOSTheme.tertiaryText)
+                                    .lineLimit(1)
                             }
-                            if !workspaceSubtitle.isEmpty {
-                                Text(workspaceSubtitle)
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                                    .lineLimit(2)
-                                    .iosNaturalWrap()
-                                    .layoutPriority(1)
-                            }
+                            Text(workspaceTitle)
+                                .font(IOSTypography.bodyEmphasis)
+                                .foregroundStyle(IOSTheme.text)
+                                .lineLimit(1)
+                                .iosMachineText()
                         }
-                        Spacer(minLength: 0)
+                        Spacer(minLength: 8)
+                        if !sessions.isEmpty {
+                            Text("\(sessions.count)")
+                                .font(IOSTypography.metric)
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(IOSTheme.muted.opacity(0.35), in: Capsule())
+                        }
+                        Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(width: 20, height: 20)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .frame(minHeight: IOSTheme.workspaceRowHeight)
-                .accessibilityLabel("Open \(workspaceTitle)")
-                if !sessions.isEmpty {
-                    Button(action: toggleSessions) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isExpanded ? "Collapse sessions in \(workspaceTitle)" : "Expand sessions in \(workspaceTitle)")
-                    .accessibilityValue("\(sessions.count) session\(sessions.count == 1 ? "" : "s")")
+
+                Button(action: openNewSession) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 28, height: 28)
+                        .background(IOSTheme.muted.opacity(0.35), in: Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New session in \(workspaceTitle)")
             }
-            .padding(.leading, 29)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(IOSTheme.separator.opacity(0.42))
-                    .frame(height: 1)
-                    .padding(.leading, 40)
-            }
-            if isExpanded {
-                ForEach(sessions) { session in
-                    WorkspaceSessionRailRow(
-                        session: session,
-                        agentStatus: agentStatusBySessionID[session.id] ?? session.agentStatus,
-                        isActive: activeSessionID == session.id,
-                        openSession: { openSession(session.id) }
-                    )
+            .padding(.horizontal, 14)
+            .frame(minHeight: 46)
+
+            if !isCollapsed {
+                if !sessions.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.22))
+                                .frame(height: 0.5)
+                                .padding(.leading, 42)
+
+                            SessionCardRow(
+                                model: model,
+                                session: session,
+                                agentStatus: model.agentStatusBySessionID[session.id] ?? session.agentStatus,
+                                isActive: activeSessionID == session.id,
+                                onSelect: { openSession(session.id) }
+                            )
+                        }
+                    }
+                } else {
+                    Rectangle()
+                        .fill(IOSTheme.separator.opacity(0.22))
+                        .frame(height: 0.5)
+                    HStack {
+                        Text("No sessions")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                        Spacer()
+                        Button("New session", action: openNewSession)
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.accent)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 38)
                 }
             }
         }
+        .background(IOSTheme.cardBackground, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                .stroke(IOSTheme.cardBorder, lineWidth: 0.5)
+        }
+        .padding(.bottom, 10)
     }
 
     private var workspaceTitle: String {
         workspace.branch ?? (workspace.name.isEmpty ? pathLeaf(workspace.path) : workspace.name)
     }
+}
 
-    private var sessionSummary: String {
-        guard !sessions.isEmpty else { return "No sessions" }
-        return "\(sessions.count) session\(sessions.count == 1 ? "" : "s")"
-    }
+private struct TerminalGroupCard: View {
+    @ObservedObject var model: IOSApplicationModel
+    let group: WarrenRemoteRoster.TerminalGroup
+    let sessions: [WarrenRemoteRoster.Session]
+    let activeSessionID: String?
+    let isCollapsed: Bool
+    let toggle: () -> Void
+    let openSession: (String) -> Void
+    let openNewSession: () -> Void
 
-    /// Keep the secondary rail as one natural-language string so it can wrap
-    /// at meaningful boundaries in German, CJK, or a translated Host label.
-    /// An HStack of individually constrained fragments cannot wrap as a unit.
-    private var workspaceSubtitle: String {
-        var parts: [String] = []
-        if let branch = workspace.branch, !branch.isEmpty, !workspace.name.isEmpty {
-            parts.append(workspace.name)
-        } else if !workspace.path.isEmpty {
-            parts.append(pathLeaf(workspace.path))
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Button(action: toggle) {
+                    HStack(spacing: 8) {
+                        Text(group.name.isEmpty ? "Terminal Group" : group.name)
+                            .font(IOSTypography.bodyEmphasis)
+                            .foregroundStyle(IOSTheme.text)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        if !sessions.isEmpty {
+                            Text("\(sessions.count)")
+                                .font(IOSTypography.metric)
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(IOSTheme.muted.opacity(0.35), in: Capsule())
+                        }
+                        Image(systemName: isCollapsed ? "chevron.forward" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(width: 20, height: 20)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: openNewSession) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 28, height: 28)
+                        .background(IOSTheme.muted.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New session in \(group.name)")
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 46)
+
+            if !isCollapsed {
+                if !sessions.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.22))
+                                .frame(height: 0.5)
+                                .padding(.leading, 42)
+
+                            SessionCardRow(
+                                model: model,
+                                session: session,
+                                agentStatus: model.agentStatusBySessionID[session.id] ?? session.agentStatus,
+                                isActive: activeSessionID == session.id,
+                                onSelect: { openSession(session.id) }
+                            )
+                        }
+                    }
+                } else {
+                    Rectangle()
+                        .fill(IOSTheme.separator.opacity(0.22))
+                        .frame(height: 0.5)
+                    HStack {
+                        Text("No sessions")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                        Spacer()
+                        Button("New session", action: openNewSession)
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.accent)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 38)
+                }
+            }
         }
-        if parts.isEmpty, sessions.isEmpty { parts.append("No sessions") }
-        return parts.joined(separator: " · ")
-    }
-
-    private var agentStatus: WarrenRemoteAgentStatus? {
-        highestAgentStatus(sessions: sessions, statuses: agentStatusBySessionID)
+        .background(IOSTheme.cardBackground, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                .stroke(IOSTheme.cardBorder, lineWidth: 0.5)
+        }
+        .padding(.bottom, 10)
     }
 }
 
-private struct WorkspaceSessionRailRow: View {
+private struct SessionCardRow: View {
+    @ObservedObject var model: IOSApplicationModel
     let session: WarrenRemoteRoster.Session
     let agentStatus: WarrenRemoteAgentStatus?
     let isActive: Bool
-    let openSession: () -> Void
+    let onSelect: () -> Void
 
     var body: some View {
-        Button(action: openSession) {
-            HStack(spacing: 9) {
-                if session.isAgentBacked, let agentStatus {
-                    IOSAgentActivityMark(
-                        activity: agentStatus.activity,
-                        attention: agentStatus.attention,
-                        slotSize: 18
+        Button(action: onSelect) {
+            HStack(spacing: 11) {
+                if session.isAgentBacked {
+                    SessionProviderMark(
+                        model: model,
+                        agentState: model.agentState,
+                        session: session,
+                        slotSize: 20
                     )
                 } else {
-                    IOSStatusDot(color: activityColor, size: 6)
-                        .frame(width: 18)
+                    Image(systemName: "terminal")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 20, height: 20)
                 }
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.displayTitle.isEmpty ? (session.process ?? session.kind.capitalized) : session.displayTitle)
-                        .font(isActive ? IOSTypography.bodyEmphasis : IOSTypography.body)
-                        .foregroundStyle(isActive ? IOSTheme.text : IOSTheme.secondaryText)
+                        .font(IOSTypography.bodyEmphasis)
+                        .foregroundStyle(isActive ? IOSTheme.accent : IOSTheme.text)
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(session.process ?? session.kind.capitalized)
-                        .font(IOSTypography.metadata)
-                        .foregroundStyle(IOSTheme.tertiaryText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
+                        .iosMachineText()
+
+                    statusSubtitle
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
                 if isActive {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(IOSTheme.accent)
+                    Circle()
+                        .fill(IOSTheme.accent)
+                        .frame(width: 6, height: 6)
                 }
             }
-            .padding(.leading, 62)
-            .padding(.trailing, 9)
-            .frame(minHeight: 46)
-            .background(isActive ? IOSTheme.muted.opacity(0.55) : .clear)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(session.displayTitle.isEmpty ? "Session" : session.displayTitle)
-        .accessibilityValue(isActive ? "Active session" : (session.process ?? session.kind.capitalized))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(IOSTheme.separator.opacity(0.3))
-                .frame(height: 1)
-                .padding(.leading, 62)
-        }
     }
 
-    private var activityColor: Color {
-        if let agentStatus { return IOSTheme.statusColor(agentStatus) }
-        return session.isRunning ? IOSTheme.green : IOSTheme.secondaryText
+    @ViewBuilder
+    private var statusSubtitle: some View {
+        if session.isAgentBacked {
+            if let status = agentStatus {
+                if status.activity == .working {
+                    Text("Working")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.amber)
+                } else if status.attention != nil {
+                    Text("Action needed")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.yellow)
+                } else if status.activity == .failed {
+                    Text("Failed")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.red)
+                } else {
+                    Text("Ready")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+            } else {
+                Text("Ready")
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+            }
+        } else {
+            Text(session.process ?? "Shell")
+                .font(IOSTypography.status)
+                .foregroundStyle(IOSTheme.tertiaryText)
+        }
     }
 }
 
@@ -1019,10 +1006,6 @@ private struct WorkspaceGlyph: View {
                     slotSize: 23
                 )
             } else {
-                // Desktop uses the activity dot for live Agent work and a
-                // branch mark for an otherwise quiet workspace. Never use a
-                // computer glyph here: the row represents a branch scope,
-                // not the device running Warren.
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(IOSTheme.secondaryText)
@@ -1033,95 +1016,6 @@ private struct WorkspaceGlyph: View {
     }
 }
 
-private struct ScopeGroupRow: View {
-    let group: WarrenRemoteRoster.TerminalGroup
-    let sessions: [WarrenRemoteRoster.Session]
-    let agentStatusBySessionID: [String: WarrenRemoteAgentStatus]
-    let activeSessionID: String?
-    let isExpanded: Bool
-    let openGroup: () -> Void
-    let openSession: (String) -> Void
-    let toggleSessions: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                Button(action: openGroup) {
-                    HStack(spacing: 11) {
-                        Image(systemName: "rectangle.split.3x1")
-                            .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .frame(width: 23)
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 5) {
-                                Text(group.name)
-                                    .font(IOSTypography.body)
-                                    .foregroundStyle(IOSTheme.text)
-                                    .lineLimit(2)
-                                    .iosNaturalWrap()
-                                    .layoutPriority(1)
-                                if !sessions.isEmpty {
-                                    Text("\(sessions.count)")
-                                        .font(IOSTypography.metric)
-                                        .foregroundStyle(IOSTheme.tertiaryText)
-                                        .accessibilityLabel(sessionSummary)
-                                }
-                            }
-                            if let home = group.home, !home.isEmpty {
-                                Text(home)
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                                    .lineLimit(2)
-                                    .iosNaturalWrap()
-                                    .iosMachineText()
-                                    .layoutPriority(1)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .frame(minHeight: IOSTheme.workspaceRowHeight)
-                .accessibilityLabel("Open \(group.name)")
-                if !sessions.isEmpty {
-                    Button(action: toggleSessions) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isExpanded ? "Collapse sessions in \(group.name)" : "Expand sessions in \(group.name)")
-                    .accessibilityValue(sessionSummary)
-                }
-            }
-            .padding(.leading, 29)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(IOSTheme.separator.opacity(0.42))
-                    .frame(height: 1)
-                    .padding(.leading, 40)
-            }
-            if isExpanded {
-                ForEach(sessions) { session in
-                    WorkspaceSessionRailRow(
-                        session: session,
-                        agentStatus: agentStatusBySessionID[session.id] ?? session.agentStatus,
-                        isActive: activeSessionID == session.id,
-                        openSession: { openSession(session.id) }
-                    )
-                }
-            }
-        }
-    }
-
-    private var sessionSummary: String {
-        "\(sessions.count) session\(sessions.count == 1 ? "" : "s")"
-    }
-}
-
 /// Shared bottom Host rail. The selected Host name opens the same explicit
 /// picker from the dashboard and from a live Session surface.
 struct IOSHostFooter: View {
@@ -1129,33 +1023,32 @@ struct IOSHostFooter: View {
     @State private var showingHostPicker = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            IOSStatusDot(color: connectionColor, size: 8)
+        HStack(spacing: 12) {
             Button { showingHostPicker = true } label: {
-                HStack(spacing: 7) {
-                    VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    IOSStatusDot(color: connectionColor, size: 7)
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(model.endpointMetadata.name)
                             .font(IOSTypography.bodyEmphasis)
                             .foregroundStyle(IOSTheme.text)
                             .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
                         Text(model.endpointMetadata.isRelay ? "Relay" : "Direct Host")
                             .font(IOSTypography.status)
                             .foregroundStyle(IOSTheme.tertiaryText)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Switch Host")
 
+            Spacer()
+
             Button(action: model.reconnect) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 17, weight: .regular))
+                    .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reconnect to Host")
@@ -1164,20 +1057,20 @@ struct IOSHostFooter: View {
                 IOSEndpointConfigurationView(model: model)
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 19, weight: .regular))
+                    .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Host settings")
         }
         .padding(.horizontal, IOSTheme.pagePadding)
-        .frame(minHeight: 62)
-        .background(IOSTheme.chrome)
+        .frame(minHeight: 56)
+        .background(.ultraThinMaterial)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(IOSTheme.separator)
-                .frame(height: 1)
+                .fill(IOSTheme.separator.opacity(0.35))
+                .frame(height: 0.5)
         }
         .sheet(isPresented: $showingHostPicker) {
             IOSEndpointPickerSheet(
