@@ -211,7 +211,7 @@ func NewServer(config Config) (*Server, error) {
 		registry:        registry,
 		signer:          signer,
 		web:             web,
-		upgrader:        websocket.Upgrader{Subprotocols: []string{"brly/2"}, CheckOrigin: func(*http.Request) bool { return true }},
+		upgrader:        websocket.Upgrader{EnableCompression: true, Subprotocols: []string{"brly/2"}, CheckOrigin: func(*http.Request) bool { return true }},
 		mux:             http.NewServeMux(),
 		refreshTokens:   make(map[string]refreshRecord),
 		usedRefresh:     make(map[string]string),
