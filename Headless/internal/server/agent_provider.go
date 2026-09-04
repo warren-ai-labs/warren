@@ -1381,6 +1381,45 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 
 	agentSessionID := strings.TrimSpace(value.AgentSessionID)
 	transcriptPath := strings.TrimSpace(value.TranscriptPath)
+
+	if kind == "codex" {
+		// Codex sessions are bound strictly by the per-session hook Warren installs in
+		// ~/.codex/hooks.json (which writes ~/.config/warren/agent-bind/<session-id>.json).
+		// Never use fuzzy cwd+mtime discovery without a valid binding: an active
+		// session in the same workspace would be erroneously claimed by a newly created
+		// session before its own hook has fired.
+		binding, err := agent.ReadBinding(agent.BindPath(value.SessionID))
+		if err == nil && binding != nil && normalizeProviderKind(binding.Provider) == "codex" {
+			if binding.TranscriptPath != "" && regularFileExists(binding.TranscriptPath) {
+				agentSessionID = strings.TrimSpace(binding.SessionID)
+				if agentSessionID == "" {
+					agentSessionID = value.SessionID
+				}
+				transcriptPath = binding.TranscriptPath
+			}
+		} else if value.TranscriptPath != "" && regularFileExists(value.TranscriptPath) && value.AgentSessionID != "" {
+			// Persisted from a prior reconcile before daemon restart.
+			agentSessionID = value.AgentSessionID
+			transcriptPath = value.TranscriptPath
+		}
+		if transcriptPath == "" {
+			return nil, ErrAgentNotReady
+		}
+		if service.Store != nil && service.transcriptTakenByOtherInState(service.Store.Snapshot(), transcriptPath, value.SessionID) {
+			return nil, ErrAgentNotReady
+		}
+		return &tuiAgentHandle{
+			service:        service,
+			sessionID:      value.SessionID,
+			provider:       kind,
+			agentSessionID: agentSessionID,
+			transcriptPath: transcriptPath,
+			runtimeName:    value.Runtime,
+			runtimeKind:    value.RuntimeKind,
+			key:            tuiBindingKey(kind, agentSessionID, transcriptPath),
+		}, nil
+	}
+
 	if binding, err := agent.ReadBinding(agent.BindPath(value.SessionID)); err == nil && binding != nil && normalizeProviderKind(binding.Provider) == kind {
 		if binding.SessionID != "" {
 			agentSessionID = binding.SessionID
@@ -1407,7 +1446,7 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 	if transcriptPath == "" && kind == "antigravity" && agentSessionID != "" {
 		transcriptPath = agent.FindAntigravityTranscript(agentSessionID, value.WorkspacePath)
 	}
-	if transcriptPath == "" && nonNilInterface(service.AgentFinder) {
+	if transcriptPath == "" && kind != "codex" && nonNilInterface(service.AgentFinder) {
 		found, err := service.AgentFinder.Find(ctx, kind, value.WorkspacePath, value.Session.CreatedAt)
 		if err != nil {
 			return nil, err

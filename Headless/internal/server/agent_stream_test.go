@@ -1308,3 +1308,154 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 		t.Fatalf("gapEvents = %#v, want 2 events", subResult["gapEvents"])
 	}
 }
+
+func TestCodexSessionIsolationInSameWorkspace(t *testing.T) {
+	directory := t.TempDir()
+	dataDir := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", dataDir)
+
+	transcriptPath1 := filepath.Join(directory, "rollout-1.jsonl")
+	if err := os.WriteFile(transcriptPath1, []byte(
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"session_meta","payload":{"id":"thread-1","cwd":"`+directory+`"}}`+"\n"+
+			`{"timestamp":"2026-08-16T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Old conversation from session 1"}]}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteBinding(agent.BindPath("session-1"), agent.Binding{
+		Provider:       "codex",
+		SessionID:      "thread-1",
+		TranscriptPath: transcriptPath1,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session1 := api.Session{
+		ID: "session-1", WorkspaceID: workspaceID, Title: "Codex 1", Kind: "codex",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		AgentSessionID: "thread-1", TranscriptPath: transcriptPath1,
+	}
+	session2 := api.Session{
+		ID: "session-2", WorkspaceID: workspaceID, Title: "Codex 2", Kind: "codex",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session1, session2}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-agent", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{
+		Store:       state,
+		Runtime:     runtime,
+		AgentFinder: staticAgentFinder{path: transcriptPath1}, // Decoy finder returning session 1's path
+	}
+	service.AgentProviders = NewTUIAgentProviderRegistry(service)
+	service.lazyInit()
+
+	// Ensure Session 1 is bound
+	entry1, err := service.ensureAgent(context.Background(), session1)
+	if err != nil || entry1 == nil || entry1.handle == nil {
+		t.Fatalf("session 1 failed to bind: %v", err)
+	}
+	defer entry1.handle.Close()
+
+	// Ensure Session 2 before its binding appears.
+	// It must NOT use fuzzy fallback (staticAgentFinder decoy) and must NOT adopt session 1's transcript.
+	entry2, err := service.ensureAgent(context.Background(), session2)
+	if err != nil {
+		t.Fatalf("ensureAgent returned error: %v", err)
+	}
+	if entry2 != nil && entry2.handle != nil {
+		t.Fatalf("session 2 unexpectedly bound to handle before binding was written")
+	}
+
+	// Verify session 2 did not replay session 1 events or borrow its title
+	service.agentsMu.Lock()
+	session2Agent := service.agents["session-2"]
+	if session2Agent != nil {
+		session2Agent.mu.Lock()
+		if len(session2Agent.events) > 0 {
+			t.Fatalf("session 2 has replayed events: %#v", session2Agent.events)
+		}
+		if session2Agent.titleUser != "" {
+			t.Fatalf("session 2 titleUser was polluted: %q", session2Agent.titleUser)
+		}
+		session2Agent.mu.Unlock()
+	}
+	service.agentsMu.Unlock()
+
+	// Now simulate session 2 writing its own binding and transcript
+	transcriptPath2 := filepath.Join(directory, "rollout-2.jsonl")
+	if err := os.WriteFile(transcriptPath2, []byte(
+		`{"timestamp":"2026-08-16T10:01:00Z","type":"session_meta","payload":{"id":"thread-2","cwd":"`+directory+`"}}`+"\n"+
+			`{"timestamp":"2026-08-16T10:01:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"New conversation for session 2"}]}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteBinding(agent.BindPath("session-2"), agent.Binding{
+		Provider:       "codex",
+		SessionID:      "thread-2",
+		TranscriptPath: transcriptPath2,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reconcile session 2 now that binding exists
+	entry2Bound, err := service.ensureAgent(context.Background(), session2)
+	if err != nil || entry2Bound == nil || entry2Bound.handle == nil {
+		t.Fatalf("session 2 failed to bind after binding was written: %v", err)
+	}
+	defer entry2Bound.handle.Close()
+
+	if meta, ok := entry2Bound.handle.(interface{ BindingMetadata() (string, string) }); ok {
+		if _, path := meta.BindingMetadata(); path != transcriptPath2 {
+			t.Fatalf("session 2 watcher path = %q, want %q", path, transcriptPath2)
+		}
+	} else {
+		t.Fatal("handle does not implement BindingMetadata")
+	}
+
+	// Wait briefly for watcher to process session 2's transcript
+	for i := 0; i < 50; i++ {
+		service.agentsMu.Lock()
+		s2 := service.agents["session-2"]
+		var title string
+		if s2 != nil {
+			s2.mu.Lock()
+			title = s2.titleUser
+			s2.mu.Unlock()
+		}
+		service.agentsMu.Unlock()
+		if title == "New conversation for session 2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	service.agentsMu.Lock()
+	s2 := service.agents["session-2"]
+	if s2 != nil {
+		s2.mu.Lock()
+		if s2.titleUser != "New conversation for session 2" {
+			t.Fatalf("session 2 titleUser = %q, want %q", s2.titleUser, "New conversation for session 2")
+		}
+		s2.mu.Unlock()
+	}
+	service.agentsMu.Unlock()
+}
