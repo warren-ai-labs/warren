@@ -230,9 +230,17 @@ final class WarrenRemoteClientTests: XCTestCase {
     func testSubscribeThenUnsubscribeAreSentInOrder() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let sessionID = sessionUUID.uuidString.lowercased()
-        let subscribe = Task { try await client.subscribe(sessionID: sessionID) }
+        let subscribe = Task { try await client.subscribe(sessionID: sessionID, omitAgentOutput: true) }
         let subscribeMessages = await waitForSentMessages(task, count: 2)
         let subscribeMessage = try XCTUnwrap(subscribeMessages.dropFirst().first)
+        guard case .text(let subscribeText) = subscribeMessage,
+              let subscribeObject = try JSONSerialization.jsonObject(with: Data(subscribeText.utf8)) as? [String: Any],
+              let subscribeParams = subscribeObject["params"] as? [String: Any],
+              let wireOptions = subscribeParams["wireOptions"] as? [String: Any] else {
+            XCTFail("session subscription wire options are malformed")
+            return
+        }
+        XCTAssertEqual(wireOptions["omitFields"] as? [String], ["output"])
         let subscribeID = try requestID(from: subscribeMessage)
         await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true}}"))
         let subscribeResult = try await subscribe.value

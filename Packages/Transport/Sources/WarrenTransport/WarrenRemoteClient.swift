@@ -502,6 +502,7 @@ public actor WarrenRemoteClient {
     private struct Subscription: Sendable {
         let size: TerminalSize?
         let claimControl: Bool
+        let omitAgentOutput: Bool
     }
 
     private let configuration: WarrenRemoteEndpointConfiguration
@@ -856,13 +857,15 @@ public actor WarrenRemoteClient {
         sessionID: String,
         size: TerminalSize? = nil,
         anchor: WarrenRemoteRecoveryAnchor? = nil,
-        claimControl: Bool = false
+        claimControl: Bool = false,
+        omitAgentOutput: Bool = false
     ) async throws -> WarrenRemoteSubscriptionResult {
         let result = try await subscribe(
             sessionID: sessionID,
             size: size,
             anchor: anchor,
             claimControl: claimControl,
+            omitAgentOutput: omitAgentOutput,
             record: true
         )
         return result
@@ -873,6 +876,7 @@ public actor WarrenRemoteClient {
         size: TerminalSize?,
         anchor: WarrenRemoteRecoveryAnchor?,
         claimControl: Bool,
+        omitAgentOutput: Bool,
         record: Bool,
         socket: WarrenRemoteSocket? = nil
     ) async throws -> WarrenRemoteSubscriptionResult {
@@ -889,10 +893,16 @@ public actor WarrenRemoteClient {
             // Record intent before the request starts. A Session can be
             // selected while the socket is reconnecting; retaining that
             // intent lets the next socket restore it automatically.
-            subscriptions[sessionID] = Subscription(size: size, claimControl: claimControl)
+            subscriptions[sessionID] = Subscription(size: size, claimControl: claimControl, omitAgentOutput: omitAgentOutput)
         }
         let data: Data
-        if let socket {
+        if omitAgentOutput {
+            var structured: [String: Any] = params.reduce(into: [:]) { $0[$1.key] = $1.value }
+            structured["wireOptions"] = ["omitFields": ["output"]]
+            let payload = try JSONSerialization.data(withJSONObject: structured)
+            if let socket { data = try await request(on: socket, method: "session.subscribe", paramsData: payload) }
+            else { data = try await request("session.subscribe", jsonParams: structured) }
+        } else if let socket {
             data = try await request(on: socket, method: "session.subscribe", params: params)
         } else {
             data = try await request("session.subscribe", params: params)
@@ -1319,7 +1329,8 @@ public actor WarrenRemoteClient {
             guard running, self.socket === socket else { return }
             guard let current = subscriptions[sessionID],
                   current.size == subscription.size,
-                  current.claimControl == subscription.claimControl else { continue }
+                  current.claimControl == subscription.claimControl,
+                  current.omitAgentOutput == subscription.omitAgentOutput else { continue }
             let anchor = anchors[sessionID]
             do {
                 _ = try await subscribe(
@@ -1327,6 +1338,7 @@ public actor WarrenRemoteClient {
                     size: subscription.size,
                     anchor: anchor,
                     claimControl: subscription.claimControl,
+                    omitAgentOutput: subscription.omitAgentOutput,
                     record: false,
                     socket: socket
                 )
@@ -1346,6 +1358,7 @@ public actor WarrenRemoteClient {
                         size: subscription.size,
                         anchor: nil,
                         claimControl: subscription.claimControl,
+                        omitAgentOutput: subscription.omitAgentOutput,
                         record: false,
                         socket: socket
                     )

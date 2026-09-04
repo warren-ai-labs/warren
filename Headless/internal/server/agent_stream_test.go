@@ -1040,6 +1040,19 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	if previous["hasMore"] != false {
 		t.Fatalf("previous history hasMore = %v, want false", previous["hasMore"])
 	}
+
+	service.recordAgentEvents("session-history-ws", []api.AgentEvent{{
+		Sequence: 4, Type: "tool_output", Output: "hidden",
+	}}, api.AgentStatus{Activity: api.AgentActivityReady})
+	projected := requestResult[map[string]any](t, connection, "agent.history", map[string]any{
+		"session":     "session-history-ws",
+		"since":       "4",
+		"wireOptions": map[string]any{"omitFields": []string{"output"}},
+	})
+	projectedEvents := projected["events"].([]any)
+	if event := projectedEvents[0].(map[string]any); event["output"] != nil {
+		t.Fatalf("history event retained omitted output: %#v", event)
+	}
 }
 
 func TestAgentTranscriptChunkOverWebSocketStreamsOnlyBoundJSONL(t *testing.T) {
@@ -1107,7 +1120,7 @@ func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
 	service.lazyInit()
 	service.recordAgentTurns("session-turn", []api.AgentTurn{{ID: 3, Status: api.AgentTurnCompleted}}, false)
 	service.recordAgentEvents("session-turn", []api.AgentEvent{{
-		Sequence: 1, Turn: 3, Type: "assistant", Content: "done",
+		Sequence: 1, Turn: 3, Type: "assistant", Content: "done", Output: "hidden",
 	}}, api.AgentStatus{Activity: api.AgentActivityReady})
 
 	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
@@ -1123,14 +1136,15 @@ func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
 		t.Fatalf("snapshot turn = %#v, want turn 3 completed", snapshot["turn"])
 	}
 	events := requestResult[[]any](t, connection, "agent.turn.events", map[string]any{
-		"session": "session-turn",
-		"turn":    float64(3),
+		"session":     "session-turn",
+		"turn":        float64(3),
+		"wireOptions": map[string]any{"omitFields": []string{"output"}},
 	})
 	if len(events) != 1 {
 		t.Fatalf("turn events = %#v, want one event", events)
 	}
 	event, ok := events[0].(map[string]any)
-	if !ok || event["content"] != "done" {
+	if !ok || event["content"] != "done" || event["output"] != nil {
 		t.Fatalf("turn event = %#v, want assistant result", events[0])
 	}
 }
@@ -1285,7 +1299,7 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 
 	events := []api.AgentEvent{
 		{Sequence: 1, Type: "user", Content: "1"},
-		{Sequence: 2, Type: "assistant", Content: "2"},
+		{Sequence: 2, Type: "assistant", Content: "2", Output: "hidden"},
 		{Sequence: 3, Type: "tool_call", Content: "3"},
 	}
 	service.agentsMu.Lock()
@@ -1304,10 +1318,45 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 		"session":      session.ID,
 		"epoch":        strconv.FormatUint(epoch, 10),
 		"lastSequence": 1,
+		"wireOptions":  map[string]any{"omitFields": []string{"output"}},
 	})
 	gapEventsRaw, ok := subResult["gapEvents"].([]any)
 	if !ok || len(gapEventsRaw) != 2 {
 		t.Fatalf("gapEvents = %#v, want 2 events", subResult["gapEvents"])
+	}
+	if event, ok := gapEventsRaw[0].(map[string]any); !ok || event["output"] != nil {
+		t.Fatalf("gap event retained omitted output: %#v", gapEventsRaw[0])
+	}
+
+	service.broadcastAgentBatch(session.ID, []api.AgentEvent{{Sequence: 4, Type: "tool_output", Output: "hidden"}})
+	message := readBrowserMessage(t, connection, "agent")
+	liveEvents := message["events"].([]any)
+	if event := liveEvents[0].(map[string]any); event["output"] != nil {
+		t.Fatalf("live event retained omitted output: %#v", event)
+	}
+}
+
+func TestSessionSubscribeProjectsAgentTail(t *testing.T) {
+	const sessionID = "session-wire-tail"
+	service, _, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	service.agentsMu.Lock()
+	service.agents[sessionID] = &agentSession{}
+	service.agentsMu.Unlock()
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Sequence: 1, Type: "tool_output", Output: "hidden",
+	}}, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{
+		"id":          sessionID,
+		"wireOptions": map[string]any{"omitFields": []string{"output"}},
+	})
+	readBrowserMessage(t, connection, "synced")
+	message := readBrowserMessage(t, connection, "agent")
+	events := message["events"].([]any)
+	if event := events[0].(map[string]any); event["output"] != nil {
+		t.Fatalf("attach tail retained omitted output: %#v", event)
 	}
 }
 
@@ -1852,5 +1901,46 @@ func TestProjectWireEventsOmitsRequestedFields(t *testing.T) {
 		if bytes.Contains(encoded, []byte(`"`+field+`"`)) {
 			t.Fatalf("JSON contains omitted field %q: %s", field, encoded)
 		}
+	}
+}
+
+func TestPeerProjectsAgentEventsPerSession(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	var messages []api.AgentMessage
+	peer := &wsPeer{
+		server: &HTTPServer{Service: service},
+		closed: make(chan struct{}),
+		agentWireOptions: map[string]wireOptions{
+			"lean": {omitFields: map[string]struct{}{"output": {}}},
+			"full": {},
+		},
+		transport: func(item outboundMessage) bool {
+			var message api.AgentMessage
+			if err := json.Unmarshal(item.data, &message); err != nil {
+				t.Fatal(err)
+			}
+			messages = append(messages, message)
+			return true
+		},
+	}
+	event := []api.AgentEvent{{Sequence: 1, Type: "tool_output", Output: "visible"}}
+	if err := peer.enqueueAgentEvents("lean", event); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.enqueueAgentEvents("full", event); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Events[0].Output != "" || messages[1].Events[0].Output != "visible" {
+		t.Fatalf("per-session projection = %#v", messages)
+	}
+}
+
+func TestParseWireOptionsRejectsUnsupportedFields(t *testing.T) {
+	_, err := parseWireOptions(map[string]any{
+		"wireOptions": map[string]any{"omitFields": []any{"content"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "content") {
+		t.Fatalf("protected field error = %v", err)
 	}
 }

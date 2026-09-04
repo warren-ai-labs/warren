@@ -372,6 +372,12 @@ non-empty user and assistant messages for a page. OpenCode content deltas are
 coalesced into one logical message before the page limit is applied. The cursor
 remains the normalized event sequence, while requests without `priority`
 retain the full normalized event page including reasoning and tool activity.
+Clients that do not render heavy event data can pass `wireOptions.omitFields`
+to `session.attach`, `session.subscribe`, `agent.subscribe`, `agent.history`,
+or `agent.turn.events`. The supported fields are `output`, `toolInput`,
+`files`, `payload`, and `usage`; lifecycle and conversational fields cannot be
+omitted. Subscription options apply to that peer and session, while history
+and turn-event options apply only to the current request.
 The PTY byte stream remains the source of truth; the transcript is a
 best-effort, read-only side channel.
 
