@@ -88,7 +88,7 @@ func TestSessionUndoFailsClosedAfterInterveningMove(t *testing.T) {
 	secondWorkspace := api.Workspace{ID: "workspace-second", ProjectID: "project-1", Name: "second", Path: t.TempDir(), Kind: "root"}
 	if err := state.Update(func(value *api.State) error {
 		value.Workspaces = append(value.Workspaces, firstWorkspace, secondWorkspace)
-		value.Sessions = append(value.Sessions, api.Session{ID: "session-2", WorkspaceID: firstWorkspace.ID, Scope: api.SessionScopeWorkspace})
+		value.Sessions = append(value.Sessions, api.Session{ID: "session-2", WorkspaceID: firstWorkspace.ID, Scope: api.SessionScopeWorkspace, Lifecycle: "running"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestSessionSafetyMethodsOverWebSocket(t *testing.T) {
 	group := state.Snapshot().TerminalGroups[0]
 	if err := state.Update(func(value *api.State) error {
 		value.Workspaces = append(value.Workspaces, workspace)
-		value.Sessions = append(value.Sessions, api.Session{ID: "session-api", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, AgentSessionID: "thread-api"})
+		value.Sessions = append(value.Sessions, api.Session{ID: "session-api", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, AgentSessionID: "thread-api", Lifecycle: "running"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)

@@ -860,6 +860,12 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
 	sortTerminalGroups(state.TerminalGroups)
+	// Filter out ended sessions from the roster to reduce payload size and
+	// present only active resources. Frontend already filters by lifecycle,
+	// so this optimization improves network efficiency without changing semantics.
+	state.Sessions = filter(state.Sessions, func(session api.Session) bool {
+		return session.Lifecycle != "ended"
+	})
 	s.initMergeState()
 	mergeStates := s.mergeCache.snapshot()
 	for i := range state.Workspaces {
@@ -2970,7 +2976,7 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 
 func (s *Service) Session(id string) (api.Session, bool) {
 	for _, session := range s.Store.Snapshot().Sessions {
-		if session.ID == id && session.Lifecycle != "ended" {
+		if session.ID == id && session.Lifecycle == "running" {
 			return session, true
 		}
 	}
