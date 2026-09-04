@@ -274,9 +274,11 @@ public struct IOSPresetIcon: View {
         switch presetID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "claude", "claude-code": return "preset-claude"
         case "codex": return "preset-codex-white"
+        case "antigravity", "agy": return "preset-antigravity"
         case "opencode", "open-code": return "preset-opencode"
         case "pi": return "preset-pi"
         case "qoder": return "preset-qoder"
+        case "trae": return "preset-trae"
         default: return "preset-shell"
         }
     }

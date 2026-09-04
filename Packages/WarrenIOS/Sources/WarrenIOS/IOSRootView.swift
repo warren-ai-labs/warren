@@ -1629,9 +1629,12 @@ private func agentStatusPriority(_ status: WarrenRemoteAgentStatus) -> Int {
 private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
     case claude
     case codex
-    case shell
+    case antigravity
     case opencode
     case pi
+    case qoder
+    case trae
+    case shell
 
     var id: String { rawValue }
 
@@ -1639,9 +1642,12 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
-        case .shell: return "Shell"
+        case .antigravity: return "Antigravity"
         case .opencode: return "OpenCode"
         case .pi: return "Pi"
+        case .qoder: return "Qoder"
+        case .trae: return "Trae"
+        case .shell: return "Shell"
         }
     }
 
@@ -1649,9 +1655,12 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         switch self {
         case .claude: return "sparkles"
         case .codex: return "curlybraces"
-        case .shell: return "terminal"
+        case .antigravity: return "arrow.up.circle"
         case .opencode: return "terminal.fill"
         case .pi: return "function"
+        case .qoder: return "sparkle"
+        case .trae: return "sparkle.magnifyingglass"
+        case .shell: return "terminal"
         }
     }
 
@@ -1659,9 +1668,12 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
         switch self {
         case .claude: return "claude"
         case .codex: return "codex --dangerously-bypass-hook-trust"
-        case .shell: return nil
+        case .antigravity: return "agy"
         case .opencode: return "opencode"
         case .pi: return "pi"
+        case .qoder: return "qoder"
+        case .trae: return "trae-cli interactive"
+        case .shell: return nil
         }
     }
 }

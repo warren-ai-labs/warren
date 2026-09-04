@@ -470,8 +470,11 @@ func sessionProviderID(
     switch provider {
     case "claude", "claude-code": return "claude"
     case "codex": return "codex"
+    case "antigravity", "agy": return "antigravity"
     case "opencode", "open-code": return "opencode"
     case "pi": return "pi"
+    case "qoder": return "qoder"
+    case "trae": return "trae"
     default: return "shell"
     }
 }
@@ -519,8 +522,11 @@ struct SessionProviderMark: View {
         ) {
         case "claude": return "Claude session"
         case "codex": return "Codex session"
+        case "antigravity": return "Antigravity session"
         case "opencode": return "OpenCode session"
         case "pi": return "Pi session"
+        case "qoder": return "Qoder session"
+        case "trae": return "Trae session"
         default: return "Shell session"
         }
     }

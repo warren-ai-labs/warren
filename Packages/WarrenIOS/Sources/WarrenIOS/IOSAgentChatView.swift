@@ -1199,8 +1199,11 @@ public struct AgentChatView: View {
         switch raw.lowercased() {
         case "codex": return "Codex"
         case "claude", "claude-code": return "Claude"
+        case "antigravity", "agy": return "Antigravity"
         case "opencode", "open-code": return "OpenCode"
         case "pi": return "Pi"
+        case "qoder": return "Qoder"
+        case "trae": return "Trae"
         default: return raw.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
