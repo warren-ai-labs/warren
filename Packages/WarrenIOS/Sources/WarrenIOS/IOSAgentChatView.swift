@@ -252,6 +252,8 @@ public struct AgentChatView: View {
         self.model = model
         self._agentState = ObservedObject(wrappedValue: model.agentState)
         self.sessionID = sessionID
+        let initialEvents = model.agentState.agentEventsBySessionID[sessionID] ?? []
+        self._renderedBlocks = State(initialValue: agentDisplayBlocks(from: initialEvents))
     }
 
     public var body: some View {
@@ -346,12 +348,12 @@ public struct AgentChatView: View {
                     // repositioning only.
                     .onAppear {
                         guard !didEstablishInitialScroll else { return }
-                        didEstablishInitialScroll = true
-                        isNearLatest = true
-                        Task { @MainActor in
-                            await Task.yield()
-                            proxy.scrollTo("agent-bottom", anchor: .bottom)
-                        }
+                        scrollToLatest(using: proxy, animated: false, settle: true)
+                    }
+                    .onChange(of: model.displayMode) { _, mode in
+                        guard mode == .agent else { return }
+                        refreshRenderedBlocks()
+                        scrollToLatest(using: proxy, animated: false, settle: true)
                     }
                     .onChange(of: agentState.agentEventRevisionBySessionID[sessionID] ?? 0) { _, _ in
                         observeAgentRevision(using: proxy)
@@ -362,6 +364,9 @@ public struct AgentChatView: View {
                     .onPreferenceChange(AgentChatBottomOffsetPreferenceKey.self) { bottomY in
                         guard bottomY.isFinite else { return }
                         let distanceFromLatest = bottomY - viewport.size.height
+                        // While the initial scroll position is settling, don't let intermediate
+                        // un-scrolled layout frames erroneously mark the user as scrolled away from latest.
+                        guard didEstablishInitialScroll else { return }
                         let wasNearLatest = isNearLatest
                         isNearLatest = distanceFromLatest <= latestVisibilityThreshold
 
@@ -422,10 +427,7 @@ public struct AgentChatView: View {
                         historyScrollAnchorID = nil
                         showReturnToLatest = false
                         isNearLatest = true
-                        Task { @MainActor in
-                            await Task.yield()
-                            scrollToLatest(using: proxy, animated: false)
-                        }
+                        scrollToLatest(using: proxy, animated: false, settle: true)
                     }
                     .onChange(of: model.historyLoadingBySessionID) { wasLoading, isLoading in
                         guard wasLoading.contains(sessionID), !isLoading.contains(sessionID) else { return }
@@ -575,7 +577,7 @@ public struct AgentChatView: View {
             // Keep a live response pinned without an animation on every
             // streamed delta. Repeated animated scrolls are perceived as page
             // jumps, especially while the user is changing scroll direction.
-            scrollToLatest(using: proxy, animated: false)
+            scrollToLatest(using: proxy, animated: false, settle: true)
         } else {
             showReturnToLatest = true
         }
@@ -586,7 +588,8 @@ public struct AgentChatView: View {
         // LazyVStack can briefly remove the bottom sentinel, so reading the
         // live proximity state after that layout pass would incorrectly stop
         // following a conversation that was already at the latest message.
-        let shouldFollowLatest = isNearLatest
+        // If initial scroll has not settled yet, always follow to latest.
+        let shouldFollowLatest = !didEstablishInitialScroll || isNearLatest
         refreshRenderedBlocks()
         guard historyScrollAnchorID == nil else { return }
         // The revision is published before the new LazyVStack rows have been
@@ -599,44 +602,66 @@ public struct AgentChatView: View {
         }
     }
 
-    private func scrollToLatest(using proxy: ScrollViewProxy, animated: Bool) {
+    private func scrollToLatest(
+        using proxy: ScrollViewProxy,
+        animated: Bool,
+        settle: Bool = false
+    ) {
         isNearLatest = true
         showReturnToLatest = false
-        if animated, !reduceMotion {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                proxy.scrollTo("agent-bottom", anchor: .bottom)
+        let performScroll = {
+            if animated, !reduceMotion {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    proxy.scrollTo("agent-bottom", anchor: .bottom)
+                }
+            } else {
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    proxy.scrollTo("agent-bottom", anchor: .bottom)
+                }
             }
-        } else {
-            var transaction = Transaction()
-            transaction.animation = nil
-            withTransaction(transaction) {
-                proxy.scrollTo("agent-bottom", anchor: .bottom)
-            }
+        }
+
+        performScroll()
+        guard settle else { return }
+
+        Task { @MainActor in
+            // Yield once so LazyVStack can instantiate cells near the bottom edge
+            await Task.yield()
+            performScroll()
+            // Yield again so multi-line text and cards can finalize measured heights
+            await Task.yield()
+            performScroll()
+            didEstablishInitialScroll = true
+            isNearLatest = true
+            showReturnToLatest = false
         }
     }
 
     private func restoreHistoryScrollAnchor(using proxy: ScrollViewProxy) {
-        guard let anchorID = historyScrollAnchorID else { return }
-        // The loading flag can be removed in the same main-actor turn as the
-        // event merge. Refresh the local block cache before checking the anchor
-        // so the row insertion cannot race the restoration transaction.
         refreshRenderedBlocks()
-        // The model publishes the history-loading flag after merging the new
-        // page. Yield once so LazyVStack has installed the older blocks before
-        // anchoring the previous first block; this keeps the visible content
-        // in place while the new rows appear above it.
-        Task { @MainActor in
-            await Task.yield()
-            guard renderedBlocks.contains(where: { $0.id == anchorID }) else {
+        if let anchorID = historyScrollAnchorID {
+            // The loading flag can be removed in the same main-actor turn as the
+            // event merge. Refresh the local block cache before checking the anchor
+            // so the row insertion cannot race the restoration transaction.
+            Task { @MainActor in
+                await Task.yield()
+                guard renderedBlocks.contains(where: { $0.id == anchorID }) else {
+                    historyScrollAnchorID = nil
+                    return
+                }
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    proxy.scrollTo(anchorID, anchor: .top)
+                }
                 historyScrollAnchorID = nil
-                return
             }
-            var transaction = Transaction()
-            transaction.animation = nil
-            withTransaction(transaction) {
-                proxy.scrollTo(anchorID, anchor: .top)
-            }
-            historyScrollAnchorID = nil
+        } else {
+            // Initial history page completed loading (not a user pull-to-refresh).
+            // Scroll to the bottom of the freshly populated transcript.
+            scrollToLatest(using: proxy, animated: false, settle: true)
         }
     }
 

@@ -120,6 +120,7 @@ public struct SessionView: View {
                 }
 
                 AgentChatView(model: model, sessionID: activeSessionID)
+                    .id(activeSessionID)
                     .opacity(model.displayMode == .agent ? 1 : 0)
                     .allowsHitTesting(model.displayMode == .agent)
             }
