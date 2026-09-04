@@ -171,6 +171,12 @@ public final class IOSLocalStore: @unchecked Sendable {
             if let values = storedEndpoints() {
                 return values.map(configuration(from:))
             }
+            // UserDefaults is removed with the application. Keep a second
+            // copy of the non-secret endpoint catalog in Keychain so an app
+            // reinstall can restore the Relay route and find its token.
+            if let values = keychainStoredEndpoints() {
+                return values.map(configuration(from:))
+            }
             guard let legacy = legacyEndpoint() else { return [] }
             return [configuration(from: legacy)]
         }
@@ -180,6 +186,7 @@ public final class IOSLocalStore: @unchecked Sendable {
             let nextNames = Set(newValue.map(\.name))
             for name in previousNames.subtracting(nextNames) {
                 _ = keychain.remove(account: name)
+                _ = keychain.remove(account: "\(name).refresh")
             }
             for value in newValue {
                 if !value.token.isEmpty {
@@ -188,11 +195,11 @@ public final class IOSLocalStore: @unchecked Sendable {
                     _ = keychain.remove(account: value.name)
                 }
             }
-            if defaults.string(forKey: Keys.activeEndpoint).map(nextNames.contains) != true {
+            if activeEndpointName().map(nextNames.contains) != true {
                 if let first = newValue.first?.name {
-                    defaults.set(first, forKey: Keys.activeEndpoint)
+                    setActiveEndpointName(first)
                 } else {
-                    defaults.removeObject(forKey: Keys.activeEndpoint)
+                    removeActiveEndpointName()
                 }
             }
         }
@@ -203,7 +210,7 @@ public final class IOSLocalStore: @unchecked Sendable {
     public var endpoint: WarrenRemoteEndpointConfiguration? {
         get {
             let values = endpoints
-            if let activeName = defaults.string(forKey: Keys.activeEndpoint),
+            if let activeName = activeEndpointName(),
                let active = values.first(where: { $0.name == activeName }) {
                 return active
             }
@@ -214,7 +221,8 @@ public final class IOSLocalStore: @unchecked Sendable {
                 endpoints.forEach { _ = keychain.remove(account: $0.name) }
                 defaults.removeObject(forKey: Keys.endpoints)
                 defaults.removeObject(forKey: Keys.endpoint)
-                defaults.removeObject(forKey: Keys.activeEndpoint)
+                removeActiveEndpointName()
+                _ = keychain.remove(account: Keys.endpointMetadata)
                 return
             }
             let previousName = endpoint?.name
@@ -287,6 +295,7 @@ public final class IOSLocalStore: @unchecked Sendable {
 
         if let replacingName, replacingName != value.name {
             _ = keychain.remove(account: replacingName)
+            _ = keychain.remove(account: "\(replacingName).refresh")
         }
         if !value.token.isEmpty {
             _ = keychain.write(value.token, account: value.name)
@@ -296,7 +305,7 @@ public final class IOSLocalStore: @unchecked Sendable {
             _ = keychain.remove(account: value.name)
         }
         if activate {
-            defaults.set(value.name, forKey: Keys.activeEndpoint)
+            setActiveEndpointName(value.name)
         }
     }
 
@@ -304,7 +313,7 @@ public final class IOSLocalStore: @unchecked Sendable {
     @discardableResult
     public func activateEndpoint(named name: String) -> Bool {
         guard endpoints.contains(where: { $0.name == name }) else { return false }
-        defaults.set(name, forKey: Keys.activeEndpoint)
+        setActiveEndpointName(name)
         return true
     }
 
@@ -317,11 +326,12 @@ public final class IOSLocalStore: @unchecked Sendable {
         values.remove(at: index)
         writeEndpoints(values)
         _ = keychain.remove(account: name)
-        if defaults.string(forKey: Keys.activeEndpoint) == name {
+        _ = keychain.remove(account: "\(name).refresh")
+        if activeEndpointName() == name {
             if let replacement = values.first?.name {
-                defaults.set(replacement, forKey: Keys.activeEndpoint)
+                setActiveEndpointName(replacement)
             } else {
-                defaults.removeObject(forKey: Keys.activeEndpoint)
+                removeActiveEndpointName()
             }
         }
         return true
@@ -377,6 +387,7 @@ public final class IOSLocalStore: @unchecked Sendable {
         static let endpoint = "warren.ios.endpoint"
         static let endpoints = "warren.ios.endpoints"
         static let activeEndpoint = "warren.ios.active-endpoint"
+        static let endpointMetadata = "warren.ios.endpoint-metadata"
         static let navigation = "warren.ios.navigation"
         static let lastSessionKind = "warren.ios.last-session-kind"
     }
@@ -437,6 +448,29 @@ public final class IOSLocalStore: @unchecked Sendable {
         return try? JSONDecoder().decode([StoredEndpoint].self, from: data)
     }
 
+    private func keychainStoredEndpoints() -> [StoredEndpoint]? {
+        guard let value = keychain.read(account: Keys.endpointMetadata),
+              let data = Data(base64Encoded: value),
+              let endpoints = try? JSONDecoder().decode([StoredEndpoint].self, from: data)
+        else { return nil }
+        return endpoints
+    }
+
+    private func activeEndpointName() -> String? {
+        defaults.string(forKey: Keys.activeEndpoint)
+            ?? keychain.read(account: Keys.activeEndpoint)
+    }
+
+    private func setActiveEndpointName(_ name: String) {
+        defaults.set(name, forKey: Keys.activeEndpoint)
+        _ = keychain.write(name, account: Keys.activeEndpoint)
+    }
+
+    private func removeActiveEndpointName() {
+        defaults.removeObject(forKey: Keys.activeEndpoint)
+        _ = keychain.remove(account: Keys.activeEndpoint)
+    }
+
     private func legacyEndpoint() -> StoredEndpoint? {
         guard let data = defaults.data(forKey: Keys.endpoint) else { return nil }
         return try? JSONDecoder().decode(StoredEndpoint.self, from: data)
@@ -468,6 +502,9 @@ public final class IOSLocalStore: @unchecked Sendable {
             )
         }
         defaults.set(try? JSONEncoder().encode(metadata), forKey: Keys.endpoints)
+        if let data = try? JSONEncoder().encode(metadata) {
+            _ = keychain.write(data.base64EncodedString(), account: Keys.endpointMetadata)
+        }
         // A successful write upgrades any legacy single-endpoint record.
         defaults.removeObject(forKey: Keys.endpoint)
     }
