@@ -145,7 +145,9 @@ func relayEndpoint(raw, hostID string) (string, error) {
 }
 
 func dial(ctx context.Context, endpoint string, auth map[string]any) (*Client, error) {
-	connection, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint, http.Header{})
+	dialer := *websocket.DefaultDialer
+	dialer.EnableCompression = true
+	connection, response, err := dialer.DialContext(ctx, endpoint, http.Header{})
 	if err != nil {
 		if response != nil {
 			return nil, fmt.Errorf("connect %s: HTTP %d", endpoint, response.StatusCode)
