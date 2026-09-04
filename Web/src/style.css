@@ -1538,6 +1538,41 @@ button:disabled {
   font: var(--text-sm)/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
+.agent-tool-files-preview {
+  flex: 0 1 auto;
+  color: var(--color-text-tertiary);
+  font: var(--text-xs) ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tool-sublist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-xs) 0;
+}
+
+.agent-tool-subitem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.agent-tool-subitem-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.agent-tool-bullet {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+}
+
 .agent-tool-card.command .agent-tool-status {
   margin-inline-start: auto;
   padding-inline-start: var(--space-lg);

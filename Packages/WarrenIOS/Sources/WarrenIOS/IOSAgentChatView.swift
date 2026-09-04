@@ -1663,13 +1663,13 @@ private struct AgentActivityGroup {
                 let toolNames = Set(toolBlocks.compactMap { $0.call.toolName?.lowercased() })
                 if toolNames.count == 1, let singleType = toolNames.first {
                     switch singleType {
-                    case "read", "view_file", "viewfile":
+                    case "read", "view_file", "viewfile", "read_file":
                         parts.append("Read \(toolCount) files")
-                    case "edit", "write", "apply_patch":
+                    case "edit", "write", "apply_patch", "replace_file_content", "write_to_file":
                         parts.append("Edited \(toolCount) files")
-                    case "grep", "glob", "web_search":
+                    case "grep", "glob", "web_search", "grep_search", "find_by_name", "search_web":
                         parts.append("Searched \(toolCount) times")
-                    case "shell":
+                    case "shell", "exec", "execute", "run_command":
                         parts.append("Ran \(toolCount) commands")
                     default:
                         parts.append("\(displayToolName(singleType)) × \(toolCount)")
@@ -1682,21 +1682,24 @@ private struct AgentActivityGroup {
         return parts.isEmpty ? "Activity" : parts.joined(separator: " · ")
     }
 
-    var firstToolSummary: String? {
-        for entry in entries {
-            if case .tool(let tool) = entry,
-               let summary = toolSummary(for: tool.call) {
-                return summary
-            }
+    var mergedToolSummary: String? {
+        let summaries = entries.compactMap { entry -> String? in
+            guard case .tool(let tool) = entry else { return nil }
+            return toolSummary(for: tool.call)
         }
-        return nil
+        guard !summaries.isEmpty else { return nil }
+        var unique: [String] = []
+        for s in summaries where !unique.contains(s) {
+            unique.append(s)
+        }
+        return truncateToolSummary(unique.joined(separator: " · "), maxLength: 140)
     }
 
     /// A collapsed activity row should still tell the reader why it exists.
     /// Tool input is the most actionable preview; when a provider only emits
     /// reasoning, show its first line instead of leaving a blank rail.
     var preview: String? {
-        if let summary = firstToolSummary { return summary }
+        if let summary = mergedToolSummary { return summary }
         for entry in entries {
             guard case .reasoning(let event) = entry,
                   let content = event.content?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1843,7 +1846,17 @@ private func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [Agent
         }
     }
     flushActivity()
-    return result
+    var consolidated: [AgentDisplayBlock] = []
+    for block in result {
+        if case .activity(let nextGroup) = block,
+           let last = consolidated.last,
+           case .activity(let prevGroup) = last {
+            consolidated[consolidated.count - 1] = .activity(AgentActivityGroup(entries: prevGroup.entries + nextGroup.entries))
+        } else {
+            consolidated.append(block)
+        }
+    }
+    return consolidated
 }
 
 private extension WarrenRemoteAgentEvent {
@@ -2735,8 +2748,12 @@ private struct AgentActivityGroupBlock: View {
                         }
                     }
                     if !activity.toolBlocks.isEmpty {
-                        ForEach(activity.toolBlocks, id: \.id) { tool in
-                            AgentToolBlockView(tool: tool)
+                        ForEach(coalesceToolBlocks(activity.toolBlocks)) { group in
+                            if group.tools.count == 1 {
+                                AgentToolBlockView(tool: group.tools[0])
+                            } else {
+                                AgentCoalescedToolBlockView(group: group)
+                            }
                         }
                     }
                 }
@@ -2954,6 +2971,109 @@ private struct AgentToolBlockView: View {
     }
 }
 
+private struct AgentCoalescedToolGroup: Identifiable {
+    var id: String { "coalesced-\(toolName)-\(tools.first?.id ?? "")" }
+    let toolName: String
+    let tools: [AgentToolBlock]
+
+    var status: String {
+        let values = tools.map { $0.status }
+        if values.contains("error") || values.contains("failed") { return "error" }
+        if values.contains("interrupted") { return "interrupted" }
+        if values.contains("running") { return "running" }
+        return "success"
+    }
+
+    var summary: String? {
+        let summaries = tools.compactMap { toolSummary(for: $0.call) }
+        guard !summaries.isEmpty else { return nil }
+        var unique: [String] = []
+        for s in summaries where !unique.contains(s) {
+            unique.append(s)
+        }
+        return truncateToolSummary(unique.joined(separator: ", "), maxLength: 140)
+    }
+}
+
+private func coalesceToolBlocks(_ tools: [AgentToolBlock]) -> [AgentCoalescedToolGroup] {
+    var groups: [AgentCoalescedToolGroup] = []
+    for tool in tools {
+        let name = (tool.call.toolName ?? "").lowercased()
+        if let last = groups.last, last.toolName == name {
+            var updatedTools = last.tools
+            updatedTools.append(tool)
+            groups[groups.count - 1] = AgentCoalescedToolGroup(toolName: name, tools: updatedTools)
+        } else {
+            groups.append(AgentCoalescedToolGroup(toolName: name, tools: [tool]))
+        }
+    }
+    return groups
+}
+
+private struct AgentCoalescedToolBlockView: View {
+    let group: AgentCoalescedToolGroup
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+
+    init(group: AgentCoalescedToolGroup) {
+        self.group = group
+        _expanded = State(initialValue: group.status == "error" || group.status == "failed" || group.status == "interrupted")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 10, alignment: .center)
+                    Image(systemName: toolIconName(group.toolName))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
+                    Text("\(displayToolName(group.toolName)) × \(group.tools.count)")
+                        .font(IOSTypography.status)
+                        .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
+                        .lineLimit(1)
+                    if let summary = group.summary {
+                        Text(summary)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    AgentToolStatusMark(status: group.status)
+                        .frame(width: 14, height: 14, alignment: .trailing)
+                }
+                .foregroundStyle(IOSTheme.secondaryText)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(displayToolName(group.toolName)) × \(group.tools.count)")
+            .accessibilityValue("\(expanded ? "Expanded" : "Collapsed") · \(toolStatusTitle(group.status))")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(group.tools, id: \.id) { tool in
+                        AgentToolBlockView(tool: tool)
+                            .padding(.leading, 10)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct AgentToolOutputBlock: View {
     let event: WarrenRemoteAgentEvent
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -3061,51 +3181,254 @@ private extension WarrenRemoteAgentEvent {
     }
 }
 
-private func displayToolName(_ name: String?) -> String {
-    switch name {
-    case "shell": return "Shell"
-    case "edit": return "Edit file"
-    case "read": return "Read file"
-    case "grep": return "Search files"
-    case "glob": return "Find files"
-    case "web_search": return "Web search"
-    case "fetch": return "Web fetch"
-    case "subagent": return "Subagent"
+func displayToolName(_ name: String?) -> String {
+    guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+        return "Tool"
+    }
+    switch name.lowercased() {
+    case "shell", "exec", "execute", "run_command": return "Shell"
+    case "edit", "replace_file_content": return "Edit file"
+    case "read", "view_file", "viewfile": return "Read file"
+    case "grep", "grep_search": return "Search files"
+    case "glob", "find_by_name", "list_dir": return "Find files"
+    case "web_search", "search_web": return "Web search"
+    case "fetch", "read_url_content": return "Web fetch"
+    case "subagent", "invoke_subagent": return "Subagent"
     case "apply_patch": return "Apply patch"
-    case "write": return "Write file"
-    case "question": return "Ask user"
-    case "permission": return "Permission"
+    case "write", "write_to_file": return "Write file"
+    case "question", "ask_user_question", "ask_question": return "Ask user"
+    case "permission", "permission_request": return "Permission"
     case "reasoning": return "Thinking"
-    default: return name?.isEmpty == false ? name! : "Tool"
+    default: return name
     }
 }
 
-private func toolIconName(_ name: String?) -> String {
-    switch name?.lowercased() {
-    case "shell": return "terminal"
-    case "edit", "write", "apply_patch": return "pencil"
+func toolIconName(_ name: String?) -> String {
+    switch name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "shell", "exec", "execute", "run_command": return "terminal"
+    case "edit", "replace_file_content", "write", "write_to_file", "apply_patch": return "pencil"
     case "read", "view_file", "viewfile": return "doc.text"
-    case "grep", "glob", "web_search": return "magnifyingglass"
-    case "fetch": return "arrow.down.circle"
-    case "subagent": return "person.2"
-    case "question", "ask_user_question": return "questionmark.bubble"
+    case "grep", "grep_search", "glob", "find_by_name", "list_dir", "web_search", "search_web": return "magnifyingglass"
+    case "fetch", "read_url_content": return "arrow.down.circle"
+    case "subagent", "invoke_subagent": return "person.2"
+    case "question", "ask_user_question", "ask_question": return "questionmark.bubble"
     case "permission", "permission_request": return "shield"
     case "reasoning": return "brain"
     default: return "hammer"
     }
 }
 
-private func toolSummary(for event: WarrenRemoteAgentEvent) -> String? {
-    guard let input = event.toolInput else { return nil }
-    if case .string(let value) = input, !value.isEmpty {
-        return truncateToolSummary(value)
+func basename(_ path: String) -> String {
+    let clean = path.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    if let lastSlash = clean.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+        let afterSlash = clean.index(after: lastSlash)
+        return String(clean[afterSlash...])
     }
-    guard case .object(let object) = input else { return nil }
-    for key in ["command", "cmd", "file_path", "path", "query", "pattern", "prompt", "url"] {
-        if case .string(let value) = object[key], !value.isEmpty {
-            return truncateToolSummary(value)
+    return clean
+}
+
+func cleanDisplayPath(_ path: String) -> String {
+    let clean = path.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    if clean.hasPrefix("/") && (clean.count > 30 || clean.hasPrefix("/Users/") || clean.hasPrefix("/home/")) {
+        return basename(clean)
+    }
+    return clean
+}
+
+func extractPatchFiles(_ patch: String) -> [String] {
+    var files: [String] = []
+    let lines = patch.components(separatedBy: "\n")
+    let markers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "+++ b/", "--- a/"]
+    for line in lines {
+        for marker in markers {
+            if line.hasPrefix(marker) {
+                let name = String(line.dropFirst(marker.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty && name != "/dev/null" && name != "dev/null" && !files.contains(name) {
+                    files.append(name)
+                }
+                break
+            }
         }
     }
+    return files
+}
+
+func extractExecCommands(_ raw: String) -> [String] {
+    var commands: [String] = []
+    let callPattern = #"(?:exec_command|exec|execute)\s*\(\s*\{[^\n}]*["']?(?:cmd|command)["']?\s*:\s*"((?:[^"\\]|\\.)*)""#
+    if let regex = try? NSRegularExpression(pattern: callPattern, options: []) {
+        let nsString = raw as NSString
+        let matches = regex.matches(in: raw, options: [], range: NSRange(location: 0, length: nsString.length))
+        for match in matches {
+            if match.numberOfRanges > 1 {
+                let range = match.range(at: 1)
+                if range.location != NSNotFound {
+                    let val = nsString.substring(with: range)
+                    let unescaped = val.replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+                    commands.append(unescaped)
+                }
+            }
+        }
+    }
+    if commands.isEmpty {
+        let jsonPattern = #"["'](?:cmd|command)["']\s*:\s*"((?:[^"\\]|\\.)*)""#
+        if let regex = try? NSRegularExpression(pattern: jsonPattern, options: []) {
+            let nsString = raw as NSString
+            let matches = regex.matches(in: raw, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches {
+                if match.numberOfRanges > 1 {
+                    let range = match.range(at: 1)
+                    if range.location != NSNotFound {
+                        let val = nsString.substring(with: range)
+                        let unescaped = val.replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+                        commands.append(unescaped)
+                    }
+                }
+            }
+        }
+    }
+    return commands
+}
+
+func formatFileList(_ list: [String]) -> String {
+    let valid = list.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    if valid.isEmpty { return "" }
+    if valid.count == 1 { return truncateToolSummary(cleanDisplayPath(valid[0])) }
+    if valid.count <= 3 {
+        return valid.map { truncateToolSummary(basename($0)) }.joined(separator: ", ")
+    }
+    let firstTwo = valid.prefix(2).map { truncateToolSummary(basename($0)) }.joined(separator: ", ")
+    return "\(firstTwo) (+\(valid.count - 2) more)"
+}
+
+func toolSummary(for event: WarrenRemoteAgentEvent) -> String? {
+    let files = (event.files ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+
+    if let input = event.toolInput {
+        if case .string(let raw) = input, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let commands = extractExecCommands(trimmed)
+            if !commands.isEmpty {
+                let first = truncateToolSummary(commands[0])
+                let summary = commands.count > 1 ? "\(first)  (+\(commands.count - 1) more)" : first
+                return !files.isEmpty ? "\(summary) · \(formatFileList(files))" : summary
+            }
+            return truncateToolSummary(trimmed)
+        }
+
+        if case .object(let object) = input {
+            func getString(_ keys: [String]) -> String? {
+                for key in keys {
+                    if case .string(let val) = object[key], !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return val.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+                return nil
+            }
+
+            let cleanAction: String = {
+                if let action = getString(["toolAction", "toolSummary", "action"]) {
+                    return action.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                return ""
+            }()
+
+            if let cmd = getString(["command", "cmd", "CommandLine"]) {
+                let commandStr = truncateToolSummary(cmd)
+                if !files.isEmpty {
+                    return "\(commandStr) · \(formatFileList(files))"
+                }
+                return commandStr
+            }
+            for key in ["command", "cmd", "CommandLine"] {
+                if case .array(let arr) = object[key] {
+                    let strings = arr.compactMap { val -> String? in
+                        if case .string(let s) = val, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            return s.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                        return nil
+                    }
+                    if !strings.isEmpty {
+                        let joined = strings.joined(separator: " ")
+                        if !files.isEmpty {
+                            return "\(truncateToolSummary(joined)) · \(formatFileList(files))"
+                        }
+                        return truncateToolSummary(joined)
+                    }
+                }
+            }
+
+            if case .string(let raw) = object["raw"], !raw.isEmpty {
+                let commands = extractExecCommands(raw)
+                if !commands.isEmpty {
+                    let first = truncateToolSummary(commands[0])
+                    let summary = commands.count > 1 ? "\(first)  (+\(commands.count - 1) more)" : first
+                    if !files.isEmpty {
+                        return "\(summary) · \(formatFileList(files))"
+                    }
+                    return summary
+                }
+                return raw.count > 200 ? String(raw.prefix(200)) + "…" : raw
+            }
+
+            if let filePath = getString(["file_path", "path", "TargetFile", "AbsolutePath", "file", "filename", "target"]) {
+                let cleanP = cleanDisplayPath(filePath)
+                if !cleanAction.isEmpty {
+                    return "\(cleanAction): \(cleanP)"
+                }
+                return truncateToolSummary(cleanP)
+            }
+
+            if !files.isEmpty {
+                let fileSummary = formatFileList(files)
+                if !cleanAction.isEmpty {
+                    return "\(cleanAction): \(fileSummary)"
+                }
+                return fileSummary
+            }
+
+            if case .string(let patch) = object["patch"], !patch.isEmpty {
+                let patchFiles = extractPatchFiles(patch)
+                if !patchFiles.isEmpty {
+                    return formatFileList(patchFiles)
+                }
+            }
+
+            if let query = getString(["query", "Query", "pattern", "Pattern"]) {
+                let cleanQ = query.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let scope = getString(["SearchPath", "SearchDirectory", "path"]) {
+                    return "\"\(truncateToolSummary(cleanQ, maxLength: 50))\" in \(truncateToolSummary(basename(scope)))"
+                }
+                return "\"\(truncateToolSummary(cleanQ))\""
+            }
+            if case .array(let arr) = object["queries"] {
+                let strings = arr.compactMap { val -> String? in
+                    if case .string(let s) = val { return s }
+                    return nil
+                }
+                if !strings.isEmpty {
+                    return strings.joined(separator: ", ")
+                }
+            }
+
+            if let url = getString(["url", "Url"]) {
+                return truncateToolSummary(url.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+
+            if let text = getString(["prompt", "instruction", "Instruction", "description", "Description"]) {
+                return truncateToolSummary(text)
+            }
+
+            if !cleanAction.isEmpty {
+                return cleanAction
+            }
+        }
+    }
+
+    if !files.isEmpty {
+        return formatFileList(files)
+    }
+
     return nil
 }
 

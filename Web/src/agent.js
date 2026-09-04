@@ -212,7 +212,18 @@ export function groupAgentEvents(events = []) {
     }
   }
   flushActivity();
-  return blocks;
+  const consolidated = [];
+  for (const block of blocks) {
+    const prev = consolidated.at(-1);
+    if (prev && prev.kind === "activity_group" && block.kind === "activity_group") {
+      prev.reasoning.push(...block.reasoning);
+      prev.tools.push(...block.tools);
+      prev.order.push(...block.order);
+    } else {
+      consolidated.push(block);
+    }
+  }
+  return consolidated;
 }
 
 /**
@@ -593,8 +604,63 @@ export function displayToolName(name) {
     ask_user_question: "Question",
     permission_request: "Permission",
     apply_patch: "Apply patch",
+    exec: "Shell",
+    execute: "Shell",
+    run_command: "Shell",
+    replace_file_content: "Edit file",
+    write_to_file: "Write file",
+    view_file: "Read file",
+    grep_search: "Search files",
+    find_by_name: "Find files",
+    list_dir: "Find files",
+    search_web: "Web search",
+    read_url_content: "Web fetch",
+    invoke_subagent: "Subagent",
+    ask_question: "Question",
   };
   return labels[name] || name || "Tool";
+}
+
+export function basename(path) {
+  if (typeof path !== "string") return "";
+  const clean = path.replace(/^["']|["']$/g, "").trim();
+  const index = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+  return index >= 0 ? clean.slice(index + 1) : clean;
+}
+
+export function cleanDisplayPath(path) {
+  if (typeof path !== "string") return "";
+  const clean = path.replace(/^["']|["']$/g, "").trim();
+  if (clean.startsWith("/") && (clean.length > 30 || clean.startsWith("/Users/") || clean.startsWith("/home/"))) {
+    return basename(clean);
+  }
+  return clean;
+}
+
+export function extractPatchFiles(patch) {
+  if (typeof patch !== "string") return [];
+  const files = [];
+  for (const line of patch.split("\n")) {
+    for (const marker of ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "+++ b/", "--- a/"]) {
+      if (line.startsWith(marker)) {
+        const name = line.slice(marker.length).trim();
+        if (name && !files.includes(name) && name !== "/dev/null" && name !== "dev/null") {
+          files.push(name);
+        }
+        break;
+      }
+    }
+  }
+  return files;
+}
+
+export function formatFileList(list) {
+  if (!Array.isArray(list) || list.length === 0) return "";
+  const valid = list.filter(Boolean);
+  if (valid.length === 0) return "";
+  if (valid.length === 1) return truncatePreview(cleanDisplayPath(valid[0]));
+  if (valid.length <= 3) return valid.map(f => truncatePreview(basename(f))).join(", ");
+  return `${valid.slice(0, 2).map(f => truncatePreview(basename(f))).join(", ")} (+${valid.length - 2} more)`;
 }
 
 export function truncatePreview(value, maxLength = 140) {
@@ -604,43 +670,122 @@ export function truncatePreview(value, maxLength = 140) {
 }
 
 export function extractExecCommands(raw) {
+  if (typeof raw !== "string") return [];
   const commands = [];
-  const pattern = /exec_command\(\s*\{\s*cmd\s*:\s*"(?:[^"\\]|\\.)*"/g;
+  const pattern = /(?:exec_command|exec|execute)\s*\(\s*\{[^\n}]*["']?(?:cmd|command)["']?\s*:\s*"(?:[^"\\]|\\.)*"/g;
   let match;
   while ((match = pattern.exec(raw))) {
     const body = match[0];
-    const value = body.match(/cmd\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    const value = body.match(/["']?(?:cmd|command)["']?\s*:\s*"((?:[^"\\]|\\.)*)"/);
     if (value) {
       commands.push(value[1].replace(/\\(["\\])/g, "$1"));
+    }
+  }
+  if (commands.length === 0) {
+    const jsonPattern = /["'](?:cmd|command)["']\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+    while ((match = jsonPattern.exec(raw))) {
+      commands.push(match[1].replace(/\\(["\\])/g, "$1"));
     }
   }
   return commands;
 }
 
 export function toolSummary(call) {
-  const input = call?.toolInput;
-  if (!input || typeof input !== "object") return "";
-  if (typeof input.raw === "string") {
-    const commands = extractExecCommands(input.raw);
+  if (!call) return "";
+  const input = call.toolInput;
+  const files = Array.isArray(call.files) ? call.files.filter(Boolean) : [];
+
+  if (typeof input === "string" && input.trim()) {
+    const raw = input.trim();
+    const commands = extractExecCommands(raw);
     if (commands.length > 0) {
       const first = truncatePreview(commands[0]);
-      return commands.length > 1
-        ? `${first}  (+${commands.length - 1} more)`
-        : first;
+      const summary = commands.length > 1 ? `${first}  (+${commands.length - 1} more)` : first;
+      return files.length > 0 ? `${summary} · ${formatFileList(files)}` : summary;
     }
-    return input.raw.length > 200
-      ? `${input.raw.slice(0, 200)}…`
-      : input.raw;
+    return truncatePreview(raw);
   }
-  if (typeof input.command === "string") return truncatePreview(input.command);
-  if (typeof input.cmd === "string") return truncatePreview(input.cmd);
-  if (typeof input.file_path === "string") return input.file_path;
-  if (typeof input.path === "string") return input.path;
-  if (typeof input.query === "string") return input.query;
-  if (typeof input.pattern === "string") return input.pattern;
-  if (typeof input.prompt === "string") return input.prompt;
-  if (typeof input.url === "string") return input.url;
-  if (Array.isArray(input.queries)) return input.queries.join(", ");
+
+  if (input && typeof input === "object") {
+    const action = input.toolAction || input.toolSummary || input.action;
+    const cleanAction = typeof action === "string" ? action.replace(/^["']|["']$/g, "").trim() : "";
+
+    const cmd = input.command || input.cmd || input.CommandLine;
+    if (typeof cmd === "string" && cmd.trim()) {
+      const commandStr = truncatePreview(cmd.trim());
+      if (files.length > 0) {
+        return `${commandStr} · ${formatFileList(files)}`;
+      }
+      return commandStr;
+    }
+    if (Array.isArray(cmd)) {
+      const parts = cmd.filter(c => typeof c === "string").join(" ");
+      if (parts) return truncatePreview(parts);
+    }
+
+    if (typeof input.raw === "string") {
+      const commands = extractExecCommands(input.raw);
+      if (commands.length > 0) {
+        const first = truncatePreview(commands[0]);
+        const summary = commands.length > 1 ? `${first}  (+${commands.length - 1} more)` : first;
+        if (files.length > 0) return `${summary} · ${formatFileList(files)}`;
+        return summary;
+      }
+      return input.raw.length > 200
+        ? `${input.raw.slice(0, 200)}…`
+        : input.raw;
+    }
+
+    const filePath = input.file_path || input.path || input.TargetFile || input.AbsolutePath || input.file || input.filename || input.target;
+    if (typeof filePath === "string" && filePath.trim()) {
+      const cleanP = cleanDisplayPath(filePath);
+      if (cleanAction) return `${cleanAction}: ${cleanP}`;
+      return truncatePreview(cleanP);
+    }
+
+    if (files.length > 0) {
+      const fileSummary = formatFileList(files);
+      if (cleanAction) return `${cleanAction}: ${fileSummary}`;
+      return fileSummary;
+    }
+
+    if (typeof input.patch === "string" && input.patch.trim()) {
+      const patchFiles = extractPatchFiles(input.patch);
+      if (patchFiles.length > 0) {
+        return formatFileList(patchFiles);
+      }
+    }
+
+    const query = input.query || input.Query || input.pattern || input.Pattern;
+    if (typeof query === "string" && query.trim()) {
+      const cleanQ = query.replace(/^["']|["']$/g, "").trim();
+      const scope = input.SearchPath || input.SearchDirectory || input.path;
+      if (typeof scope === "string" && scope.trim()) {
+        return `"${truncatePreview(cleanQ, 50)}" in ${truncatePreview(basename(scope.trim()))}`;
+      }
+      return `"${truncatePreview(cleanQ)}"`;
+    }
+    if (Array.isArray(input.queries)) return input.queries.join(", ");
+
+    const url = input.url || input.Url;
+    if (typeof url === "string" && url.trim()) {
+      return truncatePreview(url.replace(/^["']|["']$/g, "").trim());
+    }
+
+    const text = input.prompt || input.instruction || input.Instruction || input.description || input.Description;
+    if (typeof text === "string" && text.trim()) {
+      return truncatePreview(text.trim());
+    }
+
+    if (cleanAction) {
+      return cleanAction;
+    }
+  }
+
+  if (files.length > 0) {
+    return formatFileList(files);
+  }
+
   return "";
 }
 
