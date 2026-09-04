@@ -102,7 +102,8 @@ export function AgentView({
   const displayTitle = sessionDisplayTitle(session) || "Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
-  const modelLabel = formatAgentModel(agentModel(session, events));
+  const rawModel = agentModel(session, events);
+  const modelLabel = formatAgentModel(rawModel) || (session?.kind && session.kind !== "shell" ? displayTitle : "");
   const canCompose = ready && hasControl && canSendForStatus(agentStatus);
   const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
   const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
@@ -531,19 +532,30 @@ export function AgentView({
             void submit();
           }}
         >
-          <div className="agent-input-surface">
-            {attachments.length > 0 && (
-              <div className="agent-attachment-list" aria-label="Selected attachments">
-                {attachments.map((item, index) => (
-                  <span key={`${item.file.name}-${item.file.lastModified}-${index}`} className={`agent-attachment-chip ${item.status}`}>
-                    <span>{item.file.name}</span>
-                    {item.status === "uploading" && <small>{Math.round(item.progress * 100)}%</small>}
-                    {item.status === "failed" && <><small title={item.error}>Failed</small><button type="button" onClick={() => retryAttachment(index)}>Retry</button></>}
-                    {!uploadingAttachments && <button type="button" onClick={() => removeAttachment(index)} aria-label={`Remove ${item.file.name}`}>×</button>}
+          {attachments.length > 0 && (
+            <div className="agent-attachment-tray" aria-label="Selected attachments">
+              {attachments.map((item, index) => (
+                <span key={`${item.file.name}-${item.file.lastModified}-${index}`} className={`agent-attachment-chip ${item.status}`}>
+                  <span className="agent-attachment-icon" aria-hidden="true">
+                    {item.file.type?.startsWith("image/") ? "🖼️" : "📄"}
                   </span>
-                ))}
-              </div>
-            )}
+                  <span className="agent-attachment-name" title={item.file.name}>{item.file.name}</span>
+                  {item.status === "uploading" && <small className="agent-attachment-progress">{Math.round(item.progress * 100)}%</small>}
+                  {item.status === "ready" && <span className="agent-attachment-ready" aria-label="Ready">✓</span>}
+                  {item.status === "failed" && (
+                    <>
+                      <small className="agent-attachment-failed" title={item.error}>Failed</small>
+                      <button type="button" className="agent-attachment-retry" onClick={() => retryAttachment(index)}>Retry</button>
+                    </>
+                  )}
+                  {!uploadingAttachments && (
+                    <button type="button" className="agent-attachment-remove" onClick={() => removeAttachment(index)} aria-label={`Remove ${item.file.name}`}>×</button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="agent-input-surface">
             <div className="agent-input-row">
               <textarea
                 ref={inputRef}
@@ -596,7 +608,7 @@ export function AgentView({
                   disabled={!canUpload || uploadingAttachments || submitStatus === "sending"}
                 />
               </label>
-              {modelLabel && <code>{modelLabel}</code>}
+              {modelLabel && <code className="agent-model-chip">{modelLabel}</code>}
               <button type="submit" className="agent-send" disabled={(!draft.trim() && attachments.length === 0) || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
                 <SendIcon />
               </button>

@@ -333,10 +333,10 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
 | “右侧红叉” | `AgentToolStatusMark`（由 `AgentToolBlockView` / `AgentToolOutputBlock` 调用） | 失败显示无边框红色 `xmark`，用固定宽度 frame 放在最右侧；不要改成圆形按钮 |
 | “红/绿色竖线压住箭头” | `AgentStatusRail` + `AgentStructuredEventBlock` / `AgentActivityGroupBlock` overlays | Tool/Thinking 子行已经不画竖线；若仍重叠，先查顶层 ActivityGroup 的独立 rail 列与 detail indent |
 | “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`52-162`）与 `composer` 第一行（约 `670-707`） | 固定 44pt；UITextView 内部滚动；`layoutSubviews` 动态计算上下 inset，placeholder 与 caret 对齐 |
-| “Composer 应该两行” | `composer`（`644-777`） | 第一行 Message，第二行 +/附件/Model/发送箭头；不要把两行合并成 HStack |
-| “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `740-769`） | 当前是无背景的白色 `arrow.up`，44pt hit area |
-| “+ 按钮” | `attachmentControlsWithPlus`（`778-793`） | 直接呈现 PhotosPicker/fileImporter，点击后真正打开选择器 |
-| “Model 文案” | `agentComposerMetadata`（`1094`）与 `IOSAgentInteraction.formatAgentModel` | 这是第二行 metadata，不是 Message 输入框 |
+| “Composer 应该两行” | `composer`（`672-815`） | 顶部为附件胶囊托盘；输入框第一行 Message，第二行 +/Model/键盘收起/发送箭头；不要把两行合并成 HStack |
+| “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `770-795`） | 当前是无背景的白色 `arrow.up`，44pt hit area；左侧为键盘收起按钮 |
+| “+ 按钮” | `attachmentControlsWithPlus`（`820-860`） | 直接呈现 PhotosPicker/fileImporter，点击后真正打开选择器 |
+| “Model 文案” | `agentComposerMetadata`（`1170`）与 `IOSAgentInteraction.formatAgentModel` | 第二行 model 胶囊，优先完整展示模型名称，无人工 116pt 截断 |
 | “新增消息没有自动下滚” | `observeAgentRevision`（`585`）、`handleNewContent`（`570`）、底部哨兵（约 `304`） | 刷新前捕获 `isNearLatest`，等待两轮布局后滚动 |
 | “Working/正在思考” | `shouldShowWorking`（约 `1124`）、`AgentWorkingFooter`（`1405`） | 文案动画来自 `IOSShimmerText` |
 | “需要我回答/权限” | `AgentAttentionBanner`（`1323`）、`AgentStructuredEventBlock` Question/Permission 分支 | input 可聚焦 Composer，approval 引导 Terminal |

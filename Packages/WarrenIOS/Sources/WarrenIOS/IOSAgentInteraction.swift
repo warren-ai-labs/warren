@@ -20,7 +20,27 @@ public func formatAgentModel(_ raw: String?) -> String? {
     guard let raw else { return nil }
     let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return nil }
-    let leaf = value.split(separator: "/").last.map(String.init) ?? value
+    var leaf = value.split(separator: "/").last.map(String.init) ?? value
+
+    // Strip common tags like :latest, :free, @...
+    if let colonIndex = leaf.lastIndex(of: ":") {
+        let suffix = leaf[colonIndex...].lowercased()
+        if suffix == ":latest" || suffix == ":free" {
+            leaf = String(leaf[..<colonIndex])
+        }
+    }
+    if let atIndex = leaf.lastIndex(of: "@") {
+        leaf = String(leaf[..<atIndex])
+    }
+
+    // Strip trailing snapshot date / latest suffixes (e.g. -20250219, -2024-10-22, -latest)
+    if let dateRange = leaf.range(of: #"-(?:20\d{6}|20\d{2}-\d{2}-\d{2}|latest)$"#, options: .regularExpression) {
+        leaf.removeSubrange(dateRange)
+    }
+
+    // Convert hyphens between digits to decimal dots: e.g. 3-7 -> 3.7, 3-5 -> 3.5
+    leaf = leaf.replacingOccurrences(of: #"(?<=\d)-(?=\d)"#, with: ".", options: .regularExpression)
+
     let words = leaf
         .replacingOccurrences(of: "_", with: "-")
         .replacingOccurrences(of: " ", with: "-")
@@ -28,14 +48,36 @@ public func formatAgentModel(_ raw: String?) -> String? {
         .map(String.init)
     guard !words.isEmpty else { return nil }
     return words.map { word in
-        switch word.lowercased() {
+        let lower = word.lowercased()
+        switch lower {
         case "gpt": return "GPT"
         case "llm": return "LLM"
+        case "sol": return "Sol"
         case "sonnet": return "Sonnet"
         case "haiku": return "Haiku"
         case "opus": return "Opus"
-        case "sol": return "Sol"
+        case "claude": return "Claude"
+        case "gemini": return "Gemini"
+        case "deepseek": return "DeepSeek"
+        case "qwen": return "Qwen"
+        case "llama": return "Llama"
+        case "mistral": return "Mistral"
+        case "codestral": return "Codestral"
+        case "dbrx": return "DBRX"
+        case "glm": return "Glm"
         default:
+            if lower.range(of: #"^o[1-9]$"#, options: .regularExpression) != nil {
+                return lower
+            }
+            if lower.range(of: #"^r\d+$"#, options: .regularExpression) != nil {
+                return lower.uppercased()
+            }
+            if lower.range(of: #"^v\d+$"#, options: .regularExpression) != nil {
+                return lower.uppercased()
+            }
+            if lower.range(of: #"^\d+b$"#, options: .regularExpression) != nil {
+                return lower.dropLast() + "B"
+            }
             guard let first = word.first else { return word }
             return String(first).uppercased() + word.dropFirst().lowercased()
         }

@@ -24,7 +24,14 @@ export function isStructuredAgentEvent(event) {
 export function formatAgentModel(raw) {
   const value = String(raw || "").trim();
   if (!value) return "";
-  const leaf = value.split("/").at(-1) || value;
+  let leaf = value.split("/").at(-1) || value;
+  // Strip tags like :free, :latest, @...
+  leaf = leaf.replace(/:(?:latest|free)$/i, "").replace(/@.*$/, "");
+  // Strip snapshot/date suffixes like -20250219, -2024-10-22, -latest
+  leaf = leaf.replace(/-(?:20\d{6}|20\d{2}-\d{2}-\d{2}|latest)$/i, "");
+  // Convert hyphens between digits to decimal dots: e.g. 3-7 -> 3.7, 3-5 -> 3.5
+  leaf = leaf.replace(/(\d)-(\d)/g, "$1.$2");
+
   const words = leaf
     .replaceAll("_", "-")
     .replaceAll(" ", "-")
@@ -38,6 +45,19 @@ export function formatAgentModel(raw) {
     if (lower === "sonnet") return "Sonnet";
     if (lower === "haiku") return "Haiku";
     if (lower === "opus") return "Opus";
+    if (lower === "claude") return "Claude";
+    if (lower === "gemini") return "Gemini";
+    if (lower === "deepseek") return "DeepSeek";
+    if (lower === "qwen") return "Qwen";
+    if (lower === "llama") return "Llama";
+    if (lower === "mistral") return "Mistral";
+    if (lower === "codestral") return "Codestral";
+    if (lower === "dbrx") return "DBRX";
+    if (lower === "glm") return "Glm";
+    if (/^o[1-9]$/i.test(word)) return word.toLowerCase();
+    if (/^r\d+$/i.test(word)) return word.toUpperCase();
+    if (/^v\d+$/i.test(word)) return word.toUpperCase();
+    if (/^\d+b$/i.test(word)) return `${word.slice(0, -1)}${word.slice(-1).toUpperCase()}`;
     return `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`;
   }).join(" ");
 }
