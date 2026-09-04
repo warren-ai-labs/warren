@@ -126,12 +126,8 @@ force_terminate_pids() {
 echo "Building Warren.app (release)..."
 bash "$repository_root/scripts/build-app.sh" release
 
-# When a forced ghostline handoff is requested, persist a marker that survives
-# `open` (which does not propagate the install shell's environment to the
-# LS-launched app). The headless daemon checks both the env var and this file
-# and clears it after the handoff, so `mise run install` and menubar Restart
-# reliably pick up a rebuilt binary even when the version string is unchanged
-# (dev hash rebuilds).
+# When a forced Ghostline handoff is requested, persist a marker that survives
+# `open` and the LaunchServices-launched app process.
 force_marker="$HOME/.warren/force-ghostline-handoff"
 should_force="false"
 _force_value="$(printf '%s' "${WARREN_GHOSTLINE_FORCE_HANDOFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"

@@ -42,7 +42,6 @@ enum WarrenProcessEnvironment {
         "WARREN_OPENCODE_DATA_DIR",
         "WARREN_OPENCODE_PLUGIN_PATH",
         "WARREN_WEB_ROOT",
-        "WARREN_GHOSTLINE_V0_COMPAT",
         "WARREN_GHOSTLINE_FORCE_HANDOFF",
         "WARREN_FORCE_HANDOFF",
         "WARREN_LISTEN",
