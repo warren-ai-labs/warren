@@ -16,6 +16,7 @@ struct WarrenDesktopSidebarRows: View {
     let groups: [WarrenDesktopProjectGroup]
     let terminalGroups: [WarrenDesktopTerminalGroup]
     let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
+    let activeWorkspaceIDs: Set<WorkspaceID>
     let activeAgentGroups: [WarrenDesktopActiveAgentGroup]
     /// Kept for embedded callers that still render the legacy rows directly;
     /// the production sidebar always disables this section in favor of the
@@ -44,6 +45,7 @@ struct WarrenDesktopSidebarRows: View {
         groups: [WarrenDesktopProjectGroup],
         terminalGroups: [WarrenDesktopTerminalGroup],
         workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary],
+        activeWorkspaceIDs: Set<WorkspaceID> = [],
         activeAgentGroups: [WarrenDesktopActiveAgentGroup] = [],
         showsActiveSessions: Bool = true,
         showsTasks: Bool = true,
@@ -68,6 +70,7 @@ struct WarrenDesktopSidebarRows: View {
         self.groups = groups
         self.terminalGroups = terminalGroups
         self.workspaceActivitySummaries = workspaceActivitySummaries
+        self.activeWorkspaceIDs = activeWorkspaceIDs
         self.activeAgentGroups = activeAgentGroups
         self.showsActiveSessions = showsActiveSessions
         self.showsTasks = showsTasks
@@ -115,6 +118,8 @@ struct WarrenDesktopSidebarRows: View {
             }
             if groups.isEmpty && !isCollapsed {
                 noProjectsMessage
+            } else if tree.showsActiveOnly && visibleProjectGroups.isEmpty && !isCollapsed {
+                noActiveWorkspacesMessage
             }
             if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
                 ForEach(visibleProjectGroups) { group in
@@ -233,6 +238,16 @@ struct WarrenDesktopSidebarRows: View {
                 tree.tasksCollapsed = false
             }
         }
+        .onChange(of: tree.showsActiveOnly) { showsActiveOnly in
+            if showsActiveOnly {
+                withAnimation(WarrenMotion.animation(
+                    .stateChange,
+                    reduceMotion: reduceMotion
+                )) {
+                    tree.expandedProjectIDs.formUnion(groups.map(\.project.id))
+                }
+            }
+        }
     }
 
     private var projectsSectionHeader: some View {
@@ -325,6 +340,31 @@ struct WarrenDesktopSidebarRows: View {
         )
     }
 
+    private var noActiveWorkspacesMessage: some View {
+        VStack(spacing: WarrenSpacing.xs) {
+            Text("No active workspaces")
+                .font(WarrenTypography.body)
+            Text("No workspaces currently have running or attached sessions.")
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                .multilineTextAlignment(.center)
+            Button("Show all workspaces") {
+                withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                    tree.showsActiveOnly = false
+                }
+            }
+            .font(WarrenTypography.supporting)
+            .buttonStyle(.plain)
+            .foregroundStyle(WarrenColorTokens.dark.highlight)
+            .padding(.top, WarrenSpacing.xs)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.large)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("No active workspaces. No workspaces currently have running or attached sessions.")
+    }
+
     private func activeAgentRow(
         _ session: WarrenDesktopSession,
         context: String
@@ -347,56 +387,74 @@ struct WarrenDesktopSidebarRows: View {
         return session.tabID == selectedTabID
     }
 
-    private var tasksSection: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            if !isCollapsed {
-                WarrenDesktopSidebarSectionHeader(
-                    title: "Tasks",
-                    disclosureExpanded: !tree.tasksCollapsed,
-                    actionImage: "plus",
-                    actionLabel: "New task",
-                    actionEnabled: !isInteractionDisabled,
-                    onToggle: toggleTasks,
-                    onAction: onRequestTaskCreate,
-                    additionalActions: []
+    private var visibleTaskGroups: [WarrenDesktopTaskGroup] {
+        if tree.showsActiveOnly {
+            return taskGroups.compactMap { group in
+                let activeWorkspaces = group.workspaces.filter { activeWorkspaceIDs.contains($0.id) }
+                guard !activeWorkspaces.isEmpty else { return nil }
+                return WarrenDesktopTaskGroup(
+                    task: group.task,
+                    workspaces: activeWorkspaces
                 )
             }
-            if !tree.tasksCollapsed || isCollapsed {
-                if taskGroups.isEmpty && !isCollapsed {
-                    Text("No tasks yet")
-                        .font(WarrenTypography.supporting)
-                        .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.bottom, WarrenSpacing.compact)
-                }
-                ForEach(taskGroups) { group in
-                    taskRow(group)
-                    if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
-                        if group.workspaces.isEmpty {
-                            if !isCollapsed {
-                                Text("No linked workspaces")
-                                    .font(WarrenTypography.supporting)
-                                    .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                                    .padding(.horizontal, WarrenSpacing.standard + WarrenSpacing.medium)
-                                    .padding(.bottom, WarrenSpacing.xs)
-                            }
-                        } else {
-                            ForEach(group.workspaces) { workspace in
-                                if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
-                                    workspaceRow(
-                                        workspace,
-                                        in: project,
-                                        semanticScope: "task-list",
-                                        displayName: "\(project.project.name) · \(workspace.name)"
-                                    )
+        }
+        return taskGroups
+    }
+
+    private var tasksSection: some View {
+        Group {
+            if !tree.showsActiveOnly || !visibleTaskGroups.isEmpty {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    if !isCollapsed {
+                        WarrenDesktopSidebarSectionHeader(
+                            title: "Tasks",
+                            disclosureExpanded: !tree.tasksCollapsed,
+                            actionImage: "plus",
+                            actionLabel: "New task",
+                            actionEnabled: !isInteractionDisabled,
+                            onToggle: toggleTasks,
+                            onAction: onRequestTaskCreate,
+                            additionalActions: []
+                        )
+                    }
+                    if !tree.tasksCollapsed || isCollapsed {
+                        if visibleTaskGroups.isEmpty && !isCollapsed {
+                            Text("No tasks yet")
+                                .font(WarrenTypography.supporting)
+                                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                                .padding(.horizontal, WarrenSpacing.standard)
+                                .padding(.bottom, WarrenSpacing.compact)
+                        }
+                        ForEach(visibleTaskGroups) { group in
+                            taskRow(group)
+                            if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
+                                if group.workspaces.isEmpty {
+                                    if !isCollapsed {
+                                        Text("No linked workspaces")
+                                            .font(WarrenTypography.supporting)
+                                            .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                                            .padding(.horizontal, WarrenSpacing.standard + WarrenSpacing.medium)
+                                            .padding(.bottom, WarrenSpacing.xs)
+                                    }
+                                } else {
+                                    ForEach(group.workspaces) { workspace in
+                                        if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
+                                            workspaceRow(
+                                                workspace,
+                                                in: project,
+                                                semanticScope: "task-list",
+                                                displayName: "\(project.project.name) · \(workspace.name)"
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func taskRow(_ group: WarrenDesktopTaskGroup) -> some View {
@@ -510,57 +568,68 @@ struct WarrenDesktopSidebarRows: View {
         .accessibilityLabel("Add workspace to task \(group.task.name)")
     }
 
+    private var visibleTerminalGroups: [WarrenDesktopTerminalGroup] {
+        if tree.showsActiveOnly {
+            return terminalGroups.filter { $0.runningSessionCount > 0 }
+        }
+        return terminalGroups
+    }
+
     private var terminalGroupsSection: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            if !isCollapsed {
-                WarrenDesktopSidebarSectionHeader(
-                    title: "Terminals",
-                    actionImage: "plus",
-                    actionLabel: "New terminal group",
-                    actionEnabled: !isInteractionDisabled,
-                    onAction: onRequestTerminalGroupCreate,
-                    additionalActions: []
-                )
-            }
-            if terminalGroups.isEmpty {
-                if !isCollapsed {
-                    Text("No terminal groups")
-                        .font(WarrenTypography.supporting)
-                        .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.bottom, WarrenSpacing.compact)
-                }
-            } else {
-                ScrollView(.vertical, showsIndicators: terminalGroups.count > 3) {
-                    LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                        ForEach(terminalGroups) { group in
-                            WarrenDesktopTerminalGroupRow(
-                                group: group,
-                                isCollapsed: isCollapsed,
-                                isSelected: selection == .terminalGroup(group.id),
-                                isInteractionDisabled: isInteractionDisabled,
-                                onSelect: { onAction(.selectTerminalGroup(group.id)) },
-                                onRename: { onRequestTerminalGroupEdit(group.group) },
-                                onSetHome: { onRequestTerminalGroupEdit(group.group) },
-                                onDelete: {
-                                    onRequestDeletion(.terminalGroup(
-                                        group.group,
-                                        sessionCount: group.sessions.count
-                                    ))
-                                }
-                            )
+        Group {
+            if !tree.showsActiveOnly || !visibleTerminalGroups.isEmpty {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    if !isCollapsed {
+                        WarrenDesktopSidebarSectionHeader(
+                            title: "Terminals",
+                            actionImage: "plus",
+                            actionLabel: "New terminal group",
+                            actionEnabled: !isInteractionDisabled,
+                            onAction: onRequestTerminalGroupCreate,
+                            additionalActions: []
+                        )
+                    }
+                    if visibleTerminalGroups.isEmpty {
+                        if !isCollapsed {
+                            Text("No terminal groups")
+                                .font(WarrenTypography.supporting)
+                                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                                .padding(.horizontal, WarrenSpacing.standard)
+                                .padding(.bottom, WarrenSpacing.compact)
                         }
+                    } else {
+                        ScrollView(.vertical, showsIndicators: visibleTerminalGroups.count > 3) {
+                            LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                                ForEach(visibleTerminalGroups) { group in
+                                    WarrenDesktopTerminalGroupRow(
+                                        group: group,
+                                        isCollapsed: isCollapsed,
+                                        isSelected: selection == .terminalGroup(group.id),
+                                        isInteractionDisabled: isInteractionDisabled,
+                                        onSelect: { onAction(.selectTerminalGroup(group.id)) },
+                                        onRename: { onRequestTerminalGroupEdit(group.group) },
+                                        onSetHome: { onRequestTerminalGroupEdit(group.group) },
+                                        onDelete: {
+                                            onRequestDeletion(.terminalGroup(
+                                                group.group,
+                                                sessionCount: group.sessions.count
+                                            ))
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        .frame(
+                            maxHeight: (isCollapsed
+                                ? WarrenLayoutMetrics.sidebarHeaderRowHeight
+                                : WarrenLayoutMetrics.sidebarProjectRowHeight) * 3
+                                + WarrenSpacing.xxs * 2
+                        )
                     }
                 }
-                .frame(
-                    maxHeight: (isCollapsed
-                        ? WarrenLayoutMetrics.sidebarHeaderRowHeight
-                        : WarrenLayoutMetrics.sidebarProjectRowHeight) * 3
-                        + WarrenSpacing.xxs * 2
-                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var selectedProjectID: ProjectID? {
@@ -591,11 +660,32 @@ struct WarrenDesktopSidebarRows: View {
     }
 
     private var visibleProjectGroups: [WarrenDesktopProjectGroup] {
-        guard !tree.projectsCollapsed || isCollapsed else { return groups.filter { group in
-            deletingProjectIDs.contains(group.project.id)
-                || hasDeletingWorkspace(in: group.project.id)
-        } }
-        return groups
+        let baseGroups: [WarrenDesktopProjectGroup]
+        if tree.showsActiveOnly {
+            baseGroups = groups.compactMap { group in
+                let activeWorkspaces = group.workspaces.filter { workspace in
+                    activeWorkspaceIDs.contains(workspace.id)
+                        || deletingWorkspaceIDs.contains(workspace.id)
+                }
+                guard !activeWorkspaces.isEmpty || deletingProjectIDs.contains(group.project.id) else {
+                    return nil
+                }
+                return WarrenDesktopProjectGroup(
+                    project: group.project,
+                    workspaces: activeWorkspaces
+                )
+            }
+        } else {
+            baseGroups = groups
+        }
+
+        guard !tree.projectsCollapsed || isCollapsed else {
+            return baseGroups.filter { group in
+                deletingProjectIDs.contains(group.project.id)
+                    || hasDeletingWorkspace(in: group.project.id)
+            }
+        }
+        return baseGroups
     }
 
     private func select(_ newSelection: WarrenDesktopSidebarSelection) {

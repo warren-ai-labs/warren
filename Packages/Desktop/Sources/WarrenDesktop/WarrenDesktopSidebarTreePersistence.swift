@@ -11,19 +11,22 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public var tasksCollapsed: Bool
     public var projectsCollapsed: Bool
     public var activeSessionsCollapsed: Bool
+    public var showsActiveOnly: Bool
 
     public init(
         expandedTaskIDs: Set<TaskID> = [],
         expandedProjectIDs: Set<ProjectID> = [],
         tasksCollapsed: Bool = false,
         projectsCollapsed: Bool = false,
-        activeSessionsCollapsed: Bool = false
+        activeSessionsCollapsed: Bool = false,
+        showsActiveOnly: Bool = false
     ) {
         self.expandedTaskIDs = expandedTaskIDs
         self.expandedProjectIDs = expandedProjectIDs
         self.tasksCollapsed = tasksCollapsed
         self.projectsCollapsed = projectsCollapsed
         self.activeSessionsCollapsed = activeSessionsCollapsed
+        self.showsActiveOnly = showsActiveOnly
     }
 }
 
@@ -44,7 +47,8 @@ public enum WarrenDesktopSidebarTreePersistence {
             expandedProjectIDs: Set(expanded),
             tasksCollapsed: defaults.bool(forKey: base + ".tasks.collapsed"),
             projectsCollapsed: defaults.bool(forKey: base + ".collapsed"),
-            activeSessionsCollapsed: defaults.bool(forKey: base + ".active-sessions.collapsed")
+            activeSessionsCollapsed: defaults.bool(forKey: base + ".active-sessions.collapsed"),
+            showsActiveOnly: defaults.bool(forKey: base + ".active-only")
         )
     }
 
@@ -69,6 +73,7 @@ public enum WarrenDesktopSidebarTreePersistence {
             state.activeSessionsCollapsed,
             forKey: base + ".active-sessions.collapsed"
         )
+        defaults.set(state.showsActiveOnly, forKey: base + ".active-only")
         defaults.set(state.projectsCollapsed, forKey: base + ".collapsed")
     }
 

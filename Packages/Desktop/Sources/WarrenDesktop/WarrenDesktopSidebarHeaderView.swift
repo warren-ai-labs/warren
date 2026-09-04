@@ -8,6 +8,8 @@ struct WarrenDesktopSidebarHeader: View {
     let onUpdateAction: () -> Void
     let onToggle: () -> Void
     let onCommandPalette: () -> Void
+    var showsActiveOnly: Bool = false
+    var onToggleActiveOnly: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var searchFocused: Bool
@@ -52,7 +54,8 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var trafficRow: some View {
-        HStack(spacing: WarrenSpacing.xs) {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        return HStack(spacing: WarrenSpacing.xs) {
             // Superset owns an 80pt traffic-light pad; Warren renders the
             // lights itself because the window is borderless.
             WarrenDesktopTrafficLights()
@@ -63,6 +66,14 @@ struct WarrenDesktopSidebarHeader: View {
                 label: "Collapse sidebar",
                 hint: "Collapse the project and session list",
                 action: onToggle
+            )
+
+            WarrenDesktopChromeButton(
+                systemImage: showsActiveOnly ? "bolt.horizontal.fill" : "bolt.horizontal",
+                label: showsActiveOnly ? "Show all workspaces" : "Filter active workspaces",
+                hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
+                action: onToggleActiveOnly,
+                tint: showsActiveOnly ? tokens.highlight : nil
             )
 
             WarrenDesktopWindowDragRegion()
@@ -144,12 +155,21 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var expandedDashboardHeader: some View {
-        HStack(spacing: WarrenSpacing.xs) {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        return HStack(spacing: WarrenSpacing.xs) {
             WarrenDesktopChromeButton(
                 systemImage: "sidebar.leading",
                 label: "Collapse sidebar",
                 hint: "Collapse the sidebar to icons",
                 action: onToggle
+            )
+
+            WarrenDesktopChromeButton(
+                systemImage: showsActiveOnly ? "bolt.horizontal.fill" : "bolt.horizontal",
+                label: showsActiveOnly ? "Show all workspaces" : "Filter active workspaces",
+                hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
+                action: onToggleActiveOnly,
+                tint: showsActiveOnly ? tokens.highlight : nil
             )
 
             Spacer(minLength: 0)

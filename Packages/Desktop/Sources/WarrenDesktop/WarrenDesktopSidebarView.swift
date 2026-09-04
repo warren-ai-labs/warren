@@ -35,7 +35,9 @@ struct WarrenDesktopSidebar: View {
                 updateStatus: updateStatus,
                 onUpdateAction: onUpdateAction,
                 onToggle: toggleSidebar,
-                onCommandPalette: onCommandPalette
+                onCommandPalette: onCommandPalette,
+                showsActiveOnly: sidebarTree.showsActiveOnly,
+                onToggleActiveOnly: toggleActiveOnly
             )
             ScrollViewReader { proxy in
                 WarrenOverflowFadeScrollView(
@@ -53,6 +55,7 @@ struct WarrenDesktopSidebar: View {
                             )
                         },
                         workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                        activeWorkspaceIDs: projection.activeWorkspaceIDs,
                         // Active Sessions lives in the dedicated shortcut
                         // switcher; the sidebar stays focused on navigation.
                         showsActiveSessions: false,
@@ -121,6 +124,18 @@ struct WarrenDesktopSidebar: View {
     private func toggleSidebar() {
         sidebarState.toggleCollapsed()
         onAction(.toggleSidebar)
+    }
+
+    private func toggleActiveOnly() {
+        withAnimation(WarrenMotion.animation(
+            .stateChange,
+            reduceMotion: reduceMotion
+        )) {
+            sidebarTree.showsActiveOnly.toggle()
+            if sidebarTree.showsActiveOnly {
+                sidebarTree.expandedProjectIDs.formUnion(projection.groups.map(\.project.id))
+            }
+        }
     }
 
 }
