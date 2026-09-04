@@ -103,7 +103,7 @@ struct WarrenDesktopSidebarHeader: View {
                     .accessibilityHidden(true)
 
                 Text("Search")
-                    .font(WarrenTypography.navigationGroup)
+                    .font(WarrenTypography.navigationItemLight)
                     .lineLimit(1)
 
                 Spacer(minLength: 0)

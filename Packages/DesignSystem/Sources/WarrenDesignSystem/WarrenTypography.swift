@@ -25,6 +25,7 @@ public enum WarrenTypography {
     public static let settingsControl = Font.system(size: 14, weight: .regular)
     public static let settingsAction = Font.system(size: 14, weight: .regular)
     public static let settingsMeta = Font.system(size: 12, weight: .regular)
+    public static let navigationItemLight = Font.system(size: 13, weight: .light)
     /// Superset group headings are `text-xs font-medium`.
     public static let groupHeading = Font.system(size: 12, weight: .medium)
     /// Superset shortcuts are `text-xs tracking-widest`; Warren keeps the

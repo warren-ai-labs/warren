@@ -187,8 +187,8 @@ struct WarrenDesktopSidebar: View {
                     .frame(width: 18)
                     .accessibilityHidden(true)
                 if showsLabel {
-                    Text("Add project")
-                        .font(WarrenTypography.navigationItem)
+                        Text("Add project")
+                            .font(WarrenTypography.navigationItemLight)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
