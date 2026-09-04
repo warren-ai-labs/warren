@@ -469,8 +469,9 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
     }
 }
 
-/// The trailing controls are ordered from workspace actions to global preferences.
-/// Add new controls here so their placement remains explicit and reviewable.
+/// The trailing controls are ordered from workspace actions to global utilities.
+/// Settings is kept as a compatibility case for persisted layouts, but is now
+/// rendered in the sidebar footer to match the workspace navigation model.
 public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Sendable {
     case externalIDE
     case endpoint
@@ -480,10 +481,9 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
 
     public static let maximumExternalButtonCount = 5
     /// Locked priority for the workspace trailing chrome: IDE → Endpoint →
-    /// Web → Notifications → Settings. Endpoint occupies the second slot only
-    /// when multiple execution servers exist; Settings stays in overflow (`⋯`)
-    /// unless the visible set fits without overflow. This order is the product
-    /// contract for both macOS and Web.
+    /// Web → Notifications. Endpoint occupies the second slot only when
+    /// multiple execution servers exist. Settings is intentionally excluded
+    /// from this chrome and lives in the sidebar footer.
     public static let defaultExternalControls: [Self] = [
         .externalIDE,
         .web,
@@ -571,9 +571,10 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         embeddedEditorAvailable: Bool = false
     ) -> [Self] {
         allCases.filter { control in
-            control != .externalIDE
-                || embeddedEditorAvailable
-                || !(externalIDEOptions?.isEmpty ?? true)
+            control != .settings
+                && (control != .externalIDE
+                    || embeddedEditorAvailable
+                    || !(externalIDEOptions?.isEmpty ?? true))
         }
     }
 }
