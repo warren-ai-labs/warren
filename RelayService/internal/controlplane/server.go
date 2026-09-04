@@ -16,7 +16,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +93,12 @@ type refreshRecord struct {
 	Generation uint64
 	ClientID   string
 	Expires    time.Time
+}
+
+type persistedSessions struct {
+	RefreshTokens   map[string]refreshRecord `json:"refresh_tokens"`
+	UsedRefresh     map[string]string        `json:"used_refresh,omitempty"`
+	RevokedFamilies map[string]bool          `json:"revoked_families,omitempty"`
 }
 
 type httpHeadersMessage struct {
@@ -221,6 +229,9 @@ func NewServer(config Config) (*Server, error) {
 		publicLimiter:   newRateLimiter(config.PublicRateLimit, config.RateLimitWindow),
 		upgradeLimiter:  newRateLimiter(config.UpgradeRateLimit, config.RateLimitWindow),
 		liveActivities:  make(map[string]map[string]liveActivityRegistration),
+	}
+	if err := server.loadSessions(); err != nil {
+		return nil, err
 	}
 	apns, err := newAPNsSender(config)
 	if err != nil {
@@ -773,6 +784,7 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		familyRevoked = true
 	}
 	server.sessionMu.Unlock()
+	_ = server.persistSessions()
 	if !ok || familyRevoked || refresh == "" || time.Now().After(entry.Expires) {
 		http.Error(response, "invalid refresh capability", http.StatusUnauthorized)
 		return
@@ -831,7 +843,68 @@ func (server *Server) newRefreshInFamily(hostID string, generation uint64, famil
 	}
 	server.refreshTokens[hashRefresh(value)] = refreshRecord{Family: family, HostID: hostID, Generation: generation, ClientID: id, Expires: time.Now().Add(server.config.RefreshTTL)}
 	server.sessionMu.Unlock()
+	_ = server.persistSessions()
 	return value, nil
+}
+
+func (server *Server) sessionsPath() string {
+	if strings.TrimSpace(server.config.DataURL) == "" {
+		return ""
+	}
+	return server.config.DataURL + ".sessions"
+}
+
+func (server *Server) loadSessions() error {
+	p := server.sessionsPath()
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var state persistedSessions
+	if err := json.Unmarshal(b, &state); err != nil {
+		return err
+	}
+	server.refreshTokens = state.RefreshTokens
+	if server.refreshTokens == nil {
+		server.refreshTokens = make(map[string]refreshRecord)
+	}
+	server.usedRefresh = state.UsedRefresh
+	if server.usedRefresh == nil {
+		server.usedRefresh = make(map[string]string)
+	}
+	server.revokedFamilies = state.RevokedFamilies
+	if server.revokedFamilies == nil {
+		server.revokedFamilies = make(map[string]bool)
+	}
+	return nil
+}
+
+func (server *Server) persistSessions() error {
+	p := server.sessionsPath()
+	if p == "" {
+		return nil
+	}
+	server.sessionMu.Lock()
+	state := persistedSessions{RefreshTokens: server.refreshTokens, UsedRefresh: server.usedRefresh, RevokedFamilies: server.revokedFamilies}
+	data, err := json.Marshal(state)
+	server.sessionMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p)
 }
 
 func (server *Server) setRefreshCookie(response http.ResponseWriter, request *http.Request, hostID, value string) {
