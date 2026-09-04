@@ -958,29 +958,6 @@ func StartOpenCodeSessionTailer(binding OpenCodeBinding) (*OpenCodeTailer, error
 	return tailer, nil
 }
 
-// StartOpenCodeTailer is retained as a small compatibility helper for callers
-// that only have a workspace. New code should resolve and pass a binding.
-func StartOpenCodeTailer(cachePath, workspace string, after time.Time) *OpenCodeTailer {
-	binding, _ := (DefaultFinder{}).FindBinding(context.Background(), "compat", openCodeProvider, workspace, after)
-	if binding == nil {
-		done := make(chan struct{})
-		close(done)
-		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{}), loadDone: done}
-	}
-	if cachePath != "" {
-		binding.CachePath = cachePath
-	}
-	tailer, err := NewOpenCodeTailer(*binding)
-	if err != nil {
-		done := make(chan struct{})
-		close(done)
-		return &OpenCodeTailer{cachePath: cachePath, interval: watchInterval, seen: map[string]string{}, stop: make(chan struct{}), loadDone: done}
-	}
-	tailer.started = true
-	go tailer.loop()
-	return tailer
-}
-
 // Path returns the Warren-owned JSONL cache consumed by the transcript
 // watcher.
 func (t *OpenCodeTailer) Path() string { return t.cachePath }
