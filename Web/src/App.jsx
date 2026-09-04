@@ -3843,8 +3843,13 @@ export default function App() {
                     Terminal
                   </button>
                 ) : (
-                  <button type="button" className="pane-action" onClick={() => toggleAgentView("agent")}>
-                    Agent
+                  <button
+                    type="button"
+                    className={`pane-action${agentStateBySession[selectedSession?.id]?.status?.attention ? " has-attention" : ""}`}
+                    onClick={() => toggleAgentView("agent")}
+                    title={agentStateBySession[selectedSession?.id]?.status?.attention ? "Agent needs attention" : "Switch to Agent"}
+                  >
+                    Agent{agentStateBySession[selectedSession?.id]?.status?.attention ? " •" : ""}
                   </button>
                 ))}
               </div>

@@ -1093,6 +1093,12 @@ button:disabled {
   transition-timing-function: var(--ease-out);
 }
 
+.pane-title .pane-action.has-attention {
+  color: var(--color-status-working);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-working) 48%, transparent);
+  background: color-mix(in srgb, var(--color-status-working) 12%, transparent);
+}
+
 .terminal-shell {
   position: relative;
   min-width: 0;
@@ -1128,7 +1134,7 @@ button:disabled {
   width: 100%;
   max-width: 820px;
   margin-inline: auto;
-  padding: 8px 22px;
+  padding: 6px 18px;
   border-top: 1px solid color-mix(in srgb, var(--color-status-warning) 34%, transparent);
   background: var(--color-bg-surface);
   color: var(--color-text-secondary);
@@ -1186,16 +1192,36 @@ button:disabled {
 }
 
 .agent-attention-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   margin-inline-start: auto;
   min-height: 28px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 1px solid color-mix(in srgb, var(--color-status-warning) 42%, transparent);
   border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
   color: var(--color-text-primary);
   font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.agent-attention-action:hover {
+  background: color-mix(in srgb, var(--color-status-warning) 24%, transparent);
+  border-color: color-mix(in srgb, var(--color-status-warning) 60%, transparent);
+}
+
+.agent-attention.input .agent-attention-action {
+  border-color: color-mix(in srgb, var(--color-text-link) 42%, transparent);
+  background: color-mix(in srgb, var(--color-text-link) 12%, transparent);
+}
+
+.agent-attention.input .agent-attention-action:hover {
+  background: color-mix(in srgb, var(--color-text-link) 24%, transparent);
+  border-color: color-mix(in srgb, var(--color-text-link) 60%, transparent);
 }
 
 .agent-working {
@@ -1221,6 +1247,20 @@ button:disabled {
   animation: agent-working-shimmer 3.2s linear infinite;
 }
 
+.agent-working-action {
+  color: #ffffff;
+  background: linear-gradient(90deg, #ffffff 0%, #ffffff 38%, #787878 50%, #ffffff 62%, #ffffff 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: agent-working-shimmer 3.2s linear infinite;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-working-provider {
   color: var(--color-text-secondary);
 }
@@ -1233,11 +1273,14 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .agent-working-shimmer {
     animation: none;
-  }
-
-  .agent-working-shimmer {
     background: none;
     -webkit-text-fill-color: currentColor;
+  }
+
+  .agent-working-action {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: #ffffff;
   }
 }
 

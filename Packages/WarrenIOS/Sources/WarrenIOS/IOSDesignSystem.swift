@@ -361,12 +361,14 @@ func iosAgentActivityShouldPulse(_ activity: WarrenRemoteAgentActivity) -> Bool 
 struct IOSShimmerText: View {
     private let title: String
     private let color: Color
+    private let highlightColor: Color
     private let font: Font
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(_ title: String, color: Color, font: Font) {
+    init(_ title: String, color: Color, highlightColor: Color = Color.white.opacity(0.92), font: Font) {
         self.title = title
         self.color = color
+        self.highlightColor = highlightColor
         self.font = font
     }
 
@@ -394,7 +396,7 @@ struct IOSShimmerText: View {
                         stops: [
                             .init(color: color, location: 0),
                             .init(color: color, location: 0.38),
-                            .init(color: Color.white.opacity(0.92), location: 0.50),
+                            .init(color: highlightColor, location: 0.50),
                             .init(color: color, location: 0.62),
                             .init(color: color, location: 1),
                         ],
@@ -632,10 +634,16 @@ public struct IOSModeToggle: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedMode: String?
     private let isAgentSession: Bool
+    private let hasAttention: Bool
 
-    public init(selection: Binding<IOSSessionDisplayMode>, isAgentSession: Bool = true) {
+    public init(
+        selection: Binding<IOSSessionDisplayMode>,
+        isAgentSession: Bool = true,
+        hasAttention: Bool = false
+    ) {
         _selection = selection
         self.isAgentSession = isAgentSession
+        self.hasAttention = hasAttention
     }
 
     public var body: some View {
@@ -643,7 +651,15 @@ public struct IOSModeToggle: View {
             HStack(spacing: 0) {
                 modeButton(.terminal, symbol: "terminal", accessibilityLabel: "Terminal")
                     .padding(.trailing, 1)
-                modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: "Agent chat")
+                modeButton(.agent, symbol: "bubble.left.and.bubble.right", accessibilityLabel: hasAttention ? "Agent chat (needs attention)" : "Agent chat")
+                    .overlay(alignment: .topTrailing) {
+                        if hasAttention && selection == .terminal {
+                            Circle()
+                                .fill(IOSTheme.amber)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -4, y: 4)
+                        }
+                    }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
             .background(IOSTheme.input, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))

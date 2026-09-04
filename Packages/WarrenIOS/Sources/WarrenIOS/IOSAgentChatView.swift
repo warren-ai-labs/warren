@@ -463,36 +463,7 @@ public struct AgentChatView: View {
         // view-level animation transaction prevents a responder hand-off
         // while the composer is being laid out.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if model.displayMode == .agent {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let attention = model.agentAttention(for: sessionID) {
-                        AgentAttentionBanner(
-                            attention: attention,
-                            openTerminal: {
-                                model.setDisplayMode(.terminal)
-                                model.focusTerminal()
-                            },
-                            focusComposer: { composerFocused = true }
-                        )
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    }
-                    if shouldShowWorking {
-                        AgentWorkingFooter(phrase: workingPhrase)
-                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    }
-                    if let actionError = model.agentActionError, !actionError.isEmpty {
-                        Text(actionError)
-                            .font(IOSTypography.status)
-                            .foregroundStyle(IOSTheme.red)
-                            .padding(.horizontal, 18)
-                            .padding(.bottom, 4)
-                            .accessibilityLabel("Agent action failed: \(actionError)")
-                    }
-                    composer
-                }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: shouldShowWorking)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
-            }
+            bottomTray
         }
         .onAppear {
             draftSessionID = sessionID
@@ -666,6 +637,47 @@ public struct AgentChatView: View {
                 proxy.scrollTo(anchorID, anchor: .top)
             }
             historyScrollAnchorID = nil
+        }
+    }
+
+    private var latestActionText: String? {
+        latestAgentAction(from: agentState.agentEventsBySessionID[sessionID] ?? [])
+    }
+
+    @ViewBuilder
+    private var bottomTray: some View {
+        if model.displayMode == .agent {
+            VStack(alignment: .leading, spacing: 0) {
+                if let attention = model.agentAttention(for: sessionID) {
+                    AgentAttentionBanner(
+                        attention: attention,
+                        openTerminal: {
+                            model.setDisplayMode(.terminal)
+                            model.focusTerminal()
+                        },
+                        focusComposer: { composerFocused = true }
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+                if shouldShowWorking {
+                    AgentWorkingFooter(
+                        phrase: workingPhrase,
+                        action: latestActionText
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+                if let actionError = model.agentActionError, !actionError.isEmpty {
+                    Text(actionError)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.red)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 4)
+                        .accessibilityLabel("Agent action failed: \(actionError)")
+                }
+                composer
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: shouldShowWorking)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
         }
     }
 
@@ -1407,30 +1419,38 @@ private struct AgentAttentionBanner: View {
             Spacer(minLength: 4)
             if attention.kind == .input {
                 Button(action: focusComposer) {
-                    Label("Reply", systemImage: "arrow.turn.down.left")
-                        .font(IOSTypography.label)
-                        .foregroundStyle(IOSTheme.text)
+                    HStack(spacing: 4) {
+                        Text("Reply")
+                        Image(systemName: "arrow.turn.down.left")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(IOSTypography.label)
+                    .foregroundStyle(IOSTheme.text)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 9)
-                .frame(minHeight: 44)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 36)
                 .background(IOSTheme.accentSubtle, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
                 .accessibilityLabel("Reply to Agent question")
-            } else if attention.kind == .approval {
+            } else {
                 Button(action: openTerminal) {
-                    Label("Terminal", systemImage: "terminal")
-                        .font(IOSTypography.label)
-                        .foregroundStyle(IOSTheme.text)
+                    HStack(spacing: 4) {
+                        Text("Terminal")
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    .font(IOSTypography.label)
+                    .foregroundStyle(IOSTheme.text)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 9)
-                .frame(minHeight: 44)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 36)
                 .background(IOSTheme.accentSubtle, in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
-                .accessibilityLabel("Open Terminal to approve")
+                .accessibilityLabel("Open Terminal to review request")
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(IOSTheme.chrome)
         .overlay(alignment: .top) {
             Rectangle()
@@ -1477,10 +1497,21 @@ private struct AgentAttentionBanner: View {
 
 private struct AgentWorkingFooter: View {
     let phrase: String
+    var action: String? = nil
 
     var body: some View {
         HStack(spacing: 7) {
             IOSShimmerText(phrase, color: IOSTheme.accent, font: IOSTypography.working)
+            if let action, !action.isEmpty {
+                IOSShimmerText(
+                    action,
+                    color: .white,
+                    highlightColor: Color(white: 0.55),
+                    font: IOSTypography.working
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 18)
@@ -1492,7 +1523,7 @@ private struct AgentWorkingFooter: View {
                 .frame(height: 1)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Agent working: \(phrase)")
+        .accessibilityLabel("Agent working: \(phrase)\(action.map { " " + $0 } ?? "")")
     }
 }
 
@@ -3090,4 +3121,23 @@ private func toolStatusTitle(_ status: String) -> String {
     case "running", "working": return "Running…"
     default: return "Completed"
     }
+}
+
+private func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
+    for event in events.reversed() {
+        let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if type == "tool_call" || type == "toolcall" {
+            let name = displayToolName(event.toolName)
+            if let summary = toolSummary(for: event), !summary.isEmpty {
+                return "\(name) \(summary)"
+            }
+            return name
+        }
+        if type == "tool_output" || type == "tooloutput" {
+            if let toolName = event.toolName, !toolName.isEmpty {
+                return displayToolName(toolName)
+            }
+        }
+    }
+    return nil
 }

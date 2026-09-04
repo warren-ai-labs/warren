@@ -576,3 +576,89 @@ function coalesceAgentContent(events) {
   }
   return result;
 }
+
+// displayToolName maps a canonical tool name (already normalized by the
+// parser) to a human-friendly label.
+export function displayToolName(name) {
+  const labels = {
+    shell: "Shell",
+    edit: "Edit file",
+    write: "Write file",
+    read: "Read file",
+    grep: "Search files",
+    glob: "Find files",
+    web_search: "Web search",
+    fetch: "Web fetch",
+    subagent: "Subagent",
+    ask_user_question: "Question",
+    permission_request: "Permission",
+    apply_patch: "Apply patch",
+  };
+  return labels[name] || name || "Tool";
+}
+
+export function truncatePreview(value, maxLength = 140) {
+  if (typeof value !== "string") return "";
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}…`;
+}
+
+export function extractExecCommands(raw) {
+  const commands = [];
+  const pattern = /exec_command\(\s*\{\s*cmd\s*:\s*"(?:[^"\\]|\\.)*"/g;
+  let match;
+  while ((match = pattern.exec(raw))) {
+    const body = match[0];
+    const value = body.match(/cmd\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (value) {
+      commands.push(value[1].replace(/\\(["\\])/g, "$1"));
+    }
+  }
+  return commands;
+}
+
+export function toolSummary(call) {
+  const input = call?.toolInput;
+  if (!input || typeof input !== "object") return "";
+  if (typeof input.raw === "string") {
+    const commands = extractExecCommands(input.raw);
+    if (commands.length > 0) {
+      const first = truncatePreview(commands[0]);
+      return commands.length > 1
+        ? `${first}  (+${commands.length - 1} more)`
+        : first;
+    }
+    return input.raw.length > 200
+      ? `${input.raw.slice(0, 200)}…`
+      : input.raw;
+  }
+  if (typeof input.command === "string") return truncatePreview(input.command);
+  if (typeof input.cmd === "string") return truncatePreview(input.cmd);
+  if (typeof input.file_path === "string") return input.file_path;
+  if (typeof input.path === "string") return input.path;
+  if (typeof input.query === "string") return input.query;
+  if (typeof input.pattern === "string") return input.pattern;
+  if (typeof input.prompt === "string") return input.prompt;
+  if (typeof input.url === "string") return input.url;
+  if (Array.isArray(input.queries)) return input.queries.join(", ");
+  return "";
+}
+
+/** Extracts the latest active tool or action summary from agent events. */
+export function latestAgentAction(events = []) {
+  if (!Array.isArray(events)) return "";
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event) continue;
+    if (isToolCallAgentEvent(event)) {
+      const name = displayToolName(event.toolName);
+      const summary = toolSummary(event);
+      return summary ? `${name} ${summary}` : name;
+    }
+    if (isToolOutputAgentEvent(event)) {
+      const name = displayToolName(event.toolName);
+      return name;
+    }
+  }
+  return "";
+}
