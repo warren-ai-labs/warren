@@ -223,7 +223,7 @@ public struct SessionView: View {
                 terminalGroupID: session?.terminalGroupID,
                 title: sessionTitle(for: session)
             )
-            .iosSheetPresentation(.medium)
+            .iosSheetPresentation(.medium, .large)
         }
         .sheet(isPresented: $showingSessionSwitcher) {
             SessionSwitcherSheet(model: model, agentState: model.agentState, sessions: siblings, pendingSessionID: $pendingSessionID, selectSession: selectSession)

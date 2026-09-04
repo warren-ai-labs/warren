@@ -344,6 +344,7 @@ private struct HostDashboardView: View {
                 terminalGroupID: target.terminalGroupID,
                 title: target.title
             )
+            .iosSheetPresentation(.medium, .large)
         }
     }
 
@@ -989,7 +990,8 @@ struct IOSHostFooter: View {
                 hosts: hosts,
                 title: "Switch Host"
             )
-            .iosSheetPresentation(.medium, .large)
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -1009,10 +1011,7 @@ struct IOSHostFooter: View {
     }
 }
 
-/// A calm, explicit Host switcher. Native `Menu` popovers vary considerably
-/// between iPhone sizes and can feel detached from the footer; this sheet
-/// keeps the current endpoint, Relay/direct distinction, and connection state
-/// aligned in one predictable list.
+/// A calm, explicit Host switcher without clutter or extraneous text.
 private struct IOSEndpointPickerSheet: View {
     @ObservedObject var model: IOSApplicationModel
     let hosts: [IOSEndpointMetadata]
@@ -1021,89 +1020,82 @@ private struct IOSEndpointPickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Sessions stay on the selected connection. Relay credentials remain device-local.")
-                        .font(IOSTypography.metadata)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 16)
-                        .padding(.bottom, 14)
-
-                    VStack(spacing: 0) {
-                        ForEach(Array(displayHosts.enumerated()), id: \.element.name) { index, host in
-                            if index > 0 {
-                                Rectangle()
-                                    .fill(IOSTheme.separator.opacity(0.35))
-                                    .frame(height: 0.5)
-                                    .padding(.leading, 48)
-                            }
-                            Button {
-                                model.selectEndpoint(named: host.name)
-                                dismiss()
-                            } label: {
-                                HStack(spacing: 11) {
-                                    Image(systemName: host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(host.name == model.endpointMetadata.name ? IOSTheme.accent : IOSTheme.secondaryText)
-                                        .frame(width: 24)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(host.name)
-                                            .font(host.name == model.endpointMetadata.name ? IOSTypography.bodyEmphasis : IOSTypography.body)
-                                            .foregroundStyle(IOSTheme.text)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                        Text(host.isRelay ? "Relay · \(host.routeID ?? "Direct route")" : host.url)
-                                            .font(IOSTypography.metadata)
-                                            .foregroundStyle(IOSTheme.secondaryText)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                        HStack(spacing: 6) {
-                                            if host.name == model.endpointMetadata.name {
-                                                Text(IOSCopy.connectionTitle(for: model.connectionState))
-                                                    .foregroundStyle(connectionColor)
-                                            } else {
-                                                Text("Tap to connect")
-                                                    .foregroundStyle(IOSTheme.tertiaryText)
-                                            }
-                                            Text("·")
-                                                .foregroundStyle(IOSTheme.tertiaryText)
-                                            Text(host.hasToken ? "Token saved" : "No token")
-                                                .foregroundStyle(IOSTheme.tertiaryText)
-                                        }
-                                        .font(IOSTypography.status)
-                                        .lineLimit(1)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    ForEach(Array(displayHosts.enumerated()), id: \.element.name) { index, host in
+                        if index > 0 {
+                            Divider()
+                                .background(IOSTheme.separator.opacity(0.3))
+                                .padding(.leading, 56)
+                        }
+                        Button {
+                            IOSHaptics.selection()
+                            model.selectEndpoint(named: host.name)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack(alignment: .bottomTrailing) {
+                                    Circle()
+                                        .fill(host.name == model.endpointMetadata.name ? IOSTheme.accent.opacity(0.15) : IOSTheme.muted.opacity(0.4))
+                                        .frame(width: 38, height: 38)
+                                        .overlay(
+                                            Image(systemName: host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
+                                                .font(.system(size: 15, weight: .medium))
+                                                .foregroundStyle(host.name == model.endpointMetadata.name ? IOSTheme.accent : IOSTheme.secondaryText)
+                                        )
                                     if host.name == model.endpointMetadata.name {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(IOSTheme.green)
+                                        Circle()
+                                            .fill(connectionColor)
+                                            .frame(width: 8, height: 8)
+                                            .overlay(Circle().stroke(IOSTheme.cardBackground, lineWidth: 1.5))
                                     }
                                 }
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 72)
-                                .contentShape(Rectangle())
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(host.name)
+                                        .font(IOSTypography.bodyEmphasis)
+                                        .foregroundStyle(IOSTheme.text)
+                                        .lineLimit(1)
+                                    Text(host.isRelay ? "Relay" : host.url)
+                                        .font(IOSTypography.metadata)
+                                        .foregroundStyle(IOSTheme.tertiaryText)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                if host.name == model.endpointMetadata.name {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(IOSTheme.green)
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
-                    .iosCardSurface()
                 }
+                .iosCardSurface()
                 .padding(.horizontal, IOSTheme.pagePadding)
-                .padding(.bottom, 28)
+                .padding(.top, 16)
+
+                Spacer(minLength: 0)
             }
-            .scrollIndicators(.hidden)
             .background(IOSTheme.background.ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
             .navigationTitle(title)
 #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
 #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .font(IOSTypography.bodyEmphasis)
+                        .foregroundStyle(IOSTheme.accent)
+                }
+            }
         }
         .preferredColorScheme(.dark)
     }
@@ -1419,7 +1411,7 @@ private struct WorkspaceView: View {
         )
         .sheet(isPresented: $showingNewSession) {
             IOSSessionCreationSheet(model: model, workspaceID: workspaceID, title: workspace?.name ?? "Workspace")
-                .iosSheetPresentation(.medium)
+                .iosSheetPresentation(.medium, .large)
         }
         .overlay(alignment: .top) {
             if let actionFeedback {
@@ -1522,7 +1514,7 @@ private struct TerminalGroupView: View {
         )
         .sheet(isPresented: $showingNewSession) {
             IOSSessionCreationSheet(model: model, terminalGroupID: groupID, title: group?.name ?? "Terminal group")
-                .iosSheetPresentation(.medium)
+                .iosSheetPresentation(.medium, .large)
         }
     }
 }
@@ -1635,9 +1627,9 @@ private func agentStatusPriority(_ status: WarrenRemoteAgentStatus) -> Int {
 /// creation flow. Unknown Host kinds remain visible in the roster but are not
 /// manufactured by this first-party shortcut.
 private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
-    case shell
-    case codex
     case claude
+    case codex
+    case shell
     case opencode
     case pi
 
@@ -1645,9 +1637,9 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .shell: return "Shell"
-        case .codex: return "Codex"
         case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .shell: return "Shell"
         case .opencode: return "OpenCode"
         case .pi: return "Pi"
         }
@@ -1655,9 +1647,9 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .shell: return "terminal"
-        case .codex: return "curlybraces"
         case .claude: return "sparkles"
+        case .codex: return "curlybraces"
+        case .shell: return "terminal"
         case .opencode: return "terminal.fill"
         case .pi: return "function"
         }
@@ -1665,9 +1657,9 @@ private enum IOSSessionCreationKind: String, CaseIterable, Identifiable {
 
     var defaultCommand: String? {
         switch self {
-        case .shell: return nil
-        case .codex: return "codex --dangerously-bypass-hook-trust"
         case .claude: return "claude"
+        case .codex: return "codex --dangerously-bypass-hook-trust"
+        case .shell: return nil
         case .opencode: return "opencode"
         case .pi: return "pi"
         }
@@ -1710,7 +1702,7 @@ struct IOSSessionCreationSheet: View {
         self.workspaceID = workspaceID
         self.terminalGroupID = terminalGroupID
         self.title = title
-        let remembered = IOSSessionCreationKind(rawValue: model.localStore.lastSessionKind) ?? .shell
+        let remembered = IOSSessionCreationKind(rawValue: model.localStore.lastSessionKind) ?? .claude
         _selectedKind = State(initialValue: remembered)
         _command = State(initialValue: remembered.defaultCommand ?? "")
 
@@ -1764,56 +1756,57 @@ struct IOSSessionCreationSheet: View {
         workspaceID == nil && terminalGroupID == nil && !projects.isEmpty
     }
 
-    private var headingSubtitle: String? {
-        if !isDestinationSelectable {
-            return title.isEmpty ? nil : title
+    private var currentWorkspace: WarrenRemoteRoster.Workspace? {
+        guard let workspaceID else { return nil }
+        return model.roster?.workspaces.first(where: { $0.id == workspaceID })
+    }
+
+    private var currentProject: WarrenRemoteRoster.Project? {
+        guard let projectID = currentWorkspace?.projectID else { return nil }
+        return model.roster?.projects.first(where: { $0.id == projectID })
+    }
+
+    private var currentTerminalGroup: WarrenRemoteRoster.TerminalGroup? {
+        guard let terminalGroupID else { return nil }
+        return model.roster?.terminalGroups.first(where: { $0.id == terminalGroupID })
+    }
+
+    private var displayProjectName: String {
+        if let currentProject {
+            return currentProject.name.isEmpty ? pathLeaf(currentProject.path) : currentProject.name
         }
-        return nil
+        if title.contains(" · ") {
+            return title.components(separatedBy: " · ").first ?? "Scope"
+        }
+        return "Scope"
+    }
+
+    private var displayTargetName: String {
+        if let currentWorkspace {
+            return currentWorkspace.name.isEmpty ? (currentWorkspace.branch ?? "Workspace") : currentWorkspace.name
+        }
+        if let currentTerminalGroup {
+            return currentTerminalGroup.name.isEmpty ? "Terminal Group" : currentTerminalGroup.name
+        }
+        if title.contains(" · ") {
+            return title.components(separatedBy: " · ").last ?? title
+        }
+        return title.isEmpty ? "Workspace" : title
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    IOSScreenHeading(
-                        title: "New session",
-                        symbol: "plus",
-                        subtitle: headingSubtitle
-                    )
-
+                VStack(alignment: .leading, spacing: 16) {
                     if isDestinationSelectable {
                         destinationSection
+                    } else {
+                        fixedScopeCard
                     }
 
-                    VStack(spacing: 1) {
-                        HStack(spacing: 10) {
-                            Image(systemName: selectedKind.symbol)
-                                .font(.system(size: 15, weight: .regular))
-                                .foregroundStyle(IOSTheme.secondaryText)
-                                .frame(width: 23)
-                            Text("Type")
-                                .font(IOSTypography.body)
-                                .foregroundStyle(IOSTheme.text)
-                            Spacer(minLength: 0)
-                            Picker("Session type", selection: $selectedKind) {
-                                ForEach(IOSSessionCreationKind.allCases) { kind in
-                                    Text(kind.displayName).tag(kind)
-                                }
-                            }
-                            .font(IOSTypography.body)
-                            .tint(IOSTheme.accent)
-                            .accessibilityLabel("Session type")
-                        }
-                        .frame(minHeight: 44)
-                        TextField("Title (optional)", text: $sessionTitle)
-                        TextField(commandPlaceholder, text: $command)
-                            #if os(iOS)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            #endif
-                    }
-                    .padding(.horizontal, 12)
-                    .iosSurface(color: IOSTheme.chrome)
+                    sessionTypeSection
+
+                    optionsSection
 
                     if let error = model.mutationError {
                         IOSInlineNotice(
@@ -1824,25 +1817,29 @@ struct IOSSessionCreationSheet: View {
                         )
                     }
 
-                    Button {
-                        submit()
-                    } label: {
-                        Text(submitButtonText)
-                            .font(IOSTypography.button)
-                            .foregroundStyle(IOSTheme.background)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.smallRadius, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSubmit)
-                    .opacity(canSubmit ? 1 : 0.45)
+                    submitButton
                 }
-                .padding(16)
+                .padding(.horizontal, IOSTheme.pagePadding)
+                .padding(.vertical, 16)
             }
             .background(IOSTheme.background.ignoresSafeArea())
+            .navigationTitle("New Session")
             #if os(iOS) || os(visionOS)
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss")
+                }
+            }
         }
         .preferredColorScheme(.dark)
         .onChange(of: selectedKind) { oldKind, newKind in
@@ -1872,104 +1869,332 @@ struct IOSSessionCreationSheet: View {
     }
 
     @ViewBuilder
-    private var destinationSection: some View {
-        VStack(spacing: 1) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 23)
-                Text("Project")
-                    .font(IOSTypography.body)
-                    .foregroundStyle(IOSTheme.text)
-                Spacer(minLength: 0)
-                Picker("Project", selection: $selectedProjectID) {
-                    ForEach(projects) { proj in
-                        Text(proj.name.isEmpty ? pathLeaf(proj.path) : proj.name)
-                            .tag(proj.id)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(IOSTheme.accent)
-                .accessibilityLabel("Project")
+    private var fixedScopeCard: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(IOSTheme.accent.opacity(0.12))
+                    .frame(width: 40, height: 40)
+                Image(systemName: terminalGroupID != nil ? "terminal.fill" : "folder.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(IOSTheme.accent)
             }
-            .frame(minHeight: 44)
 
-            Divider().background(IOSTheme.separator.opacity(0.35))
-
-            HStack(spacing: 10) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 23)
-                Text("Workspace")
-                    .font(IOSTypography.body)
-                    .foregroundStyle(IOSTheme.text)
-                Spacer(minLength: 0)
-                Picker("Workspace Mode", selection: $workspaceMode) {
-                    ForEach(IOSSessionCreationWorkspaceMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 160)
-            }
-            .frame(minHeight: 44)
-
-            Divider().background(IOSTheme.separator.opacity(0.35))
-
-            if workspaceMode == .existing {
-                if projectWorkspaces.isEmpty {
-                    HStack {
-                        Text("No existing workspaces")
-                            .font(IOSTypography.status)
-                            .foregroundStyle(IOSTheme.secondaryText)
-                        Spacer()
-                        Button("Create New") {
-                            workspaceMode = .new
-                        }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(displayProjectName)
                         .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.accent)
-                    }
-                    .frame(minHeight: 44)
-                } else {
-                    HStack(spacing: 10) {
-                        Image(systemName: "shippingbox")
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .frame(width: 23)
-                        Text("Target")
-                            .font(IOSTypography.body)
-                            .foregroundStyle(IOSTheme.text)
-                        Spacer(minLength: 0)
-                        Picker("Workspace Target", selection: $selectedWorkspaceID) {
-                            ForEach(projectWorkspaces) { ws in
-                                Text(ws.name.isEmpty ? (ws.branch ?? ws.id) : ws.name)
-                                    .tag(ws.id)
-                            }
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .lineLimit(1)
+
+                    if let branch = currentWorkspace?.branch, !branch.isEmpty {
+                        Text("•")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(branch)
+                                .font(IOSTypography.metadata)
                         }
-                        .pickerStyle(.menu)
-                        .tint(IOSTheme.accent)
-                        .accessibilityLabel("Workspace target")
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                        .lineLimit(1)
                     }
-                    .frame(minHeight: 44)
                 }
-            } else {
-                VStack(spacing: 1) {
-                    TextField("Branch (e.g. main, feat-x)", text: $newWorkspaceBranch)
+
+                Text(displayTargetName)
+                    .font(IOSTypography.bodyEmphasis)
+                    .foregroundStyle(IOSTheme.text)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(IOSTheme.green)
+                    .frame(width: 6, height: 6)
+                Text("Target")
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(IOSTheme.muted.opacity(0.35), in: Capsule())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .iosCardSurface()
+    }
+
+    @ViewBuilder
+    private var destinationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("DESTINATION")
+                .font(IOSTypography.eyebrow)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                // Project Row
+                HStack(spacing: 12) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(IOSTheme.accent)
+                        .frame(width: 24)
+
+                    Text("Project")
+                        .font(IOSTypography.bodyEmphasis)
+                        .foregroundStyle(IOSTheme.text)
+
+                    Spacer(minLength: 8)
+
+                    Picker("Project", selection: $selectedProjectID) {
+                        ForEach(projects) { proj in
+                            Text(proj.name.isEmpty ? pathLeaf(proj.path) : proj.name)
+                                .tag(proj.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(IOSTheme.accent)
+                    .accessibilityLabel("Project")
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+
+                Divider()
+                    .background(IOSTheme.separator.opacity(0.35))
+                    .padding(.leading, 50)
+
+                // Workspace Mode Selector
+                VStack(spacing: 10) {
+                    Picker("Workspace Mode", selection: $workspaceMode) {
+                        ForEach(IOSSessionCreationWorkspaceMode.allCases) { mode in
+                            Text(mode == .existing ? "Existing Workspace" : "New Workspace")
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+
+                    if workspaceMode == .existing {
+                        if projectWorkspaces.isEmpty {
+                            HStack(spacing: 8) {
+                                Text("No existing workspaces in this project")
+                                    .font(IOSTypography.status)
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                Spacer()
+                                Button("Create One") {
+                                    withAnimation(IOSMotion.quick) {
+                                        workspaceMode = .new
+                                    }
+                                }
+                                .font(IOSTypography.status)
+                                .foregroundStyle(IOSTheme.accent)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 12)
+                        } else {
+                            HStack(spacing: 12) {
+                                Image(systemName: "shippingbox.fill")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .frame(width: 24)
+
+                                Text("Target")
+                                    .font(IOSTypography.bodyEmphasis)
+                                    .foregroundStyle(IOSTheme.text)
+
+                                Spacer(minLength: 8)
+
+                                Picker("Workspace Target", selection: $selectedWorkspaceID) {
+                                    ForEach(projectWorkspaces) { ws in
+                                        Text(ws.name.isEmpty ? (ws.branch ?? ws.id) : ws.name)
+                                            .tag(ws.id)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(IOSTheme.accent)
+                                .accessibilityLabel("Workspace target")
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 10)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            Divider()
+                                .background(IOSTheme.separator.opacity(0.35))
+                                .padding(.leading, 50)
+
+                            HStack(spacing: 12) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(IOSTheme.accent)
+                                    .frame(width: 24)
+
+                                TextField("Branch (e.g. main, feat-ui)", text: $newWorkspaceBranch)
+                                    .font(IOSTypography.body)
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    #endif
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 46)
+
+                            Divider()
+                                .background(IOSTheme.separator.opacity(0.35))
+                                .padding(.leading, 50)
+
+                            HStack(spacing: 12) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(IOSTheme.secondaryText)
+                                    .frame(width: 24)
+
+                                TextField("Workspace name (optional)", text: $newWorkspaceName)
+                                    .font(IOSTypography.body)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 46)
+                        }
+                    }
+                }
+                .padding(.bottom, workspaceMode == .existing && !projectWorkspaces.isEmpty ? 0 : (workspaceMode == .new ? 4 : 0))
+            }
+            .iosCardSurface()
+        }
+    }
+
+    private var sessionTypeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SESSION TYPE")
+                .font(IOSTypography.eyebrow)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .padding(.horizontal, 4)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(IOSSessionCreationKind.allCases) { kind in
+                        sessionKindCard(kind)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionKindCard(_ kind: IOSSessionCreationKind) -> some View {
+        let isSelected = selectedKind == kind
+        Button {
+            IOSHaptics.selection()
+            withAnimation(IOSMotion.quick) {
+                selectedKind = kind
+            }
+        } label: {
+            VStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isSelected ? IOSTheme.accent.opacity(0.18) : IOSTheme.muted.opacity(0.35))
+                        .frame(width: 44, height: 44)
+
+                    IOSPresetIcon(presetID: kind.rawValue, size: 24)
+                }
+
+                Text(kind.displayName)
+                    .font(isSelected ? IOSTypography.bodyEmphasis : IOSTypography.secondaryBody)
+                    .foregroundStyle(isSelected ? IOSTheme.text : IOSTheme.secondaryText)
+                    .lineLimit(1)
+            }
+            .frame(width: 82, height: 86)
+            .background(
+                isSelected ? IOSTheme.accent.opacity(0.10) : IOSTheme.cardBackground,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(
+                        isSelected ? IOSTheme.accent : IOSTheme.cardBorder,
+                        lineWidth: isSelected ? 1.5 : 0.5
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var optionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CONFIGURATION")
+                .font(IOSTypography.eyebrow)
+                .foregroundStyle(IOSTheme.secondaryText)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(systemName: "text.cursor")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 24)
+
+                    TextField("Session title (optional)", text: $sessionTitle)
+                        .font(IOSTypography.body)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+
+                Divider()
+                    .background(IOSTheme.separator.opacity(0.35))
+                    .padding(.leading, 50)
+
+                HStack(spacing: 12) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 24)
+
+                    TextField(commandPlaceholder, text: $command)
+                        .font(IOSTypography.code)
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         #endif
-                        .frame(minHeight: 44)
-                    Divider().background(IOSTheme.separator.opacity(0.35))
-                    TextField("Workspace name (optional)", text: $newWorkspaceName)
-                        .frame(minHeight: 44)
                 }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
             }
+            .iosCardSurface()
         }
-        .padding(.horizontal, 12)
-        .iosSurface(color: IOSTheme.chrome)
+    }
+
+    private var submitButton: some View {
+        Button {
+            IOSHaptics.light()
+            submit()
+        } label: {
+            HStack(spacing: 8) {
+                if model.isMutating || didSubmit {
+                    ProgressView()
+                        .tint(IOSTheme.background)
+                } else {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                Text(submitButtonText)
+                    .font(IOSTypography.bodyEmphasis)
+            }
+            .foregroundStyle(IOSTheme.background)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(
+                canSubmit ? IOSTheme.accent : IOSTheme.accent.opacity(0.4),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSubmit)
+        .padding(.top, 4)
     }
 
     private var canSubmit: Bool {
@@ -2640,7 +2865,8 @@ public struct IOSEndpointConfigurationView: View {
         }
         .sheet(isPresented: $showingHostPicker) {
             IOSEndpointPickerSheet(model: model, hosts: hosts, title: "Switch Host")
-                .iosSheetPresentation(.medium, .large)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
     }
 
