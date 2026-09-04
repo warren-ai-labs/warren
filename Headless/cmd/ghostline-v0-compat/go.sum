@@ -1,6 +1,0 @@
-github.com/abcdlsj/ghostline v0.8.0 h1:P6pttyAtEkD+KqCLq1Xbo2vFvc+Y6c9E7vJWqddH8oY=
-github.com/abcdlsj/ghostline v0.8.0/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
-github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
-github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
-golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
-golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

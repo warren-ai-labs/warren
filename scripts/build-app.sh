@@ -87,37 +87,6 @@ validate_arm64_artifact() {
     fi
 }
 
-compatibility_binary_build="$repository_root/.build/ghostline-v0-compat"
-compatibility_library_build="$repository_root/.build/libghostline-v0-compat.dylib"
-if [[ ! -f "$compatibility_binary_build" ]]; then
-    echo "Missing build-headless output: $compatibility_binary_build" >&2
-    exit 66
-fi
-if [[ ! -f "$compatibility_library_build" ]]; then
-    echo "Missing build-headless output: $compatibility_library_build" >&2
-    exit 66
-fi
-validate_arm64_artifact "$compatibility_binary_build"
-validate_arm64_artifact "$compatibility_library_build"
-install -m 755 "$compatibility_binary_build" "$staging_path/Contents/Resources/ghostline-v0-compat"
-mkdir -p "$staging_path/Contents/Frameworks"
-install -m 755 \
-    "$compatibility_library_build" \
-    "$staging_path/Contents/Frameworks/libghostty-vt.dylib"
-
-# Ghostline v1 statically links libghostty-vt. Only the temporary v0.8 bridge
-# needs the bundled dylib, so relocate just that executable's development
-# rpath to the app Frameworks directory.
-compatibility_binary="$staging_path/Contents/Resources/ghostline-v0-compat"
-while IFS= read -r old_rpath; do
-    [[ -n "$old_rpath" ]] || continue
-    install_name_tool -delete_rpath "$old_rpath" "$compatibility_binary"
-done < <(
-    otool -l "$compatibility_binary" |
-        awk '/LC_RPATH/{rpath=1} rpath && /path /{print $2; rpath=0}'
-)
-install_name_tool -add_rpath @executable_path/../Frameworks "$compatibility_binary"
-
 install -m 644 "$repository_root/Assets/Brand/Warren.icns" "$staging_path/Contents/Resources/Warren.icns"
 install -m 755 "$repository_root/Support/Raycast/warren-terminal.sh" "$staging_path/Contents/Resources/warren-terminal.sh"
 install -m 644 "$repository_root/Assets/Brand/warren-app-icon.png" "$staging_path/Contents/Resources/warren-terminal.png"

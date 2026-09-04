@@ -54,20 +54,6 @@ validate_arm64_artifact() {
     fi
 }
 
-compatibility_module_directory="$repository_root/Headless/cmd/ghostline-v0-compat"
-go -C "$compatibility_module_directory" mod download github.com/abcdlsj/ghostline
-compatibility_ghostline_directory="$(go -C "$compatibility_module_directory" list -m -f '{{.Dir}}' github.com/abcdlsj/ghostline)"
-if [[ -z "$compatibility_ghostline_directory" ]]; then
-    echo "Cannot resolve the downloaded ghostline v0.8 module directory." >&2
-    exit 66
-fi
-compatibility_library="$compatibility_ghostline_directory/third_party/lib/libghostty-vt.dylib"
-if [[ ! -f "$compatibility_library" ]]; then
-    echo "Missing v0.8 arm64 libghostty-vt.dylib: $compatibility_library" >&2
-    exit 66
-fi
-validate_arm64_artifact "$compatibility_library"
-
 build_macos_product() {
     local binary_name="$1"
     local destination="$2"
@@ -83,21 +69,7 @@ build_macos_product() {
         "$repository_root/Headless/cmd/$binary_name"
 }
 
-build_v0_compatibility() {
-    GOOS=darwin \
-    GOARCH=arm64 \
-    CGO_ENABLED=1 \
-    CGO_CFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
-    CGO_LDFLAGS="-arch arm64 -mmacosx-version-min=13.0" \
-    go -C "$compatibility_module_directory" build \
-        -o "$output_directory/ghostline-v0-compat" \
-        .
-}
-
 build_macos_product warren-headless "$output_directory/warren-headless"
 build_macos_product warren "$output_directory/warren"
 build_macos_product warren-ssh-tunnel "$output_directory/warren-ssh-tunnel"
-build_v0_compatibility
 cp -f "$output_directory/warren" "$output_directory/warren-cli"
-validate_arm64_artifact "$output_directory/ghostline-v0-compat"
-install -m 755 "$compatibility_library" "$output_directory/libghostline-v0-compat.dylib"
