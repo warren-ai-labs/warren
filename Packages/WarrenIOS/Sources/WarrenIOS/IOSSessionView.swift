@@ -475,7 +475,43 @@ func sessionProviderID(
     case "pi": return "pi"
     case "qoder": return "qoder"
     case "trae": return "trae"
-    default: return "shell"
+    default:
+        if let handler = session.agentHandler?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !handler.isEmpty {
+            for known in ["claude", "codex", "antigravity", "agy", "opencode", "open-code", "pi", "qoder", "trae"] {
+                if handler.contains(known) {
+                    if known == "agy" { return "antigravity" }
+                    if known == "open-code" { return "opencode" }
+                    return known
+                }
+            }
+        }
+        if let cmd = session.command?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            let firstWord = cmd.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? cmd
+            switch firstWord {
+            case "claude", "claude-code": return "claude"
+            case "codex": return "codex"
+            case "antigravity", "agy": return "antigravity"
+            case "opencode", "open-code": return "opencode"
+            case "pi": return "pi"
+            case "qoder": return "qoder"
+            case "trae", "trae-cli": return "trae"
+            default: break
+            }
+        }
+        if let proc = session.process?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            let firstWord = proc.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? proc
+            switch firstWord {
+            case "claude", "claude-code": return "claude"
+            case "codex": return "codex"
+            case "antigravity", "agy": return "antigravity"
+            case "opencode", "open-code": return "opencode"
+            case "pi": return "pi"
+            case "qoder": return "qoder"
+            case "trae", "trae-cli": return "trae"
+            default: break
+            }
+        }
+        return "shell"
     }
 }
 

@@ -825,10 +825,19 @@ private struct SessionCardRow: View {
     let isActive: Bool
     let onSelect: () -> Void
 
+    private var isAgent: Bool {
+        if session.isAgentBacked { return true }
+        let provider = sessionProviderID(
+            for: session,
+            events: model.agentState.agentEventsBySessionID[session.id]
+        )
+        return provider != "shell"
+    }
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 11) {
-                if session.isAgentBacked {
+                if isAgent {
                     SessionProviderMark(
                         model: model,
                         agentState: model.agentState,
@@ -2625,7 +2634,6 @@ public struct IOSEndpointConfigurationView: View {
     @ObservedObject private var model: IOSApplicationModel
     @Environment(\.dismiss) private var dismiss
     @State private var showingRelayScanner = false
-    @State private var showingHostPicker = false
 
     public init(model: IOSApplicationModel) {
         self.model = model
@@ -2641,123 +2649,10 @@ public struct IOSEndpointConfigurationView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    IOSSectionLabel("Current Host")
+                    IOSSectionLabel("Hosts", count: hosts.isEmpty ? nil : hosts.count)
                         .padding(.top, 22)
                         .padding(.bottom, 8)
 
-                    Button {
-                        IOSHaptics.selection()
-                        showingHostPicker = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: model.endpointMetadata.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(IOSTheme.text)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack(spacing: 6) {
-                                    Text(model.endpointMetadata.name)
-                                        .font(IOSTypography.bodyEmphasis)
-                                        .foregroundStyle(IOSTheme.text)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Text("Active")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(IOSTheme.green)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(IOSTheme.green.opacity(0.12), in: Capsule())
-                                }
-                                Text(model.endpointMetadata.isRelay ? "Relay" : model.endpointMetadata.url)
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            HStack(spacing: 6) {
-                                IOSStatusDot(color: connectionColor, size: 6)
-                                Text(IOSCopy.connectionTitle(for: model.connectionState))
-                                    .font(IOSTypography.status)
-                                    .foregroundStyle(connectionColor)
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 64)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .iosCardSurface()
-                    .accessibilityLabel("Switch Host")
-
-                    IOSSectionLabel("Add a Host")
-                        .padding(.top, 24)
-                        .padding(.bottom, 8)
-
-                    Button {
-                        showingRelayScanner = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "qrcode.viewfinder")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(IOSTheme.background)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Scan Relay QR")
-                                    .font(IOSTypography.bodyEmphasis)
-                                    .foregroundStyle(IOSTheme.background)
-                                Text("Add a Host from a shareable pairing link")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.background.opacity(0.78))
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.forward")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(IOSTheme.background.opacity(0.8))
-                        }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 60)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(IOSTheme.accent, in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous))
-                    .accessibilityLabel("Scan Relay QR to add a Host")
-                    .disabled(model.isPairingRelay)
-                    .padding(.bottom, 8)
-
-                    NavigationLink {
-                        IOSEndpointEditorView(model: model, endpoint: nil)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 17, weight: .medium))
-                                .foregroundStyle(IOSTheme.accent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Add direct Host")
-                                    .font(IOSTypography.bodyEmphasis)
-                                    .foregroundStyle(IOSTheme.text)
-                                Text("Connect with a local or remote URL")
-                                    .font(IOSTypography.metadata)
-                                    .foregroundStyle(IOSTheme.secondaryText)
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.forward")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(IOSTheme.tertiaryText)
-                        }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 60)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .iosCardSurface()
-                    .accessibilityLabel("Add a direct Host")
-
-                    IOSSectionLabel("Saved Hosts", count: hosts.isEmpty ? nil : hosts.count)
-                        .padding(.top, 25)
-                        .padding(.bottom, 9)
                     if hosts.isEmpty {
                         IOSEmptyState(
                             symbol: "server.rack",
@@ -2767,6 +2662,7 @@ public struct IOSEndpointConfigurationView: View {
                     } else {
                         VStack(spacing: 0) {
                             ForEach(Array(hosts.enumerated()), id: \.element.name) { index, host in
+                                let isCurrent = host.name == model.endpointMetadata.name
                                 if index > 0 {
                                     Rectangle()
                                         .fill(IOSTheme.separator.opacity(0.35))
@@ -2774,46 +2670,24 @@ public struct IOSEndpointConfigurationView: View {
                                         .padding(.leading, 48)
                                 }
                                 HStack(spacing: 0) {
-                                    Button {
-                                        IOSHaptics.selection()
-                                        model.selectEndpoint(named: host.name)
-                                    } label: {
-                                        HStack(spacing: 12) {
-                                            Image(systemName: host.name == model.endpointMetadata.name
-                                                ? "checkmark"
-                                                : host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
-                                                .font(.system(size: 15, weight: host.name == model.endpointMetadata.name ? .semibold : .regular))
-                                                .foregroundStyle(host.name == model.endpointMetadata.name ? IOSTheme.accent : IOSTheme.secondaryText)
-                                                .frame(width: 24)
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(host.name)
-                                                    .font(host.name == model.endpointMetadata.name
-                                                        ? IOSTypography.bodyEmphasis
-                                                        : IOSTypography.body)
-                                                    .foregroundStyle(IOSTheme.text)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                                Text(host.isRelay ? "Relay" : host.url)
-                                                    .font(IOSTypography.metadata)
-                                                    .foregroundStyle(IOSTheme.secondaryText)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                            }
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            if host.hasToken {
-                                                Image(systemName: "lock.fill")
-                                                    .font(.system(size: 11, weight: .medium))
-                                                    .foregroundStyle(IOSTheme.tertiaryText)
-                                            }
+                                    if isCurrent {
+                                        NavigationLink {
+                                            IOSEndpointDetailView(model: model, endpoint: host)
+                                        } label: {
+                                            hostRowContent(host: host, isCurrent: true)
                                         }
-                                        .padding(.leading, 14)
-                                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-                                        .contentShape(Rectangle())
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Current Host, \(host.name)")
+                                    } else {
+                                        Button {
+                                            IOSHaptics.selection()
+                                            model.selectEndpoint(named: host.name)
+                                        } label: {
+                                            hostRowContent(host: host, isCurrent: false)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Switch to Host \(host.name)")
                                     }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel(host.name == model.endpointMetadata.name
-                                        ? "Current Host, \(host.name)"
-                                        : "Use Host \(host.name)")
 
                                     NavigationLink {
                                         IOSEndpointDetailView(model: model, endpoint: host)
@@ -2831,6 +2705,75 @@ public struct IOSEndpointConfigurationView: View {
                         }
                         .iosCardSurface()
                     }
+
+                    IOSSectionLabel("Add a Host")
+                        .padding(.top, 24)
+                        .padding(.bottom, 8)
+
+                    VStack(spacing: 0) {
+                        Button {
+                            showingRelayScanner = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "qrcode.viewfinder")
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundStyle(IOSTheme.accent)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Scan Relay QR")
+                                        .font(IOSTypography.bodyEmphasis)
+                                        .foregroundStyle(IOSTheme.text)
+                                    Text("Pair from a shareable link or QR code")
+                                        .font(IOSTypography.metadata)
+                                        .foregroundStyle(IOSTheme.secondaryText)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.forward")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(IOSTheme.tertiaryText)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Scan Relay QR to add a Host")
+                        .disabled(model.isPairingRelay)
+
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.35))
+                            .frame(height: 0.5)
+                            .padding(.leading, 50)
+
+                        NavigationLink {
+                            IOSEndpointEditorView(model: model, endpoint: nil)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "server.rack")
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundStyle(IOSTheme.accent)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Add direct Host")
+                                        .font(IOSTypography.bodyEmphasis)
+                                        .foregroundStyle(IOSTheme.text)
+                                    Text("Connect with a local or remote URL")
+                                        .font(IOSTypography.metadata)
+                                        .foregroundStyle(IOSTheme.secondaryText)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.forward")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(IOSTheme.tertiaryText)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add a direct Host")
+                    }
+                    .iosCardSurface()
 
                     if let error = model.endpointError {
                         IOSInlineNotice(
@@ -2875,11 +2818,68 @@ public struct IOSEndpointConfigurationView: View {
             )
             .ignoresSafeArea()
         }
-        .sheet(isPresented: $showingHostPicker) {
-            IOSEndpointPickerSheet(model: model, hosts: hosts, title: "Switch Host")
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private func hostRowContent(host: IOSEndpointMetadata, isCurrent: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: host.isRelay ? "point.3.connected.trianglepath.dotted" : "server.rack")
+                .font(.system(size: 16, weight: isCurrent ? .medium : .regular))
+                .foregroundStyle(isCurrent ? IOSTheme.accent : IOSTheme.secondaryText)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(host.name)
+                        .font(isCurrent ? IOSTypography.bodyEmphasis : IOSTypography.body)
+                        .foregroundStyle(IOSTheme.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    if isCurrent {
+                        Text("Active")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(IOSTheme.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(IOSTheme.green.opacity(0.12), in: Capsule())
+                    }
+
+                    if host.hasToken {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                    }
+                }
+
+                if isCurrent {
+                    HStack(spacing: 5) {
+                        IOSStatusDot(color: connectionColor, size: 5)
+                        Text(IOSCopy.connectionTitle(for: model.connectionState))
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(connectionColor)
+                        Text("·")
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                        Text(host.isRelay ? "Relay" : host.url)
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                } else {
+                    Text(host.isRelay ? "Relay" : host.url)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.leading, 14)
+        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var hosts: [IOSEndpointMetadata] {

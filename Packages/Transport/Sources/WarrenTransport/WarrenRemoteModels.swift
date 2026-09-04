@@ -642,12 +642,35 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
                !agentSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return true
             }
+            if let agentHandler,
+               !agentHandler.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
             switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "codex", "claude", "opencode", "pi", "qoder":
+            case "codex", "claude", "claude-code", "antigravity", "agy", "opencode", "open-code", "pi", "qoder", "trae":
                 return true
             default:
-                return false
+                break
             }
+            if let cmd = command?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                let firstWord = cmd.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? cmd
+                switch firstWord {
+                case "codex", "claude", "claude-code", "opencode", "open-code", "pi", "qoder", "agy", "antigravity", "trae", "trae-cli":
+                    return true
+                default:
+                    break
+                }
+            }
+            if let proc = process?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                let firstWord = proc.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? proc
+                switch firstWord {
+                case "codex", "claude", "claude-code", "opencode", "open-code", "pi", "qoder", "agy", "antigravity", "trae", "trae-cli":
+                    return true
+                default:
+                    break
+                }
+            }
+            return false
         }
 
         public func supportsAgentCapability(_ capability: String) -> Bool {
