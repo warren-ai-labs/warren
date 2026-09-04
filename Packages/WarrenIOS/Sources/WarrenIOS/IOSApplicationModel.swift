@@ -212,6 +212,7 @@ public final class IOSApplicationModel: ObservableObject {
         self.displayMode = restoredNavigation.displayMode
         self.endpointMetadata = restoredEndpoint
         self.endpointMetadataList = restoredEndpoints
+        self.roster = localStore.cachedRoster(endpointName: restoredEndpoint.name, endpointURL: restoredEndpoint.url)
         self.endpointError = nil
         self.mutationError = nil
         self.connectionError = nil
@@ -232,7 +233,13 @@ public final class IOSApplicationModel: ObservableObject {
         localStore: IOSLocalStore = IOSLocalStore()
     ) {
         self.init(
-            client: WarrenRemoteClient(configuration: configuration),
+            client: WarrenRemoteClient(
+                configuration: configuration,
+                refreshTokenHandler: { [localStore] token in
+                    guard !token.isEmpty else { return }
+                    _ = localStore.keychain.write(token, account: "\(configuration.name).refresh")
+                }
+            ),
             localStore: localStore,
             endpointMetadata: IOSEndpointMetadata(configuration: configuration)
         )
@@ -495,7 +502,8 @@ public final class IOSApplicationModel: ObservableObject {
             ssh: existing?.ssh,
             type: resolvedType,
             hostID: resolvedHostID,
-            routeID: resolvedRouteID
+            routeID: resolvedRouteID,
+            refreshToken: refreshToken ?? existing?.refreshToken
         )
         guard configuration.webSocketURL != nil else {
             endpointError = "Enter a valid http(s) or ws(s) Host URL."
@@ -507,6 +515,12 @@ public final class IOSApplicationModel: ObservableObject {
             replacingName: replacingEndpointName,
             activate: true
         )
+        if let refreshToken, !refreshToken.isEmpty {
+            _ = localStore.keychain.write(refreshToken, account: "\(normalizedName).refresh")
+        }
+        if let replacingEndpointName, replacingEndpointName != normalizedName {
+            _ = localStore.keychain.remove(account: "\(replacingEndpointName).refresh")
+        }
         activateEndpoint(configuration, shouldRestart: eventTask != nil)
         return true
     }
@@ -571,7 +585,13 @@ public final class IOSApplicationModel: ObservableObject {
             await previousLifecycle?.value
             await oldClient.stop()
         }
-        client = WarrenRemoteClient(configuration: configuration)
+        client = WarrenRemoteClient(
+            configuration: configuration,
+            refreshTokenHandler: { [localStore] token in
+                guard !token.isEmpty else { return }
+                _ = localStore.keychain.write(token, account: "\(configuration.name).refresh")
+            }
+        )
         endpointToken = configuration.token
         endpointMetadata = IOSEndpointMetadata(configuration: configuration)
         endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
@@ -946,7 +966,12 @@ public final class IOSApplicationModel: ObservableObject {
                     self.terminalSubscriptionRequests.remove(sessionID)
                     self.pendingTerminalFocusBySessionID.remove(sessionID)
                     self.hasControlLease = false
-                    if let previousSession {
+                    if retainIntent {
+                        // Offline is not a failed selection. Keep the route
+                        // and cached surface visible; the client will retry
+                        // this subscription when the socket reconnects.
+                        self.connectionState = .reconnecting
+                    } else if let previousSession {
                         // A rejected handoff must not leave navigation pointing
                         // at a Session that is no longer subscribed. Restore the
                         // previous scope immediately; its subscription intent
@@ -959,15 +984,10 @@ public final class IOSApplicationModel: ObservableObject {
                         self.terminalState.terminalReadyBySessionID[previousSession.id] = false
                         self.terminalState.terminalSubscriptionBySessionID[previousSession.id] = false
                         self.terminalSubscriptionRequests.insert(previousSession.id)
-                        if retainIntent {
-                            self.connectionState = .reconnecting
-                        } else {
-                            self.ensureTerminalSubscription(for: previousSession.id)
-                        }
+                        self.ensureTerminalSubscription(for: previousSession.id)
                     } else {
                         self.currentSessionID = nil
                         self.navigation.sessionID = nil
-                        if retainIntent { self.connectionState = .reconnecting }
                     }
                     self.persistNavigation()
                     self.syncLiveActivity()
@@ -2812,6 +2832,7 @@ public final class IOSApplicationModel: ObservableObject {
             )
         }
         roster = next
+        localStore.cacheRoster(next, endpointName: endpointMetadata.name, endpointURL: endpointMetadata.url)
         maintenanceMessage = nil
         agentStatusBySessionID = [:]
         agentTurnBySessionID = [:]

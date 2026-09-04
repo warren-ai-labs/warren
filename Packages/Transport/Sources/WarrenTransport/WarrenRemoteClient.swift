@@ -508,7 +508,8 @@ public actor WarrenRemoteClient {
     private let urlSession: URLSession
     private var accessToken: String
     private let advertisedCapabilities: [String]
-    private let refreshToken: String?  // OAuth2-style refresh token for Relay
+    private var refreshToken: String?  // OAuth2-style refresh token for Relay
+    private let refreshTokenHandler: (@Sendable (String) -> Void)?
     /// A native pairing intentionally leaves the Relay capability's client_id
     /// empty. Keeping this optional also lets a future enrollment flow pin a
     /// stable client identity without changing the WebSocket protocol.
@@ -532,13 +533,15 @@ public actor WarrenRemoteClient {
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
         urlSession: URLSession = WarrenRemoteNetworking.session,
-        codec: WarrenWireCodec = WarrenWireCodec()
+        codec: WarrenWireCodec = WarrenWireCodec(),
+        refreshTokenHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
         // Extract refresh_token from endpoint metadata if available
         self.refreshToken = configuration.refreshToken
+        self.refreshTokenHandler = refreshTokenHandler
         self.advertisedCapabilities = [
             "roster-delta",
             WarrenRemoteAgentCapability.timeline,
@@ -559,12 +562,14 @@ public actor WarrenRemoteClient {
         task: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
         capabilities: [String] = ["roster-delta"],
-        urlSession: URLSession = WarrenRemoteNetworking.session
+        urlSession: URLSession = WarrenRemoteNetworking.session,
+        refreshTokenHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
         self.refreshToken = configuration.refreshToken
+        self.refreshTokenHandler = refreshTokenHandler
         self.advertisedCapabilities = capabilities
         self.clientID = nil
         self.injectedTask = task
@@ -1167,6 +1172,7 @@ public actor WarrenRemoteClient {
                       !value.accessToken.isEmpty else { return false }
                 
                 accessToken = value.accessToken
+                if let next = value.refreshToken, !next.isEmpty { self.refreshToken = next; refreshTokenHandler?(next) }
                 return true
             } catch {
                 // OAuth2 refresh failed, fall back to cookie-based approach
@@ -1186,6 +1192,7 @@ public actor WarrenRemoteClient {
             guard value.hostID == configuration.hostID,
                   !value.accessToken.isEmpty else { return false }
             accessToken = value.accessToken
+            if let next = value.refreshToken, !next.isEmpty { refreshToken = next; refreshTokenHandler?(next) }
             return true
         } catch {
             return false
