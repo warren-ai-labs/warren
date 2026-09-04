@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -1458,4 +1459,270 @@ func TestCodexSessionIsolationInSameWorkspace(t *testing.T) {
 		s2.mu.Unlock()
 	}
 	service.agentsMu.Unlock()
+}
+
+func TestClaudeSessionIsolationInSameWorkspace(t *testing.T) {
+	claudeHome := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+
+	directory := t.TempDir()
+	projectsRoot := filepath.Join(claudeHome, "projects")
+
+	claudeID1 := "claude-uuid-1"
+	claudeID2 := "claude-uuid-2"
+
+	transcriptPath1 := agent.ClaudeTranscriptPath(projectsRoot, directory, claudeID1)
+	if err := os.MkdirAll(filepath.Dir(transcriptPath1), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcriptPath1, []byte(
+		`{"type":"summary","summary":"Claude 1 conversation","leafUuid":null}`+"\n"+
+			`{"type":"user","uuid":"u1","cwd":"`+directory+`","message":{"role":"user","content":"Initial prompt for session 1"}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session1 := api.Session{
+		ID: "session-claude-1", WorkspaceID: workspaceID, Title: "Claude 1", Kind: "claude",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		AgentSessionID: claudeID1, TranscriptPath: transcriptPath1,
+	}
+	session2 := api.Session{
+		ID: "session-claude-2", WorkspaceID: workspaceID, Title: "Claude 2", Kind: "claude",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		AgentSessionID: claudeID2,
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session1, session2}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-agent", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{
+		Store:       state,
+		Runtime:     runtime,
+		AgentFinder: staticAgentFinder{path: transcriptPath1}, // Decoy finder returning session 1's path
+	}
+	service.AgentProviders = NewTUIAgentProviderRegistry(service)
+	service.lazyInit()
+
+	// Ensure Session 1 is bound
+	entry1, err := service.ensureAgent(context.Background(), session1)
+	if err != nil || entry1 == nil || entry1.handle == nil {
+		t.Fatalf("session 1 failed to bind: %v", err)
+	}
+	defer entry1.handle.Close()
+
+	// Ensure Session 2 before its transcript file is written by Claude CLI.
+	// It must NOT use fuzzy fallback (staticAgentFinder decoy) and must NOT adopt session 1's transcript.
+	entry2, err := service.ensureAgent(context.Background(), session2)
+	if err != nil {
+		t.Fatalf("ensureAgent returned error: %v", err)
+	}
+	if entry2 != nil && entry2.handle != nil {
+		t.Fatalf("session 2 unexpectedly bound to handle before file was written")
+	}
+
+	// Verify session 2 did not replay session 1 events or borrow its title
+	service.agentsMu.Lock()
+	session2Agent := service.agents["session-claude-2"]
+	if session2Agent != nil {
+		session2Agent.mu.Lock()
+		if len(session2Agent.events) > 0 {
+			t.Fatalf("session 2 has replayed events: %#v", session2Agent.events)
+		}
+		if session2Agent.titleUser != "" {
+			t.Fatalf("session 2 titleUser was polluted: %q", session2Agent.titleUser)
+		}
+		session2Agent.mu.Unlock()
+	}
+	service.agentsMu.Unlock()
+
+	// Now simulate Claude writing its transcript for session 2
+	transcriptPath2 := agent.ClaudeTranscriptPath(projectsRoot, directory, claudeID2)
+	if err := os.WriteFile(transcriptPath2, []byte(
+		`{"type":"summary","summary":"Claude 2 conversation","leafUuid":null}`+"\n"+
+			`{"type":"user","uuid":"u2","cwd":"`+directory+`","message":{"role":"user","content":"New prompt for session 2"}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reconcile session 2 now that file exists
+	entry2Bound, err := service.ensureAgent(context.Background(), session2)
+	if err != nil || entry2Bound == nil || entry2Bound.handle == nil {
+		t.Fatalf("session 2 failed to bind after transcript was written: %v", err)
+	}
+	defer entry2Bound.handle.Close()
+
+	if meta, ok := entry2Bound.handle.(interface{ BindingMetadata() (string, string) }); ok {
+		if _, path := meta.BindingMetadata(); path != transcriptPath2 {
+			t.Fatalf("session 2 watcher path = %q, want %q", path, transcriptPath2)
+		}
+	} else {
+		t.Fatal("handle does not implement BindingMetadata")
+	}
+}
+
+func TestAntigravitySessionIsolationInSameWorkspace(t *testing.T) {
+	antigravityHome := t.TempDir()
+	t.Setenv("ANTIGRAVITY_HOME", antigravityHome)
+
+	directory := t.TempDir()
+
+	// Populate conversation_summaries.db with a past conversation in this workspace
+	dbPath := filepath.Join(antigravityHome, "conversation_summaries.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE conversation_summaries (
+		conversation_id TEXT PRIMARY KEY,
+		workspace_uris TEXT,
+		last_modified_time TEXT
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convoID1 := "convo-1"
+	transcriptDir1 := filepath.Join(antigravityHome, "brain", convoID1, ".system_generated", "logs")
+	if err := os.MkdirAll(transcriptDir1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath1 := filepath.Join(transcriptDir1, "transcript.jsonl")
+	if err := os.WriteFile(transcriptPath1, []byte(
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"USER_INPUT","content":"Prior conversation"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO conversation_summaries VALUES (?, ?, ?)`,
+		convoID1,
+		`["`+directory+`"]`,
+		time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session1 := api.Session{
+		ID: "session-agy-1", WorkspaceID: workspaceID, Title: "Antigravity 1", Kind: "antigravity",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		AgentSessionID: convoID1, TranscriptPath: transcriptPath1,
+	}
+	session2 := api.Session{
+		ID: "session-agy-2", WorkspaceID: workspaceID, Title: "Antigravity 2", Kind: "antigravity",
+		Runtime: "runtime-agent", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session1, session2}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-agent", directory, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{
+		Store:       state,
+		Runtime:     runtime,
+		AgentFinder: staticAgentFinder{path: transcriptPath1}, // Decoy finder returning session 1's path
+	}
+	service.AgentProviders = NewTUIAgentProviderRegistry(service)
+	service.lazyInit()
+
+	// Ensure Session 1 is bound
+	entry1, err := service.ensureAgent(context.Background(), session1)
+	if err != nil || entry1 == nil || entry1.handle == nil {
+		t.Fatalf("session 1 failed to bind: %v", err)
+	}
+	defer entry1.handle.Close()
+
+	// Ensure Session 2 before its binding appears.
+	// It must NOT adopt convo 1 from DB or finder fallback.
+	entry2, err := service.ensureAgent(context.Background(), session2)
+	if err != nil {
+		t.Fatalf("ensureAgent returned error: %v", err)
+	}
+	if entry2 != nil && entry2.handle != nil {
+		t.Fatalf("session 2 unexpectedly bound to handle before binding was written")
+	}
+
+	// Verify session 2 did not borrow session 1
+	service.agentsMu.Lock()
+	session2Agent := service.agents["session-agy-2"]
+	if session2Agent != nil {
+		session2Agent.mu.Lock()
+		if len(session2Agent.events) > 0 {
+			t.Fatalf("session 2 has replayed events: %#v", session2Agent.events)
+		}
+		if session2Agent.titleUser != "" {
+			t.Fatalf("session 2 titleUser was polluted: %q", session2Agent.titleUser)
+		}
+		session2Agent.mu.Unlock()
+	}
+	service.agentsMu.Unlock()
+
+	// Now simulate session 2 writing its own binding and transcript
+	convoID2 := "convo-2"
+	transcriptDir2 := filepath.Join(antigravityHome, "brain", convoID2, ".system_generated", "logs")
+	if err := os.MkdirAll(transcriptDir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath2 := filepath.Join(transcriptDir2, "transcript.jsonl")
+	if err := os.WriteFile(transcriptPath2, []byte(
+		`{"timestamp":"2026-08-16T10:01:00Z","type":"USER_INPUT","content":"Fresh convo 2 prompt"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteBinding(agent.BindPath("session-agy-2"), agent.Binding{
+		Provider:       "antigravity",
+		SessionID:      convoID2,
+		TranscriptPath: transcriptPath2,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reconcile session 2 now that binding exists
+	entry2Bound, err := service.ensureAgent(context.Background(), session2)
+	if err != nil || entry2Bound == nil || entry2Bound.handle == nil {
+		t.Fatalf("session 2 failed to bind after binding was written: %v", err)
+	}
+	defer entry2Bound.handle.Close()
+
+	if meta, ok := entry2Bound.handle.(interface{ BindingMetadata() (string, string) }); ok {
+		if _, path := meta.BindingMetadata(); path != transcriptPath2 {
+			t.Fatalf("session 2 watcher path = %q, want %q", path, transcriptPath2)
+		}
+	} else {
+		t.Fatal("handle does not implement BindingMetadata")
+	}
 }

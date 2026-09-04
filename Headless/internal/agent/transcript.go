@@ -77,14 +77,13 @@ func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, aft
 		// generic finder has no identity to search with.
 		return "", nil
 	case "antigravity":
-		return f.findAntigravity(ctx, workspacePath, after)
+		// Antigravity sessions are bound by the per-session lifecycle hook
+		// Warren installs in hooks.json. Generic workspace-level DB lookup has
+		// no session identity and would erroneously adopt unrelated prior conversations.
+		return "", nil
 	default:
 		return "", nil
 	}
-}
-
-func (f DefaultFinder) findAntigravity(ctx context.Context, workspacePath string, after time.Time) (string, error) {
-	return FindAntigravityTranscript("", workspacePath), nil
 }
 
 func (f DefaultFinder) findCodex(ctx context.Context, workspacePath string, after time.Time) (string, error) {

@@ -1382,79 +1382,66 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 	agentSessionID := strings.TrimSpace(value.AgentSessionID)
 	transcriptPath := strings.TrimSpace(value.TranscriptPath)
 
-	if kind == "codex" {
-		// Codex sessions are bound strictly by the per-session hook Warren installs in
-		// ~/.codex/hooks.json (which writes ~/.config/warren/agent-bind/<session-id>.json).
-		// Never use fuzzy cwd+mtime discovery without a valid binding: an active
-		// session in the same workspace would be erroneously claimed by a newly created
-		// session before its own hook has fired.
-		binding, err := agent.ReadBinding(agent.BindPath(value.SessionID))
-		if err == nil && binding != nil && normalizeProviderKind(binding.Provider) == "codex" {
-			if binding.TranscriptPath != "" && regularFileExists(binding.TranscriptPath) {
-				agentSessionID = strings.TrimSpace(binding.SessionID)
-				if agentSessionID == "" {
-					agentSessionID = value.SessionID
-				}
-				transcriptPath = binding.TranscriptPath
-			}
-		} else if value.TranscriptPath != "" && regularFileExists(value.TranscriptPath) && value.AgentSessionID != "" {
-			// Persisted from a prior reconcile before daemon restart.
-			agentSessionID = value.AgentSessionID
-			transcriptPath = value.TranscriptPath
-		}
-		if transcriptPath == "" {
-			return nil, ErrAgentNotReady
-		}
-		if service.Store != nil && service.transcriptTakenByOtherInState(service.Store.Snapshot(), transcriptPath, value.SessionID) {
-			return nil, ErrAgentNotReady
-		}
-		return &tuiAgentHandle{
-			service:        service,
-			sessionID:      value.SessionID,
-			provider:       kind,
-			agentSessionID: agentSessionID,
-			transcriptPath: transcriptPath,
-			runtimeName:    value.Runtime,
-			runtimeKind:    value.RuntimeKind,
-			key:            tuiBindingKey(kind, agentSessionID, transcriptPath),
-		}, nil
-	}
-
-	if binding, err := agent.ReadBinding(agent.BindPath(value.SessionID)); err == nil && binding != nil && normalizeProviderKind(binding.Provider) == kind {
+	// Explicit hook bindings written by Warren's lifecycle hooks/extensions are authoritative.
+	binding, err := agent.ReadBinding(agent.BindPath(value.SessionID))
+	if err == nil && binding != nil && normalizeProviderKind(binding.Provider) == kind {
 		if binding.SessionID != "" {
-			agentSessionID = binding.SessionID
+			agentSessionID = strings.TrimSpace(binding.SessionID)
 		}
 		if binding.TranscriptPath != "" && regularFileExists(binding.TranscriptPath) {
 			transcriptPath = binding.TranscriptPath
 		}
+	} else if value.TranscriptPath != "" && regularFileExists(value.TranscriptPath) && value.AgentSessionID != "" {
+		// Persisted from a prior reconcile before daemon restart.
+		agentSessionID = value.AgentSessionID
+		transcriptPath = value.TranscriptPath
 	}
+
 	if transcriptPath != "" && !regularFileExists(transcriptPath) {
 		transcriptPath = ""
 	}
-	if transcriptPath == "" && kind == "claude" && agentSessionID != "" {
-		path := agent.ClaudeTranscriptPath(agent.ClaudeProjectsRoot(), value.WorkspacePath, agentSessionID)
-		if regularFileExists(path) {
-			transcriptPath = path
+
+	if transcriptPath == "" {
+		switch kind {
+		case "claude":
+			// Claude transcript path is deterministic based on the session ID injected by Warren.
+			if agentSessionID != "" {
+				path := agent.ClaudeTranscriptPath(agent.ClaudeProjectsRoot(), value.WorkspacePath, agentSessionID)
+				if regularFileExists(path) {
+					transcriptPath = path
+				}
+			}
+		case "pi":
+			// Pi reports its session ID via hook extension; transcript file ends with _<session-id>.jsonl.
+			if agentSessionID != "" {
+				transcriptPath = agent.FindPiTranscript(agentSessionID)
+			}
+		case "qoder":
+			// Qoder transcript path is derived from the injected session ID under ~/.qoder/projects.
+			if agentSessionID != "" {
+				transcriptPath = agent.FindQoderTranscript(agentSessionID, value.WorkspacePath)
+			}
+		case "antigravity":
+			// Antigravity sessions resolve strictly by the conversation ID reported in the binding hook.
+			if agentSessionID != "" {
+				transcriptPath = agent.FindAntigravityTranscript(agentSessionID, value.WorkspacePath)
+			}
+		case "codex":
+			// Codex transcripts are bound strictly by the per-session hook report.
+		default:
+			// Non-standard or third-party providers may use a custom finder.
+			if nonNilInterface(service.AgentFinder) {
+				found, err := service.AgentFinder.Find(ctx, kind, value.WorkspacePath, value.Session.CreatedAt)
+				if err != nil {
+					return nil, err
+				}
+				if found != "" && regularFileExists(found) {
+					transcriptPath = found
+				}
+			}
 		}
 	}
-	if transcriptPath == "" && kind == "pi" && agentSessionID != "" {
-		transcriptPath = agent.FindPiTranscript(agentSessionID)
-	}
-	if transcriptPath == "" && kind == "qoder" && agentSessionID != "" {
-		transcriptPath = agent.FindQoderTranscript(agentSessionID, value.WorkspacePath)
-	}
-	if transcriptPath == "" && kind == "antigravity" && agentSessionID != "" {
-		transcriptPath = agent.FindAntigravityTranscript(agentSessionID, value.WorkspacePath)
-	}
-	if transcriptPath == "" && kind != "codex" && nonNilInterface(service.AgentFinder) {
-		found, err := service.AgentFinder.Find(ctx, kind, value.WorkspacePath, value.Session.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		if found != "" && regularFileExists(found) {
-			transcriptPath = found
-		}
-	}
+
 	if transcriptPath == "" {
 		return nil, ErrAgentNotReady
 	}
