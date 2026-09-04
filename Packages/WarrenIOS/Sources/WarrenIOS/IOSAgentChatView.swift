@@ -1785,7 +1785,7 @@ enum AgentActivityEntry {
     }
 }
 
-struct AgentToolBlock {
+struct AgentToolBlock: Identifiable {
     let call: WarrenRemoteAgentEvent
     var outputs: [WarrenRemoteAgentEvent]
 
@@ -2815,12 +2815,8 @@ private struct AgentActivityGroupBlock: View {
                         }
                     }
                     if !activity.toolBlocks.isEmpty {
-                        ForEach(coalesceToolBlocks(activity.toolBlocks)) { group in
-                            if group.tools.count == 1 {
-                                AgentToolBlockView(tool: group.tools[0])
-                            } else {
-                                AgentCoalescedToolBlockView(group: group)
-                            }
+                        ForEach(activity.toolBlocks) { tool in
+                            AgentToolBlockView(tool: tool)
                         }
                     }
                 }
@@ -2996,89 +2992,6 @@ private struct AgentToolBlockView: View {
         .contentShape(Rectangle())
         .accessibilityLabel(isCommand ? "Command: \(toolSummary(for: tool.call) ?? "exec")" : displayToolName(tool.call.toolName))
         .accessibilityValue(toolStatusTitle(tool.status))
-    }
-}
-
-private struct AgentCoalescedToolGroup: Identifiable {
-    var id: String { "coalesced-\(toolName)-\(tools.first?.id ?? "")" }
-    let toolName: String
-    let tools: [AgentToolBlock]
-
-    var status: String {
-        let values = tools.map { $0.status }
-        if values.contains("error") || values.contains("failed") { return "error" }
-        if values.contains("interrupted") { return "interrupted" }
-        if values.contains("running") { return "running" }
-        return "success"
-    }
-
-    var summary: String? {
-        let summaries = tools.compactMap { toolSummary(for: $0.call) }
-        guard !summaries.isEmpty else { return nil }
-        var unique: [String] = []
-        for s in summaries where !unique.contains(s) {
-            unique.append(s)
-        }
-        return truncateToolSummary(unique.joined(separator: ", "), maxLength: 140)
-    }
-}
-
-private func coalesceToolBlocks(_ tools: [AgentToolBlock]) -> [AgentCoalescedToolGroup] {
-    var groups: [AgentCoalescedToolGroup] = []
-    for tool in tools {
-        let name = (tool.call.toolName ?? "").lowercased()
-        if let last = groups.last, last.toolName == name {
-            var updatedTools = last.tools
-            updatedTools.append(tool)
-            groups[groups.count - 1] = AgentCoalescedToolGroup(toolName: name, tools: updatedTools)
-        } else {
-            groups.append(AgentCoalescedToolGroup(toolName: name, tools: [tool]))
-        }
-    }
-    return groups
-}
-
-private struct AgentCoalescedToolBlockView: View {
-    let group: AgentCoalescedToolGroup
-
-    private var isCommand: Bool {
-        isCommandTool(group.toolName)
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Color.clear.frame(width: 10)
-            if isCommand {
-                Text("$ × \(group.tools.count)")
-                    .font(IOSTypography.status)
-                    .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
-                    .lineLimit(1)
-            } else {
-                Image(systemName: toolIconName(group.toolName))
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 14, height: 14, alignment: .center)
-                Text("\(displayToolName(group.toolName)) × \(group.tools.count)")
-                    .font(IOSTypography.status)
-                    .foregroundStyle(group.status == "running" ? IOSTheme.text : (group.status == "error" || group.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
-                    .lineLimit(1)
-            }
-            if let summary = group.summary {
-                Text(summary)
-                    .font(IOSTypography.metadata)
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            AgentToolStatusMark(status: group.status)
-                .frame(width: 14, height: 14, alignment: .trailing)
-        }
-        .foregroundStyle(IOSTheme.secondaryText)
-        .frame(minHeight: 26)
-        .contentShape(Rectangle())
-        .accessibilityLabel(isCommand ? "$ × \(group.tools.count)" : "\(displayToolName(group.toolName)) × \(group.tools.count)")
-        .accessibilityValue(toolStatusTitle(group.status))
     }
 }
 
