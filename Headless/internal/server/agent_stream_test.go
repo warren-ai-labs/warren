@@ -1726,3 +1726,110 @@ func TestAntigravitySessionIsolationInSameWorkspace(t *testing.T) {
 		t.Fatal("handle does not implement BindingMetadata")
 	}
 }
+
+func TestAgentHistoryClipsToolOutput(t *testing.T) {
+	service := &Service{
+		AgentStorePath: filepath.Join(t.TempDir(), "agent_store.db"),
+	}
+	service.lazyInit()
+	sessionID := "session-clip-test"
+
+	service.agentsMu.Lock()
+	service.agents[sessionID] = &agentSession{}
+	service.agentsMu.Unlock()
+
+	longOutput := strings.Repeat("A", 10000)
+	longContent := strings.Repeat("B", 10000)
+	events := []api.AgentEvent{
+		{
+			Sequence: 1,
+			Type:     "tool_output",
+			Output:   longOutput,
+		},
+		{
+			Sequence: 2,
+			Type:     "message",
+			Role:     "assistant",
+			Content:  longContent,
+		},
+		{
+			Sequence: 3,
+			Type:     "tool_call",
+			ToolName: "execute",
+			ToolInput: map[string]any{
+				"cmd": strings.Repeat("C", 8000),
+			},
+		},
+	}
+
+	service.recordAgentEvents(sessionID, events, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	// Default clipping (4096)
+	page := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false)
+	if len(page.Events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(page.Events))
+	}
+
+	// Tool output must be clipped to 4096 runes + ellipsis
+	if len(page.Events[0].Output) > 4096+len("…") {
+		t.Fatalf("tool output length = %d, want <= %d", len(page.Events[0].Output), 4096+len("…"))
+	}
+	if !strings.HasSuffix(page.Events[0].Output, "…") {
+		t.Fatalf("expected tool output to end with ellipsis")
+	}
+
+	// Assistant conversational Content must NEVER be clipped
+	if len(page.Events[1].Content) != 10000 {
+		t.Fatalf("assistant content was clipped: got len %d, want 10000", len(page.Events[1].Content))
+	}
+
+	// Tool input must be clipped
+	inputMap, ok := page.Events[2].ToolInput.(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool input to be map[string]any, got %T", page.Events[2].ToolInput)
+	}
+	cmdStr, ok := inputMap["cmd"].(string)
+	if !ok || len(cmdStr) > 4096+len("…") {
+		t.Fatalf("tool input cmd length = %d, want <= %d", len(cmdStr), 4096+len("…"))
+	}
+
+	// Custom maxOutput limit
+	customPage := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false, 100)
+	if len(customPage.Events[0].Output) > 100+len("…") {
+		t.Fatalf("tool output with custom maxOutput length = %d, want <= 103", len(customPage.Events[0].Output))
+	}
+
+	// Unclipped when maxOutput <= 0 (e.g. -1)
+	unclippedPage := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false, -1)
+	if len(unclippedPage.Events[0].Output) != 10000 {
+		t.Fatalf("tool output with maxOutput=-1 was clipped: got %d, want 10000", len(unclippedPage.Events[0].Output))
+	}
+}
+
+func TestClipWireEvents(t *testing.T) {
+	// Test multi-byte UTF-8 string truncation
+	chineseStr := strings.Repeat("中", 100)
+	clipped := truncateString(chineseStr, 10)
+	if clipped != strings.Repeat("中", 10)+"…" {
+		t.Fatalf("unexpected utf-8 truncation result: %s", clipped)
+	}
+
+	// Test nested tool input
+	nested := map[string]any{
+		"nested": []any{
+			map[string]any{
+				"key": strings.Repeat("X", 20),
+			},
+			strings.Repeat("Y", 20),
+		},
+	}
+	limited := limitToolInput(nested, 5).(map[string]any)
+	arr := limited["nested"].([]any)
+	innerMap := arr[0].(map[string]any)
+	if innerMap["key"] != "XXXXX…" {
+		t.Fatalf("inner key = %v, want XXXXX…", innerMap["key"])
+	}
+	if arr[1] != "YYYYY…" {
+		t.Fatalf("inner array item = %v, want YYYYY…", arr[1])
+	}
+}

@@ -1854,7 +1854,7 @@ func (p *wsPeer) enqueueAgentEvents(sessionID string, events []api.AgentEvent) e
 		Type:    "agent",
 		Session: sessionID,
 		Epoch:   p.server.Service.currentAgentEpoch(),
-		Events:  events,
+		Events:  clipWireEvents(events, defaultWireToolOutputLimit),
 	})
 }
 
@@ -2039,6 +2039,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		since, _ := uint64Param(params, "since")
 		before, _ := uint64Param(params, "before")
 		limit := intParam(params, "limit")
+		maxOutput := intParam(params, "maxOutput")
+		if maxOutput == 0 {
+			maxOutput = intParam(params, "contentLimit")
+		}
 		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
 		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithOptions(
 			sessionID,
@@ -2046,6 +2050,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			before,
 			limit,
 			priority == "conversation" || priority == "messages",
+			maxOutput,
 		))
 	case "agent.transcript":
 		sessionID := stringParam(params, "session")

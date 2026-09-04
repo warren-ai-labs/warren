@@ -4611,13 +4611,79 @@ func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) a
 // paged Agent View cannot lose a pending interaction or plan. The cursor
 // remains an event sequence, so clients can page backwards without changing
 // the wire contract or the ordering of the default view.
+const defaultWireToolOutputLimit = 4096
+
+func truncateString(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	count := 0
+	for index := range value {
+		if count == limit {
+			return value[:index] + "…"
+		}
+		count++
+	}
+	return value
+}
+
+func limitToolInput(value any, limit int) any {
+	switch item := value.(type) {
+	case string:
+		return truncateString(item, limit)
+	case []any:
+		result := make([]any, len(item))
+		for index := range item {
+			result[index] = limitToolInput(item[index], limit)
+		}
+		return result
+	case []string:
+		result := make([]string, len(item))
+		for index := range item {
+			result[index] = truncateString(item[index], limit)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(item))
+		for key, nested := range item {
+			result[key] = limitToolInput(nested, limit)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func clipWireEvents(events []api.AgentEvent, maxOutput int) []api.AgentEvent {
+	if maxOutput <= 0 {
+		return events
+	}
+	result := make([]api.AgentEvent, len(events))
+	for i, e := range events {
+		typeName := normalizedAgentEventType(e)
+		if typeName == "tool_output" && len(e.Output) > maxOutput {
+			e.Output = truncateString(e.Output, maxOutput)
+		}
+		if typeName == "tool_call" && e.ToolInput != nil {
+			e.ToolInput = limitToolInput(e.ToolInput, maxOutput)
+		}
+		result[i] = e
+	}
+	return result
+}
+
 func (s *Service) agentHistoryPageWithOptions(
 	sessionID string,
 	since uint64,
 	before uint64,
 	limit int,
 	conversationOnly bool,
+	maxOutputOption ...int,
 ) api.AgentHistoryResult {
+	maxOutput := defaultWireToolOutputLimit
+	if len(maxOutputOption) > 0 && maxOutputOption[0] != 0 {
+		maxOutput = maxOutputOption[0]
+	}
 	if limit <= 0 {
 		limit = agentHistoryDefaultLimit
 	}
@@ -4633,7 +4699,7 @@ func (s *Service) agentHistoryPageWithOptions(
 			if conversationOnly {
 				return conversationHistoryPage(queried, before, limit, result)
 			}
-			result.Events = queried
+			result.Events = clipWireEvents(queried, maxOutput)
 			result.Cursor = queried[0].Sequence
 			result.HasMore = hasMore
 			return result
@@ -4698,7 +4764,7 @@ func (s *Service) agentHistoryPageWithOptions(
 	if len(page) == 0 {
 		return result
 	}
-	result.Events = append([]api.AgentEvent(nil), page...)
+	result.Events = clipWireEvents(page, maxOutput)
 	result.Cursor = page[0].Sequence
 	return result
 }

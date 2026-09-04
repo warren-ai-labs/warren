@@ -921,7 +921,7 @@ export default function App() {
   }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
-    const params = { session: sessionID, limit: "200", priority: "conversation" };
+    const params = { session: sessionID, limit: "200", priority: "conversation", maxOutput: "4096" };
     if (before > 0) params.before = String(before);
     const token = {
       id: ++agentHistoryRequestSequenceRef.current,
@@ -3728,6 +3728,7 @@ export default function App() {
             since: String(lastSeq + 1),
             before: String(result.snapshot.sequence + 1),
             limit: "100",
+            maxOutput: "4096",
           }, page => {
             if (page?.events?.length > 0) {
               saveAgentEvents(sessionID, page.epoch || epoch, page.events);

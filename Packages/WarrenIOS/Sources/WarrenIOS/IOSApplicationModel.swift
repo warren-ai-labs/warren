@@ -2381,7 +2381,8 @@ public final class IOSApplicationModel: ObservableObject {
                 let page = try await client.agentHistory(
                     sessionID: sessionID,
                     before: before,
-                    conversationOnly: true
+                    conversationOnly: true,
+                    maxOutput: 4096
                 )
                 await MainActor.run {
                     guard let self,
@@ -2441,7 +2442,8 @@ public final class IOSApplicationModel: ObservableObject {
                     since: since,
                     before: before,
                     limit: 100,
-                    conversationOnly: false
+                    conversationOnly: false,
+                    maxOutput: 4096
                 )
                 if !page.events.isEmpty {
                     await MainActor.run {

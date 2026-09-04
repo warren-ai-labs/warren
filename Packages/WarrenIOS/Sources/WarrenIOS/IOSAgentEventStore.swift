@@ -117,7 +117,8 @@ public actor IOSAgentEventStore {
         var maxSeq: UInt64 = 0
         let now = Date().timeIntervalSince1970
 
-        for event in events {
+        for rawEvent in events {
+            let event = rawEvent.clipped(limit: 4096)
             if event.sequence > maxSeq {
                 maxSeq = event.sequence
             }
