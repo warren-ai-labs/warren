@@ -2266,8 +2266,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                       let values = object["devices"] as? [[String: Any]] else { return }
                 self?.relayDevices = values.compactMap { value in
                     guard let id = value["id"] as? String else { return nil }
-                    let created = (value["created_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? .distantPast
-                    let lastSeen = (value["last_seen_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? created
+                    let created = Self.parseISO8601Date(value["created_at"] as? String)
+                    let lastSeen = Self.parseISO8601Date(value["last_seen_at"] as? String) ?? created
                     return WarrenDesktopRelayDevice(id: id, clientID: value["client_id"] as? String ?? "", createdAt: created, lastSeenAt: lastSeen)
                 }
             } catch { self?.present(error) }
@@ -2367,7 +2367,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 } else {
                     expiresIn = 0
                 }
-                let expiresAt = (value["expires_at"] as? String).flatMap(Self.parseRelayInviteDate)
+                let expiresAt = Self.parseISO8601Date(value["expires_at"] as? String)
                 completion(.success(WarrenDesktopRelayInvite(url: url, expiresAt: expiresAt, expiresIn: expiresIn)))
             } catch {
                 self?.present(error)
@@ -2376,14 +2376,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private static let dateFormatter: ISO8601DateFormatter = {
+    private static let fractionalISO8601DateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static func parseRelayInviteDate(_ value: String) -> Date? {
-        dateFormatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    private static let iso8601DateFormatterWithoutFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    /// Relay and daemon timestamps are RFC 3339 values with optional
+    /// fractional seconds. Keep one parser so every remote date accepts both
+    /// forms and malformed values remain explicitly unknown to the caller.
+    static func parseISO8601Date(_ rawValue: String?) -> Date? {
+        guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return fractionalISO8601DateFormatter.date(from: value)
+            ?? iso8601DateFormatterWithoutFractionalSeconds.date(from: value)
     }
 
     private func clearPublicAccessAfterRelayReset() {
@@ -5230,10 +5242,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ))
     }
     private static func terminalGroupDate(_ rawValue: String?) -> Date {
-        guard let rawValue, let date = ISO8601DateFormatter().date(from: rawValue) else {
-            return .distantPast
-        }
-        return date
+        parseISO8601Date(rawValue) ?? .distantPast
     }
 
     private static func tabID(_ id: TerminalSessionID) -> String { "remote-\(id.description)" }
