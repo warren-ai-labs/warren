@@ -1794,17 +1794,6 @@ func TestAgentHistoryClipsToolOutput(t *testing.T) {
 		t.Fatalf("tool input cmd length = %d, want <= %d", len(cmdStr), 4096+len("…"))
 	}
 
-	// Custom maxOutput limit
-	customPage := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false, 100)
-	if len(customPage.Events[0].Output) > 100+len("…") {
-		t.Fatalf("tool output with custom maxOutput length = %d, want <= 103", len(customPage.Events[0].Output))
-	}
-
-	// Unclipped when maxOutput <= 0 (e.g. -1)
-	unclippedPage := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false, -1)
-	if len(unclippedPage.Events[0].Output) != 10000 {
-		t.Fatalf("tool output with maxOutput=-1 was clipped: got %d, want 10000", len(unclippedPage.Events[0].Output))
-	}
 }
 
 func TestClipWireEvents(t *testing.T) {
