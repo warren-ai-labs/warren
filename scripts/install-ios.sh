@@ -159,15 +159,14 @@ try:
         hp=dev.get('hardwareProperties',{}) or {}
         if hp.get('platform') not in (None, 'iOS'):
             continue
-        for k in ('udid','serialNumber','ecid'):
+        for k in ('udid', 'serialNumber'):
             v=hp.get(k)
             if isinstance(v,str) and re.match(r'^[0-9A-F-]+$', v):
                 print(v); raise SystemExit(0)
-        # Also try identifier field
-        for k in ('identifier','udid'):
-            v=dev.get(k)
-            if isinstance(v,str) and re.match(r'^0{4}[0-9A-F-]+', v):
-                print(v); raise SystemExit(0)
+        # Also try identifier field (CoreDevice UUID)
+        v=dev.get('identifier')
+        if isinstance(v,str) and re.match(r'^[0-9A-F-]+$', v):
+            print(v); raise SystemExit(0)
 except SystemExit:
     raise
 except Exception:
@@ -190,10 +189,16 @@ except Exception:
     fi
 fi
 
-# Verify team cert exists when possible.
+# Verify team cert exists when possible, or auto-detect if default team is missing.
 if ! security find-identity -v -p codesigning 2>&1 | grep -q "$team"; then
-    echo "Warning: Team $team not found in keychain identities; build may fail. Available:" >&2
-    security find-identity -v -p codesigning 2>&1 | head -n 20 >&2 || true
+    detected_team="$(security find-identity -v -p codesigning 2>&1 | sed -nE 's/.*Apple Development:.*\(([A-Z0-9]{10})\).*/\1/p' | head -n 1)"
+    if [[ -n "$detected_team" ]]; then
+        echo "Default team $team not found; using keychain Apple Development team: $detected_team"
+        team="$detected_team"
+    else
+        echo "Warning: Team $team not found in keychain identities; build may fail. Available:" >&2
+        security find-identity -v -p codesigning 2>&1 | head -n 20 >&2 || true
+    fi
 fi
 
 echo "==> Warren iOS install"
