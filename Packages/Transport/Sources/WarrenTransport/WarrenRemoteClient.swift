@@ -9,6 +9,7 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
     case closed
     case authenticationFailed(String)
     case requestFailed(String)
+    case requestFailedWithCode(code: String, message: String, details: [String: WarrenRemoteJSONValue]?)
     case incompatibleProtocol(expected: String, received: String)
     case unsupportedTerminalStateFormat(String)
     case invalidResponse
@@ -28,6 +29,8 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
             return "Warren Host authentication failed: \(message)"
         case .requestFailed(let message):
             return "Warren Host request failed: \(message)"
+        case .requestFailedWithCode(let code, let message, _):
+            return "Warren Host request failed [\(code)]: \(message)"
         case .incompatibleProtocol(let expected, let received):
             return "Warren Host protocol mismatch (expected \(expected), received \(received))."
         case .unsupportedTerminalStateFormat(let format):
@@ -413,8 +416,19 @@ private actor WarrenRemoteSocket {
                 requests.removeValue(forKey: id)?.resume(returning: encoded)
             } else {
                 let message = object["error"] as? String ?? "Remote request failed"
+                let code = object["code"] as? String
+                let details: [String: WarrenRemoteJSONValue]? = {
+                    guard let raw = object["details"],
+                          JSONSerialization.isValidJSONObject(raw),
+                          let data = try? JSONSerialization.data(withJSONObject: raw) else { return nil }
+                    return try? JSONDecoder().decode([String: WarrenRemoteJSONValue].self, from: data)
+                }()
                 requestTimeoutTasks.removeValue(forKey: id)?.cancel()
-                requests.removeValue(forKey: id)?.resume(throwing: WarrenRemoteClientError.requestFailed(message))
+                if let code, !code.isEmpty {
+                    requests.removeValue(forKey: id)?.resume(throwing: WarrenRemoteClientError.requestFailedWithCode(code: code, message: message, details: details))
+                } else {
+                    requests.removeValue(forKey: id)?.resume(throwing: WarrenRemoteClientError.requestFailed(message))
+                }
             }
         case "error":
             // Headless uses `error`; Relay's upgrade boundary uses `message`.
@@ -1506,6 +1520,14 @@ public actor WarrenRemoteClient {
 
     private static func isRecoveryAnchorFailure(_ error: Error) -> Bool {
         guard case let WarrenRemoteClientError.requestFailed(message) = error else {
+            if case let WarrenRemoteClientError.requestFailedWithCode(_, message, _) = error {
+                let value = message.lowercased()
+                return value.contains("anchor")
+                    || value.contains("cursor")
+                    || value.contains("epoch")
+                    || value.contains("sequence")
+                    || value.contains("recovery")
+            }
             return false
         }
         let value = message.lowercased()

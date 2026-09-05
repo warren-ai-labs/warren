@@ -35,4 +35,28 @@ final class CanonicalAgentEventTests: XCTestCase {
         let complete = try await store.saveEvents([event(1), event(2)], namespace: scope, streamID: "exec")
         XCTAssertEqual(complete.contiguousThrough, 3)
     }
+
+    func testHistoryBoundaryInstallsReplacementCursor() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WarrenAgentEventStore(databasePath: url.path)
+        let scope = WarrenAgentEventStore.Namespace(hostID: "host", accessScopeID: "owner")
+        func event(_ sequence: UInt64) -> WarrenRemoteAgentEvent {
+            .init(sequence: sequence, eventID: "evt-\(sequence)", streamID: "exec", executionID: "exec", type: "future.event", payload: [:])
+        }
+        _ = try await store.saveEvents([event(1)], namespace: scope, streamID: "exec")
+        let state = try await store.installHistoryBoundary(
+            namespace: scope,
+            streamID: "exec",
+            retainedFromSequence: 3,
+            headSequence: 5,
+            checkpointSequence: 5,
+            checkpoint: [:]
+        )
+        XCTAssertEqual(state.retainedFromSequence, 3)
+        XCTAssertEqual(state.contiguousThrough, 5)
+        XCTAssertEqual(state.headSequence, 5)
+        let cached = await store.loadRecentEvents(namespace: scope, streamID: "exec")
+        XCTAssertTrue(cached.isEmpty)
+    }
 }

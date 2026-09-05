@@ -76,6 +76,7 @@ import {
 import {
   agentReplicaNamespace,
   saveAgentEventsForStream,
+  installAgentHistoryBoundary,
   loadRecentAgentEventsForStream,
   getAgentSyncState,
 } from "./agent-store.js";
@@ -1042,8 +1043,53 @@ export default function App() {
             };
           });
         }
-      }, error => {
+      }, (error, failure = {}) => {
         if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
+        if (failure.code === "history_boundary" && failure.details) {
+          const details = failure.details;
+          installAgentHistoryBoundary(namespace, streamID, details).then(next => {
+            if (agentReplicaNamespaceRef.current !== namespace) return;
+            if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
+            setAgentStateBySession(previous => {
+              const current = previous[sessionID] || {};
+              const checkpoint = details.checkpoint && typeof details.checkpoint === "object"
+                ? { sequence: next.checkpointSequence, state: details.checkpoint }
+                : null;
+              const projected = checkpoint
+                ? projectAgentControlState(current.events || [], current, checkpoint)
+                : {};
+              return {
+                ...previous,
+                [sessionID]: {
+                  ...current,
+                  streamId: streamID,
+                  executionId: current.executionId || streamID,
+                  headSequence: Math.max(Number(current.headSequence) || 0, next.headSequence || 0),
+                  contiguousThrough: next.contiguousThrough,
+                  historyCursor: next.retainedFromSequence || 0,
+                  historyHasMore: false,
+                  historyLoading: false,
+                  historyLoaded: true,
+                  historyError: "",
+                  ...projected,
+                },
+              };
+            });
+            if (next.contiguousThrough < next.headSequence) {
+              void recoverAgentGap(sessionID, streamID, namespace);
+            }
+          }).catch(boundaryError => {
+            setAgentStateBySession(previous => ({
+              ...previous,
+              [sessionID]: {
+                ...(previous[sessionID] || {}),
+                historyLoading: false,
+                historyError: String(boundaryError?.message || boundaryError || "Unable to install Agent history boundary."),
+              },
+            }));
+          });
+          return;
+        }
         // A failed history request must not leave the loader spinning. Keep an
         // actionable retry affordance in the conversation surface instead of
         // silently dropping the user's only way to load older messages.
@@ -2239,9 +2285,17 @@ export default function App() {
       const handler = pendingRequestsRef.current.get(message.id);
       clearPendingRequest(pendingRequestsRef.current, message.id);
       if (!message.ok) {
-        const detail = message.error?.message || message.error || "Request failed";
+        const detail = typeof message.error === "object"
+          ? (message.error?.message || "Request failed")
+          : (message.error || "Request failed");
+        const structured = {
+          code: typeof message.code === "string" ? message.code : "",
+          details: message.details && typeof message.details === "object" ? message.details : null,
+        };
         if (handler?.onError) {
-          handler.onError(detail);
+          // Keep the first argument source-compatible for existing UI code,
+          // while exposing the RFC 0016 error code/details to recovery paths.
+          handler.onError(detail, structured);
         } else {
           setConnectionStatus({ message: detail, online: false });
           setEmptyOverride({ loading: false, message: detail });
@@ -3795,6 +3849,40 @@ export default function App() {
             },
           }));
         }
+      }, (error, failure = {}) => {
+        if (failure.code !== "history_boundary" || !failure.details) {
+          setAgentStateBySession(previous => ({
+            ...previous,
+            [sessionID]: {
+              ...(previous[sessionID] || {}),
+              historyError: String(error || "Unable to subscribe to Agent events."),
+            },
+          }));
+          return;
+        }
+        installAgentHistoryBoundary(namespace, streamID, failure.details).then(next => {
+          if (agentReplicaNamespaceRef.current !== namespace) return;
+          setAgentStateBySession(previous => ({
+            ...previous,
+            [sessionID]: {
+              ...(previous[sessionID] || {}),
+              streamId: streamID,
+              contiguousThrough: next.contiguousThrough,
+              headSequence: Math.max(next.headSequence || 0, Number(failure.details.headSequence) || 0),
+              historyLoaded: true,
+              historyError: "",
+            },
+          }));
+          if (next.contiguousThrough < next.headSequence) void recoverAgentGap(sessionID, streamID, namespace);
+        }).catch(boundaryError => {
+          setAgentStateBySession(previous => ({
+            ...previous,
+            [sessionID]: {
+              ...(previous[sessionID] || {}),
+              historyError: String(boundaryError?.message || boundaryError || "Unable to install Agent history boundary."),
+            },
+          }));
+        });
       });
     });
 

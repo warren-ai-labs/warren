@@ -87,10 +87,24 @@ function eventKey(identity, sequence) {
   return `${identity.hostId}\u0000${identity.accessScopeId}\u0000${identity.streamId}\u0000${sequence}`;
 }
 
-function advanceState(state, events) {
+function advanceState(state, events, { baselineSequence = 0 } = {}) {
   const next = { ...initialState(), ...state };
   const ordered = [...events].sort((left, right) => eventSequence(left) - eventSequence(right));
-  if (ordered.length) next.retainedFromSequence = eventSequence(ordered[0]);
+  if (ordered.length) {
+    const first = eventSequence(ordered[0]);
+    next.retainedFromSequence = next.retainedFromSequence > 0
+      ? Math.min(next.retainedFromSequence, first)
+      : first;
+  }
+  if (baselineSequence > 0) {
+    next.retainedFromSequence = next.retainedFromSequence > 0
+      ? Math.min(next.retainedFromSequence, baselineSequence)
+      : baselineSequence;
+    // A retention boundary is an explicit statement that the prefix before
+    // it is no longer required for continuity. Ordinary late batches must
+    // never get this treatment, or a dropped event would be silently skipped.
+    next.contiguousThrough = Math.max(next.contiguousThrough, baselineSequence - 1);
+  }
   for (const event of ordered) {
     const sequence = eventSequence(event);
     if (!sequence) continue;
@@ -165,15 +179,42 @@ export function openAgentDB() {
 export async function saveAgentEventsForStream(namespace, streamId, events = [], {
   checkpointSequence = 0,
   checkpoint = null,
+  historyBoundary = null,
 } = {}) {
   const identity = streamIdentity(namespace, streamId);
   const incoming = events.map(event => validateCanonicalAgentEvent(event, identity.streamId));
-  if (incoming.length === 0 && !checkpoint) return getAgentSyncState(identity, identity.streamId);
+  if (incoming.length === 0 && !checkpoint && !historyBoundary) return getAgentSyncState(identity, identity.streamId);
+
+  const boundary = historyBoundary && {
+    retainedFromSequence: Math.max(0, Number(historyBoundary.retainedFromSequence) || 0),
+    headSequence: Math.max(0, Number(historyBoundary.headSequence) || 0),
+    checkpointSequence: Math.max(0, Number(historyBoundary.checkpointSequence) || Number(checkpointSequence) || 0),
+  };
 
   if (!hasIndexedDB()) {
     let state = memoryState.get(stateKey(identity)) || initialState();
     const accepted = [];
     const staged = new Map(memoryEvents);
+    if (boundary?.retainedFromSequence > 0) {
+      for (const [key, value] of staged) {
+        if (value.hostId === identity.hostId
+          && value.accessScopeId === identity.accessScopeId
+          && value.streamId === identity.streamId
+          && value.sequence < boundary.retainedFromSequence) staged.delete(key);
+      }
+      state = {
+        ...state,
+        retainedFromSequence: boundary.retainedFromSequence,
+        headSequence: Math.max(state.headSequence, boundary.headSequence),
+        contiguousThrough: Math.max(state.contiguousThrough, boundary.checkpointSequence),
+      };
+      for (const [key, value] of memoryEvents) {
+        if (value.hostId === identity.hostId
+          && value.accessScopeId === identity.accessScopeId
+          && value.streamId === identity.streamId
+          && value.sequence < boundary.retainedFromSequence) memoryEvents.delete(key);
+      }
+    }
     for (const event of incoming) {
       const sequence = eventSequence(event);
       const key = eventKey(identity, sequence);
@@ -195,7 +236,14 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
         && value.accessScopeId === identity.accessScopeId
         && value.streamId === identity.streamId)
       .map(value => value.event);
-    state = advanceState(state, allEvents);
+    state = advanceState(state, allEvents, {
+      baselineSequence: boundary?.retainedFromSequence || 0,
+    });
+    if (boundary) {
+      state.headSequence = Math.max(state.headSequence, boundary.headSequence);
+      state.contiguousThrough = Math.max(state.contiguousThrough, boundary.checkpointSequence);
+      state.retainedFromSequence = boundary.retainedFromSequence || state.retainedFromSequence;
+    }
     if (checkpoint) {
       state.checkpoint = checkpoint;
       state.checkpointSequence = Number(checkpointSequence) || state.checkpointSequence;
@@ -239,7 +287,15 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
               cursor.continue();
               return;
             }
-            state = advanceState(stateRequest.result || initialState(), rows);
+            state = advanceState(stateRequest.result || initialState(), rows, {
+              baselineSequence: boundary?.retainedFromSequence || 0,
+            });
+            if (boundary) {
+              state.headSequence = Math.max(state.headSequence, boundary.headSequence);
+              state.contiguousThrough = Math.max(state.contiguousThrough, boundary.checkpointSequence);
+              state.retainedFromSequence = boundary.retainedFromSequence || state.retainedFromSequence;
+              state.hasMoreBefore = false;
+            }
             if (checkpoint) {
               state.checkpoint = checkpoint;
               state.checkpointSequence = Number(checkpointSequence) || state.checkpointSequence;
@@ -282,7 +338,39 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
     tx.oncomplete = () => resolve(state);
     tx.onerror = () => reject(failed || tx.error || new Error("unable to persist Agent events"));
     tx.onabort = () => reject(failed || tx.error || new Error("unable to persist Agent events"));
-    visit();
+    const start = () => visit();
+    if (boundary?.retainedFromSequence > 0) {
+      const range = IDBKeyRange.bound(
+        [identity.hostId, identity.accessScopeId, identity.streamId, 0],
+        [identity.hostId, identity.accessScopeId, identity.streamId, boundary.retainedFromSequence - 1],
+      );
+      const cursorRequest = eventStore.index("by_stream_sequence").openCursor(range);
+      cursorRequest.onsuccess = cursorEvent => {
+        const cursor = cursorEvent.target.result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+          return;
+        }
+        start();
+      };
+      cursorRequest.onerror = () => fail(cursorRequest.error || new Error("unable to install Agent history boundary"));
+    } else {
+      start();
+    }
+  });
+}
+
+/**
+ * Installs the Host replacement checkpoint returned by a structured
+ * history_boundary error. This is the only operation allowed to move a zero
+ * cursor to an explicit retention baseline.
+ */
+export function installAgentHistoryBoundary(namespace, streamId, boundary = {}) {
+  return saveAgentEventsForStream(namespace, streamId, [], {
+    checkpointSequence: Number(boundary.checkpointSequence) || 0,
+    checkpoint: boundary.checkpoint || null,
+    historyBoundary: boundary,
   });
 }
 

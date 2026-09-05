@@ -67,6 +67,38 @@ func TestCanonicalAgentEventStoreHistoryBounds(t *testing.T) {
 	}
 }
 
+func TestCanonicalAgentEventStorePersistsCheckpointWithAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	ctx := context.Background()
+	s, err := OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AppendCanonicalEventsWithCheckpoint(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{{
+		EventID: "evt-1", Type: "status.changed", Origin: api.AgentEventOrigin{Kind: "host", Confidence: "derived"},
+		Payload: map[string]any{"activity": "working"},
+	}}, map[string]any{"status": map[string]any{"activity": "working"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, ok, err := s.CanonicalCheckpoint(ctx, "exec-1")
+	if err != nil || !ok || checkpoint.Sequence != 1 || checkpoint.State["status"] == nil {
+		t.Fatalf("checkpoint = %#v, ok=%v, err=%v", checkpoint, ok, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	checkpoint, ok, err = s.CanonicalCheckpoint(ctx, "exec-1")
+	if err != nil || !ok || checkpoint.Sequence != 1 {
+		t.Fatalf("checkpoint after restart = %#v, ok=%v, err=%v", checkpoint, ok, err)
+	}
+}
+
 func TestCanonicalCommandJournalSurvivesRestartAndRejectsReuse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commands.db")
 	ctx := context.Background()
