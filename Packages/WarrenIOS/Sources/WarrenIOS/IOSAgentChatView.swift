@@ -2036,47 +2036,34 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
         }
     }
     // Structured snapshots carry their own sequence; restore timeline order.
-    // Sort indexes instead of events so the precomputed norms stay aligned.
-    let renderOrder: [Int] = {
-        var order = Array(renderEvents.indices)
-        let structured = Array(structuredByID.values)
-        guard !structured.isEmpty else {
-            // Fast path: live tail is already sequence-ordered.
-            var ordered = true
-            var last: UInt64 = 0
-            for event in renderEvents {
-                if event.sequence < last {
-                    ordered = false
-                    break
-                }
-                last = event.sequence
+    if structuredByID.isEmpty {
+        // Fast path: the live tail is already sequence-ordered, so skip the
+        // sort when every row arrives in order.
+        var ordered = true
+        var last: UInt64 = 0
+        for event in renderEvents {
+            if event.sequence < last {
+                ordered = false
+                break
             }
-            if ordered { return order }
-            order.sort { renderEvents[$0].sequence < renderEvents[$1].sequence }
-            var sortedEvents = [WarrenRemoteAgentEvent]()
-            sortedEvents.reserveCapacity(renderEvents.count)
-            var sortedNorms = [String]()
-            sortedNorms.reserveCapacity(renderNorms.count)
-            for index in order {
-                sortedEvents.append(renderEvents[index])
-                sortedNorms.append(renderNorms[index])
-            }
-            renderEvents = sortedEvents
-            renderNorms = sortedNorms
-            return Array(renderEvents.indices)
+            last = event.sequence
         }
+        if !ordered {
+            let order = renderEvents.indices.sorted { renderEvents[$0].sequence < renderEvents[$1].sequence }
+            renderEvents = order.map { renderEvents[$0] }
+            renderNorms = order.map { renderNorms[$0] }
+        }
+    } else {
         var combined = renderEvents
         var combinedNorms = renderNorms
-        combined.append(contentsOf: structured)
-        combinedNorms.append(contentsOf: structured.map {
+        combined.append(contentsOf: structuredByID.values)
+        combinedNorms.append(contentsOf: structuredByID.values.map {
             $0.normalizedType.replacingOccurrences(of: "-", with: "_")
         })
-        order = Array(combined.indices)
-        order.sort { combined[$0].sequence < combined[$1].sequence }
+        let order = combined.indices.sorted { combined[$0].sequence < combined[$1].sequence }
         renderEvents = order.map { combined[$0] }
         renderNorms = order.map { combinedNorms[$0] }
-        return Array(renderEvents.indices)
-    }()
+    }
 
     /// Activity is a timeline segment, not a whole user turn. Ending the
     /// segment at every visible conversation event keeps tool/thinking work
