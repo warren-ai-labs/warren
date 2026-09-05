@@ -11,28 +11,6 @@ packages:
     path: .
 
 targets:
-  WarrenLiveActivity:
-    type: app-extension
-    platform: iOS
-    deploymentTarget: "17.0"
-    sources:
-      - path: Widgets/WarrenLiveActivity
-        excludes:
-          - Info.plist
-    dependencies:
-      - package: WarrenIOSPackage
-        product: WarrenIOS
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: 2PX99VFWSU.WarrenIOSDevice.WarrenLiveActivity
-        INFOPLIST_FILE: Widgets/WarrenLiveActivity/Info.plist
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
-        SWIFT_VERSION: "6.0"
-        TARGETED_DEVICE_FAMILY: "1,2"
-        SUPPORTS_MACCATALYST: false
-        CODE_SIGN_STYLE: Automatic
-
   WarrenIOSApp:
     type: application
     platform: iOS
@@ -44,14 +22,11 @@ targets:
     dependencies:
       - package: WarrenIOSPackage
         product: WarrenIOS
-      - target: WarrenLiveActivity
-        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: 2PX99VFWSU.WarrenIOSDevice
         INFOPLIST_FILE: Sources/WarrenIOSApp/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/WarrenIOSApp/WarrenIOSApp.entitlements
-        APS_ENVIRONMENT: development
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -62,10 +37,8 @@ targets:
       configs:
         Debug:
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-          APS_ENVIRONMENT: development
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
-          APS_ENVIRONMENT: production
 
 schemes:
   WarrenIOSApp:

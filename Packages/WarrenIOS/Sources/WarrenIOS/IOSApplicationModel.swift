@@ -133,9 +133,6 @@ public final class IOSApplicationModel: ObservableObject {
     /// fallback). Rebuilt with the dashboard cache; values cover ended records
     /// exactly like the previous linear roster scans.
     private var sessionByID: [String: WarrenRemoteRoster.Session] = [:]
-    /// Guards the Live Activity bridge: roster/status/turn events arrive far
-    /// more often than the presented counts change.
-    private var lastLiveActivitySignature: String?
 
     /// Rebuilds the dashboard projections and session index from the current
     /// roster. Must be called after every roster assignment or clear while on
@@ -193,9 +190,7 @@ public final class IOSApplicationModel: ObservableObject {
     public let localStore: IOSLocalStore
 
     private var endpointToken: String
-    private let liveActivityCoordinator: IOSLiveActivityCoordinator
     private let relayBackgroundKeepAlive: IOSRelayBackgroundKeepAlive
-    private var liveActivityPushTokensBySessionID: [String: String] = [:]
     private var didEnterBackground = false
     private var eventTask: Task<Void, Never>?
     /// The UI's desired lifecycle is separate from the transport's last
@@ -300,7 +295,6 @@ public final class IOSApplicationModel: ObservableObject {
         self.agentState = IOSAgentLiveState()
         self.client = client
         self.localStore = localStore
-        self.liveActivityCoordinator = IOSLiveActivityCoordinator()
         self.relayBackgroundKeepAlive = IOSRelayBackgroundKeepAlive()
         self.endpointToken = storedEndpoint?.token ?? ""
         self.navigation = restoredNavigation
@@ -316,12 +310,6 @@ public final class IOSApplicationModel: ObservableObject {
         // fresh roster confirms that the Host still owns the Session.
         self.currentSessionID = nil
         self.sessionDeletionDestination = nil
-        self.liveActivityCoordinator.pushTokenHandler = { [weak self] sessionID, token in
-            self?.registerLiveActivityPushToken(token, for: sessionID)
-        }
-        self.liveActivityCoordinator.activityEndedHandler = { [weak self] sessionID in
-            self?.unregisterLiveActivityPushToken(for: sessionID)
-        }
 #if canImport(Network)
         let monitor = NWPathMonitor()
         self.pathMonitor = monitor
@@ -388,7 +376,6 @@ public final class IOSApplicationModel: ObservableObject {
     /// previous roster remains visible while a reconnect is in progress.
     public func start() {
         connectionRequested = true
-        syncLiveActivity()
         guard eventTask == nil else { return }
         let client = client
         let generation = clientGeneration
@@ -414,7 +401,6 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = false
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        endLiveActivity()
         eventTask?.cancel()
         eventTask = nil
         sessionTask?.cancel()
@@ -457,36 +443,8 @@ public final class IOSApplicationModel: ObservableObject {
         connectionState = .stopped
     }
 
-    private func registerLiveActivityPushToken(_ token: String, for sessionID: String) {
-        guard endpointMetadata.isRelay else { return }
-        liveActivityPushTokensBySessionID[sessionID] = token
-        let client = client
-        Task {
-            _ = try? await client.registerLiveActivityPushToken(sessionID: sessionID, token: token)
-        }
-    }
-
-    private func unregisterLiveActivityPushToken(for sessionID: String) {
-        guard let token = liveActivityPushTokensBySessionID.removeValue(forKey: sessionID) else { return }
-        let client = client
-        Task {
-            _ = try? await client.unregisterLiveActivityPushToken(sessionID: sessionID, token: token)
-        }
-    }
-
-    private func retryLiveActivityPushTokenRegistrations() {
-        guard endpointMetadata.isRelay else { return }
-        let client = client
-        for (sessionID, token) in liveActivityPushTokensBySessionID {
-            Task {
-                _ = try? await client.registerLiveActivityPushToken(sessionID: sessionID, token: token)
-            }
-        }
-    }
-
     /// Keeps the Relay socket alive for the finite background execution window
-    /// granted by iOS. The Live Activity remains visible after suspension, but
-    /// it is not itself a permission to run an indefinite WebSocket loop.
+    /// granted by iOS. It is not a permission to run an indefinite WebSocket loop.
     public func sceneDidEnterBackground() {
         guard endpointMetadata.isRelay, connectionRequested else { return }
         didEnterBackground = true
@@ -502,51 +460,6 @@ public final class IOSApplicationModel: ObservableObject {
         relayBackgroundKeepAlive.end()
         guard wasBackground, connectionRequested else { return }
         reconnect()
-    }
-
-    /// Ends the Live Activity bridge and clears its dedup signature so the
-    /// next sync restarts presentation even when counts are unchanged.
-    private func endLiveActivity() {
-        liveActivityCoordinator.end()
-        lastLiveActivitySignature = nil
-    }
-
-    /// Projects the selected Session into the optional Live Activity. Relay
-    /// routing decides whether a background task is requested, while this
-    /// activity remains a presentation of the current session state.
-    private func syncLiveActivity() {
-        guard connectionRequested, let currentSession else {
-            endLiveActivity()
-            return
-        }
-
-        let sessions = activeSessions
-        var workingCount = 0
-        var attentionCount = 0
-        for session in sessions {
-            guard let status = agentStatus(for: session.id) else { continue }
-            if status.activity == .working { workingCount += 1 }
-            if status.attention != nil || status.activity == .blocked || status.activity == .stalled {
-                attentionCount += 1
-            }
-        }
-        // Roster/status/turn events arrive far more often than the presented
-        // counts change; skip the ActivityKit bridge when nothing changed.
-        let signature = "\(currentSession.id)\u{1F}\(currentSession.displayTitle)\u{1F}\(endpointMetadata.name)\u{1F}\(connectionState)\u{1F}\(sessions.count)\u{1F}\(workingCount)\u{1F}\(attentionCount)"
-        guard signature != lastLiveActivitySignature else { return }
-        lastLiveActivitySignature = signature
-        liveActivityCoordinator.sync(
-            sessionID: currentSession.id,
-            sessionTitle: currentSession.displayTitle,
-            hostName: endpointMetadata.name,
-            state: WarrenLiveActivityState(
-                connection: WarrenLiveActivityConnection(connectionState),
-                activeSessionCount: sessions.count,
-                workingSessionCount: workingCount,
-                attentionSessionCount: attentionCount,
-                currentSessionTitle: currentSession.displayTitle
-            )
-        )
     }
 
     /// Requests a reconnect without exposing the transport actor to a View.
@@ -939,8 +852,6 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = false
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        endLiveActivity()
-        liveActivityPushTokensBySessionID.removeAll()
         eventTask?.cancel()
         eventTask = nil
         sessionTask?.cancel()
@@ -1011,8 +922,6 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = shouldRestart
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        endLiveActivity()
-        liveActivityPushTokensBySessionID.removeAll()
         let oldClient = client
         eventTask?.cancel()
         eventTask = nil
@@ -1407,7 +1316,6 @@ public final class IOSApplicationModel: ObservableObject {
         pendingTerminalFocusBySessionID.removeAll()
         pendingTerminalRecoveryBySessionID.removeValue(forKey: sessionID)
         terminalRecoveryRequests.remove(sessionID)
-        syncLiveActivity()
         if let oldSessionID {
             terminalSubscriptionRequests.remove(oldSessionID)
             cancelTerminalResize(for: oldSessionID)
@@ -1480,7 +1388,6 @@ public final class IOSApplicationModel: ObservableObject {
                         self.navigation.sessionID = nil
                     }
                     self.persistNavigation()
-                    self.syncLiveActivity()
                 }
             }
         }
@@ -1521,7 +1428,6 @@ public final class IOSApplicationModel: ObservableObject {
             guard let self, self.sessionSelectionGeneration == generation else { return }
             self.hasControlLease = false
             self.currentSessionID = nil
-            self.syncLiveActivity()
         }
         terminalSubscriptionRequests.remove(oldSessionID)
         cancelTerminalResize(for: oldSessionID)
@@ -1529,7 +1435,6 @@ public final class IOSApplicationModel: ObservableObject {
         pendingTerminalFocusBySessionID.remove(oldSessionID)
         terminalRecoveryRequests.remove(oldSessionID)
         hasControlLease = false
-        syncLiveActivity()
     }
 
     private func cancelTerminalResize(for sessionID: String) {
@@ -2746,7 +2651,6 @@ public final class IOSApplicationModel: ObservableObject {
         currentSessionID = nil
         navigation.sessionID = nil
         persistNavigation()
-        syncLiveActivity()
     }
 
     private func restoreSessionAfterDeleteFailure(_ sessionID: String) {
@@ -3294,13 +3198,11 @@ public final class IOSApplicationModel: ObservableObject {
                 if connectionState != .connected {
                     connectionState = .reconnecting
                 }
-                syncLiveActivity()
                 return
             }
             connectionState = state
             if state == .connected {
                 connectionError = nil
-                retryLiveActivityPushTokenRegistrations()
                 if let currentSessionID {
                     terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
                     ensureTerminalSubscription(for: currentSessionID)
@@ -3331,7 +3233,6 @@ public final class IOSApplicationModel: ObservableObject {
                     checkAutoFallbackToRelay()
                 }
             }
-            syncLiveActivity()
         case .welcome:
             let client = client
             Task { [weak self] in
@@ -3367,7 +3268,6 @@ public final class IOSApplicationModel: ObservableObject {
             if !hasReceivedAuthoritativeRoster {
                 hasReceivedAuthoritativeRoster = true
                 applyRoster(next)
-                syncLiveActivity()
                 if let namespace = agentReplicaNamespace {
                     let activeStreams = Set(next.sessions.compactMap(\.agentExecutionID))
                     Task {
@@ -3381,11 +3281,9 @@ public final class IOSApplicationModel: ObservableObject {
             }
             guard shouldApplyRoster(next) else { return }
             applyRoster(next)
-            syncLiveActivity()
         case .rosterDelta(let delta):
             guard let current = roster, let next = current.applying(delta) else { return }
             applyRoster(next)
-            syncLiveActivity()
         case .output(let frame):
             appendTerminalOutput(frame)
         case .atomicState(let state):
@@ -3474,12 +3372,10 @@ public final class IOSApplicationModel: ObservableObject {
         case .maintenance(let message):
             maintenanceMessage = message ?? "Host is updating."
             connectionState = .reconnecting
-            syncLiveActivity()
         case .disconnected(let reason):
             connectionError = reason
             hasControlLease = false
             if connectionState != .stopped { connectionState = .reconnecting }
-            syncLiveActivity()
         }
     }
 
@@ -4019,7 +3915,6 @@ public final class IOSApplicationModel: ObservableObject {
             pendingTerminalFocusBySessionID.remove(currentSessionID)
             hasControlLease = false
             self.currentSessionID = nil
-            syncLiveActivity()
         }
         if let requested = navigation.sessionID,
            sessionByID[requested]?.isRunning != true {
