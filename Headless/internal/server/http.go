@@ -1508,7 +1508,8 @@ type wsPeer struct {
 	connection *websocket.Conn
 	outbound   chan outboundMessage
 	// transport is set for a Relay control peer. It bypasses the WebSocket
-	// writer while preserving the same bounded peer and service lifecycle.
+	// socket but is still owned by the peer's writer goroutine, preserving the
+	// same bounded queue and service lifecycle.
 	transport func(outboundMessage) bool
 
 	enqueueMu sync.Mutex
@@ -1583,11 +1584,14 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 }
 
 func newRelayPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsPeer {
-	return &wsPeer{
+	peer := &wsPeer{
 		server:    server,
 		transport: transport,
+		outbound:  make(chan outboundMessage, outboundQueueCapacity),
 		closed:    make(chan struct{}),
 	}
+	go peer.writeLoop()
+	return peer
 }
 
 // beginPendingSubscription installs a cancellable marker for one session. A
@@ -1659,10 +1663,21 @@ func (p *wsPeer) close() {
 }
 
 func (p *wsPeer) writeLoop() {
-	if p.connection == nil {
+	if p.connection == nil && p.transport == nil {
 		return
 	}
 	for item := range p.outbound {
+		if p.transport != nil {
+			if !p.transport(item) {
+				// The Relay stream is the writer's ownership boundary. A failed
+				// transport send closes only this peer and lets the normal detach
+				// path release subscriptions; enqueue callers never wait on the
+				// network while holding enqueueMu.
+				p.close()
+				return
+			}
+			continue
+		}
 		_ = p.connection.SetWriteDeadline(time.Now().Add(outboundWriteTimeout))
 		if err := p.connection.WriteMessage(item.kind, item.data); err != nil {
 			p.close()
@@ -1671,22 +1686,29 @@ func (p *wsPeer) writeLoop() {
 	}
 	// The channel closed after a peer teardown; let the writer flush the
 	// already-queued final messages (for example the auth error) before
-	// releasing the socket.
-	_ = p.connection.Close()
+	// releasing the socket. Relay peers have no local WebSocket to close.
+	if p.connection != nil {
+		_ = p.connection.Close()
+	}
 }
 
 func (p *wsPeer) enqueue(item outboundMessage) bool {
 	p.enqueueMu.Lock()
+	// A few embedders construct wsPeer directly in tests. Lazily initialize
+	// the same owned writer used by production constructors so no code path
+	// falls back to a synchronous Relay transport call.
+	if p.closed == nil {
+		p.closed = make(chan struct{})
+	}
+	if p.outbound == nil && (p.transport != nil || p.connection != nil) {
+		p.outbound = make(chan outboundMessage, outboundQueueCapacity)
+		go p.writeLoop()
+	}
 	select {
 	case <-p.closed:
 		p.enqueueMu.Unlock()
 		return false
 	default:
-	}
-	if p.transport != nil {
-		ok := p.transport(item)
-		p.enqueueMu.Unlock()
-		return ok
 	}
 	select {
 	case p.outbound <- item:

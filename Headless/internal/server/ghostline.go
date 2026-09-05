@@ -140,13 +140,29 @@ func (r *GhostlineRuntime) session(ctx context.Context, name string) (*ghostline
 	return adopted, nil
 }
 
-func (r *GhostlineRuntime) Exists(ctx context.Context, name string) bool {
+// Probe preserves the distinction between an authoritative not-found/dead
+// answer and an unavailable Ghostline server. Lifecycle reconciliation must
+// never turn the latter into a durable Session end.
+func (r *GhostlineRuntime) Probe(ctx context.Context, name string) RuntimeProbeResult {
 	session, err := r.session(ctx, name)
 	if err != nil {
-		return false
+		if errors.Is(err, ghostline.ErrSessionNotFound) {
+			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "session_not_found", Err: err}
+		}
+		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "session_get_failed", Err: err}
 	}
 	status, err := session.Status(ctx)
-	return err == nil && status.Alive
+	if err != nil {
+		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "session_status_failed", Err: err}
+	}
+	if status.Alive {
+		return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "status_alive"}
+	}
+	return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "status_not_alive"}
+}
+
+func (r *GhostlineRuntime) Exists(ctx context.Context, name string) bool {
+	return r.Probe(ctx, name).State == RuntimeProbeAlive
 }
 
 func (r *GhostlineRuntime) Capture(ctx context.Context, name string) ([]byte, error) {

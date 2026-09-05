@@ -1908,21 +1908,19 @@ func TestPeerProjectsAgentEventsPerSession(t *testing.T) {
 	service := &Service{}
 	service.lazyInit()
 	var messages []api.AgentMessage
-	peer := &wsPeer{
-		server: &HTTPServer{Service: service},
-		closed: make(chan struct{}),
-		agentWireOptions: map[string]wireOptions{
-			"lean": {omitFields: map[string]struct{}{"output": {}}},
-			"full": {},
-		},
-		transport: func(item outboundMessage) bool {
-			var message api.AgentMessage
-			if err := json.Unmarshal(item.data, &message); err != nil {
-				t.Fatal(err)
-			}
-			messages = append(messages, message)
-			return true
-		},
+	messageReady := make(chan struct{}, 2)
+	peer := newRelayPeer(&HTTPServer{Service: service}, func(item outboundMessage) bool {
+		var message api.AgentMessage
+		if err := json.Unmarshal(item.data, &message); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, message)
+		messageReady <- struct{}{}
+		return true
+	})
+	peer.agentWireOptions = map[string]wireOptions{
+		"lean": {omitFields: map[string]struct{}{"output": {}}},
+		"full": {},
 	}
 	event := []api.AgentEvent{{Sequence: 1, Type: "tool_output", Output: "visible"}}
 	if err := peer.enqueueAgentEvents("lean", event); err != nil {
@@ -1931,9 +1929,17 @@ func TestPeerProjectsAgentEventsPerSession(t *testing.T) {
 	if err := peer.enqueueAgentEvents("full", event); err != nil {
 		t.Fatal(err)
 	}
+	for range 2 {
+		select {
+		case <-messageReady:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for Relay peer writer")
+		}
+	}
 	if len(messages) != 2 || messages[0].Events[0].Output != "" || messages[1].Events[0].Output != "visible" {
 		t.Fatalf("per-session projection = %#v", messages)
 	}
+	peer.close()
 }
 
 func TestParseWireOptionsRejectsUnsupportedFields(t *testing.T) {
