@@ -1,3 +1,5 @@
+import { validateCanonicalAgentEvent } from "./agent-store.js";
+
 export const agentEventLimit = 2000;
 export const agentAttachmentMaximumBytes = 64 * 1024 * 1024;
 export const agentAttachmentChunkSize = 256 * 1024;
@@ -13,8 +15,30 @@ export const agentStructuredEventTypes = new Set([
 ]);
 
 export function agentEventSequence(event) {
-  const value = Number(event?.sequence);
+  const value = event?.sequence;
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/** Applies Host control facts only through the contiguous event prefix. */
+export function projectAgentControlState(events, current = {}, checkpoint = null) {
+  let projectionThrough = current.projectionThrough || 0;
+  let status = current.status || null;
+  let turn = current.turn || null;
+  if (checkpoint && checkpoint.sequence >= projectionThrough) {
+    projectionThrough = checkpoint.sequence;
+    status = checkpoint.state?.status || status;
+    if (checkpoint.state?.turnId) turn = { id: Number(checkpoint.state.turnId), status: checkpoint.state.turnStatus };
+  }
+  for (const event of events) {
+    if (event.sequence <= projectionThrough) continue;
+    if (event.sequence !== projectionThrough + 1) break;
+    projectionThrough = event.sequence;
+    if (event.type === "status.changed") status = event.payload;
+    if (["turn.started", "turn.completed", "turn.failed", "turn.cancelled"].includes(event.type)) {
+      turn = { id: Number(event.turnId), status: event.type === "turn.cancelled" ? "aborted" : event.type.slice(5) };
+    }
+  }
+  return { projectionThrough, status, turn };
 }
 
 /**
@@ -23,7 +47,7 @@ export function agentEventSequence(event) {
  * here: payload fields are selected solely by the canonical event type.
  */
 export function normalizeCanonicalAgentEvent(event) {
-  if (!event || !agentEventSequence(event)) return null;
+  validateCanonicalAgentEvent(event);
   const sequence = agentEventSequence(event);
   const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
   const originProvider = event.origin?.provider || "";
@@ -32,7 +56,7 @@ export function normalizeCanonicalAgentEvent(event) {
   let role = payload.role || null;
   let content = payload.content ?? payload.contentDelta ?? null;
   let contentDelta = type === "message.delta";
-  const projected = { ...event, sequence, eventId: event.eventId || event.id || `${event.streamId || "stream"}:${sequence}` };
+  const projected = { ...event, sequence, eventId: event.eventId };
   if (!projected.provider && originProvider) projected.provider = originProvider;
   switch (type) {
     case "message.created":
@@ -83,7 +107,7 @@ export function normalizeCanonicalAgentEvent(event) {
   if (role) projected.role = role;
   if (content !== null && content !== undefined) projected.content = String(content);
   if (contentDelta) projected.contentDelta = true;
-  if (payload.messageId && !projected.id) projected.id = String(payload.messageId);
+  projected.id = String(payload.messageId || payload.callId || payload.interactionId || event.eventId);
   if (payload.toolName !== undefined) projected.toolName = payload.toolName;
   if (payload.toolInput !== undefined) projected.toolInput = payload.toolInput;
   if (payload.toolStatus !== undefined) projected.toolStatus = payload.toolStatus;
@@ -369,17 +393,17 @@ export function retryAgentQueueItem(queue = [], id) {
 export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = {}) {
   const bySequence = new Map();
   for (const event of existing || []) {
-    const normalized = normalizeCanonicalAgentEvent(event) || event;
+    const normalized = event;
     const sequence = agentEventSequence(normalized);
     if (normalized && sequence && !bySequence.has(sequence)) {
       bySequence.set(sequence, normalized);
     }
   }
   for (const event of incoming || []) {
-    // Sequence numbers identify immutable positions in an epoch. A replayed
+    // Sequence numbers identify immutable positions in a stream. A replayed
     // history/live overlap must retain the first observed event rather than
     // letting a later payload rewrite that position.
-    const normalized = normalizeCanonicalAgentEvent(event) || event;
+    const normalized = normalizeCanonicalAgentEvent(event);
     const sequence = agentEventSequence(normalized);
     if (normalized && sequence && !bySequence.has(sequence)) {
       bySequence.set(sequence, normalized);
@@ -462,31 +486,6 @@ export function groupAgentEvents(events = []) {
     }
   }
   return consolidated;
-}
-
-/**
- * Shared live/history reducer. Unknown events remain in `events` and advance
- * `lastSequence`, while a new epoch starts a clean projection. This is kept
- * independent from React so iOS/Web fixtures can assert identical semantics.
- */
-export function reduceAgentTimeline(
-  state = { epoch: null, events: [], lastSequence: 0 },
-  { epoch = 0, events = [] } = {},
-) {
-  const nextEpoch = Number(epoch) || 0;
-  const reset = state.epoch !== null && nextEpoch !== 0 && state.epoch !== nextEpoch;
-  const bySequence = new Map((reset ? [] : state.events || []).map(event => [event.sequence, event]));
-  let lastSequence = reset ? 0 : Number(state.lastSequence) || 0;
-  for (const event of events || []) {
-    if (!event || !Number.isFinite(event.sequence)) continue;
-    lastSequence = Math.max(lastSequence, event.sequence);
-    if (!bySequence.has(event.sequence)) bySequence.set(event.sequence, event);
-  }
-  return {
-    epoch: nextEpoch || (reset ? null : state.epoch),
-    lastSequence,
-    events: [...bySequence.values()].sort((left, right) => left.sequence - right.sequence),
-  };
 }
 
 /** Returns renderable blocks with one card per structured object ID. */

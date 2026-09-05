@@ -318,7 +318,7 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(requestParams(firstHistory)?["beforeSequence"], nil)
         let firstHistoryID = try requestID(from: firstHistory)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + firstHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":2,\"eventId\":\"evt-2\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-2\",\"role\":\"user\",\"content\":\"Earlier prompt\"}},{\"sequence\":3,\"eventId\":\"evt-3\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-3\",\"role\":\"assistant\",\"content\":\"Earlier answer\"}}],\"nextAfterSequence\":3,\"headSequence\":3,\"hasMore\":true}}"
+            "{\"t\":\"response\",\"id\":\"" + firstHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":2,\"eventId\":\"evt-2\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-2\",\"role\":\"user\",\"content\":\"Earlier prompt\"}},{\"sequence\":3,\"eventId\":\"evt-3\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-3\",\"role\":\"assistant\",\"content\":\"Earlier answer\"}}],\"nextAfterSequence\":3,\"headSequence\":3,\"hasMore\":true}}"
         ))
         for _ in 0..<400 {
             if model.agentEventsBySessionID[sessionID]?.count == 2,
@@ -333,7 +333,7 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(requestParams(secondHistory)?["beforeSequence"], "2")
         let secondHistoryID = try requestID(from: secondHistory)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + secondHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":1,\"eventId\":\"evt-1\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-1\",\"role\":\"user\",\"content\":\"Oldest prompt\"}}],\"nextAfterSequence\":1,\"headSequence\":3,\"hasMore\":false}}"
+            "{\"t\":\"response\",\"id\":\"" + secondHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":1,\"eventId\":\"evt-1\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"user\",\"content\":\"Oldest prompt\"}}],\"nextAfterSequence\":1,\"headSequence\":3,\"hasMore\":false}}"
         ))
         for _ in 0..<400 {
             if model.agentEventsBySessionID[sessionID]?.count == 3,
@@ -351,9 +351,11 @@ final class IOSPersistenceTests: XCTestCase {
         let sessionID = "66666666-6666-6666-6666-666666666666"
         let cachedEvent = WarrenRemoteAgentEvent(
             sequence: 99,
-            type: "assistant",
-            role: "assistant",
-            content: "Cached tail"
+            eventID: "evt-cache-99",
+            streamID: "exec-cache",
+            executionID: "exec-cache",
+            type: "message.created",
+            payload: ["role": .string("assistant"), "content": .string("Cached tail")]
         )
         let namespace = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
         try await WarrenAgentEventStore.shared.saveEvents(
@@ -396,7 +398,8 @@ final class IOSPersistenceTests: XCTestCase {
         let sessionSubscribeID = try requestID(from: sessionSubscribe)
         let agentSubscribeID = try requestID(from: agentSubscribe)
         XCTAssertEqual(requestParams(agentSubscribe)?["streamId"], "exec-cache")
-        XCTAssertEqual(requestParams(agentSubscribe)?["afterSequence"], "99")
+        // A cached tail is not proof that its missing prefix was received.
+        XCTAssertEqual(requestParams(agentSubscribe)?["afterSequence"], "0")
 
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + sessionSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
@@ -455,7 +458,7 @@ final class IOSPersistenceTests: XCTestCase {
         let agentSubscribe = try XCTUnwrap(agentMessages.first(where: { requestMethod($0) == "agent.events.subscribe" }))
         let agentSubscribeID = try requestID(from: agentSubscribe)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"checkpoint\":{\"sequence\":250,\"state\":{}},\"events\":[{\"sequence\":250,\"eventId\":\"evt-250\",\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-250\",\"role\":\"assistant\",\"content\":\"event 250\"}}],\"live\":true}}"
+            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"checkpoint\":{\"sequence\":250,\"state\":{}},\"events\":[{\"sequence\":250,\"eventId\":\"evt-250\",\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-250\",\"role\":\"assistant\",\"content\":\"event 250\"}}],\"live\":true}}"
         ))
 
         func historyResponse(
@@ -470,6 +473,9 @@ final class IOSPersistenceTests: XCTestCase {
                     "streamId": "exec-gap",
                     "executionId": "exec-gap",
                     "type": "message.created",
+                    "occurredAt": "2026-01-01T00:00:00Z",
+                    "recordedAt": "2026-01-01T00:00:00Z",
+                    "origin": ["kind": "host", "confidence": "native"],
                     "payload": [
                         "messageId": "msg-\(sequence)",
                         "role": "assistant",

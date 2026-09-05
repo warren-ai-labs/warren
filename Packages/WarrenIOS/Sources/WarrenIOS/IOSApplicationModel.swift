@@ -218,6 +218,7 @@ public final class IOSApplicationModel: ObservableObject {
     private var agentReplicaNamespaceStorage: WarrenAgentEventStore.Namespace?
     private var agentExecutionIDBySessionID: [String: String] = [:]
     private var agentEventWriteTasks: [String: Task<Void, Never>] = [:]
+    private var agentPendingProjectionBySessionID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
     private var agentProjectionSequenceBySessionID: [String: UInt64] = [:]
     private var agentEventKeysBySessionID: [String: Set<String>] = [:]
     private var agentSubscribedSessionIDs: Set<String> = []
@@ -432,6 +433,7 @@ public final class IOSApplicationModel: ObservableObject {
         historyErrorBySessionID.removeAll()
         agentEventErrorBySessionID.removeAll()
         agentProjectionSequenceBySessionID.removeAll()
+        agentPendingProjectionBySessionID.removeAll()
         terminalFocusGeneration &+= 1
         terminalFocusRequestsBySessionID.removeAll()
         let client = client
@@ -978,6 +980,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentState.reset()
         agentEventErrorBySessionID.removeAll()
         agentProjectionSequenceBySessionID.removeAll()
+        agentPendingProjectionBySessionID.removeAll()
         agentStatusBySessionID = [:]
         agentTurnBySessionID = [:]
         agentCapabilities = []
@@ -1075,8 +1078,9 @@ public final class IOSApplicationModel: ObservableObject {
             terminalState.reset()
             agentState.reset()
             agentEventErrorBySessionID.removeAll()
-        agentProjectionSequenceBySessionID.removeAll()
-        agentStatusBySessionID = [:]
+            agentProjectionSequenceBySessionID.removeAll()
+            agentPendingProjectionBySessionID.removeAll()
+            agentStatusBySessionID = [:]
             agentTurnBySessionID = [:]
             agentCapabilities = []
             agentActionError = nil
@@ -2689,6 +2693,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentEventKeysBySessionID.removeValue(forKey: sessionID)
         agentEventErrorBySessionID.removeValue(forKey: sessionID)
         agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
+        agentPendingProjectionBySessionID.removeValue(forKey: sessionID)
         agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
         agentExecutionIDBySessionID.removeValue(forKey: sessionID)
         agentSubscribedSessionIDs.remove(sessionID)
@@ -2969,7 +2974,7 @@ public final class IOSApplicationModel: ObservableObject {
         guard let sessionID = currentSessionID,
               sessionByID[sessionID]?.isAgentBacked == true,
               let streamID = agentExecutionID(for: sessionID),
-              agentReplicaNamespace != nil,
+              let namespace = agentReplicaNamespace,
               historyLoadingBySessionID.insert(sessionID).inserted else { return }
         let before = historyCursorBySessionID[sessionID]
             ?? agentState.agentEventsBySessionID[sessionID]?.first?.sequence
@@ -2987,14 +2992,11 @@ public final class IOSApplicationModel: ObservableObject {
                     beforeSequence: before,
                     limit: 200
                 )
-                let namespace = await MainActor.run { self?.agentReplicaNamespace }
-                if let namespace {
-                    _ = try await WarrenAgentEventStore.shared.saveEvents(
-                        page.events,
-                        namespace: namespace,
-                        streamID: streamID
-                    )
-                }
+                _ = try await WarrenAgentEventStore.shared.saveEvents(
+                    page.events,
+                    namespace: namespace,
+                    streamID: streamID
+                )
                 await MainActor.run {
                     guard let self,
                           self.historyRequestTokenBySessionID[sessionID] == requestToken,
@@ -3045,12 +3047,13 @@ public final class IOSApplicationModel: ObservableObject {
         let currentClientGeneration = clientGeneration
         Task { [weak self] in
             var nextAfter = since == 0 ? 0 : since - 1
+            var pageBefore = before
             while nextAfter < before && !Task.isCancelled {
                 do {
                     let page = try await client.agentEventsHistory(
                         streamID: streamID,
                         afterSequence: nextAfter,
-                        beforeSequence: before,
+                        beforeSequence: pageBefore,
                         limit: 200
                     )
                     guard let pageMax = page.events.map(\.sequence).max(),
@@ -3085,8 +3088,13 @@ public final class IOSApplicationModel: ObservableObject {
                     }
                     guard applied else { break }
                     guard page.hasMore else { break }
+                    if nextAfter == 0, let first = page.events.first?.sequence, first > 1 {
+                        pageBefore = first
+                        continue
+                    }
                     guard pageMax > nextAfter else { break }
                     nextAfter = pageMax
+                    pageBefore = before
                 } catch {
                     await MainActor.run { [weak self] in
                         guard let self,
@@ -3128,6 +3136,9 @@ public final class IOSApplicationModel: ObservableObject {
         _ checkpoint: WarrenRemoteAgentProjectionCheckpoint,
         sessionID: String
     ) {
+        guard checkpoint.sequence >= (agentProjectionSequenceBySessionID[sessionID] ?? 0) else { return }
+        agentProjectionSequenceBySessionID[sessionID] = checkpoint.sequence
+        agentPendingProjectionBySessionID[sessionID] = agentPendingProjectionBySessionID[sessionID]?.filter { $0.key > checkpoint.sequence }
         let state = checkpoint.state
         func string(_ key: String) -> String? {
             guard case .string(let value) = state[key] else { return nil }
@@ -3142,6 +3153,7 @@ public final class IOSApplicationModel: ObservableObject {
             let turnStatus = WarrenRemoteAgentTurnStatus(rawValue: string("turnStatus") ?? "unknown")
             agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: turnStatus)
         }
+        mergeCanonicalAgentEvents([], sessionID: sessionID, prepend: false)
     }
 
     public func ensureAgentSubscribed(for sessionID: String) {
@@ -3156,8 +3168,9 @@ public final class IOSApplicationModel: ObservableObject {
             agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
             agentEventKeysBySessionID[sessionID] = []
             agentEventErrorBySessionID.removeValue(forKey: sessionID)
-        agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
-        agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
+            agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
+            agentPendingProjectionBySessionID.removeValue(forKey: sessionID)
+            agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
             historyCursorBySessionID.removeValue(forKey: sessionID)
             historyHasMoreBySessionID.removeValue(forKey: sessionID)
             historyLoadedBySessionID.remove(sessionID)
@@ -3212,9 +3225,7 @@ public final class IOSApplicationModel: ObservableObject {
                     }
                 }
                 return self.agentReplicaNamespace == namespace
-                    ? (syncState?.contiguousThrough
-                        ?? self.agentHighestSequenceBySessionID[sessionID]
-                        ?? 0)
+                    ? (syncState?.contiguousThrough ?? 0)
                     : nil
             }
             guard let target else {
@@ -3342,7 +3353,8 @@ public final class IOSApplicationModel: ObservableObject {
                         self.historyHasMoreBySessionID.removeAll()
                         self.historyLoadedBySessionID.removeAll()
                         self.agentEventErrorBySessionID.removeAll()
-        agentProjectionSequenceBySessionID.removeAll()
+                        self.agentProjectionSequenceBySessionID.removeAll()
+                        self.agentPendingProjectionBySessionID.removeAll()
                         if let currentSessionID = self.currentSessionID,
                            self.sessionByID[currentSessionID]?.isAgentBacked == true {
                             self.agentSubscribedSessionIDs.remove(currentSessionID)
@@ -3685,22 +3697,8 @@ public final class IOSApplicationModel: ObservableObject {
             let status: WarrenRemoteAgentTurnStatus = rawStatus == "cancelled"
                 ? .aborted
                 : WarrenRemoteAgentTurnStatus(rawValue: rawStatus)
-            let turnID = event.turn
-                ?? string("turnId").flatMap(UInt64.init)
-                ?? UInt64(event.id)
-                ?? 0
+            let turnID = event.turn ?? 0
             agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: status)
-        case "interaction.requested":
-            let kind = string("kind")?.lowercased()
-            let attentionKind: WarrenRemoteAgentAttentionKind = kind == "permission" ? .approval : .input
-            let reason = string("title") ?? string("description") ?? "Agent is waiting for input."
-            let requestID = string("interactionId") ?? string("requestId")
-            agentStatusBySessionID[sessionID] = WarrenRemoteAgentStatus(
-                activity: .blocked,
-                attention: WarrenRemoteAgentAttention(kind: attentionKind, reason: reason, requestID: requestID)
-            )
-        case "execution.failed":
-            agentStatusBySessionID[sessionID] = WarrenRemoteAgentStatus(activity: .failed)
         default:
             break
         }
@@ -3711,11 +3709,15 @@ public final class IOSApplicationModel: ObservableObject {
         sessionID: String,
         prepend: Bool
     ) {
-        for event in incoming.sorted(by: { $0.sequence < $1.sequence }) {
-            guard event.sequence > (agentProjectionSequenceBySessionID[sessionID] ?? 0) else { continue }
+        var pending = agentPendingProjectionBySessionID[sessionID] ?? [:]
+        var through = agentProjectionSequenceBySessionID[sessionID] ?? 0
+        for event in incoming where event.sequence > through { pending[event.sequence] = event }
+        while let event = pending.removeValue(forKey: through + 1) {
             applyCanonicalProjection(event, sessionID: sessionID)
-            agentProjectionSequenceBySessionID[sessionID] = event.sequence
+            through = event.sequence
         }
+        agentPendingProjectionBySessionID[sessionID] = pending
+        agentProjectionSequenceBySessionID[sessionID] = through
         mergeAgentEvents(
             incoming.map { projectCanonicalEvent($0) },
             sessionID: sessionID,
@@ -3905,6 +3907,7 @@ public final class IOSApplicationModel: ObservableObject {
             agentEventKeysBySessionID[session.id] = []
             agentEventErrorBySessionID.removeValue(forKey: session.id)
             agentProjectionSequenceBySessionID.removeValue(forKey: session.id)
+            agentPendingProjectionBySessionID.removeValue(forKey: session.id)
             agentHighestSequenceBySessionID.removeValue(forKey: session.id)
             historyCursorBySessionID.removeValue(forKey: session.id)
             historyHasMoreBySessionID.removeValue(forKey: session.id)

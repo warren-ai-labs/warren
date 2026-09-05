@@ -69,6 +69,7 @@ import {
   agentQueueKey,
   encodeAgentAttachmentChunk,
   mergeAgentEvents,
+  projectAgentControlState,
   removeAgentDraft,
   validateAgentAttachment,
 } from "./agent.js";
@@ -282,6 +283,8 @@ export default function App() {
   const [agentActionError, setAgentActionError] = useState("");
   const agentCapabilitiesRef = useRef(new Set());
   const agentReplicaNamespaceRef = useRef(null);
+  const quarantinedAgentStreamsRef = useRef(new Set());
+  const agentGapRequestsRef = useRef(new Set());
   const agentQueueRef = useRef({});
   const agentInterruptInFlightRef = useRef(new Set());
   const [agentViewOverride, setAgentViewOverride] = useState(null);
@@ -330,14 +333,52 @@ export default function App() {
   const renamePendingRef = useRef(false);
   const deletePendingRef = useRef(false);
 
-  const persistAgentEvents = (streamID, events, options = {}) => {
-    const namespace = agentReplicaNamespaceRef.current;
+  const persistAgentEvents = (streamID, events, options = {}, namespace = agentReplicaNamespaceRef.current) => {
     if (!namespace || !streamID || !Array.isArray(events)) return Promise.reject(new Error("Agent replica identity is unavailable"));
+    const key = JSON.stringify([namespace.hostId, namespace.accessScopeId, streamID]);
+    if (quarantinedAgentStreamsRef.current.has(key)) return Promise.reject(new Error("Agent stream is quarantined"));
     if (events.length === 0 && !options.checkpoint) return Promise.resolve();
     return saveAgentEventsForStream(namespace, streamID, events, options).catch(error => {
+      quarantinedAgentStreamsRef.current.add(key);
       setAgentActionError(error?.message || "Unable to persist Agent events");
       throw error;
     });
+  };
+
+  const recoverAgentGap = async (sessionID, streamID, namespace) => {
+    const key = JSON.stringify([namespace.hostId, namespace.accessScopeId, streamID]);
+    if (agentGapRequestsRef.current.has(key)) return;
+    agentGapRequestsRef.current.add(key);
+    try {
+      let beforeSequence = 0;
+      while (agentReplicaNamespaceRef.current === namespace) {
+        const state = await getAgentSyncState(namespace, streamID);
+        if (!state || state.contiguousThrough >= state.headSequence) break;
+        const result = await new Promise((resolve, reject) => {
+          if (!request("agent.events.history", { streamId: streamID, afterSequence: state.contiguousThrough, beforeSequence, limit: 200 }, resolve, reject)) reject(new Error("Host is disconnected"));
+        });
+        const events = result.events;
+        if (!events?.length) throw new Error("Host did not return the missing Agent events");
+        const next = await persistAgentEvents(streamID, events, {}, namespace);
+        if (agentReplicaNamespaceRef.current !== namespace) break;
+        setAgentStateBySession(previous => {
+          const current = previous[sessionID] || {};
+          if (current.streamId !== streamID) return previous;
+          const merged = mergeAgentEvents(current.events || [], events, { cap: false });
+          return { ...previous, [sessionID]: { ...current, ...projectAgentControlState(merged, current), events: merged, contiguousThrough: next.contiguousThrough } };
+        });
+        if (state.contiguousThrough === 0 && next.contiguousThrough === 0) {
+          if (beforeSequence && events[0].sequence >= beforeSequence) throw new Error("Agent gap recovery did not advance");
+          beforeSequence = events[0].sequence;
+        } else {
+          beforeSequence = 0;
+        }
+      }
+    } catch (error) {
+      setAgentActionError(error?.message || "Unable to recover Agent events");
+    } finally {
+      agentGapRequestsRef.current.delete(key);
+    }
   };
   const renameOperationRef = useRef(null);
   const deleteOperationRef = useRef(null);
@@ -935,6 +976,7 @@ export default function App() {
   }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
+    const namespace = agentReplicaNamespaceRef.current;
     const session = appStateRef.current.catalog?.sessions?.get?.(sessionID);
     const streamID = String(session?.agentExecutionId || "").trim();
     if (!streamID) return false;
@@ -963,7 +1005,8 @@ export default function App() {
         const hasMore = Boolean(result?.hasMore);
         const headSequence = Number(result?.headSequence) || 0;
         try {
-          await persistAgentEvents(streamID, events);
+          await persistAgentEvents(streamID, events, {}, namespace);
+          if (agentReplicaNamespaceRef.current !== namespace) return;
           if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
           setAgentStateBySession(previous => {
             if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
@@ -2004,7 +2047,7 @@ export default function App() {
     // A full snapshot is authoritative. Delta responses can race a recovery
     // request, so never roll a known revision backwards.
     const previousRoster = rosterRef.current;
-    if (!isDelta && previousRoster?.revision !== null && nextRoster.revision !== null
+    if (!isDelta && previousRoster?.revision != null && nextRoster.revision !== null
       && nextRoster.revision < previousRoster.revision) {
       rosterRefreshInFlightRef.current = false;
       return;
@@ -2174,7 +2217,12 @@ export default function App() {
     case "welcome":
       try {
         if (!message.host?.id || !message.accessScopeId) throw new Error("Host welcome is missing host.id or accessScopeId");
-        agentReplicaNamespaceRef.current = agentReplicaNamespace(message.host.id, message.accessScopeId);
+        const previousNamespace = agentReplicaNamespaceRef.current;
+        if (previousNamespace?.hostId !== message.host.id || previousNamespace?.accessScopeId !== message.accessScopeId) {
+          agentReplicaNamespaceRef.current = agentReplicaNamespace(message.host.id, message.accessScopeId);
+          setAgentStateBySession({});
+          agentHistoryRequestRef.current.clear();
+        }
       } catch {
         agentReplicaNamespaceRef.current = null;
         setConnectionStatus({ message: "Invalid Host identity", online: false });
@@ -2191,7 +2239,7 @@ export default function App() {
       const handler = pendingRequestsRef.current.get(message.id);
       clearPendingRequest(pendingRequestsRef.current, message.id);
       if (!message.ok) {
-        const detail = message.error || "Request failed";
+        const detail = message.error?.message || message.error || "Request failed";
         if (handler?.onError) {
           handler.onError(detail);
         } else {
@@ -2345,38 +2393,26 @@ export default function App() {
       break;
     }
     case "agent.events": {
-      const streamID = String(message.streamId || message.executionId || "").trim();
+      const namespace = agentReplicaNamespaceRef.current;
+      const streamID = String(message.streamId || "").trim();
       const incoming = Array.isArray(message.events) ? message.events : [];
-      if (!streamID || incoming.length === 0) break;
+      if (!namespace || !streamID || incoming.length === 0) break;
       const sessionEntry = [...(appStateRef.current.catalog?.sessions?.values?.() || [])]
         .find(session => session.agentExecutionId === streamID);
       const sessionID = sessionEntry?.id;
       if (!sessionID) break;
       void (async () => {
         try {
-          await persistAgentEvents(streamID, incoming);
+          const replicaState = await persistAgentEvents(streamID, incoming, {}, namespace);
+          if (agentReplicaNamespaceRef.current !== namespace) return;
           setAgentStateBySession(previous => {
             const current = previous[sessionID] || {};
             const streamChanged = current.streamId && current.streamId !== streamID;
             const merged = mergeAgentEvents(streamChanged ? [] : (current.events || []), incoming);
-            const sequences = new Set(merged.map(event => Number(event.sequence)).filter(value => Number.isSafeInteger(value) && value > 0));
-            let contiguous = Number(current.contiguousThrough) || 0;
-            while (sequences.has(contiguous + 1)) contiguous += 1;
+            const contiguous = replicaState.contiguousThrough;
             let head = Number(current.headSequence) || 0;
-            let status = current.status || null;
-            let turn = current.turn || null;
-            for (const event of incoming) {
-              head = Math.max(head, Number(event.sequence) || 0);
-              const type = String(event.type || "").toLowerCase();
-              const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
-              if (type === "status.changed" && payload.activity) {
-                status = { activity: payload.activity, attention: payload.attention || null };
-              }
-              if (type.startsWith("turn.")) {
-                const id = Number(event.turnId || payload.turnId) || 0;
-                if (id) turn = { id, status: type.slice("turn.".length) === "cancelled" ? "aborted" : type.slice("turn.".length) };
-              }
-            }
+            const control = projectAgentControlState(merged, streamChanged ? {} : current);
+            head = Math.max(head, replicaState.headSequence);
             return {
               ...previous,
               [sessionID]: {
@@ -2384,21 +2420,14 @@ export default function App() {
                 streamId: streamID,
                 executionId: message.executionId || streamID,
                 events: merged,
-                status,
-                turn,
+                ...control,
                 headSequence: head,
                 contiguousThrough: contiguous,
                 historyLoaded: true,
               },
             };
           });
-          const statusEvent = [...incoming].reverse().find(event => event.type === "status.changed" && event.payload?.activity);
-          if (statusEvent) {
-            setCatalog(previous => updateSessionAgentStatus(previous, sessionID, {
-              activity: statusEvent.payload.activity,
-              attention: statusEvent.payload.attention || null,
-            }));
-          }
+          if (replicaState.contiguousThrough < replicaState.headSequence) void recoverAgentGap(sessionID, streamID, namespace);
         } catch {
           setAgentStateBySession(previous => ({
             ...previous,
@@ -3721,7 +3750,8 @@ export default function App() {
         setAgentStateBySession(prev => {
           const cur = prev[sessionID] || {};
           if (!cur.events || cur.events.length === 0) {
-            return { ...prev, [sessionID]: { ...cur, events: cached } };
+            if (agentReplicaNamespaceRef.current !== namespace) return prev;
+            return { ...prev, [sessionID]: { ...cur, streamId: streamID, events: mergeAgentEvents([], cached) } };
           }
           return prev;
         });
@@ -3740,7 +3770,8 @@ export default function App() {
           await persistAgentEvents(streamID, replay, {
             checkpointSequence: Number(result?.checkpoint?.sequence) || 0,
             checkpoint: result?.checkpoint?.state || null,
-          });
+          }, namespace);
+          if (agentReplicaNamespaceRef.current !== namespace) return;
           setAgentStateBySession(prev => {
             const cur = prev[sessionID] || {};
             return {
@@ -3750,6 +3781,7 @@ export default function App() {
                 streamId: streamID,
                 executionId: result?.executionId || cur.executionId || streamID,
                 events: mergeAgentEvents(cur.events || [], replay),
+                ...projectAgentControlState(mergeAgentEvents(cur.events || [], replay), cur, result.checkpoint),
                 headSequence: Math.max(cur.headSequence || 0, Number(result?.checkpoint?.sequence) || 0),
               },
             };

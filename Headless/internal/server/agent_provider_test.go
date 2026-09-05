@@ -66,15 +66,15 @@ func (handle *lifecycleTestHandle) Capabilities() CapabilitySet {
 	return NewCapabilitySet(CapabilityTimeline)
 }
 
-func (handle *lifecycleTestHandle) SendMessage(context.Context, AgentMessage) error {
+func (handle *lifecycleTestHandle) SendMessage(context.Context, api.AgentMessageSendRequest) error {
 	return nil
 }
 
-func (handle *lifecycleTestHandle) Interrupt(context.Context, AgentInterruptRequest) error {
+func (handle *lifecycleTestHandle) Interrupt(context.Context, api.AgentTurnInterruptRequest) error {
 	return nil
 }
 
-func (handle *lifecycleTestHandle) RespondInteraction(context.Context, AgentInteractionResponse) error {
+func (handle *lifecycleTestHandle) RespondInteraction(context.Context, api.AgentInteractionResponse) error {
 	return nil
 }
 
@@ -508,15 +508,15 @@ func TestACPAgentProviderRegistrationAndHandle(t *testing.T) {
 		}
 	}
 
-	if err := acpHandle.SendMessage(ctx, AgentMessage{Text: "hello"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+	if err := acpHandle.SendMessage(ctx, api.AgentMessageSendRequest{Text: "hello"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
 		t.Errorf("SendMessage err = %v, want 'not implemented yet'", err)
 	}
 
-	if err := acpHandle.Interrupt(ctx, AgentInterruptRequest{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+	if err := acpHandle.Interrupt(ctx, api.AgentTurnInterruptRequest{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
 		t.Errorf("Interrupt err = %v, want 'not implemented yet'", err)
 	}
 
-	if err := acpHandle.RespondInteraction(ctx, AgentInteractionResponse{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+	if err := acpHandle.RespondInteraction(ctx, api.AgentInteractionResponse{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
 		t.Errorf("RespondInteraction err = %v, want 'not implemented yet'", err)
 	}
 

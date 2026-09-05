@@ -459,8 +459,7 @@ func (c *Client) WaitAgentTurn(ctx context.Context, sessionID, streamID string, 
 				return api.AgentTurn{}, errors.New("agent execution replaced while waiting")
 			}
 			if event.Type == "status.changed" {
-				status, _ := event.Payload["status"].(map[string]any)
-				if status["activity"] == "exited" {
+				if event.Payload["activity"] == "exited" {
 					return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
 				}
 			}

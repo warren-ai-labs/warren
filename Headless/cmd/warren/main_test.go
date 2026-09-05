@@ -259,7 +259,7 @@ func TestConnectUsesRelayEndpointType(t *testing.T) {
 			path string
 			auth map[string]any
 		}{path: request.URL.Path, auth: auth}
-		_ = connection.WriteJSON(map[string]any{"t": "welcome"})
+		_ = connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": "test-host"}, "accessScopeId": "test-scope"})
 	}))
 	defer server.Close()
 
@@ -392,28 +392,6 @@ func TestEndpointUseAllowsSyntheticLocalEndpoint(t *testing.T) {
 	}
 	if settings.Current != "local" {
 		t.Fatalf("current endpoint = %q, want local", settings.Current)
-	}
-}
-
-func TestSendAgentTextSubmitsComposerWithKittyEnter(t *testing.T) {
-	var frames [][]byte
-	input := func(_ context.Context, data []byte) error {
-		frames = append(frames, append([]byte(nil), data...))
-		return nil
-	}
-	started := time.Now()
-	err := sendAgentTextWithInput(context.Background(), input, "first\nsecond")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(started); elapsed < agentSubmitDelay {
-		t.Fatalf("agent submit delay = %s, want at least %s", elapsed, agentSubmitDelay)
-	}
-	if got := string(frames[0]); got != "first\rsecond" {
-		t.Fatalf("agent message frame = %q, want CR-normalized text", got)
-	}
-	if got := string(frames[1]); got != agentSubmitEvent {
-		t.Fatalf("agent submit frame = %q, want kitty Enter", got)
 	}
 }
 

@@ -24,13 +24,14 @@ final class WarrenAgentEventStoreTests: XCTestCase {
         _ sequence: UInt64,
         id: String,
         type: String = "message.created",
+        streamID: String = "exec-1",
         content: String? = nil
     ) -> WarrenRemoteAgentEvent {
         WarrenRemoteAgentEvent(
             sequence: sequence,
             eventID: id,
-            streamID: "exec-1",
-            executionID: "exec-1",
+            streamID: streamID,
+            executionID: streamID,
             type: type,
             payload: content.map { ["content": .string($0)] }
         )
@@ -39,7 +40,7 @@ final class WarrenAgentEventStoreTests: XCTestCase {
     func testNamespaceAndStreamKeysAreIsolated() async throws {
         try await store.saveEvents([event(1, id: "evt-1")], namespace: owner, streamID: "exec-1")
         try await store.saveEvents([event(1, id: "evt-shared")], namespace: shared, streamID: "exec-1")
-        try await store.saveEvents([event(1, id: "evt-other")], namespace: owner, streamID: "exec-2")
+        try await store.saveEvents([event(1, id: "evt-other", streamID: "exec-2")], namespace: owner, streamID: "exec-2")
 
         let ownerEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-1")
         let sharedEvents = await store.loadRecentEvents(namespace: shared, streamID: "exec-1")
@@ -127,7 +128,7 @@ final class WarrenAgentEventStoreTests: XCTestCase {
         let clearedState = await store.syncState(namespace: owner, streamID: "exec-1")
         XCTAssertNil(clearedState)
 
-        _ = try await store.saveEvents([event(1, id: "evt-2")], namespace: owner, streamID: "exec-2")
+        _ = try await store.saveEvents([event(1, id: "evt-2", streamID: "exec-2")], namespace: owner, streamID: "exec-2")
         _ = try await store.saveEvents([event(1, id: "evt-3")], namespace: shared, streamID: "exec-1")
         await store.clearNamespace(owner)
         let ownerEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-2")

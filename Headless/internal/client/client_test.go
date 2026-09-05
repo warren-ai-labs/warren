@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -34,7 +35,7 @@ func TestDialRelayUsesScopedPathAndAccessAuthentication(t *testing.T) {
 			path string
 			auth map[string]any
 		}{path: request.URL.Path, auth: auth}
-		_ = connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"})
+		_ = connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"})
 		<-request.Context().Done()
 	}))
 	defer server.Close()
@@ -103,7 +104,7 @@ func TestReadOutputHonorsContextDeadline(t *testing.T) {
 		if err := connection.ReadJSON(&envelope); err != nil {
 			return
 		}
-		if err := connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}); err != nil {
+		if err := connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"}); err != nil {
 			return
 		}
 		// Hold the connection open without sending terminal output.
@@ -172,7 +173,7 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 				}
 				defer connection.Close()
 				var envelope map[string]any
-				if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
+				if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"}) != nil {
 					return
 				}
 				for _, message := range test.messages {
@@ -212,7 +213,7 @@ func TestWaitAgentTurnHonorsContextDeadline(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
 		<-release
@@ -242,7 +243,7 @@ func TestRequestPreservesAgentTurnArrivingBeforeResponse(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
 		if connection.ReadJSON(&envelope) != nil {
@@ -287,7 +288,7 @@ func TestWaitAgentTurnReportsAgentProcessExit(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": store.NewID()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
 		_ = connection.WriteJSON(canonicalExitBatch())
@@ -323,6 +324,6 @@ func canonicalTurnBatch(turn uint64, status string) api.CanonicalAgentEventsMess
 func canonicalExitBatch() api.CanonicalAgentEventsMessage {
 	batch := canonicalTurnBatch(1, "completed")
 	batch.Events[0].Type = "status.changed"
-	batch.Events[0].Payload = map[string]any{"status": map[string]any{"activity": "exited"}}
+	batch.Events[0].Payload = map[string]any{"activity": "exited"}
 	return batch
 }

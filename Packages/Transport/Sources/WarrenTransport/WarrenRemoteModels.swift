@@ -1370,6 +1370,7 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
     public let eventID: String
     public let streamID: String?
     public let executionID: String?
+    public let turnID: String?
     public let turn: UInt64?
     public let id: String
     public let provider: String
@@ -1404,6 +1405,7 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         eventID: String = "",
         streamID: String? = nil,
         executionID: String? = nil,
+        turnID: String? = nil,
         turn: UInt64? = nil,
         id: String = "",
         provider: String = "",
@@ -1434,6 +1436,7 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         self.eventID = eventID.isEmpty ? id : eventID
         self.streamID = streamID
         self.executionID = executionID
+        self.turnID = turnID
         self.turn = turn
         self.id = id
         self.provider = provider
@@ -1475,12 +1478,6 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         case executionID = "executionId"
         case turnID = "turnId"
         case type, occurredAt, recordedAt, causedBy, origin, payload
-        // These fields are accepted only for local UI projections produced by
-        // the public initializer; Host wire decoding never relies on them.
-        case turn, id, provider, role, content
-        case contentDelta, model, stopReason, toolName, toolInput, toolStatus
-        case callID = "callId"
-        case output, files, error, usage, durationMs, sidechain, timestamp
     }
 
     public init(from decoder: Decoder) throws {
@@ -1494,34 +1491,33 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         _ = try values.decode(String.self, forKey: .recordedAt)
         _ = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
         _ = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
-        id = try values.decodeIfPresent(String.self, forKey: .id) ?? eventID
-        provider = try values.decodeIfPresent(String.self, forKey: .provider)
-            ?? (try values.decodeIfPresent(WarrenRemoteAgentEventOrigin.self, forKey: .origin)?.provider ?? "")
-        role = try values.decodeIfPresent(String.self, forKey: .role)
-        content = try values.decodeIfPresent(String.self, forKey: .content)
-        contentDelta = try values.decodeIfPresent(Bool.self, forKey: .contentDelta) ?? false
-        model = try values.decodeIfPresent(String.self, forKey: .model)
-        stopReason = try values.decodeIfPresent(String.self, forKey: .stopReason)
-        toolName = try values.decodeIfPresent(String.self, forKey: .toolName)
-        toolInput = try values.decodeIfPresent(WarrenRemoteJSONValue.self, forKey: .toolInput)
-        toolStatus = try values.decodeIfPresent(String.self, forKey: .toolStatus)
-        callID = try values.decodeIfPresent(String.self, forKey: .callID)
-        output = try values.decodeIfPresent(String.self, forKey: .output)
-        files = try values.decodeIfPresent([String].self, forKey: .files)
-        error = try values.decodeIfPresent(String.self, forKey: .error)
-        usage = try values.decodeIfPresent(WarrenRemoteAgentUsage.self, forKey: .usage)
-        durationMs = try values.decodeIfPresent(Int64.self, forKey: .durationMs)
-        sidechain = try values.decodeIfPresent(Bool.self, forKey: .sidechain) ?? false
-        timestamp = try values.decodeIfPresent(String.self, forKey: .timestamp)
-        occurredAt = try values.decodeIfPresent(String.self, forKey: .occurredAt)
-        recordedAt = try values.decodeIfPresent(String.self, forKey: .recordedAt)
-        causedBy = try values.decodeIfPresent(String.self, forKey: .causedBy)
-        origin = try values.decodeIfPresent(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
-        if let rawTurnID = try values.decodeIfPresent(String.self, forKey: .turnID) {
-            turn = UInt64(rawTurnID)
-        } else {
-            turn = try values.decodeIfPresent(UInt64.self, forKey: .turn)
+        guard sequence > 0, !eventID.isEmpty, streamID?.isEmpty == false, executionID?.isEmpty == false else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid canonical event identity"))
         }
+        id = eventID
+        origin = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
+        provider = origin?.provider ?? ""
+        role = nil
+        content = nil
+        contentDelta = false
+        model = nil
+        stopReason = nil
+        toolName = nil
+        toolInput = nil
+        toolStatus = nil
+        callID = nil
+        output = nil
+        files = nil
+        error = nil
+        usage = nil
+        durationMs = nil
+        sidechain = false
+        timestamp = nil
+        occurredAt = try values.decode(String.self, forKey: .occurredAt)
+        recordedAt = try values.decode(String.self, forKey: .recordedAt)
+        causedBy = try values.decodeIfPresent(String.self, forKey: .causedBy)
+        turnID = try values.decodeIfPresent(String.self, forKey: .turnID)
+        turn = turnID.flatMap(UInt64.init)
         payload = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
     }
 
@@ -1538,10 +1534,8 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         try values.encode(recordedAt ?? occurredAt ?? timestamp ?? "", forKey: .recordedAt)
         try values.encode(origin ?? WarrenRemoteAgentEventOrigin(kind: "client", confidence: "derived"), forKey: .origin)
         try values.encode(payload ?? [:], forKey: .payload)
-        if let turn {
-            // The canonical wire shape carries turnId as an opaque string.
-            try values.encode(String(turn), forKey: .turnID)
-        }
+        try values.encodeIfPresent(causedBy, forKey: .causedBy)
+        try values.encodeIfPresent(turnID ?? turn.map(String.init), forKey: .turnID)
     }
 }
 

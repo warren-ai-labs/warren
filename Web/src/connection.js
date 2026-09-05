@@ -28,7 +28,7 @@ export function rejectPendingRequests(pending, detail = "Connection lost") {
 
 // Headless WebSocket errors use the response envelope's `error` field.
 export function connectionErrorDetail(message, fallback = "Error") {
-  return message?.error || fallback;
+  return message?.error?.message || message?.error || fallback;
 }
 
 export class WarrenConnection {

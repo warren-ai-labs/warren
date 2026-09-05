@@ -156,7 +156,7 @@ SessionView（某个 Session）
 - `canSend`（`1173-1176`）：发送按钮是否启用。
 
 附件发送的 View 只负责选择、读取、进度和 opaque reference。iOS 与 Web 都调用
-`agent.attachment.prepare/chunk/complete/abort`，完成后再调用 `agent.message.send`；
+`agent.attachment.prepare/chunk/complete/abort`，完成后再调用 `agent.turn.start`；
 Host 会把附件内容写入权限为 `0600` 的临时文件，并在没有 Provider-native bridge 时通过
 PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不会发送本地路径，也不会把
 文件内容写入 draft 或队列持久化。
@@ -352,7 +352,7 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
 | “Host 设置/扫码” | `IOSEndpointConfigurationView`、`IOSEndpointEditorView`、`IOSRelayPairingScannerView` | token 只显示存在性，不从 UI state 读取明文 |
 | “Host 切换按钮/箭头” | `IOSHostFooter`、`IOSEndpointConfigurationView` | Host 名称行可点击切换；不添加 `chevron.up.chevron.down` 之类提示图标 |
 | “Host 切换面板信息太少” | `IOSEndpointPickerSheet` | 检查类型、地址/route、连接状态、Token 状态和当前选中标记 |
-| “iOS/Web 附件发不出去” | iOS `IOSApplicationModel.uploadAgentAttachment` / `sendAgentMessage`、Web `uploadAgentAttachments` / `agent.message.send`、Host `Headless/internal/server/agent_view.go` | 先查 capability，再查 prepare/chunk/complete，最后查 Host 的临时文件 PTY bridge；不要把本地路径直接放进协议 |
+| “iOS/Web 附件发不出去” | iOS `IOSApplicationModel.uploadAgentAttachment` / `sendAgentMessage`、Web `uploadAgentAttachments` / `agent.turn.start`、Host `Headless/internal/server/agent_view.go` | 先查 capability，再查 prepare/chunk/complete，最后查 Host 的临时文件 PTY bridge；不要把本地路径直接放进协议 |
 
 ## 12. UI 问题描述模板
 

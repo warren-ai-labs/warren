@@ -2229,6 +2229,28 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			lock.Unlock()
 			return p.writeCanonicalError(command.ID, queryErr)
 		}
+		// The delivery limit is a page hint, never a checkpoint cursor. Hold
+		// the broadcast lock until every pre-live event has been collected.
+		for result.HasMore && len(result.Events) > 0 {
+			after, before := result.NextAfterSequence, uint64(0)
+			if request.AfterSequence == 0 {
+				after, before = 0, result.Events[0].Sequence
+			}
+			page, err := p.server.Service.canonicalHistoryPage(ctx, request.StreamID, after, before, int(request.Limit))
+			if err != nil {
+				lock.Unlock()
+				return p.writeCanonicalError(command.ID, err)
+			}
+			if request.AfterSequence == 0 {
+				result.Events = append(page.Events, result.Events...)
+			} else {
+				result.Events = append(result.Events, page.Events...)
+			}
+			result.HasMore, result.NextAfterSequence = page.HasMore, page.NextAfterSequence
+			if len(page.Events) == 0 {
+				break
+			}
+		}
 		checkpoint := p.server.Service.canonicalProjectionCheckpoint(session.ID, result.HeadSequence)
 		if err := p.subscribeCanonicalAgent(session.ID, request.StreamID); err != nil {
 			lock.Unlock()
@@ -3553,34 +3575,6 @@ func decodeCanonicalCommand(values map[string]any) (api.AgentCommand, error) {
 		return command, errors.New("commandId and executionId are required")
 	}
 	return command, nil
-}
-
-func decodeAgentInteractionParams(values map[string]any) (api.AgentInteractionResponse, error) {
-	return decodeAgentParams[api.AgentInteractionResponse](values)
-}
-
-func decodeAgentTurnInterruptParams(values map[string]any) (api.AgentTurnInterruptRequest, error) {
-	return decodeAgentParams[api.AgentTurnInterruptRequest](values)
-}
-
-func decodeAgentMessageParams(values map[string]any) (api.AgentMessageSendRequest, error) {
-	return decodeAgentParams[api.AgentMessageSendRequest](values)
-}
-
-func decodeAgentAttachmentPrepareParams(values map[string]any) (api.AgentAttachmentPrepareRequest, error) {
-	return decodeAgentParams[api.AgentAttachmentPrepareRequest](values)
-}
-
-func decodeAgentAttachmentChunkParams(values map[string]any) (api.AgentAttachmentChunkRequest, error) {
-	return decodeAgentParams[api.AgentAttachmentChunkRequest](values)
-}
-
-func decodeAgentAttachmentCompleteParams(values map[string]any) (api.AgentAttachmentCompleteRequest, error) {
-	return decodeAgentParams[api.AgentAttachmentCompleteRequest](values)
-}
-
-func decodeAgentAttachmentAbortParams(values map[string]any) (api.AgentAttachmentAbortRequest, error) {
-	return decodeAgentParams[api.AgentAttachmentAbortRequest](values)
 }
 
 func sessionMoveExpectations(values map[string]any) SessionMoveExpectations {

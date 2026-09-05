@@ -27,8 +27,10 @@ import {
   loadAgentDraft,
   loadAgentSettings,
   mergeAgentEvents,
+  normalizeCanonicalAgentEvent,
   moveAgentQueueItem,
   projectAgentEvents,
+  projectAgentControlState,
   retryAgentQueueItem,
   saveAgentSettings,
   toolSummary,
@@ -87,24 +89,24 @@ test("agent queue remains immutable while editing, ordering and retrying", () =>
 
 test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {
   const existing = [
-    { sequence: 1, type: "system", content: "started" },
-    { sequence: 2, type: "user", content: "hello" },
+    canonicalEvent(1, "system", "started"),
+    canonicalEvent(2, "user", "hello"),
   ];
   const incoming = [
-    { sequence: 2, type: "user", content: "hello" },
-    { sequence: 3, type: "assistant", content: "hi" },
+    canonicalEvent(2, "user", "hello"),
+    canonicalEvent(3, "assistant", "hi"),
   ];
-  const merged = mergeAgentEvents(existing, incoming);
+  const merged = mergeAgentEvents(existing.map(normalizeCanonicalAgentEvent), incoming);
   assert.deepEqual(merged.map(event => event.sequence), [1, 2, 3]);
   assert.deepEqual(merged.map(event => event.content), ["started", "hello", "hi"]);
 });
 
 test("mergeAgentEvents keeps the first event at an immutable sequence", () => {
   const merged = mergeAgentEvents(
-    [{ sequence: 7, type: "assistant", content: "first" }],
-    [{ sequence: 7, type: "assistant", content: "rewritten" }],
+    [normalizeCanonicalAgentEvent(canonicalEvent(7, "assistant", "first"))],
+    [canonicalEvent(7, "assistant", "rewritten")],
   );
-  assert.deepEqual(merged, [{ sequence: 7, type: "assistant", content: "first", sequence: 7, eventId: "stream:7" }]);
+  assert.equal(merged[0].content, "first");
 });
 
 test("agentQueueKey isolates endpoint and session identities", () => {
@@ -118,26 +120,17 @@ test("agentDraftKey keeps separator punctuation collision-safe", () => {
 });
 
 test("mergeAgentEvents caps history at the agent event limit", () => {
-  const existing = Array.from({ length: agentEventLimit }, (_, index) => ({ sequence: index + 1, type: "system" }));
-  const incoming = [{ sequence: agentEventLimit, type: "user", content: "new" }];
-  const merged = mergeAgentEvents(existing, incoming);
+  const existing = Array.from({ length: agentEventLimit }, (_, index) => (canonicalEvent(index + 1, "system", "")));
+  const incoming = [canonicalEvent(agentEventLimit, "user", "new")];
+  const merged = mergeAgentEvents(existing.map(normalizeCanonicalAgentEvent), incoming);
   assert.equal(merged.length, agentEventLimit);
   assert.equal(merged[0].sequence, 1);
   assert.equal(merged.at(-1).sequence, agentEventLimit);
 });
 
 test("mergeAgentEvents keeps older pages intact when paginating", () => {
-  const existing = Array.from({ length: agentEventLimit }, (_, index) => ({
-    sequence: index + 2001,
-    eventId: `evt-${index + 2001}`,
-    type: "system",
-  }));
-  const olderPage = Array.from({ length: 200 }, (_, index) => ({
-    sequence: index + 1801,
-    eventId: `evt-${index + 1801}`,
-    type: "user",
-    content: `old-${index}`,
-  }));
+  const existing = Array.from({ length: agentEventLimit }, (_, index) => normalizeCanonicalAgentEvent(canonicalEvent(index + 2001)));
+  const olderPage = Array.from({ length: 200 }, (_, index) => canonicalEvent(index + 1801, "user", `old-${index}`));
   const merged = mergeAgentEvents(existing, olderPage, { cap: false });
   assert.equal(merged.length, agentEventLimit + 200);
   assert.equal(merged[0].sequence, 1801);
@@ -498,4 +491,20 @@ test("loadAgentSettings and saveAgentSettings round-trip settings in storage", (
 
   const loaded = loadAgentSettings(mockStorage, endpoint, sessionID);
   assert.deepEqual(loaded, settings);
+});
+
+function canonicalEvent(sequence, role = "assistant", content = "") {
+  return { sequence, eventId: `evt-${sequence}`, streamId: "exec-1", executionId: "exec-1", type: "message.created", occurredAt: "2026-01-01T00:00:00Z", recordedAt: "2026-01-01T00:00:00Z", origin: { kind: "host", confidence: "native" }, payload: { role, content } };
+}
+
+test("control projection waits for missing events and applies unknown types in order", () => {
+  const first = { ...canonicalEvent(1), type: "status.changed", payload: { activity: "working" } };
+  const missing = { ...canonicalEvent(2), type: "status.changed", payload: { activity: "ready" } };
+  const future = { ...canonicalEvent(3), type: "future.event" };
+  const gapped = projectAgentControlState([first, future]);
+  assert.equal(gapped.projectionThrough, 1);
+  assert.equal(gapped.status.activity, "working");
+  const recovered = projectAgentControlState([first, missing, future], gapped);
+  assert.equal(recovered.projectionThrough, 3);
+  assert.equal(recovered.status.activity, "ready");
 });
