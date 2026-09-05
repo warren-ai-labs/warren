@@ -25,7 +25,7 @@ const (
 	DirectionClientToHost = protocol.DirectionClientToHost
 	DirectionHostToClient = protocol.DirectionHostToClient
 
-	KindInput = protocol.KindInput
+	KindInput  = protocol.KindInput
 	KindOutput = protocol.KindOutput
 	// KindAtomicState carries one opaque terminal-emulator snapshot. It is a
 	// distinct kind so clients can never feed snapshot bytes through their VT
@@ -94,7 +94,7 @@ func EncodeAtomicState(sessionID string, epoch, sequence uint64, format string, 
 
 func EncodeInput(metadata InputMetadata, payload []byte) ([]byte, error) {
 	if metadata.Version == "" {
-		metadata.Version = "2.0"
+		metadata.Version = protocol.LogicalVersion
 	}
 	return encodeEnvelope(DirectionClientToHost, KindInput, inputHeader{
 		Version:       metadata.Version,

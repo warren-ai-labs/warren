@@ -73,10 +73,10 @@ import {
   validateAgentAttachment,
 } from "./agent.js";
 import {
-  saveAgentEvents,
-  loadRecentAgentEvents,
-  getAgentMaxSequence,
-  clearAgentSession,
+  agentReplicaNamespace,
+  saveAgentEventsForStream,
+  loadRecentAgentEventsForStream,
+  getAgentSyncState,
 } from "./agent-store.js";
 import { AgentView } from "./agent.jsx";
 import {
@@ -281,6 +281,7 @@ export default function App() {
   const [agentQueueBySession, setAgentQueueBySession] = useState({});
   const [agentActionError, setAgentActionError] = useState("");
   const agentCapabilitiesRef = useRef(new Set());
+  const agentReplicaNamespaceRef = useRef(null);
   const agentQueueRef = useRef({});
   const agentInterruptInFlightRef = useRef(new Set());
   const [agentViewOverride, setAgentViewOverride] = useState(null);
@@ -328,6 +329,16 @@ export default function App() {
   const creatingSessionKindRef = useRef(null);
   const renamePendingRef = useRef(false);
   const deletePendingRef = useRef(false);
+
+  const persistAgentEvents = (streamID, events, options = {}) => {
+    const namespace = agentReplicaNamespaceRef.current;
+    if (!namespace || !streamID || !Array.isArray(events)) return Promise.reject(new Error("Agent replica identity is unavailable"));
+    if (events.length === 0 && !options.checkpoint) return Promise.resolve();
+    return saveAgentEventsForStream(namespace, streamID, events, options).catch(error => {
+      setAgentActionError(error?.message || "Unable to persist Agent events");
+      throw error;
+    });
+  };
   const renameOperationRef = useRef(null);
   const deleteOperationRef = useRef(null);
   const gitActionRef = useRef(null);
@@ -924,8 +935,11 @@ export default function App() {
   }, [gitOpen, loadGitPanel]);
 
   const loadAgentHistory = useCallback((sessionID, before = 0) => {
-    const params = { session: sessionID, limit: "200", priority: "conversation", wireOptions: { omitFields: ["output"] } };
-    if (before > 0) params.before = String(before);
+    const session = appStateRef.current.catalog?.sessions?.get?.(sessionID);
+    const streamID = String(session?.agentExecutionId || "").trim();
+    if (!streamID) return false;
+    const params = { streamId: streamID, limit: 200 };
+    if (before > 0) params.beforeSequence = before;
     const token = {
       id: ++agentHistoryRequestSequenceRef.current,
       sessionID,
@@ -939,54 +953,52 @@ export default function App() {
         [sessionID]: { ...current, historyLoading: true, historyError: "" },
       };
     });
-    if (!request("agent.history", params, result => {
+    if (!request("agent.events.history", params, async result => {
         if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
         const events = Array.isArray(result?.events) ? result.events : [];
-        const cursor = Number(result?.cursor) || 0;
+        // The first row is the next exclusive before cursor for older pages.
+        // `nextAfterSequence` remains useful for gap repair, but is not the
+        // pagination boundary when the request is ordered backwards.
+        const cursor = Number(events[0]?.sequence) || 0;
         const hasMore = Boolean(result?.hasMore);
-        const epoch = result?.epoch;
-        if (events.length > 0) {
-          saveAgentEvents(sessionID, epoch, events);
-        }
-        setAgentStateBySession(previous => {
-          if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
-          const current = previous[sessionID] || {};
-          const epochNumber = Number(epoch);
-          const currentEpochNumber = Number(current.epoch);
-          const staleEpoch = epoch && current.epoch
-            && String(epoch) !== String(current.epoch)
-            && (!Number.isFinite(epochNumber)
-              || !Number.isFinite(currentEpochNumber)
-              || epochNumber < currentEpochNumber);
-          if (staleEpoch) {
+        const headSequence = Number(result?.headSequence) || 0;
+        try {
+          await persistAgentEvents(streamID, events);
+          if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
+          setAgentStateBySession(previous => {
+            if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
+            const current = previous[sessionID] || {};
             return {
               ...previous,
-              [sessionID]: { ...current, historyLoading: false },
+              [sessionID]: {
+                ...current,
+                streamId: streamID,
+                executionId: result?.executionId || current.executionId || streamID,
+                headSequence: Math.max(current.headSequence || 0, headSequence),
+                events: mergeAgentEvents(current.events || [], events, { cap: before === 0 }),
+                status: current.status || null,
+                historyCursor: cursor,
+                historyHasMore: hasMore,
+                historyLoading: false,
+                historyLoaded: true,
+                historyError: "",
+              },
             };
-          }
-          const sameEpoch = !epoch || !current.epoch || String(current.epoch) === String(epoch);
-          return {
-            ...previous,
-            [sessionID]: {
-              ...current,
-              epoch: epoch || current.epoch,
-              events: mergeAgentEvents(
-                sameEpoch ? current.events : [],
-                events,
-                // Older pages must never be truncated by the live tail cap:
-                // slicing the newest N events here removes a middle chunk of
-                // the already-loaded conversation and loses messages.
-                { cap: before === 0 },
-              ),
-              status: current.status || null,
-              historyCursor: cursor,
-              historyHasMore: hasMore,
-              historyLoading: false,
-              historyLoaded: true,
-              historyError: "",
-            },
-          };
-        });
+          });
+        } catch (error) {
+          setAgentStateBySession(previous => {
+            if (agentHistoryRequestRef.current.get(sessionID) !== token) return previous;
+            const current = previous[sessionID] || {};
+            return {
+              ...previous,
+              [sessionID]: {
+                ...current,
+                historyLoading: false,
+                historyError: String(error?.message || error || "Unable to persist Agent history."),
+              },
+            };
+          });
+        }
       }, error => {
         if (agentHistoryRequestRef.current.get(sessionID) !== token) return;
         // A failed history request must not leave the loader spinning. Keep an
@@ -1020,6 +1032,7 @@ export default function App() {
         };
       });
     }
+    return true;
   }, [request]);
 
   const markAttachReady = useCallback((sessionID, flush = true, focus = true) => {
@@ -1217,34 +1230,6 @@ export default function App() {
     return true;
   }, [announceFeedback]);
 
-  const sendAgentInput = useCallback(async text => {
-    // The agent process is a TUI: the only input channel is the PTY. Codex
-    // reads a literal CR as text (a newline inside the input box), not as a
-    // submit key, so the message is written first and the kitty-protocol
-    // Enter event (CSI 13 u) is delivered in its own frame afterwards. The
-    // small delay keeps the TUI from folding both writes into one paste and
-    // dropping the message before the Enter key.
-    const state = appStateRef.current;
-    const sessionID = state.activeSession;
-    if (!sessionID || state.attachedSession !== sessionID) return false;
-    const generation = agentQueueGenerationRef.current;
-    const connection = connectionRef.current;
-    if (!connection?.sendBinary(text.replace(/\n/g, "\r"))) {
-      connection?.reconnectNow();
-      return false;
-    }
-    await new Promise(resolve => setTimeout(resolve, 80));
-    if (appStateRef.current.activeSession !== sessionID
-      || appStateRef.current.attachedSession !== sessionID
-      || agentQueueGenerationRef.current !== generation
-      || connectionRef.current !== connection) {
-      return false;
-    }
-    const entered = connection.sendBinary("\x1b[13u");
-    if (!entered) connection.reconnectNow();
-    return entered;
-  }, []);
-
   const publishAgentQueue = useCallback((sessionID, queue) => {
     const items = queue.items.map(item => ({ ...item, attachments: [...(item.attachments || [])] }));
     setAgentQueueBySession(previous => ({ ...previous, [sessionID]: items }));
@@ -1329,26 +1314,29 @@ export default function App() {
     };
     if (item.attachments?.length > 0 && !supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-attachments-v1")) {
       failed("This Host does not support attachments");
-    } else if (supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-timeline-v1") || item.attachments?.length > 0) {
+    } else if (supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-timeline-v1")) {
+      const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+      if (!executionID) {
+        failed("Agent execution is not available");
+        return;
+      }
+      const params = {
+        executionId: executionID,
+        commandId: item.id,
+        text: item.text,
+        ...(item.attachments?.length ? { attachments: item.attachments } : {}),
+      };
       const sent = request(
-        "agent.message.send",
-        {
-          session: sessionID,
-          clientMessageId: item.id,
-          text: item.text,
-          ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-        },
+        "agent.turn.start",
+        params,
         result => result?.accepted ? delivered() : failed("Host did not accept the message"),
         failed,
       );
       if (!sent) failed("Connection unavailable");
     } else {
-      void sendAgentInput(item.text).then(sent => {
-        if (sent) delivered();
-        else failed("Agent input was interrupted; retry.");
-      });
+      failed("This Host does not expose the canonical Agent timeline");
     }
-  }, [agentStateBySession, publishAgentQueue, request, sendAgentInput]);
+  }, [agentStateBySession, publishAgentQueue, request]);
 
   const queueAgentMessage = useCallback((sessionID, text, attachments = []) => {
     const queueKey = agentQueueKey(webSocketURL(), sessionID);
@@ -1362,10 +1350,9 @@ export default function App() {
   const sendAgentMessageFromView = useCallback((text, attachments = []) => {
     const sessionID = appStateRef.current.activeSession;
     if (!sessionID) return false;
-    // Every composer submission gets a stable local ID first. The drain then
-    // selects structured `agent.message.send` or the legacy PTY fallback
-    // according to the negotiated capabilities, avoiding a second send path
-    // that could race the queue or lose idempotency.
+    // Every composer submission gets a stable local ID first. The queue then
+    // submits exactly one canonical turn.start command, preserving idempotency
+    // across reconnects and late responses.
     queueAgentMessage(sessionID, text, attachments);
     drainAgentQueue(sessionID);
     return true;
@@ -1436,9 +1423,21 @@ export default function App() {
     agentInterruptInFlightRef.current.add(sessionID);
     const requestGeneration = agentInterruptGenerationRef.current;
     setAgentActionError("");
+    const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+    if (!executionID) {
+      agentInterruptInFlightRef.current.delete(sessionID);
+      setAgentActionError("Agent execution is not available");
+      return;
+    }
+    const params = {
+      executionId: executionID,
+      commandId: `cancel-${executionID}-${turn}`,
+      turnId: String(turn),
+      reason: "cancel",
+    };
     const sent = request(
-      "agent.turn.interrupt",
-      { session: sessionID, turn, reason: "cancel" },
+      "agent.turn.cancel",
+      params,
       () => {
         if (agentInterruptGenerationRef.current === requestGeneration) {
           agentInterruptInFlightRef.current.delete(sessionID);
@@ -1505,19 +1504,21 @@ export default function App() {
         publishAgentQueue(sessionID, queue);
         resolve(result);
       };
+      const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+      if (!executionID) {
+        finish(null, "Agent execution is not available");
+        return;
+      }
+      const params = {
+        executionId: executionID,
+        commandId: item.id,
+        turnId: String(turn),
+        text: value,
+        ...(attachments.length ? { attachments } : {}),
+      };
       const sent = request(
-        "agent.turn.interrupt",
-        {
-          session: sessionID,
-          turn,
-          reason: "send_now",
-          replacement: {
-            session: sessionID,
-            clientMessageId: item.id,
-            text: value,
-            ...(attachments.length ? { attachments } : {}),
-          },
-        },
+        "agent.turn.steer",
+        params,
         result => finish(result),
         error => finish(null, String(error || "Send now failed")),
       );
@@ -1538,13 +1539,19 @@ export default function App() {
         }
         reject(new Error(error));
       };
+      const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+      if (!executionID) {
+        failed("Agent execution is not available");
+        return;
+      }
       const sent = request(
-        "agent.interaction.respond",
+        "agent.interaction.resolve",
         {
-          session: sessionID,
-          requestId: value.requestId,
-          kind: value.kind,
-          response: value.response,
+          executionId: executionID,
+          commandId: `resolve-${executionID}-${value.requestId}-${Number(value.version) || 1}`,
+          interactionId: value.requestId,
+          version: Number(value.version) || 1,
+          resolution: value.response || {},
         },
         resolve,
         failed,
@@ -2165,6 +2172,15 @@ export default function App() {
 
     switch (message.t) {
     case "welcome":
+      try {
+        if (!message.host?.id || !message.accessScopeId) throw new Error("Host welcome is missing host.id or accessScopeId");
+        agentReplicaNamespaceRef.current = agentReplicaNamespace(message.host.id, message.accessScopeId);
+      } catch {
+        agentReplicaNamespaceRef.current = null;
+        setConnectionStatus({ message: "Invalid Host identity", online: false });
+        connectionRef.current?.stop();
+        break;
+      }
       agentCapabilitiesRef.current = new Set(
         Array.isArray(message.capabilities)
           ? message.capabilities.filter(value => typeof value === "string")
@@ -2328,82 +2344,71 @@ export default function App() {
       write(state.payload, finish);
       break;
     }
-    case "agent":
-      if (Array.isArray(message.events) && message.events.length > 0) {
-        saveAgentEvents(message.session, message.epoch, message.events);
-      }
-      setAgentStateBySession(previous => {
-        const current = previous[message.session];
-        const sameEpoch = !message.epoch || current?.epoch === message.epoch;
-        if (!sameEpoch) {
-          clearAgentSession(message.session);
-          // A new projection epoch means the daemon restarted: drop the old
-          // conversation and let the history loader refetch from scratch.
-          return {
+    case "agent.events": {
+      const streamID = String(message.streamId || message.executionId || "").trim();
+      const incoming = Array.isArray(message.events) ? message.events : [];
+      if (!streamID || incoming.length === 0) break;
+      const sessionEntry = [...(appStateRef.current.catalog?.sessions?.values?.() || [])]
+        .find(session => session.agentExecutionId === streamID);
+      const sessionID = sessionEntry?.id;
+      if (!sessionID) break;
+      void (async () => {
+        try {
+          await persistAgentEvents(streamID, incoming);
+          setAgentStateBySession(previous => {
+            const current = previous[sessionID] || {};
+            const streamChanged = current.streamId && current.streamId !== streamID;
+            const merged = mergeAgentEvents(streamChanged ? [] : (current.events || []), incoming);
+            const sequences = new Set(merged.map(event => Number(event.sequence)).filter(value => Number.isSafeInteger(value) && value > 0));
+            let contiguous = Number(current.contiguousThrough) || 0;
+            while (sequences.has(contiguous + 1)) contiguous += 1;
+            let head = Number(current.headSequence) || 0;
+            let status = current.status || null;
+            let turn = current.turn || null;
+            for (const event of incoming) {
+              head = Math.max(head, Number(event.sequence) || 0);
+              const type = String(event.type || "").toLowerCase();
+              const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+              if (type === "status.changed" && payload.activity) {
+                status = { activity: payload.activity, attention: payload.attention || null };
+              }
+              if (type.startsWith("turn.")) {
+                const id = Number(event.turnId || payload.turnId) || 0;
+                if (id) turn = { id, status: type.slice("turn.".length) === "cancelled" ? "aborted" : type.slice("turn.".length) };
+              }
+            }
+            return {
+              ...previous,
+              [sessionID]: {
+                ...current,
+                streamId: streamID,
+                executionId: message.executionId || streamID,
+                events: merged,
+                status,
+                turn,
+                headSequence: head,
+                contiguousThrough: contiguous,
+                historyLoaded: true,
+              },
+            };
+          });
+          const statusEvent = [...incoming].reverse().find(event => event.type === "status.changed" && event.payload?.activity);
+          if (statusEvent) {
+            setCatalog(previous => updateSessionAgentStatus(previous, sessionID, {
+              activity: statusEvent.payload.activity,
+              attention: statusEvent.payload.attention || null,
+            }));
+          }
+        } catch {
+          setAgentStateBySession(previous => ({
             ...previous,
-            [message.session]: {
-              epoch: message.epoch,
-              events: mergeAgentEvents([], message.events),
-              status: current?.status || null,
-              historyCursor: 0,
-              historyHasMore: false,
-              historyLoading: false,
-              historyLoaded: false,
-              historyError: "",
+            [sessionID]: {
+              ...(previous[sessionID] || {}),
+              historyError: "Agent stream integrity check failed; reload from Host.",
             },
-          };
+          }));
         }
-        const base = current?.events || [];
-        return {
-          ...previous,
-          [message.session]: {
-            ...current,
-            epoch: message.epoch || current?.epoch,
-            events: mergeAgentEvents(base, message.events),
-            status: current?.status || null,
-          },
-        };
-      });
-      break;
-    case "agent.status": {
-      const status = message.status || null;
-      setAgentStateBySession(previous => {
-        const current = previous[message.session];
-        const sameEpoch = !message.epoch || current?.epoch === message.epoch;
-        return {
-          ...previous,
-          [message.session]: {
-            ...current,
-            epoch: message.epoch || current?.epoch,
-            events: sameEpoch ? current?.events || [] : [],
-            status,
-            historyCursor: sameEpoch ? current?.historyCursor || 0 : 0,
-            historyHasMore: sameEpoch ? Boolean(current?.historyHasMore) : false,
-            historyLoading: sameEpoch ? Boolean(current?.historyLoading) : false,
-            historyLoaded: sameEpoch ? Boolean(current?.historyLoaded) : false,
-            historyError: sameEpoch ? current?.historyError || "" : "",
-          },
-        };
-      });
-      setCatalog(previous => updateSessionAgentStatus(previous, message.session, status));
-      break;
-    }
-    case "agent.turn": {
-      const turn = Number(message.turn) || 0;
-      if (!turn) break;
-      setAgentStateBySession(previous => {
-        const current = previous[message.session] || {};
-        const sameEpoch = !message.epoch || !current.epoch || current.epoch === message.epoch;
-        return {
-          ...previous,
-          [message.session]: {
-            ...current,
-            epoch: message.epoch || current.epoch,
-            turn: { id: turn, status: message.status || "unknown" },
-            events: sameEpoch ? current.events || [] : [],
-          },
-        };
-      });
+      })();
       break;
     }
     case "runtimeMetadata":
@@ -3707,8 +3712,11 @@ export default function App() {
   useEffect(() => {
     if (!agentViewActive || !selectedSession) return;
     const sessionID = selectedSession.id;
+    const streamID = String(selectedSession.agentExecutionId || "").trim();
+    const namespace = agentReplicaNamespaceRef.current;
+    if (!namespace || !streamID) return;
 
-    loadRecentAgentEvents(sessionID, 100).then(cached => {
+    loadRecentAgentEventsForStream(namespace, streamID, 100).then(cached => {
       if (cached && cached.length > 0) {
         setAgentStateBySession(prev => {
           const cur = prev[sessionID] || {};
@@ -3721,48 +3729,39 @@ export default function App() {
     });
 
     const state = agentStateBySession[sessionID];
-    getAgentMaxSequence(sessionID, state?.epoch).then(lastSeq => {
-      const params = { session: sessionID, wireOptions: { omitFields: ["output"] } };
-      if (lastSeq > 0) params.lastSequence = String(lastSeq);
-      if (state?.epoch) params.epoch = String(state.epoch);
-      request("agent.subscribe", params, result => {
-        const epoch = result?.snapshot?.epoch;
-        const gapEvents = result?.gapEvents || [];
-        if (gapEvents.length > 0) {
-          saveAgentEvents(sessionID, epoch, gapEvents);
+    getAgentSyncState(namespace, streamID).then(syncState => {
+      const lastSeq = Number(syncState?.contiguousThrough) || 0;
+      request("agent.events.subscribe", { streamId: streamID, afterSequence: lastSeq, limit: 200 }, async result => {
+        const replay = Array.isArray(result?.events) ? result.events : [];
+        try {
+          // Persist the checkpoint even when the replay is empty. The
+          // checkpoint is a projection cursor, not proof that every event row
+          // exists locally, so the store keeps it separate from contiguity.
+          await persistAgentEvents(streamID, replay, {
+            checkpointSequence: Number(result?.checkpoint?.sequence) || 0,
+            checkpoint: result?.checkpoint?.state || null,
+          });
           setAgentStateBySession(prev => {
             const cur = prev[sessionID] || {};
             return {
               ...prev,
               [sessionID]: {
                 ...cur,
-                epoch: epoch || cur.epoch,
-                events: mergeAgentEvents(cur.events || [], gapEvents),
+                streamId: streamID,
+                executionId: result?.executionId || cur.executionId || streamID,
+                events: mergeAgentEvents(cur.events || [], replay),
+                headSequence: Math.max(cur.headSequence || 0, Number(result?.checkpoint?.sequence) || 0),
               },
             };
           });
-        } else if (result?.snapshot?.sequence > lastSeq && (result.snapshot.sequence - lastSeq) > 0) {
-          request("agent.history", {
-            session: sessionID,
-            since: String(lastSeq + 1),
-            before: String(result.snapshot.sequence + 1),
-            limit: "100",
-            wireOptions: { omitFields: ["output"] },
-          }, page => {
-            if (page?.events?.length > 0) {
-              saveAgentEvents(sessionID, page.epoch || epoch, page.events);
-              setAgentStateBySession(prev => {
-                const cur = prev[sessionID] || {};
-                return {
-                  ...prev,
-                  [sessionID]: {
-                    ...cur,
-                    events: mergeAgentEvents(cur.events || [], page.events),
-                  },
-                };
-              });
-            }
-          });
+        } catch {
+          setAgentStateBySession(prev => ({
+            ...prev,
+            [sessionID]: {
+              ...(prev[sessionID] || {}),
+              historyError: "Unable to persist Agent events; stream quarantined.",
+            },
+          }));
         }
       });
     });

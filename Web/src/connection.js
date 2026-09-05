@@ -1,5 +1,6 @@
 const connecting = 0;
 const open = 1;
+export const protocolVersion = "3.0";
 
 export const agentCapabilities = [
   "agent-timeline-v1",
@@ -203,7 +204,7 @@ export class WarrenConnection {
       this.onState("open");
       const auth = {
         t: "auth",
-        version: "2.0",
+        version: protocolVersion,
         capabilities: this.capabilities,
         terminalStateFormats: ["ghostline-vt-replay-v1"],
       };

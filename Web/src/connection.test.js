@@ -55,7 +55,7 @@ test("connection authenticates and forwards messages", () => {
   assert.deepEqual(JSON.parse(socket.sent[0]), {
     t: "auth",
     token: "secret",
-    version: "2.0",
+    version: "3.0",
     capabilities: ["roster-delta"],
     terminalStateFormats: ["ghostline-vt-replay-v1"],
   });

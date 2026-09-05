@@ -1446,10 +1446,10 @@ func TestHealthEndpoint(t *testing.T) {
 		GhostlineRPCVersion string `json:"ghostlineRPCVersion"`
 		GhostlineTagVersion string `json:"ghostlineTagVersion"`
 		Status              struct {
-			Store                   string      `json:"store"`
-			Migrations              string      `json:"migrations"`
-			GhostlineSkippedSessions int         `json:"ghostlineSkippedSessions"`
-			Relay                   api.RelayHealth `json:"relay"`
+			Store                    string          `json:"store"`
+			Migrations               string          `json:"migrations"`
+			GhostlineSkippedSessions int             `json:"ghostlineSkippedSessions"`
+			Relay                    api.RelayHealth `json:"relay"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {

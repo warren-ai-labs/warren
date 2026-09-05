@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/output"
 	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
+	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -46,7 +49,11 @@ const (
 type HTTPServer struct {
 	Service *Service
 	Token   string
-	Logger  *slog.Logger
+	// AccessScopeID is the stable, non-secret visibility scope for direct
+	// authenticated clients. Relay clients receive a derived scope from their
+	// stable client ID so local replicas cannot collide across sharing scopes.
+	AccessScopeID string
+	Logger        *slog.Logger
 	// RelayStart and RelayStop are installed by the daemon entrypoint. Keeping
 	// lifecycle hooks on the HTTP server lets settings.put toggle the supervised
 	// connector without touching Session or PTY ownership; tests and embedded
@@ -108,11 +115,12 @@ type relayControlPeer struct {
 
 func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPServer {
 	server := &HTTPServer{
-		Service:    service,
-		Token:      token,
-		Logger:     logger,
-		peers:      make(map[*wsPeer]struct{}),
-		relayPeers: make(map[relay.ConnectionID]*relayControlPeer),
+		Service:       service,
+		Token:         token,
+		AccessScopeID: "scope-owner",
+		Logger:        logger,
+		peers:         make(map[*wsPeer]struct{}),
+		relayPeers:    make(map[relay.ConnectionID]*relayControlPeer),
 		upgrader: websocket.Upgrader{
 			EnableCompression: true,
 			ReadBufferSize:    256 * 1024,
@@ -1146,7 +1154,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	s.registerPeer(peer)
-	// Protocol 2 changes terminal recovery from a replayable byte stream to an
+	// Protocol 3 changes terminal recovery from a replayable byte stream to an
 	// atomically installable terminal state.  A missing version is therefore not
 	// an older-but-compatible client: it is an unauthenticated protocol shape
 	// that must be rejected before any roster or session data is exposed.
@@ -1166,12 +1174,13 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	_ = connection.SetReadDeadline(time.Time{})
+	peer.accessScopeID = s.accessScopeID("")
 	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
 	state, revision := s.Service.RosterVersion(request.Context())
 	state = projectRosterCapabilities(state, peer.capabilitiesList())
-	if err := peer.writeJSON(map[string]any{
-		"t": "welcome", "version": api.Version, "host": state.Host,
-		"capabilities": peer.capabilitiesList(),
+	if err := peer.writeJSON(api.WelcomeMessage{
+		Type: "welcome", Version: api.Version, Host: state.Host,
+		AccessScopeID: peer.accessScopeID, Capabilities: peer.capabilitiesList(),
 	}); err != nil {
 		return
 	}
@@ -1320,12 +1329,13 @@ func (s *HTTPServer) HandleRelayControl(
 		entry.authenticated = true
 		entry.stateMu.Unlock()
 		s.registerPeer(peer)
+		peer.accessScopeID = s.accessScopeID(auth.ClientID)
 		peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), auth.Capabilities))
 		state, revision := s.Service.RosterVersion(ctx)
 		state = projectRosterCapabilities(state, peer.capabilitiesList())
-		if err := peer.writeJSON(map[string]any{
-			"t": "welcome", "version": api.Version, "host": state.Host,
-			"capabilities": peer.capabilitiesList(),
+		if err := peer.writeJSON(api.WelcomeMessage{
+			Type: "welcome", Version: api.Version, Host: state.Host,
+			AccessScopeID: peer.accessScopeID, Capabilities: peer.capabilitiesList(),
 		}); err != nil {
 			s.removeRelayControl(value.ID, entry)
 			return err
@@ -1520,6 +1530,17 @@ func (s *HTTPServer) authorized(value string) bool {
 	return value != "" && subtle.ConstantTimeCompare([]byte(value), []byte(s.Token)) == 1
 }
 
+func (s *HTTPServer) accessScopeID(clientID string) string {
+	if strings.TrimSpace(clientID) == "" {
+		if value := strings.TrimSpace(s.AccessScopeID); value != "" {
+			return value
+		}
+		return "scope-owner"
+	}
+	hash := sha256.Sum256([]byte("warren-access-scope\x00" + strings.TrimSpace(clientID)))
+	return "scope-" + hex.EncodeToString(hash[:8])
+}
+
 type outboundMessage struct {
 	kind    int
 	data    []byte
@@ -1530,8 +1551,9 @@ type outboundMessage struct {
 // client only fills its own queue; overflow or a write timeout closes exactly
 // this peer, and the client reconnects from its last Recovery Anchor.
 type wsPeer struct {
-	server          *HTTPServer
-	connection      *websocket.Conn
+	server        *HTTPServer
+	connection    *websocket.Conn
+	accessScopeID string
 	// outbound is the bounded terminal-output lane. Text/control traffic uses
 	// controlOutbound so a burst of binary output cannot delay a response,
 	// heartbeat, or recovery marker.
@@ -1551,11 +1573,11 @@ type wsPeer struct {
 	// surface so background sessions keep consuming output; legacy web and
 	// mobile clients keep exactly the one implicit subscription created by
 	// their attach. Guarded by enqueueMu.
-	outputs          map[string]struct{}
-	controlSession   string
-	agentSession     string
-	agentWireOptions map[string]wireOptions
-	// terminalStateFormat is negotiated once during protocol-2 authentication.
+	outputs               map[string]struct{}
+	controlSession        string
+	agentSession          string
+	canonicalAgentStreams map[string]struct{}
+	// terminalStateFormat is negotiated once during protocol-3 authentication.
 	// Every client must install its selected format behind a presentation gate.
 	terminalStateFormat string
 	// capabilities contains the Host/client intersection established during
@@ -1942,34 +1964,15 @@ func (p *wsPeer) enqueueSynced(sessionID string, epoch, sequence uint64) error {
 	})
 }
 
-func (p *wsPeer) enqueueAgentEvents(sessionID string, events []api.AgentEvent) error {
-	p.enqueueMu.Lock()
-	options := p.agentWireOptions[sessionID]
-	p.enqueueMu.Unlock()
-	return p.writeJSON(api.AgentMessage{
-		Type:    "agent",
-		Session: sessionID,
-		Epoch:   p.server.Service.currentAgentEpoch(),
-		Events:  projectWireEvents(events, options),
-	})
-}
-
-func (p *wsPeer) enqueueAgentStatus(sessionID string, status api.AgentStatus) error {
-	return p.writeJSON(api.AgentStatusMessage{
-		Type:    "agent.status",
-		Session: sessionID,
-		Epoch:   p.server.Service.currentAgentEpoch(),
-		Status:  status,
-	})
-}
-
-func (p *wsPeer) enqueueAgentTurn(sessionID string, turn api.AgentTurn) error {
-	return p.writeJSON(api.AgentTurnMessage{
-		Type:    "agent.turn",
-		Session: sessionID,
-		Epoch:   p.server.Service.currentAgentEpoch(),
-		Turn:    turn.ID,
-		Status:  turn.Status,
+func (p *wsPeer) enqueueCanonicalAgentEvents(streamID, executionID string, events []api.CanonicalAgentEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	return p.writeJSON(api.CanonicalAgentEventsMessage{
+		Type:        "agent.events",
+		StreamID:    streamID,
+		ExecutionID: executionID,
+		Events:      events,
 	})
 }
 
@@ -1982,6 +1985,49 @@ func (p *wsPeer) writeResult(id string, result any) error {
 }
 func (p *wsPeer) writeError(id string, err error) error {
 	return p.writeJSON(api.Response{Type: "response", ID: id, OK: false, Error: err.Error()})
+}
+
+type canonicalProtocolError struct {
+	code    string
+	message string
+	details any
+}
+
+func (e *canonicalProtocolError) Error() string {
+	if e == nil {
+		return "canonical protocol error"
+	}
+	return e.message
+}
+
+func (p *wsPeer) writeCanonicalError(id string, err error) error {
+	code := "invalid_command"
+	var details any
+	var protocolErr *canonicalProtocolError
+	if errors.As(err, &protocolErr) {
+		code = protocolErr.code
+		details = protocolErr.details
+	}
+	var boundary *store.CanonicalHistoryBoundary
+	if protocolErr == nil && errors.As(err, &boundary) {
+		code = "history_boundary"
+		details = map[string]any{
+			"streamId":             boundary.StreamID,
+			"retainedFromSequence": boundary.RetainedFromSequence,
+			"headSequence":         boundary.HeadSequence,
+			"checkpointSequence":   boundary.CheckpointSequence,
+			"checkpoint":           boundary.Checkpoint,
+		}
+	} else if protocolErr == nil && strings.Contains(strings.ToLower(err.Error()), "capability") {
+		code = "capability_unavailable"
+	} else if protocolErr == nil && errors.Is(err, store.ErrCanonicalCommandPending) {
+		code = "command_pending"
+	} else if protocolErr == nil && (errors.Is(err, store.ErrCanonicalCommandConflict) || strings.Contains(strings.ToLower(err.Error()), "idempotency")) {
+		code = "command_conflict"
+	} else if protocolErr == nil && (strings.Contains(strings.ToLower(err.Error()), "version") || strings.Contains(strings.ToLower(err.Error()), "stale")) {
+		code = "stale_version"
+	}
+	return p.writeJSON(api.Response{Type: "response", ID: id, OK: false, Error: err.Error(), Code: code, Details: details})
 }
 
 func (p *wsPeer) startRoster(parent context.Context, initial api.State, initialRevision uint64, useDeltas bool) {
@@ -2127,297 +2173,95 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	switch command.Method {
 	case "roster":
 		return p.writeResult(command.ID, p.server.Service.Roster(ctx))
-	case "agent.history":
-		sessionID := stringParam(params, "session")
-		if sessionID == "" {
-			return fmt.Errorf("session parameter required")
+	case "agent.execution.get":
+		executionID := stringParam(params, "executionId")
+		if executionID == "" {
+			return p.writeCanonicalError(command.ID, errors.New("executionId is required"))
 		}
-		since, _ := uint64Param(params, "since")
-		before, _ := uint64Param(params, "before")
-		limit := intParam(params, "limit")
-		wire, err := parseWireOptions(params)
-		if err != nil {
-			return err
-		}
-		priority := strings.ToLower(strings.TrimSpace(stringParam(params, "priority")))
-		return p.writeResult(command.ID, p.server.Service.agentHistoryPageWithWireOptions(
-			sessionID,
-			since,
-			before,
-			limit,
-			priority == "conversation" || priority == "messages",
-			wire,
-		))
-	case "agent.transcript":
-		sessionID := stringParam(params, "session")
-		if sessionID == "" {
-			return fmt.Errorf("session parameter required")
-		}
-		var offset int64
-		if rawOffset, specified := params["offset"]; specified {
-			value, ok := rawOffset.(string)
-			if !ok {
-				return fmt.Errorf("transcript offset must be an integer")
+		if session, ok := p.server.Service.sessionForCanonicalStream(executionID); ok {
+			if execution, exists := p.server.Service.canonicalExecutionForSession(session.ID); exists {
+				return p.writeResult(command.ID, execution)
 			}
-			parsed, err := strconv.ParseInt(value, 10, 64)
+		}
+		if p.server.Service.AgentStore != nil {
+			execution, found, err := p.server.Service.AgentStore.CanonicalExecution(ctx, executionID)
 			if err != nil {
-				return fmt.Errorf("transcript offset must be an integer")
+				return p.writeCanonicalError(command.ID, err)
 			}
-			offset = parsed
+			if found {
+				return p.writeResult(command.ID, execution)
+			}
 		}
-		value, err := p.server.Service.agentTranscriptChunk(
-			ctx,
-			sessionID,
-			offset,
-			intParam(params, "limit"),
-		)
+		return p.writeCanonicalError(command.ID, fmt.Errorf("agent execution not found: %s", executionID))
+	case "agent.events.history":
+		request, err := decodeAgentParams[api.AgentEventsHistoryRequest](params)
 		if err != nil {
-			return err
+			return p.writeCanonicalError(command.ID, err)
 		}
-		return p.writeResult(command.ID, value)
-	case "agent.snapshot":
-		sessionID := stringParam(params, "session")
-		if sessionID == "" {
-			return fmt.Errorf("session parameter required")
+		request.StreamID = strings.TrimSpace(request.StreamID)
+		if request.StreamID == "" {
+			return p.writeCanonicalError(command.ID, errors.New("streamId is required"))
 		}
-		return p.writeResult(command.ID, p.server.Service.agentSnapshot(sessionID))
-	case "agent.turn.events":
-		sessionID := stringParam(params, "session")
-		if sessionID == "" {
-			return fmt.Errorf("session parameter required")
-		}
-		turn, _ := uint64Param(params, "turn")
-		if turn == 0 {
-			return fmt.Errorf("turn parameter required")
-		}
-		wire, err := parseWireOptions(params)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, projectWireEvents(p.server.Service.agentTurnEvents(sessionID, turn), wire))
-	case "agent.interaction.respond":
-		if !p.supportsCapability(api.CapabilityAgentInteractions) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentInteractions)
-		}
-		request, err := decodeAgentInteractionParams(params)
-		if err != nil {
-			return err
-		}
-		if request.Session == "" {
-			request.Session = stringParam(params, "session")
-		}
-		if request.RequestID == "" {
-			request.RequestID = stringParam(params, "requestId")
-		}
-		if request.RequestID == "" {
-			request.RequestID = command.ID
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityInteractions) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInteractions, request.Session)
-		}
-		result, err := p.server.Service.respondAgentInteraction(ctx, request)
-		if err != nil {
-			return err
+		result, queryErr := p.server.Service.canonicalHistoryPage(ctx, request.StreamID, request.AfterSequence, request.BeforeSequence, int(request.Limit))
+		if queryErr != nil {
+			return p.writeCanonicalError(command.ID, queryErr)
 		}
 		return p.writeResult(command.ID, result)
-	case "agent.turn.interrupt":
-		if !p.supportsCapability(api.CapabilityAgentInterrupt) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentInterrupt)
-		}
-		request, err := decodeAgentTurnInterruptParams(params)
+	case "agent.events.subscribe":
+		request, err := decodeAgentParams[api.AgentEventsSubscriptionRequest](params)
 		if err != nil {
-			return err
+			return p.writeCanonicalError(command.ID, err)
 		}
-		if request.Replacement != nil && len(request.Replacement.Attachments) > 0 &&
-			!p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
+		request.StreamID = strings.TrimSpace(request.StreamID)
+		if request.StreamID == "" {
+			return p.writeCanonicalError(command.ID, errors.New("streamId is required"))
 		}
-		if request.Session == "" {
-			request.Session = stringParam(params, "session")
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityInterrupt) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentInterrupt, request.Session)
-		}
-		result, err := p.server.Service.interruptAgentTurn(ctx, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.message.send":
-		request, err := decodeAgentMessageParams(params)
-		if err != nil {
-			return err
-		}
-		if len(request.Attachments) > 0 && !p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
-		}
-		if request.Session == "" {
-			request.Session = stringParam(params, "session")
-		}
-		if request.ClientMessageID == "" {
-			request.ClientMessageID = stringParam(params, "clientMessageId")
-		}
-		if request.ClientMessageID == "" {
-			request.ClientMessageID = command.ID
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if len(request.Attachments) > 0 && !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
-		}
-		result, err := p.server.Service.sendAgentMessage(ctx, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.attachment.prepare":
-		if !p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
-		}
-		request, err := decodeAgentAttachmentPrepareParams(params)
-		if err != nil {
-			return err
-		}
-		request.Session = stringParam(params, "session")
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
-		}
-		result, err := p.server.Service.prepareAgentAttachment(ctx, request.Session, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.attachment.chunk":
-		if !p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
-		}
-		request, err := decodeAgentAttachmentChunkParams(params)
-		if err != nil {
-			return err
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
-		}
-		result, err := p.server.Service.putAgentAttachmentChunk(ctx, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.attachment.complete":
-		if !p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
-		}
-		request, err := decodeAgentAttachmentCompleteParams(params)
-		if err != nil {
-			return err
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
-		}
-		result, err := p.server.Service.completeAgentAttachment(ctx, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.attachment.abort":
-		if !p.supportsCapability(api.CapabilityAgentAttachments) {
-			return fmt.Errorf("capability %s is not available", api.CapabilityAgentAttachments)
-		}
-		request, err := decodeAgentAttachmentAbortParams(params)
-		if err != nil {
-			return err
-		}
-		if err := p.requireAgentControl(request.Session); err != nil {
-			return err
-		}
-		if !p.server.Service.sessionSupportsCapability(request.Session, CapabilityAttachments) {
-			return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, request.Session)
-		}
-		result, err := p.server.Service.abortAgentAttachment(ctx, request)
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, result)
-	case "agent.subscribe":
-		sessionID := stringParam(params, "session")
-		session, ok := p.server.Service.Session(sessionID)
+		session, ok := p.server.Service.sessionForCanonicalStream(request.StreamID)
 		if !ok {
-			return fmt.Errorf("session not found: %s", sessionID)
+			return p.writeCanonicalError(command.ID, fmt.Errorf("agent execution not found: %s", request.StreamID))
 		}
-		if session.Lifecycle != "running" {
-			return fmt.Errorf("session is not running: %s", sessionID)
-		}
-		entry, err := p.server.Service.ensureAgent(ctx, session)
-		if err != nil {
-			return err
-		}
-		if entry == nil {
-			return fmt.Errorf("session is not bound to an agent: %s", sessionID)
-		}
-		if err := p.server.Service.waitAgentReady(ctx, sessionID); err != nil {
-			return err
-		}
-		// ensureAgent may discover and persist the CLI binding while this
-		// request is running. Return the refreshed session so callers can
-		// distinguish a ready Agent from a shell that merely has an agent kind.
-		if refreshed, ok := p.server.Service.Session(sessionID); ok {
-			session = refreshed
-		}
-		// The subscription response is also a Session-level capability
-		// snapshot. Apply the same connection intersection used by roster
-		// messages so clients do not briefly enable controls from Host-global
-		// capabilities while switching Sessions.
-		session.AgentCapabilities = p.server.Service.agentCapabilitiesForSession(sessionID, session)
-		if handler := p.server.Service.agentHandlerForSession(sessionID); handler != "" {
-			session.AgentHandler = handler
-		}
-		session = projectRosterCapabilities(api.State{Sessions: []api.Session{session}}, p.capabilitiesList()).Sessions[0]
-		lock := p.server.Service.broadcastLock(sessionID)
+		lock := p.server.Service.broadcastLock(session.ID)
 		if err := lock.LockContext(ctx); err != nil {
-			return err
+			return p.writeCanonicalError(command.ID, err)
 		}
-		snapshot := p.server.Service.agentSnapshot(sessionID)
-		wire, err := parseWireOptions(params)
-		if err != nil {
+		result, queryErr := p.server.Service.canonicalHistoryPage(ctx, request.StreamID, request.AfterSequence, 0, int(request.Limit))
+		if queryErr != nil {
 			lock.Unlock()
-			return err
+			return p.writeCanonicalError(command.ID, queryErr)
 		}
-		err = p.subscribeAgent(sessionID, wire)
+		checkpoint := p.server.Service.canonicalProjectionCheckpoint(session.ID, result.HeadSequence)
+		if err := p.subscribeCanonicalAgent(session.ID, request.StreamID); err != nil {
+			lock.Unlock()
+			return p.writeCanonicalError(command.ID, err)
+		}
+		value := api.AgentEventsSubscriptionResult{
+			StreamID: request.StreamID, ExecutionID: result.ExecutionID,
+			Checkpoint: checkpoint, Events: result.Events, Live: true,
+		}
+		writeErr := p.writeResult(command.ID, value)
 		lock.Unlock()
-		if err != nil {
-			return err
+		if writeErr != nil {
+			p.server.Service.detachAgentPeer(p, session.ID)
 		}
-		lastSeq, _ := uint64Param(params, "lastSequence")
-		epoch, _ := uint64Param(params, "epoch")
-		var gapEvents []api.AgentEvent
-		if (epoch == 0 || epoch == snapshot.Epoch) && lastSeq > 0 && lastSeq < snapshot.Sequence && snapshot.Sequence-lastSeq <= 100 {
-			res := p.server.Service.agentHistoryPageWithWireOptions(sessionID, lastSeq+1, 0, 100, false, wire)
-			gapEvents = res.Events
-		} else if lastSeq == 0 && snapshot.Sequence > 0 {
-			res := p.server.Service.agentHistoryPageWithWireOptions(sessionID, 0, 0, 64, false, wire)
-			gapEvents = res.Events
-		}
-		return p.writeResult(command.ID, api.AgentSubscriptionResult{
-			Session:   publicSession(session),
-			Snapshot:  snapshot,
-			GapEvents: gapEvents,
-		})
+		return writeErr
+	case "agent.execution.resume":
+		return p.handleCanonicalExecutionResume(ctx, command)
+	case "agent.turn.start":
+		return p.handleCanonicalTurnStart(ctx, command)
+	case "agent.turn.steer":
+		return p.handleCanonicalTurnSteer(ctx, command)
+	case "agent.turn.cancel":
+		return p.handleCanonicalTurnCancel(ctx, command)
+	case "agent.interaction.resolve":
+		return p.handleCanonicalInteractionResolve(ctx, command)
+	case "agent.attachment.prepare":
+		return p.handleCanonicalAttachmentPrepare(ctx, command)
+	case "agent.attachment.chunk":
+		return p.handleCanonicalAttachmentChunk(ctx, command)
+	case "agent.attachment.complete":
+		return p.handleCanonicalAttachmentComplete(ctx, command)
+	case "agent.attachment.abort":
+		return p.handleCanonicalAttachmentAbort(ctx, command)
 	case "relay.pairing":
 		if p.server.RelayPairing == nil {
 			return errors.New("Relay pairing is unavailable")
@@ -2868,10 +2712,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if session.Lifecycle != "running" {
 			return fmt.Errorf("session is not running: %s", id)
 		}
-		wire, err := parseWireOptions(params)
-		if err != nil {
-			return err
-		}
 		// Control-only claims carry no output intent: the desktop promotes a
 		// retained warm surface by swapping its control lease without any
 		// replay, snapshot, or runtime I/O. Legacy clients omit the flag and
@@ -2899,7 +2739,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
 			p.server.Service.reservePeerCursorOutput(p, session.ID)
 		}
-		p.setAgentWireOptions(id, wire)
 		// Register before claiming focus so a disconnect cannot leave a stale
 		// focus owner behind while the initial snapshot is being prepared.
 		p.server.Service.registerPeer(session.ID, p)
@@ -2968,10 +2807,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return fmt.Errorf("session is not running: %s", id)
 		}
 		anchor := anchorFromParams(params)
-		wire, err := parseWireOptions(params)
-		if err != nil {
-			return err
-		}
 		anchorLabel := "none"
 		if anchor != nil {
 			anchorLabel = fmt.Sprintf("epoch=%d sequence=%d", anchor.Epoch, anchor.Sequence)
@@ -2999,7 +2834,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
 			p.server.Service.reservePeerCursorOutput(p, session.ID)
 		}
-		p.setAgentWireOptions(id, wire)
 		markStep("reservePeerCursorOutput")
 		if err := ctx.Err(); err != nil {
 			lock.Unlock()
@@ -3195,6 +3029,300 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	}
 }
 
+func (p *wsPeer) canonicalCommandSession(command api.AgentCommand) (api.Session, api.AgentExecution, error) {
+	if strings.TrimSpace(command.CommandID) == "" || strings.TrimSpace(command.ExecutionID) == "" {
+		return api.Session{}, api.AgentExecution{}, errors.New("commandId and executionId are required")
+	}
+	session, ok := p.server.Service.sessionForCanonicalStream(command.ExecutionID)
+	if !ok {
+		return api.Session{}, api.AgentExecution{}, fmt.Errorf("agent execution not found: %s", command.ExecutionID)
+	}
+	execution, ok := p.server.Service.canonicalExecutionForSession(session.ID)
+	if !ok || execution.ID != command.ExecutionID {
+		return api.Session{}, api.AgentExecution{}, fmt.Errorf("agent execution not found: %s", command.ExecutionID)
+	}
+	if command.ExpectedVersion > 0 && command.ExpectedVersion != execution.HeadSequence {
+		return api.Session{}, api.AgentExecution{}, fmt.Errorf("stale expectedVersion: got %d, current %d", command.ExpectedVersion, execution.HeadSequence)
+	}
+	if err := p.requireAgentControl(session.ID); err != nil {
+		return api.Session{}, api.AgentExecution{}, err
+	}
+	return session, execution, nil
+}
+
+func (p *wsPeer) handleCanonicalExecutionResume(ctx context.Context, command api.Envelope) error {
+	base, err := decodeCanonicalCommand(command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(base)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, base.ExecutionID, base.CommandID, base,
+		func() (any, error) {
+			_, err := p.server.Service.ensureAgent(ctx, session)
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: base.CommandID, Accepted: true}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalTurnStart(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentTurnStartCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			result, err := p.server.Service.sendAgentMessage(ctx, api.AgentMessageSendRequest{
+				Session: session.ID, ClientMessageID: request.CommandID,
+				Text: request.Text, Attachments: request.Attachments,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: result.Accepted}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalTurnSteer(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentTurnSteerCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	if request.TurnID == "" {
+		return p.writeCanonicalError(command.ID, errors.New("turnId is required"))
+	}
+	turnID, parseErr := strconv.ParseUint(request.TurnID, 10, 64)
+	if parseErr != nil || turnID == 0 {
+		return p.writeCanonicalError(command.ID, errors.New("turnId must be a positive integer"))
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			_, err := p.server.Service.interruptAgentTurn(ctx, api.AgentTurnInterruptRequest{
+				Session: session.ID, Turn: turnID, Reason: "send_now",
+				Replacement: &api.AgentMessageSendRequest{
+					Session: session.ID, ClientMessageID: request.CommandID,
+					Text: request.Text, Attachments: request.Attachments,
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: true}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalTurnCancel(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentTurnCancelCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	turnID, parseErr := strconv.ParseUint(strings.TrimSpace(request.TurnID), 10, 64)
+	if parseErr != nil || turnID == 0 {
+		return p.writeCanonicalError(command.ID, errors.New("turnId must be a positive integer"))
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			_, err := p.server.Service.interruptAgentTurn(ctx, api.AgentTurnInterruptRequest{
+				CommandID: request.CommandID, Session: session.ID, Turn: turnID, Reason: "cancel",
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: true}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentInteractionResolveCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	if strings.TrimSpace(request.InteractionID) == "" || request.Version == 0 {
+		return p.writeCanonicalError(command.ID, errors.New("interactionId and version are required"))
+	}
+	interaction, found := p.server.Service.canonicalInteraction(session.ID, request.InteractionID)
+	if !found {
+		return p.writeCanonicalError(command.ID, fmt.Errorf("interaction not found: %s", request.InteractionID))
+	}
+	if request.Version != interaction.version {
+		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
+			code:    "stale_interaction",
+			message: fmt.Sprintf("interaction %s is version %d, not %d", request.InteractionID, interaction.version, request.Version),
+			details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
+		})
+	}
+	if interaction.state != "" && interaction.state != "pending" && interaction.state != "submitting" {
+		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
+			code:    "stale_interaction",
+			message: fmt.Sprintf("interaction %s is %s", request.InteractionID, interaction.state),
+			details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
+		})
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			_, err := p.server.Service.respondAgentInteraction(ctx, api.AgentInteractionResponse{
+				CommandID: request.CommandID, Session: session.ID, RequestID: request.InteractionID,
+				Kind: interaction.kind, Response: request.Resolution,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: true}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) canonicalAttachmentSession(command api.AgentCommand) (api.Session, error) {
+	session, _, err := p.canonicalCommandSession(command)
+	if err != nil {
+		return api.Session{}, err
+	}
+	if !p.server.Service.sessionSupportsCapability(session.ID, CapabilityAttachments) {
+		return api.Session{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, session.ID)
+	}
+	return session, nil
+}
+
+func (p *wsPeer) handleCanonicalAttachmentPrepare(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentAttachmentPrepareCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			return p.server.Service.prepareAgentAttachment(ctx, session.ID, api.AgentAttachmentPrepareRequest{
+				Session: session.ID, Name: request.Name, MIME: request.MIME, Size: request.Size, SHA256: request.SHA256,
+			})
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalAttachmentChunk(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentAttachmentChunkCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			return p.server.Service.putAgentAttachmentChunk(ctx, api.AgentAttachmentChunkRequest{
+				Session: session.ID, UploadID: request.UploadID, Sequence: request.Chunk,
+				Length: request.Length, SHA256: request.SHA256, Data: request.Data,
+			})
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalAttachmentComplete(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentAttachmentCompleteCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			return p.server.Service.completeAgentAttachment(ctx, api.AgentAttachmentCompleteRequest{
+				Session: session.ID, UploadID: request.UploadID, Length: request.Length, SHA256: request.SHA256,
+			})
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalAttachmentAbort(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentAttachmentAbortCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			return p.server.Service.abortAgentAttachment(ctx, api.AgentAttachmentAbortRequest{Session: session.ID, UploadID: request.UploadID})
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
 func (p *wsPeer) input(ctx context.Context, data []byte) error {
 	attached, err := p.controlledSession()
 	if err != nil {
@@ -3242,7 +3370,7 @@ func (p *wsPeer) claimControl(session api.Session) {
 	p.enqueueMu.Unlock()
 }
 
-func (p *wsPeer) subscribeAgent(sessionID string, options wireOptions) error {
+func (p *wsPeer) subscribeCanonicalAgent(sessionID, streamID string) error {
 	p.enqueueMu.Lock()
 	if p.closeFlag {
 		p.enqueueMu.Unlock()
@@ -3250,24 +3378,15 @@ func (p *wsPeer) subscribeAgent(sessionID string, options wireOptions) error {
 	}
 	previous := p.agentSession
 	p.agentSession = sessionID
-	if p.agentWireOptions == nil {
-		p.agentWireOptions = make(map[string]wireOptions)
+	if p.canonicalAgentStreams == nil {
+		p.canonicalAgentStreams = make(map[string]struct{})
 	}
-	p.agentWireOptions[sessionID] = options
-	_, previousHasOutput := p.outputs[previous]
+	p.canonicalAgentStreams[streamID] = struct{}{}
 	p.enqueueMu.Unlock()
 	if previous != "" && previous != sessionID {
 		p.server.Service.detachAgentPeer(p, previous)
-		if !previousHasOutput {
-			p.enqueueMu.Lock()
-			delete(p.agentWireOptions, previous)
-			p.enqueueMu.Unlock()
-		}
 	}
 	p.server.Service.registerAgentPeer(sessionID, p)
-
-	// A writer failure can close the peer between the local assignment and
-	// registry insertion. Recheck and remove the late registration if needed.
 	p.enqueueMu.Lock()
 	closed := p.closeFlag || p.agentSession != sessionID
 	p.enqueueMu.Unlock()
@@ -3278,45 +3397,11 @@ func (p *wsPeer) subscribeAgent(sessionID string, options wireOptions) error {
 	return nil
 }
 
-func parseWireOptions(params map[string]any) (wireOptions, error) {
-	options := wireOptions{omitFields: make(map[string]struct{})}
-	value, specified := params["wireOptions"]
-	if !specified {
-		return options, nil
-	}
-	raw, ok := value.(map[string]any)
-	if !ok {
-		return wireOptions{}, errors.New("wireOptions must be an object")
-	}
-	value, specified = raw["omitFields"]
-	if !specified {
-		return options, nil
-	}
-	fields, ok := value.([]any)
-	if !ok {
-		return wireOptions{}, errors.New("wireOptions.omitFields must be an array")
-	}
-	for _, value := range fields {
-		field, ok := value.(string)
-		if !ok {
-			return wireOptions{}, errors.New("wireOptions.omitFields entries must be strings")
-		}
-		field = strings.TrimSpace(field)
-		if !supportedWireField(field) {
-			return wireOptions{}, fmt.Errorf("wire field cannot be omitted: %s", field)
-		}
-		options.omitFields[field] = struct{}{}
-	}
-	return options, nil
-}
-
-func supportedWireField(field string) bool {
-	switch field {
-	case "output", "toolInput", "files", "payload", "usage":
-		return true
-	default:
-		return false
-	}
+func (p *wsPeer) hasCanonicalAgentStream(streamID string) bool {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	_, ok := p.canonicalAgentStreams[streamID]
+	return ok
 }
 
 func (p *wsPeer) detach() {
@@ -3412,21 +3497,9 @@ func (p *wsPeer) addOutput(sessionID string) {
 	p.enqueueMu.Unlock()
 }
 
-func (p *wsPeer) setAgentWireOptions(sessionID string, options wireOptions) {
-	p.enqueueMu.Lock()
-	if p.agentWireOptions == nil {
-		p.agentWireOptions = make(map[string]wireOptions)
-	}
-	p.agentWireOptions[sessionID] = options
-	p.enqueueMu.Unlock()
-}
-
 func (p *wsPeer) removeOutput(sessionID string) {
 	p.enqueueMu.Lock()
 	delete(p.outputs, sessionID)
-	if p.agentSession != sessionID {
-		delete(p.agentWireOptions, sessionID)
-	}
 	p.enqueueMu.Unlock()
 }
 
@@ -3466,6 +3539,20 @@ func decodeAgentParams[T any](values map[string]any) (T, error) {
 		return result, fmt.Errorf("invalid request parameters: %w", err)
 	}
 	return result, nil
+}
+
+func decodeCanonicalCommand(values map[string]any) (api.AgentCommand, error) {
+	command, err := decodeAgentParams[api.AgentCommand](values)
+	if err != nil {
+		return command, err
+	}
+	command.CommandID = strings.TrimSpace(command.CommandID)
+	command.ExecutionID = strings.TrimSpace(command.ExecutionID)
+	command.LeaseID = strings.TrimSpace(command.LeaseID)
+	if command.CommandID == "" || command.ExecutionID == "" {
+		return command, errors.New("commandId and executionId are required")
+	}
+	return command, nil
 }
 
 func decodeAgentInteractionParams(values map[string]any) (api.AgentInteractionResponse, error) {

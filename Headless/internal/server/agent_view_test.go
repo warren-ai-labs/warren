@@ -406,7 +406,7 @@ func TestSendAgentMessageStatusMutexGuards(t *testing.T) {
 
 	// Case 1: Blocked on attention -> ErrAgentBlocked
 	service.agents[sessionID].status = api.AgentStatus{
-		Activity: api.AgentActivityBlocked,
+		Activity:  api.AgentActivityBlocked,
 		Attention: &api.AgentAttention{Kind: "approval", Reason: "permission"},
 	}
 	msg1 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m1", Text: "hello blocked"}
@@ -450,7 +450,7 @@ func TestSendAgentMessageStatusMutexGuards(t *testing.T) {
 
 	// Case 4: Blocked on input attention (e.g. asking for prompt) -> Success
 	service.agents[sessionID].status = api.AgentStatus{
-		Activity: api.AgentActivityBlocked,
+		Activity:  api.AgentActivityBlocked,
 		Attention: &api.AgentAttention{Kind: api.AgentAttentionInput, Reason: "prompt"},
 	}
 	msg4 := api.AgentMessageSendRequest{Session: sessionID, ClientMessageID: "m4", Text: "answer to prompt"}

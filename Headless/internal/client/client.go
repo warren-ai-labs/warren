@@ -20,13 +20,16 @@ import (
 )
 
 type Client struct {
-	connection *websocket.Conn
-	mu         sync.Mutex
-	pendingMu  sync.Mutex
-	pending    []inboundMessage
-	closeOnce  sync.Once
-	closeErr   error
-	closeHook  func()
+	hostID        string
+	accessScopeID string
+	replica       *agentReplica
+	connection    *websocket.Conn
+	mu            sync.Mutex
+	pendingMu     sync.Mutex
+	pending       []inboundMessage
+	closeOnce     sync.Once
+	closeErr      error
+	closeHook     func()
 }
 
 type inboundMessage struct {
@@ -170,6 +173,13 @@ func dial(ctx context.Context, endpoint string, auth map[string]any) (*Client, e
 		connection.Close()
 		return nil, errors.New("authentication failed")
 	}
+	host, _ := welcome["host"].(map[string]any)
+	client.hostID, _ = host["id"].(string)
+	client.accessScopeID, _ = welcome["accessScopeId"].(string)
+	if welcome["version"] != api.Version || client.hostID == "" || client.accessScopeID == "" {
+		connection.Close()
+		return nil, errors.New("incompatible welcome: protocol 3.0 and replica namespace are required")
+	}
 	return client, nil
 }
 
@@ -193,6 +203,9 @@ func (c *Client) Close() error {
 	}
 	c.closeOnce.Do(func() {
 		c.closeErr = c.connection.Close()
+		if c.replica != nil {
+			_ = c.replica.db.Close()
+		}
 		c.mu.Lock()
 		hook := c.closeHook
 		c.mu.Unlock()
@@ -228,10 +241,25 @@ func (c *Client) Request(ctx context.Context, method string, params any, result 
 			c.stash(messageType, data)
 			continue
 		}
-		var response api.Response
+		var response struct {
+			Type   string          `json:"t"`
+			ID     string          `json:"id"`
+			OK     bool            `json:"ok"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
 		if json.Unmarshal(data, &response) == nil && response.Type == "response" && response.ID == id {
 			if !response.OK {
-				return errors.New(response.Error)
+				var detail struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(response.Error, &detail) == nil && detail.Code != "" {
+					return fmt.Errorf("%s: %s", detail.Code, detail.Message)
+				}
+				var message string
+				_ = json.Unmarshal(response.Error, &message)
+				return errors.New(message)
 			}
 			if result != nil {
 				raw, err := json.Marshal(response.Result)
@@ -323,124 +351,89 @@ func (c *Client) ReadOutput(ctx context.Context, onOutput func([]byte) bool) err
 	}
 }
 
-func (c *Client) AgentSnapshot(ctx context.Context, sessionID string) (api.AgentSnapshotResult, error) {
-	var value api.AgentSnapshotResult
-	err := c.Request(ctx, "agent.snapshot", map[string]any{"session": sessionID}, &value)
+func (c *Client) AgentExecution(ctx context.Context, executionID string) (api.AgentExecution, error) {
+	var value api.AgentExecution
+	err := c.Request(ctx, "agent.execution.get", map[string]any{"executionId": executionID}, &value)
 	return value, err
 }
 
-func (c *Client) SubscribeAgent(ctx context.Context, sessionID string) (api.AgentSubscriptionResult, error) {
-	var value api.AgentSubscriptionResult
-	err := c.Request(ctx, "agent.subscribe", map[string]any{"session": sessionID}, &value)
+func (c *Client) SubscribeAgentEvents(ctx context.Context, request api.AgentEventsSubscriptionRequest) (api.AgentEventsSubscriptionResult, error) {
+	var value api.AgentEventsSubscriptionResult
+	err := c.Request(ctx, "agent.events.subscribe", request, &value)
+	if err == nil {
+		err = c.persistAgentEvents(value.StreamID, value.Events)
+	}
 	return value, err
 }
 
-// RespondAgentInteraction submits a Question or Permission answer. The Host
-// uses requestId as an idempotency key, so callers may safely retry the same
-// response after reconnecting.
-func (c *Client) RespondAgentInteraction(ctx context.Context, response api.AgentInteractionResponse) (api.AgentInteractionResult, error) {
-	var value api.AgentInteractionResult
-	err := c.Request(ctx, "agent.interaction.respond", response, &value)
+func (c *Client) AgentEventsHistory(ctx context.Context, request api.AgentEventsHistoryRequest) (api.AgentEventsHistoryResult, error) {
+	var value api.AgentEventsHistoryResult
+	err := c.Request(ctx, "agent.events.history", request, &value)
+	if err == nil {
+		err = c.persistAgentEvents(value.StreamID, value.Events)
+	}
 	return value, err
 }
 
-// InterruptAgentTurn requests a semantic cancel or atomic Send now. A
-// replacement message is sent as part of the same Host request when present.
-func (c *Client) InterruptAgentTurn(ctx context.Context, request api.AgentTurnInterruptRequest) (api.AgentTurnInterruptResult, error) {
-	var value api.AgentTurnInterruptResult
-	err := c.Request(ctx, "agent.turn.interrupt", request, &value)
+func (c *Client) ResumeAgentExecution(ctx context.Context, command api.AgentCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.execution.resume", command, &value)
 	return value, err
 }
 
-// SendAgentMessage uses the structured message path. Plain text callers may
-// continue using sendAgentInput/PTY; this method is required for attachments
-// and carries an explicit clientMessageId for idempotent retries.
-func (c *Client) SendAgentMessage(ctx context.Context, request api.AgentMessageSendRequest) (api.AgentMessageSendResult, error) {
-	var value api.AgentMessageSendResult
-	err := c.Request(ctx, "agent.message.send", request, &value)
+func (c *Client) StartAgentTurn(ctx context.Context, command api.AgentTurnStartCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.turn.start", command, &value)
 	return value, err
 }
 
-func (c *Client) PrepareAgentAttachment(ctx context.Context, request api.AgentAttachmentPrepareRequest) (api.AgentAttachmentPrepareResult, error) {
+func (c *Client) SteerAgentTurn(ctx context.Context, command api.AgentTurnSteerCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.turn.steer", command, &value)
+	return value, err
+}
+
+func (c *Client) CancelAgentTurn(ctx context.Context, command api.AgentTurnCancelCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.turn.cancel", command, &value)
+	return value, err
+}
+
+func (c *Client) ResolveAgentInteraction(ctx context.Context, command api.AgentInteractionResolveCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.interaction.resolve", command, &value)
+	return value, err
+}
+
+func (c *Client) PrepareAgentAttachment(ctx context.Context, command api.AgentAttachmentPrepareCommand) (api.AgentAttachmentPrepareResult, error) {
 	var value api.AgentAttachmentPrepareResult
-	err := c.Request(ctx, "agent.attachment.prepare", request, &value)
+	err := c.Request(ctx, "agent.attachment.prepare", command, &value)
 	return value, err
 }
 
-// PutAgentAttachmentChunk sends one base64 encoded chunk. The JSON transport
-// keeps this API usable by the CLI and Relay; binary adapters can still fill
-// Data with their own encoded representation at the protocol boundary.
-func (c *Client) PutAgentAttachmentChunk(ctx context.Context, request api.AgentAttachmentChunkRequest) (api.AgentAttachmentResult, error) {
+func (c *Client) PutAgentAttachmentChunk(ctx context.Context, command api.AgentAttachmentChunkCommand) (api.AgentAttachmentResult, error) {
 	var value api.AgentAttachmentResult
-	err := c.Request(ctx, "agent.attachment.chunk", request, &value)
+	err := c.Request(ctx, "agent.attachment.chunk", command, &value)
 	return value, err
 }
 
-func (c *Client) CompleteAgentAttachment(ctx context.Context, request api.AgentAttachmentCompleteRequest) (api.AgentAttachmentResult, error) {
+func (c *Client) CompleteAgentAttachment(ctx context.Context, command api.AgentAttachmentCompleteCommand) (api.AgentAttachmentResult, error) {
 	var value api.AgentAttachmentResult
-	err := c.Request(ctx, "agent.attachment.complete", request, &value)
+	err := c.Request(ctx, "agent.attachment.complete", command, &value)
 	return value, err
 }
 
-func (c *Client) AbortAgentAttachment(ctx context.Context, request api.AgentAttachmentAbortRequest) (api.AgentAttachmentResult, error) {
+func (c *Client) AbortAgentAttachment(ctx context.Context, command api.AgentAttachmentAbortCommand) (api.AgentAttachmentResult, error) {
 	var value api.AgentAttachmentResult
-	err := c.Request(ctx, "agent.attachment.abort", request, &value)
+	err := c.Request(ctx, "agent.attachment.abort", command, &value)
 	return value, err
 }
 
-// AgentHistory returns one bounded page of normalized transcript events. A
-// zero before cursor starts at the newest page; callers can pass the returned
-// cursor to walk towards older events.
-func (c *Client) AgentHistory(
-	ctx context.Context,
-	sessionID string,
-	before uint64,
-	limit int,
-) (api.AgentHistoryResult, error) {
-	var value api.AgentHistoryResult
-	err := c.Request(ctx, "agent.history", map[string]any{
-		"session": sessionID,
-		"before":  before,
-		"limit":   limit,
-	}, &value)
-	return value, err
-}
-
-// AgentTranscriptChunk reads a bounded raw JSONL range from the transcript
-// bound to sessionID. Offset is encoded as a decimal string so large files do
-// not lose precision while crossing JSON's floating-point default.
-func (c *Client) AgentTranscriptChunk(
-	ctx context.Context,
-	sessionID string,
-	offset int64,
-	limit int,
-) (api.AgentTranscriptChunk, error) {
-	var value api.AgentTranscriptChunk
-	err := c.Request(ctx, "agent.transcript", map[string]any{
-		"session": sessionID,
-		"offset":  strconv.FormatInt(offset, 10),
-		"limit":   strconv.Itoa(limit),
-	}, &value)
-	return value, err
-}
-
-func (c *Client) AgentTurnEvents(ctx context.Context, sessionID string, turn uint64) ([]api.AgentEvent, error) {
-	var value []api.AgentEvent
-	err := c.Request(ctx, "agent.turn.events", map[string]any{"session": sessionID, "turn": turn}, &value)
-	return value, err
-}
-
-// WaitAgentTurn blocks on the attached session until a turn newer than after
-// reaches a terminal state. current may name an already-running turn that a
-// standalone wait should join; send-and-wait callers pass zero.
-func (c *Client) WaitAgentTurn(
-	ctx context.Context,
-	sessionID string,
-	epoch, after, current uint64,
-) (api.AgentTurn, error) {
-	stopClose := context.AfterFunc(ctx, func() {
-		_ = c.connection.Close()
-	})
+// WaitAgentTurn consumes only canonical events from the subscribed execution.
+// Turn numbers are a local CLI projection; stream identity prevents replacement
+// executions from completing a wait for an earlier conversation.
+func (c *Client) WaitAgentTurn(ctx context.Context, sessionID, streamID string, after, current uint64) (api.AgentTurn, error) {
+	stopClose := context.AfterFunc(ctx, func() { _ = c.connection.Close() })
 	defer stopClose()
 	target := current
 	for {
@@ -454,46 +447,46 @@ func (c *Client) WaitAgentTurn(
 		if messageType != websocket.TextMessage {
 			continue
 		}
-		var envelope struct {
-			Type    string          `json:"t"`
-			Session string          `json:"session"`
-			Epoch   uint64          `json:"epoch"`
-			Turn    uint64          `json:"turn"`
-			Status  json.RawMessage `json:"status"`
-		}
-		if json.Unmarshal(data, &envelope) != nil || envelope.Session != sessionID {
+		var batch api.CanonicalAgentEventsMessage
+		if json.Unmarshal(data, &batch) != nil || batch.Type != "agent.events" || batch.StreamID != streamID {
 			continue
 		}
-		if envelope.Type == "exited" {
-			return api.AgentTurn{}, errors.New("agent session exited before the turn completed")
+		if err := c.persistAgentEvents(streamID, batch.Events); err != nil {
+			return api.AgentTurn{}, err
 		}
-		if envelope.Type == "agent.status" {
-			var status api.AgentStatus
-			if json.Unmarshal(envelope.Status, &status) == nil && status.Activity == api.AgentActivityExited {
-				return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
+		for _, event := range batch.Events {
+			if event.Type == "execution.replaced" {
+				return api.AgentTurn{}, errors.New("agent execution replaced while waiting")
 			}
-			continue
-		}
-		var turnStatus api.AgentTurnStatus
-		if json.Unmarshal(envelope.Status, &turnStatus) != nil {
-			continue
-		}
-		if envelope.Type != "agent.turn" {
-			continue
-		}
-		if epoch != 0 && envelope.Epoch != 0 && envelope.Epoch != epoch {
-			return api.AgentTurn{}, errors.New("agent transcript changed while waiting")
-		}
-		if target == 0 && turnStatus == api.AgentTurnStarted && envelope.Turn > after {
-			target = envelope.Turn
-		}
-		if target == 0 && envelope.Turn > after && terminalAgentTurn(turnStatus) {
-			// Accept a terminal boundary even if a transport reconnect or a
-			// coalesced producer omitted the corresponding started notification.
-			target = envelope.Turn
-		}
-		if envelope.Turn == target && terminalAgentTurn(turnStatus) {
-			return api.AgentTurn{ID: envelope.Turn, Status: turnStatus}, nil
+			if event.Type == "status.changed" {
+				status, _ := event.Payload["status"].(map[string]any)
+				if status["activity"] == "exited" {
+					return api.AgentTurn{}, errors.New("agent process exited before the turn completed")
+				}
+			}
+			var status api.AgentTurnStatus
+			switch event.Type {
+			case "turn.started":
+				status = api.AgentTurnStarted
+			case "turn.completed":
+				status = api.AgentTurnCompleted
+			case "turn.failed":
+				status = api.AgentTurnFailed
+			case "turn.cancelled":
+				status = api.AgentTurnAborted
+			default:
+				continue
+			}
+			turn, err := strconv.ParseUint(event.TurnID, 10, 64)
+			if err != nil {
+				return api.AgentTurn{}, fmt.Errorf("invalid Host turn ID: %w", err)
+			}
+			if target == 0 && turn > after {
+				target = turn
+			}
+			if turn == target && terminalAgentTurn(status) {
+				return api.AgentTurn{ID: turn, Status: status}, nil
+			}
 		}
 	}
 }

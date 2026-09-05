@@ -43,18 +43,9 @@ const (
 	// agentMessageMaxBytes bounds one pushed agent batch so a large
 	// transcript never produces a single WebSocket message that exceeds
 	// client limits (URLSession's default maximumMessageSize is 1 MiB).
-	agentMessageMaxBytes = 256 * 1024
-	// agentAttachHistoryMaxEvents and agentAttachHistoryMaxBytes bound the
-	// initial agent replay sent during attach. Clients that need the full
-	// conversation fetch it page by page through agent.history.
-	agentAttachHistoryMaxEvents = 64
-	agentAttachHistoryMaxBytes  = 256 * 1024
-	agentHistoryDefaultLimit    = 200
-	agentHistoryMaxLimit        = 500
-	// agentTranscriptChunkBytes keeps the explicit raw-transcript escape hatch
-	// streamable. The CLI writes each response before asking for the next one,
-	// so neither the Host nor the client has to retain the complete JSONL.
-	agentTranscriptChunkBytes = 256 * 1024
+	agentMessageMaxBytes     = 256 * 1024
+	agentHistoryDefaultLimit = 200
+	agentHistoryMaxLimit     = 500
 	// orphanReapGrace protects a session between runtime creation and its state
 	// record becoming durable, so a concurrent reaper cannot kill a brand-new
 	// runtime while CreateSession is still persisting it.
@@ -204,6 +195,10 @@ type Service struct {
 	agentActionFingerprints map[string]string
 	agentActionCalls        map[string]*agentActionCall
 	agentSessionActionLocks map[string]*sync.Mutex
+	// canonicalCommandResults is keyed by executionId/commandId. It is the
+	// Host admission cache for the canonical API; a repeated command is
+	// resolved before any provider bridge is invoked.
+	canonicalCommandResults map[string]canonicalCommandResult
 	liveActivityMu          sync.Mutex
 	liveActivityWake        chan struct{}
 	liveActivityPublisher   LiveActivityPublisher
@@ -213,6 +208,12 @@ type Service struct {
 	lifecycleCancel context.CancelFunc
 	runtimeProbeMu  sync.Mutex
 	runtimeProbeLog map[string]time.Time
+}
+
+type canonicalCommandResult struct {
+	fingerprint string
+	result      any
+	err         error
 }
 
 type outputSession struct {
@@ -250,9 +251,15 @@ type agentSession struct {
 	// tailer is non-nil only for OpenCode. It owns the read-only projection
 	// from the provider's SQLite store into watcher.Path().
 	tailer *agent.OpenCodeTailer
-	events []api.AgentEvent
-	status api.AgentStatus
-	turn   api.AgentTurn
+	// executionID is the Host-owned identity for this provider conversation.
+	// canonicalEvents is an in-memory read-through projection used when an
+	// embedder does not configure AgentStore; production Headless persists the
+	// same rows in AgentStore before broadcasting them.
+	executionID     string
+	canonicalEvents []api.CanonicalAgentEvent
+	events          []api.AgentEvent
+	status          api.AgentStatus
+	turn            api.AgentTurn
 	// titleUser and titleAssistant retain only the first real text messages
 	// needed for one automatic title suggestion. They are intentionally kept
 	// separate from the public transcript projection.
@@ -3799,6 +3806,12 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		s.openCodeBindingMu.Lock()
 		defer s.openCodeBindingMu.Unlock()
 	}
+	// The execution identity is allocated only once a Session is known to be
+	// agent-backed. It is independent from the provider conversation ID and is
+	// the stream key used by the canonical journal.
+	if strings.TrimSpace(session.AgentExecutionID) == "" {
+		session.AgentExecutionID = s.ensureAgentExecutionID(state, session.ID, false)
+	}
 
 	workspacePath, pathErr := sessionWorkingDirectory(
 		*state,
@@ -4072,6 +4085,17 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 // roster shows a live agent even before the first transcript event arrives.
 func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, seedReady bool, opencodeBinding *agent.OpenCodeBinding) *agentSession {
 	s.lazyInit()
+	// Rebinding a provider conversation always starts a fresh execution stream;
+	// otherwise retain the persisted identity across daemon restarts.
+	s.agentsMu.Lock()
+	existingBefore := s.agents[sessionID]
+	reuse := false
+	if existingBefore != nil && existingBefore.watcher != nil && existingBefore.watcher.Path() == transcriptPath {
+		reuse = provider != "opencode" || existingBefore.tailer != nil
+	}
+	s.agentsMu.Unlock()
+	rebinding := existingBefore != nil && existingBefore.watcher != nil && !reuse
+	executionID := s.ensureAgentExecutionID(nil, sessionID, rebinding)
 	s.agentsMu.Lock()
 	existing := s.agents[sessionID]
 	state, _ := agent.ReadAgentState(agent.StatePath(sessionID))
@@ -4087,7 +4111,7 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		s.agentsMu.Unlock()
 		return existing
 	}
-	rebinding := existing != nil && existing.watcher != nil
+	rebinding = existing != nil && existing.watcher != nil
 	var closing *agent.Watcher
 	var closingTailer *agent.OpenCodeTailer
 	if rebinding {
@@ -4097,6 +4121,8 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.tailer = nil
 		existing.mu.Lock()
 		existing.events = nil
+		existing.canonicalEvents = nil
+		existing.executionID = executionID
 		existing.status = api.AgentStatus{}
 		existing.turn = api.AgentTurn{}
 		existing.titleUser = ""
@@ -4118,6 +4144,9 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	if existing == nil {
 		existing = &agentSession{}
 		s.agents[sessionID] = existing
+	}
+	if existing.executionID == "" {
+		existing.executionID = executionID
 	}
 	if seedReady {
 		existing.mu.Lock()
@@ -4155,7 +4184,6 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		})
 		s.bumpAgentEpoch()
 		s.bumpAgentRosterRevision()
-		s.broadcastAgentReset(sessionID)
 	}
 	var tailer *agent.OpenCodeTailer
 	if provider == "opencode" {
@@ -4388,6 +4416,271 @@ func (s *Service) persistAgentMetaWithState(state *api.State, sessionID, agentSe
 	}
 }
 
+// ensureAgentExecutionID returns the durable Host-owned execution identity for
+// a Session. force starts a new execution stream when a provider conversation
+// is replaced; the old stream remains immutable in the journal.
+func (s *Service) ensureAgentExecutionID(state *api.State, sessionID string, force bool) string {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	var current string
+	if state != nil {
+		for _, session := range state.Sessions {
+			if session.ID == sessionID {
+				current = strings.TrimSpace(session.AgentExecutionID)
+				break
+			}
+		}
+	}
+	if current == "" && s.Store != nil {
+		for _, session := range s.Store.Snapshot().Sessions {
+			if session.ID == sessionID {
+				current = strings.TrimSpace(session.AgentExecutionID)
+				break
+			}
+		}
+	}
+	if current != "" && !force {
+		return current
+	}
+	id := store.NewID()
+	if s.Store == nil {
+		return id
+	}
+	if err := s.Store.Update(func(value *api.State) error {
+		for index := range value.Sessions {
+			if value.Sessions[index].ID == sessionID {
+				value.Sessions[index].AgentExecutionID = id
+				return nil
+			}
+		}
+		return fmt.Errorf("session not found: %s", sessionID)
+	}); err != nil {
+		return current
+	}
+	if state != nil {
+		for index := range state.Sessions {
+			if state.Sessions[index].ID == sessionID {
+				state.Sessions[index].AgentExecutionID = id
+				break
+			}
+		}
+	}
+	return id
+}
+
+// canonicalExecutionID returns the Host-owned stream identity for one active
+// Agent session. Embedded Services without a durable State store still get a
+// process-local identity so their event reducer follows the same contract.
+func (s *Service) canonicalExecutionID(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	if entry == nil {
+		entry = &agentSession{}
+		s.agents[sessionID] = entry
+	}
+	entry.mu.Lock()
+	executionID := strings.TrimSpace(entry.executionID)
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+	if executionID != "" {
+		return executionID
+	}
+	if s.Store != nil {
+		executionID = s.ensureAgentExecutionID(nil, sessionID, false)
+	} else {
+		executionID = store.NewID()
+	}
+	s.agentsMu.Lock()
+	entry = s.agents[sessionID]
+	if entry == nil {
+		entry = &agentSession{}
+		s.agents[sessionID] = entry
+	}
+	entry.mu.Lock()
+	if entry.executionID == "" {
+		entry.executionID = executionID
+	}
+	executionID = entry.executionID
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+	return executionID
+}
+
+func canonicalStatusPayload(status api.AgentStatus) map[string]any {
+	payload := map[string]any{"activity": status.Activity}
+	if status.Attention != nil {
+		payload["attention"] = status.Attention
+	}
+	return payload
+}
+
+func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string) api.CanonicalAgentEvent {
+	eventType := "turn." + string(turn.Status)
+	if turn.Status == api.AgentTurnAborted {
+		eventType = "turn.cancelled"
+	}
+	return api.CanonicalAgentEvent{
+		EventID:     fmt.Sprintf("turn:%d:%s", turn.ID, turn.Status),
+		StreamID:    streamID,
+		ExecutionID: executionID,
+		TurnID:      strconv.FormatUint(turn.ID, 10),
+		Type:        eventType,
+		OccurredAt:  time.Now().UTC(),
+		Origin: api.AgentEventOrigin{
+			Kind:       "host",
+			Confidence: "derived",
+		},
+		Payload: map[string]any{
+			"turnId": strconv.FormatUint(turn.ID, 10),
+			"status": string(turn.Status),
+		},
+	}
+}
+
+func canonicalStatusEvent(status api.AgentStatus, streamID, executionID string) api.CanonicalAgentEvent {
+	return api.CanonicalAgentEvent{
+		EventID:     store.NewID(),
+		StreamID:    streamID,
+		ExecutionID: executionID,
+		Type:        "status.changed",
+		OccurredAt:  time.Now().UTC(),
+		Origin: api.AgentEventOrigin{
+			Kind:       "host",
+			Confidence: "derived",
+		},
+		Payload: canonicalStatusPayload(status),
+	}
+}
+
+// canonicalProviderEvent turns one provider observation into an immutable
+// event row. Provider IDs identify a message/tool in the provider projection;
+// they are not event IDs because a provider may reuse them across deltas or
+// lifecycle updates. The stable observation hash therefore includes the
+// provider sequence and is used as the canonical event identity, while the
+// provider ID is retained only in the typed payload for correlation.
+func canonicalProviderEvent(source api.AgentEvent, streamID, executionID string) api.CanonicalAgentEvent {
+	providerID := source.ID
+	eventID := api.StableAgentEventID(source)
+	canonical := api.CanonicalAgentEventFromLegacy(source, streamID, executionID, 0, time.Now().UTC())
+	canonical.EventID = eventID
+	canonical.Sequence = 0
+	if providerID != "" {
+		if canonical.Payload == nil {
+			canonical.Payload = make(map[string]any)
+		}
+		switch canonical.Type {
+		case "message.created", "message.delta", "message.completed", "reasoning.delta":
+			if _, exists := canonical.Payload["messageId"]; !exists {
+				canonical.Payload["messageId"] = providerID
+			}
+		case "tool.started", "tool.updated", "tool.completed", "tool.failed":
+			if _, exists := canonical.Payload["callId"]; !exists {
+				canonical.Payload["callId"] = providerID
+			}
+		case "interaction.requested", "interaction.resolved", "interaction.expired":
+			if _, exists := canonical.Payload["interactionId"]; !exists {
+				canonical.Payload["interactionId"] = providerID
+			}
+		default:
+			canonical.Payload["sourceId"] = providerID
+		}
+	}
+	// A provider sequence is only an idempotency input. Canonical sequence is
+	// assigned by the journal and must remain zero until that commit.
+	if canonical.Type == "message.created" && source.StopReason != "" {
+		canonical.Type = "message.completed"
+	}
+	return canonical
+}
+
+// appendCanonicalEventsLocked commits one immutable batch and returns the
+// exact Host-assigned rows. The caller owns entry.mu. The memory path mirrors
+// the SQLite journal for tests and embedders that do not configure AgentStore.
+func (s *Service) appendCanonicalEventsLocked(sessionID string, entry *agentSession, events []api.CanonicalAgentEvent) ([]api.CanonicalAgentEvent, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	streamID := strings.TrimSpace(entry.executionID)
+	if streamID == "" {
+		if s.Store != nil {
+			streamID = s.ensureAgentExecutionID(nil, sessionID, false)
+		} else {
+			streamID = store.NewID()
+		}
+		entry.executionID = streamID
+	}
+	if s.AgentStore != nil {
+		assigned, err := s.AgentStore.AppendCanonicalEvents(context.Background(), streamID, streamID, events)
+		if err != nil {
+			return nil, err
+		}
+		entry.canonicalEvents = append(entry.canonicalEvents, assigned...)
+		return assigned, nil
+	}
+	assigned := make([]api.CanonicalAgentEvent, 0, len(events))
+	var head uint64
+	if len(entry.canonicalEvents) > 0 {
+		head = entry.canonicalEvents[len(entry.canonicalEvents)-1].Sequence
+	}
+	for _, source := range events {
+		event := source
+		event.StreamID = streamID
+		if event.ExecutionID == "" {
+			event.ExecutionID = streamID
+		}
+		if event.EventID == "" {
+			event.EventID = store.NewID()
+		}
+		var existing *api.CanonicalAgentEvent
+		for index := range entry.canonicalEvents {
+			candidate := &entry.canonicalEvents[index]
+			if candidate.EventID == event.EventID || (event.Sequence > 0 && candidate.Sequence == event.Sequence) {
+				existing = candidate
+				break
+			}
+		}
+		if existing != nil {
+			if !canonicalEventsEquivalent(*existing, event) {
+				return nil, fmt.Errorf("canonical agent event conflict at %s", event.EventID)
+			}
+			assigned = append(assigned, *existing)
+			continue
+		}
+		if event.Sequence == 0 {
+			head++
+			event.Sequence = head
+		} else if event.Sequence > head {
+			head = event.Sequence
+		}
+		if event.RecordedAt.IsZero() {
+			event.RecordedAt = time.Now().UTC()
+		}
+		if event.OccurredAt.IsZero() {
+			event.OccurredAt = event.RecordedAt
+		}
+		entry.canonicalEvents = append(entry.canonicalEvents, event)
+		assigned = append(assigned, event)
+	}
+	return assigned, nil
+}
+
+func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool {
+	existing.Sequence = 0
+	incoming.Sequence = 0
+	existing.OccurredAt = time.Time{}
+	incoming.OccurredAt = time.Time{}
+	existing.RecordedAt = time.Time{}
+	incoming.RecordedAt = time.Time{}
+	left, leftErr := json.Marshal(existing)
+	right, rightErr := json.Marshal(incoming)
+	return leftErr == nil && rightErr == nil && string(left) == string(right)
+}
+
 // recordAgentEvents stores a bounded event history and forwards the batch to
 // every peer attached to the session.
 func (s *Service) recordAgentEvents(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
@@ -4424,20 +4717,56 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		return
 	}
 	epoch := s.currentAgentEpoch()
+	streamID := strings.TrimSpace(entry.executionID)
+	if streamID == "" {
+		// recordAgentEventsForHandle already owns agentsMu and entry.mu. Calling
+		// canonicalExecutionID here would try to acquire agentsMu a second time
+		// and deadlock the provider callback on its first event. Allocate the
+		// identity inline while the existing critical section is held.
+		if s.Store != nil {
+			streamID = s.ensureAgentExecutionID(nil, sessionID, false)
+		} else {
+			streamID = store.NewID()
+		}
+		entry.executionID = streamID
+	}
 	if s.AgentStore != nil {
 		if assigned, err := s.AgentStore.AppendEvents(context.Background(), sessionID, epoch, events, status); err == nil && len(assigned) == len(events) {
 			events = assigned
 		}
 	}
+	effectiveStatus = entry.status
+	if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
+		status = entry.status
+	} else if status.Activity != "" {
+		effectiveStatus = status
+	}
+	canonical := make([]api.CanonicalAgentEvent, 0, len(events)+1)
+	for _, source := range events {
+		// Provider sequence numbers are projection metadata. The canonical
+		// journal assigns a fresh Host sequence at commit time.
+		if source.ID == "" {
+			source.ID = api.StableAgentEventID(source)
+		}
+		canonical = append(canonical, canonicalProviderEvent(source, streamID, streamID))
+	}
+	statusChanged := status.Activity != "" && !entry.status.Equal(status)
+	if statusChanged {
+		canonical = append(canonical, canonicalStatusEvent(status, streamID, streamID))
+	}
+	assignedCanonical, appendErr := s.appendCanonicalEventsLocked(sessionID, entry, canonical)
+	if appendErr != nil {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		s.logWarn("append canonical agent events", "session", sessionID, "error", appendErr)
+		return
+	}
 	entry.events = append(entry.events, events...)
 	if len(entry.events) > 2000 {
 		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
 	}
-	if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
-		effectiveStatus = entry.status
-	} else {
-		entry.status = status
-		effectiveStatus = entry.status
+	if status.Activity != "" {
+		entry.status = effectiveStatus
 	}
 	for _, event := range events {
 		if event.Sidechain {
@@ -4465,9 +4794,9 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
 	if expected != nil {
-		s.broadcastAgentIncrementsLocked(sessionID, events, effectiveStatus)
+		s.broadcastCanonicalAgentIncrementsLocked(sessionID, assignedCanonical, streamID, streamID)
 	} else {
-		s.broadcastAgentIncrements(sessionID, events, effectiveStatus)
+		s.broadcastCanonicalAgentIncrements(sessionID, assignedCanonical, streamID, streamID)
 	}
 	if shouldTryTitle {
 		s.tryStartSessionTitle(sessionID)
@@ -4516,6 +4845,34 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 			s.agentsMu.Unlock()
 			return
 		}
+		if turn.Status == "" || turn.Status == api.AgentTurnIdle {
+			entry.mu.Unlock()
+			s.agentsMu.Unlock()
+			continue
+		}
+		streamID := strings.TrimSpace(entry.executionID)
+		if streamID == "" {
+			if s.Store != nil {
+				streamID = s.ensureAgentExecutionID(nil, sessionID, false)
+			} else {
+				streamID = store.NewID()
+			}
+			entry.executionID = streamID
+		}
+		changed := entry.turn.ID != turn.ID || entry.turn.Status != turn.Status
+		var canonical []api.CanonicalAgentEvent
+		if changed {
+			var appendErr error
+			canonical, appendErr = s.appendCanonicalEventsLocked(sessionID, entry, []api.CanonicalAgentEvent{
+				canonicalTurnEvent(turn, streamID, streamID),
+			})
+			if appendErr != nil {
+				entry.mu.Unlock()
+				s.agentsMu.Unlock()
+				s.logWarn("append canonical agent turn", "session", sessionID, "error", appendErr)
+				return
+			}
+		}
 		entry.turn = turn
 		if turn.Status == api.AgentTurnCompleted && strings.TrimSpace(entry.titleAssistant) != "" {
 			entry.titleAssistantComplete = true
@@ -4524,9 +4881,13 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 		s.agentsMu.Unlock()
 		if broadcast {
 			if expected != nil {
-				s.broadcastAgentTurnLocked(sessionID, turn)
+				if len(canonical) > 0 {
+					s.broadcastCanonicalAgentIncrementsLocked(sessionID, canonical, streamID, streamID)
+				}
 			} else {
-				s.broadcastAgentTurn(sessionID, turn)
+				if len(canonical) > 0 {
+					s.broadcastCanonicalAgentIncrements(sessionID, canonical, streamID, streamID)
+				}
 			}
 		}
 		if turn.Status == api.AgentTurnCompleted {
@@ -4722,13 +5083,36 @@ func (s *Service) setAgentStatusForHandle(sessionID string, expected AgentHandle
 		s.agentsMu.Unlock()
 		return
 	}
+	if status.Activity == "" || (!force && entry.status.Equal(status)) {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
+	streamID := strings.TrimSpace(entry.executionID)
+	if streamID == "" {
+		if s.Store != nil {
+			streamID = s.ensureAgentExecutionID(nil, sessionID, false)
+		} else {
+			streamID = store.NewID()
+		}
+		entry.executionID = streamID
+	}
+	canonical, appendErr := s.appendCanonicalEventsLocked(sessionID, entry, []api.CanonicalAgentEvent{
+		canonicalStatusEvent(status, streamID, streamID),
+	})
+	if appendErr != nil {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		s.logWarn("append canonical agent status", "session", sessionID, "error", appendErr)
+		return
+	}
 	entry.status = status
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
 	if expected != nil {
-		s.broadcastAgentStatusLocked(sessionID, status)
+		s.broadcastCanonicalAgentIncrementsLocked(sessionID, canonical, streamID, streamID)
 	} else {
-		s.broadcastAgentStatus(sessionID, status)
+		s.broadcastCanonicalAgentIncrements(sessionID, canonical, streamID, streamID)
 	}
 	s.wakeLiveActivity()
 }
@@ -4746,113 +5130,14 @@ func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
 	return append([]api.AgentEvent(nil), entry.events...)
 }
 
-// agentHistoryPage returns the newest `limit` events with sequence strictly
-// below `before` (zero means the newest page). Cursor in the result is the
-// first event's sequence and can be passed back as `before` to page further
-// into the past.
-func (s *Service) agentHistoryPage(sessionID string, before uint64, limit int) api.AgentHistoryResult {
-	return s.agentHistoryPageWithOptions(sessionID, 0, before, limit, false)
-}
-
-// agentHistoryPageWithOptions serves the regular event page and the mobile
-// conversation-priority view. The latter omits noisy tool/reasoning rows, but
-// keeps the user/assistant messages and RFC 0010 structured events so a
-// paged Agent View cannot lose a pending interaction or plan. The cursor
-// remains an event sequence, so clients can page backwards without changing
-// the wire contract or the ordering of the default view.
-const defaultWireToolOutputLimit = 4096
-
-func truncateString(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
+func (s *Service) canonicalHistoryPage(ctx context.Context, streamID string, after, before uint64, limit int) (api.AgentEventsHistoryResult, error) {
+	if s.AgentStore != nil {
+		return s.AgentStore.QueryCanonicalEvents(ctx, streamID, after, before, limit)
 	}
-	count := 0
-	for index := range value {
-		if count == limit {
-			return value[:index] + "…"
-		}
-		count++
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return api.AgentEventsHistoryResult{}, errors.New("canonical agent streamId is required")
 	}
-	return value
-}
-
-func limitToolInput(value any, limit int) any {
-	switch item := value.(type) {
-	case string:
-		return truncateString(item, limit)
-	case []any:
-		result := make([]any, len(item))
-		for index := range item {
-			result[index] = limitToolInput(item[index], limit)
-		}
-		return result
-	case []string:
-		result := make([]string, len(item))
-		for index := range item {
-			result[index] = truncateString(item[index], limit)
-		}
-		return result
-	case map[string]any:
-		result := make(map[string]any, len(item))
-		for key, nested := range item {
-			result[key] = limitToolInput(nested, limit)
-		}
-		return result
-	default:
-		return value
-	}
-}
-
-// projectWireEvents applies field projection and restricts oversized tool data on the wire.
-// Conversational messages (user, assistant, system) and their Content text are
-// intentionally NEVER clipped regardless of length.
-type wireOptions struct {
-	omitFields map[string]struct{}
-}
-
-func projectWireEvents(events []api.AgentEvent, options wireOptions) []api.AgentEvent {
-	result := make([]api.AgentEvent, len(events))
-	for i, e := range events {
-		if _, ok := options.omitFields["output"]; ok {
-			e.Output = ""
-		}
-		if _, ok := options.omitFields["toolInput"]; ok {
-			e.ToolInput = nil
-		}
-		if _, ok := options.omitFields["files"]; ok {
-			e.Files = nil
-		}
-		if _, ok := options.omitFields["payload"]; ok {
-			e.Payload = nil
-		}
-		if _, ok := options.omitFields["usage"]; ok {
-			e.Usage = nil
-		}
-		typeName := normalizedAgentEventType(e)
-		if typeName == "tool_output" && len(e.Output) > defaultWireToolOutputLimit {
-			e.Output = truncateString(e.Output, defaultWireToolOutputLimit)
-		}
-		if typeName == "tool_call" && e.ToolInput != nil {
-			e.ToolInput = limitToolInput(e.ToolInput, defaultWireToolOutputLimit)
-		}
-		result[i] = e
-	}
-	return result
-}
-
-func (s *Service) agentHistoryPageWithWireOptions(sessionID string, since, before uint64, limit int, conversationOnly bool, options wireOptions) api.AgentHistoryResult {
-	result := s.agentHistoryPageWithOptions(sessionID, since, before, limit, conversationOnly)
-	result.Events = projectWireEvents(result.Events, options)
-	return result
-}
-
-func (s *Service) agentHistoryPageWithOptions(
-	sessionID string,
-	since uint64,
-	before uint64,
-	limit int,
-	conversationOnly bool,
-) api.AgentHistoryResult {
 	if limit <= 0 {
 		limit = agentHistoryDefaultLimit
 	}
@@ -4860,316 +5145,271 @@ func (s *Service) agentHistoryPageWithOptions(
 		limit = agentHistoryMaxLimit
 	}
 	s.lazyInit()
-	result := api.AgentHistoryResult{Epoch: s.currentAgentEpoch()}
-
-	if s.AgentStore != nil {
-		queried, hasMore, err := s.AgentStore.QueryEvents(context.Background(), sessionID, result.Epoch, since, before, limit)
-		if err == nil && len(queried) > 0 {
-			if conversationOnly {
-				return conversationHistoryPage(queried, before, limit, result)
-			}
-			result.Events = projectWireEvents(queried, wireOptions{})
-			result.Cursor = queried[0].Sequence
-			result.HasMore = hasMore
-			return result
+	s.agentsMu.Lock()
+	var entry *agentSession
+	for _, candidate := range s.agents {
+		candidate.mu.Lock()
+		if candidate.executionID == streamID {
+			entry = candidate
+			candidate.mu.Unlock()
+			break
+		}
+		candidate.mu.Unlock()
+	}
+	s.agentsMu.Unlock()
+	result := api.AgentEventsHistoryResult{StreamID: streamID}
+	if entry == nil {
+		return result, nil
+	}
+	entry.mu.Lock()
+	events := append([]api.CanonicalAgentEvent(nil), entry.canonicalEvents...)
+	result.ExecutionID = entry.executionID
+	entry.mu.Unlock()
+	if len(events) == 0 {
+		return result, nil
+	}
+	result.HeadSequence = events[len(events)-1].Sequence
+	result.RetainedFrom = events[0].Sequence
+	if after > 0 && after+1 < result.RetainedFrom {
+		return api.AgentEventsHistoryResult{}, &store.CanonicalHistoryBoundary{
+			StreamID: streamID, RetainedFromSequence: result.RetainedFrom,
+			HeadSequence: result.HeadSequence,
 		}
 	}
+	start := 0
+	end := len(events)
+	if after > 0 {
+		start = sort.Search(len(events), func(index int) bool { return events[index].Sequence > after })
+	}
+	if before > 0 {
+		end = sort.Search(len(events), func(index int) bool { return events[index].Sequence >= before })
+	}
+	if start > end {
+		start = end
+	}
+	if end-start > limit {
+		if before > 0 && after == 0 {
+			start = end - limit
+		} else {
+			end = start + limit
+		}
+		result.HasMore = true
+	} else if before > 0 {
+		result.HasMore = start > 0
+	} else if after == 0 {
+		result.HasMore = start > 0
+	}
+	result.Events = append([]api.CanonicalAgentEvent(nil), events[start:end]...)
+	if len(result.Events) > 0 {
+		result.NextAfterSequence = result.Events[len(result.Events)-1].Sequence
+	}
+	return result, nil
+}
 
+func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecution, bool) {
+	session, ok := s.Session(sessionID)
+	if !ok {
+		return api.AgentExecution{}, false
+	}
+	executionID := strings.TrimSpace(session.AgentExecutionID)
+	s.lazyInit()
 	s.agentsMu.Lock()
 	entry := s.agents[sessionID]
 	s.agentsMu.Unlock()
-	if entry == nil {
-		return result
-	}
-	entry.mu.Lock()
-	// Take a stable snapshot before applying a potentially more expensive
-	// conversation projection. The watcher can append deltas concurrently;
-	// iterating its backing slice after unlocking would race a reallocation and
-	// could make a history response internally inconsistent.
-	events := append([]api.AgentEvent(nil), entry.events...)
-	entry.mu.Unlock()
-	if len(events) == 0 {
-		return result
-	}
-	if conversationOnly {
-		return conversationHistoryPage(events, before, limit, result)
-	}
-	var page []api.AgentEvent
-	start := 0
-	if since > 0 && before > 0 {
-		for _, e := range events {
-			if e.Sequence >= since && e.Sequence < before {
-				page = append(page, e)
-			}
-		}
-		if len(page) > limit {
-			result.HasMore = true
-			page = page[:limit]
-		}
-	} else if since > 0 {
-		for _, e := range events {
-			if e.Sequence >= since {
-				page = append(page, e)
-			}
-		}
-		if len(page) > limit {
-			result.HasMore = true
-			page = page[:limit]
-		}
-	} else if before > 0 {
-		// Events are stored in sequence order. Find the first event at or
-		// above the bound and take the `limit` events immediately before it.
-		index := sort.Search(len(events), func(i int) bool {
-			return events[i].Sequence >= before
-		})
-		start = max(0, index-limit)
-		page = events[start:index]
-		result.HasMore = start > 0
-	} else {
-		start = max(0, len(events)-limit)
-		page = events[start:]
-		result.HasMore = start > 0
-	}
-	if len(page) == 0 {
-		return result
-	}
-	result.Events = projectWireEvents(page, wireOptions{})
-	result.Cursor = page[0].Sequence
-	return result
-}
-
-func conversationHistoryPage(
-	events []api.AgentEvent,
-	before uint64,
-	limit int,
-	result api.AgentHistoryResult,
-) api.AgentHistoryResult {
-	conversation := conversationHistoryEvents(events)
-	if before > 0 {
-		end := sort.Search(len(conversation), func(i int) bool {
-			return conversation[i].Sequence >= before
-		})
-		conversation = conversation[:end]
-	}
-
-	// Project the bounded Host history before applying the page limit. OpenCode
-	// emits one append-only event for every mutable content delta; counting
-	// those rows independently would let a single long answer consume the whole
-	// conversation page and return only its tail. The projection coalesces such
-	// deltas into one logical message while retaining its first event sequence
-	// as the pagination cursor.
-	if len(conversation) == 0 {
-		return result
-	}
-	start := max(0, len(conversation)-limit)
-	page := conversation[start:]
-	result.Events = page
-	result.Cursor = page[0].Sequence
-	result.HasMore = start > 0
-	return result
-}
-
-// conversationHistoryEvents keeps readable conversation messages and RFC 0010
-// structured rows, then folds OpenCode's mutable-part deltas. The regular
-// history endpoint remains a lossless event view; this projection is opt-in
-// for mobile conversation surfaces that need message pagination without
-// tool/reasoning noise.
-func conversationHistoryEvents(events []api.AgentEvent) []api.AgentEvent {
-	result := make([]api.AgentEvent, 0, len(events))
-	positions := make(map[string]int)
-	for _, source := range events {
-		if !isConversationAgentEvent(source) {
-			continue
-		}
-		event := source
-		typeName := normalizedAgentEventType(event)
-		provider := strings.ToLower(strings.TrimSpace(event.Provider))
-		id := strings.TrimSpace(event.ID)
-		if provider == "opencode" && id != "" && (typeName == "user" || typeName == "assistant") {
-			key := provider + ":" + typeName + ":" + id
-			if position, ok := positions[key]; ok {
-				result[position] = mergeConversationAgentEvent(result[position], event)
-				continue
-			}
-			// A projected message is no longer a delta. This also keeps the
-			// response stable if a client feeds it back through its own merge.
-			event.ContentDelta = false
-			positions[key] = len(result)
-		}
-		result = append(result, event)
-	}
-	return result
-}
-
-func mergeConversationAgentEvent(previous, next api.AgentEvent) api.AgentEvent {
-	if next.ContentDelta {
-		previous.Content += next.Content
-	} else if next.Content != "" {
-		// OpenCode may rewrite a part instead of appending a delta. Match the
-		// Web projection and keep the provider's latest complete value.
-		previous.Content = next.Content
-	}
-	if next.Turn != 0 {
-		previous.Turn = next.Turn
-	}
-	if next.Role != "" {
-		previous.Role = next.Role
-	}
-	if next.Model != "" {
-		previous.Model = next.Model
-	}
-	if next.StopReason != "" {
-		previous.StopReason = next.StopReason
-	}
-	if !next.Timestamp.IsZero() {
-		previous.Timestamp = next.Timestamp
-	}
-	if next.Error != "" {
-		previous.Error = next.Error
-	}
-	previous.ContentDelta = false
-	return previous
-}
-
-func normalizedAgentEventType(event api.AgentEvent) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(event.Type), "-", "_"))
-}
-
-func isConversationAgentEvent(event api.AgentEvent) bool {
-	typeName := normalizedAgentEventType(event)
-	role := strings.ToLower(strings.TrimSpace(event.Role))
-	if typeName == "user" || typeName == "assistant" || role == "user" || role == "assistant" {
-		return strings.TrimSpace(event.Content) != ""
-	}
-	// Structured events are facts rather than prose. Keep them even when their
-	// payload has no display text (for example a pending interaction or an
-	// empty plan update); clients use the event identity and state to render
-	// and reconcile the card.
-	switch typeName {
-	case "question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment":
-		return event.Payload != nil || strings.TrimSpace(event.Content) != ""
-	default:
-		return false
-	}
-}
-
-// agentTranscriptChunk returns raw JSONL only from the transcript already
-// bound to this Warren session. The caller never supplies a filesystem path,
-// which prevents the remote read API from becoming a general file reader.
-func (s *Service) agentTranscriptChunk(
-	ctx context.Context,
-	sessionID string,
-	offset int64,
-	limit int,
-) (api.AgentTranscriptChunk, error) {
-	if offset < 0 {
-		return api.AgentTranscriptChunk{}, errors.New("transcript offset cannot be negative")
-	}
-	if limit == 0 {
-		limit = agentTranscriptChunkBytes
-	}
-	if limit < 0 || limit > agentTranscriptChunkBytes {
-		return api.AgentTranscriptChunk{}, fmt.Errorf("transcript chunk limit must be between 1 and %d bytes", agentTranscriptChunkBytes)
-	}
-
-	session, ok := s.Session(sessionID)
-	if !ok {
-		return api.AgentTranscriptChunk{}, fmt.Errorf("session not found: %s", sessionID)
-	}
-	if session.Kind != "codex" && session.Kind != "claude" && session.Kind != "opencode" && session.Kind != "pi" && session.Kind != "qoder" && session.AgentSessionID == "" {
-		return api.AgentTranscriptChunk{}, fmt.Errorf("session is not bound to an agent: %s", sessionID)
-	}
-	if session.TranscriptPath == "" && session.Lifecycle == "running" {
-		if _, err := s.ensureAgent(ctx, session); err != nil {
-			return api.AgentTranscriptChunk{}, err
-		}
-		if refreshed, found := s.Session(sessionID); found {
-			session = refreshed
-		}
-	}
-	if session.TranscriptPath == "" {
-		return api.AgentTranscriptChunk{}, fmt.Errorf("agent transcript is not ready: %s", sessionID)
-	}
-	data, next, eof, err := agent.ReadTranscriptChunk(session.TranscriptPath, offset, limit)
-	if err != nil {
-		return api.AgentTranscriptChunk{}, err
-	}
-	return api.AgentTranscriptChunk{Data: string(data), Next: next, EOF: eof}, nil
-}
-
-// agentTail returns the newest events fitting both the event-count and
-// serialized-byte budgets. It is used for the bounded initial replay during
-// attach; clients fetch the full conversation through agent.history.
-func (s *Service) agentTail(sessionID string, maxEvents, maxBytes int) []api.AgentEvent {
-	if maxEvents <= 0 || maxBytes <= 0 {
-		return nil
-	}
-	s.lazyInit()
-	var events []api.AgentEvent
-	if s.AgentStore != nil {
-		if queried, _, err := s.AgentStore.QueryEvents(context.Background(), sessionID, s.currentAgentEpoch(), 0, 0, maxEvents); err == nil && len(queried) > 0 {
-			events = queried
-		}
-	}
-	if len(events) == 0 {
-		s.agentsMu.Lock()
-		entry := s.agents[sessionID]
-		s.agentsMu.Unlock()
-		if entry == nil {
-			return nil
-		}
+	var provider, driver string
+	var capabilities []string
+	var status api.AgentStatus
+	var turn api.AgentTurn
+	if entry != nil {
 		entry.mu.Lock()
-		events = entry.events
+		if executionID == "" {
+			executionID = entry.executionID
+		}
+		provider, driver = entry.providerKind, entry.handlerKind
+		capabilities = entry.capabilities.Strings()
+		status, turn = entry.status, entry.turn
 		entry.mu.Unlock()
 	}
-	sizes := make([]int, len(events))
-	for index := range events {
-		if encoded, err := json.Marshal(events[index]); err == nil {
-			sizes[index] = len(encoded)
-		}
+	if executionID == "" {
+		executionID = s.canonicalExecutionID(sessionID)
 	}
-	start := len(events)
-	total := 0
-	for index := len(events) - 1; index >= 0 && len(events)-start < maxEvents; index-- {
-		// The newest event always joins the tail even when a single event is
-		// itself over budget, so a huge event still renders immediately.
-		if total > 0 && total+sizes[index] > maxBytes {
-			break
-		}
-		start = index
-		total += sizes[index]
+	if provider == "" {
+		provider = normalizeProviderKind(session.Kind)
 	}
-	if start == len(events) {
-		return nil
+	if driver == "" {
+		driver = AgentHandlerTUI
 	}
-	return append([]api.AgentEvent(nil), events[start:]...)
+	if driver == AgentHandlerCLI {
+		driver = AgentHandlerTUI
+	}
+	state := api.AgentExecutionReady
+	switch status.Activity {
+	case api.AgentActivityWorking:
+		state = api.AgentExecutionWorking
+	case api.AgentActivityBlocked, api.AgentActivityStalled:
+		state = api.AgentExecutionBlocked
+	case api.AgentActivityFailed:
+		state = api.AgentExecutionFailed
+	case api.AgentActivityExited:
+		state = api.AgentExecutionClosed
+	}
+	result := api.AgentExecution{
+		ID: executionID, StreamID: executionID,
+		Target:       api.AgentTargetRef{Kind: "terminal_session", ID: sessionID},
+		Provider:     provider,
+		Conversation: api.AgentProviderConversationRef{ID: session.AgentSessionID},
+		Driver:       driver, Capabilities: capabilities, State: state, Status: status,
+	}
+	if turn.ID > 0 {
+		result.ActiveTurn = &turn
+	}
+	if history, err := s.canonicalHistoryPage(context.Background(), executionID, 0, 0, agentHistoryMaxLimit); err == nil {
+		result.HeadSequence = history.HeadSequence
+	}
+	return result, true
 }
 
-// splitAgentEvents greedily groups events so every returned batch serializes
-// to at most maxBytes. A single event larger than the budget forms its own
-// batch instead of being dropped or split mid-event.
-func splitAgentEvents(events []api.AgentEvent, maxBytes int) [][]api.AgentEvent {
-	var batches [][]api.AgentEvent
-	var current []api.AgentEvent
-	total := 0
-	for _, event := range events {
-		encoded, err := json.Marshal(event)
-		size := 0
-		if err == nil {
-			size = len(encoded)
-		}
-		if len(current) > 0 && total+size > maxBytes {
-			batches = append(batches, current)
-			current = nil
-			total = 0
-		}
-		current = append(current, event)
-		total += size
+func (s *Service) sessionForCanonicalStream(streamID string) (api.Session, bool) {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return api.Session{}, false
 	}
-	if len(current) > 0 {
-		batches = append(batches, current)
+	if s.Store != nil {
+		state := s.Store.Snapshot()
+		for _, session := range state.Sessions {
+			if session.AgentExecutionID == streamID {
+				return session, true
+			}
+		}
 	}
-	return batches
+	s.agentsMu.Lock()
+	defer s.agentsMu.Unlock()
+	for sessionID, entry := range s.agents {
+		entry.mu.Lock()
+		matched := entry.executionID == streamID
+		entry.mu.Unlock()
+		if matched && s.Store != nil {
+			if session, ok := s.Session(sessionID); ok {
+				return session, true
+			}
+		}
+	}
+	return api.Session{}, false
+}
+
+func (s *Service) canonicalProjectionCheckpoint(sessionID string, sequence uint64) api.AgentProjectionCheckpoint {
+	status := s.agentStatus(sessionID)
+	turn := s.agentTurn(sessionID)
+	state := map[string]any{"status": canonicalStatusPayload(status)}
+	if turn.ID > 0 {
+		state["turnId"] = strconv.FormatUint(turn.ID, 10)
+		state["turnStatus"] = string(turn.Status)
+	}
+	return api.AgentProjectionCheckpoint{Sequence: sequence, State: state}
+}
+
+type canonicalInteractionProjection struct {
+	kind    string
+	version uint64
+	state   string
+}
+
+// canonicalInteraction resolves the provider-neutral interaction projection
+// from immutable events. The wire command carries only interactionId and
+// version; accepting a guessed kind or an old version would let a client
+// answer a different interaction than the one shown by the Host.
+func (s *Service) canonicalInteraction(sessionID, interactionID string) (canonicalInteractionProjection, bool) {
+	interactionID = strings.TrimSpace(interactionID)
+	if interactionID == "" {
+		return canonicalInteractionProjection{}, false
+	}
+	execution, ok := s.canonicalExecutionForSession(sessionID)
+	if !ok || execution.StreamID == "" {
+		return canonicalInteractionProjection{}, false
+	}
+	result, err := s.canonicalHistoryPage(context.Background(), execution.StreamID, 0, 0, agentHistoryMaxLimit)
+	if err != nil {
+		return canonicalInteractionProjection{}, false
+	}
+	var projection canonicalInteractionProjection
+	for _, event := range result.Events {
+		if event.Type != "interaction.requested" && event.Type != "interaction.resolved" && event.Type != "interaction.expired" {
+			continue
+		}
+		candidateID, _ := event.Payload["interactionId"].(string)
+		if candidateID == "" {
+			candidateID, _ = event.Payload["requestId"].(string)
+		}
+		if strings.TrimSpace(candidateID) != interactionID {
+			continue
+		}
+		if kind, _ := event.Payload["kind"].(string); kind != "" {
+			kind = strings.ToLower(strings.TrimSpace(kind))
+			if kind == "question" || kind == "permission" || kind == "confirmation" {
+				projection.kind = kind
+			}
+		}
+		if version := canonicalInteractionVersion(event.Payload["version"]); version > 0 {
+			projection.version = version
+		} else if projection.version == 0 {
+			projection.version = 1
+		}
+		state, _ := event.Payload["state"].(string)
+		state = strings.ToLower(strings.TrimSpace(state))
+		switch event.Type {
+		case "interaction.requested":
+			if state == "" {
+				state = "pending"
+			}
+		case "interaction.resolved":
+			if state == "" {
+				state = "resolved"
+			}
+		case "interaction.expired":
+			state = "expired"
+		}
+		if state != "" {
+			projection.state = state
+		}
+	}
+	return projection, projection.kind != ""
+}
+
+func canonicalInteractionVersion(value any) uint64 {
+	switch value := value.(type) {
+	case uint64:
+		return value
+	case uint32:
+		return uint64(value)
+	case uint:
+		return uint64(value)
+	case int:
+		if value > 0 {
+			return uint64(value)
+		}
+	case int64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case float64:
+		if value > 0 && value == float64(uint64(value)) {
+			return uint64(value)
+		}
+	case json.Number:
+		if parsed, err := strconv.ParseUint(string(value), 10, 64); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func (s *Service) canonicalInteractionKind(sessionID, interactionID string) (string, bool) {
+	projection, found := s.canonicalInteraction(sessionID, interactionID)
+	return projection.kind, found
 }
 
 func (s *Service) agentStatus(sessionID string) api.AgentStatus {
@@ -5200,34 +5440,6 @@ func (s *Service) agentTurn(sessionID string) api.AgentTurn {
 		turn.Status = api.AgentTurnIdle
 	}
 	return turn
-}
-
-func (s *Service) agentSnapshot(sessionID string) api.AgentSnapshotResult {
-	result := api.AgentSnapshotResult{
-		Epoch: s.currentAgentEpoch(),
-		Turn:  s.agentTurn(sessionID),
-	}
-	if s.AgentStore != nil {
-		if seq, err := s.AgentStore.MaxSequence(context.Background(), sessionID, result.Epoch); err == nil && seq > 0 {
-			result.Sequence = seq
-			return result
-		}
-	}
-	if history := s.agentHistory(sessionID); len(history) > 0 {
-		result.Sequence = history[len(history)-1].Sequence
-	}
-	return result
-}
-
-func (s *Service) agentTurnEvents(sessionID string, turn uint64) []api.AgentEvent {
-	history := s.agentHistory(sessionID)
-	events := make([]api.AgentEvent, 0)
-	for _, event := range history {
-		if event.Turn == turn {
-			events = append(events, event)
-		}
-	}
-	return events
 }
 
 func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
@@ -5380,95 +5592,58 @@ func (s *Service) stopAgent(sessionID string) {
 	s.wakeLiveActivity()
 }
 
-// broadcastAgentIncrements pushes a live batch of agent events to attached
-// peers, splitting the batch so no single WebSocket message exceeds
-// agentMessageMaxBytes, then broadcasts the accompanying complete status as
-// its own lightweight message.
-func (s *Service) broadcastAgentIncrements(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
-	lock := s.broadcastLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
-	s.broadcastAgentIncrementsLocked(sessionID, events, status)
-}
-
-func (s *Service) broadcastAgentIncrementsLocked(sessionID string, events []api.AgentEvent, status api.AgentStatus) {
-	if len(events) > 0 {
-		for _, batch := range splitAgentEvents(events, agentMessageMaxBytes) {
-			s.broadcastAgentBatchLocked(sessionID, batch)
+func splitCanonicalAgentEvents(events []api.CanonicalAgentEvent, maxBytes int) [][]api.CanonicalAgentEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = agentMessageMaxBytes
+	}
+	var batches [][]api.CanonicalAgentEvent
+	var current []api.CanonicalAgentEvent
+	total := 0
+	for _, event := range events {
+		size, _ := json.Marshal(event)
+		if len(current) > 0 && total+len(size) > maxBytes {
+			batches = append(batches, current)
+			current = nil
+			total = 0
 		}
+		current = append(current, event)
+		total += len(size)
 	}
-	if status.Activity != "" {
-		s.broadcastAgentStatusLocked(sessionID, status)
+	if len(current) > 0 {
+		batches = append(batches, current)
 	}
+	return batches
 }
 
-func (s *Service) broadcastAgentBatch(sessionID string, events []api.AgentEvent) {
+func (s *Service) broadcastCanonicalAgentIncrements(sessionID string, events []api.CanonicalAgentEvent, streamID, executionID string) {
 	lock := s.broadcastLock(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
-	s.broadcastAgentBatchLocked(sessionID, events)
+	s.broadcastCanonicalAgentIncrementsLocked(sessionID, events, streamID, executionID)
 }
 
-func (s *Service) broadcastAgentBatchLocked(sessionID string, events []api.AgentEvent) {
-	s.broadcastAgentLocked(func(peer *wsPeer) error {
-		return peer.enqueueAgentEvents(sessionID, events)
-	}, sessionID)
-}
-
-// broadcastAgentReset tells attached peers that the session switched to a
-// new transcript. The empty batch with a new epoch makes clients drop their
-// stale event projection and refetch history from the replacement rollout.
-func (s *Service) broadcastAgentReset(sessionID string) {
-	s.broadcastAgent(func(peer *wsPeer) error {
-		return peer.writeJSON(api.AgentMessage{
-			Type:    "agent",
-			Session: sessionID,
-			Epoch:   s.currentAgentEpoch(),
-			Events:  []api.AgentEvent{},
-		})
-	}, sessionID)
-}
-
-func (s *Service) broadcastAgentStatus(sessionID string, status api.AgentStatus) {
-	if status.Activity == "" {
-		return
-	}
-	lock := s.broadcastLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
-	s.broadcastAgentStatusLocked(sessionID, status)
-}
-
-func (s *Service) broadcastAgentStatusLocked(sessionID string, status api.AgentStatus) {
-	if status.Activity == "" {
+func (s *Service) broadcastCanonicalAgentIncrementsLocked(sessionID string, events []api.CanonicalAgentEvent, streamID, executionID string) {
+	if len(events) == 0 {
 		return
 	}
 	s.broadcastAgentLocked(func(peer *wsPeer) error {
-		return peer.enqueueAgentStatus(sessionID, status)
+		if !peer.hasCanonicalAgentStream(streamID) {
+			return nil
+		}
+		for _, batch := range splitCanonicalAgentEvents(events, agentMessageMaxBytes) {
+			if err := peer.enqueueCanonicalAgentEvents(streamID, executionID, batch); err != nil {
+				return err
+			}
+		}
+		return nil
 	}, sessionID)
 }
 
-func (s *Service) broadcastAgentTurn(sessionID string, turn api.AgentTurn) {
-	if turn.Status == "" {
-		return
-	}
-	lock := s.broadcastLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
-	s.broadcastAgentTurnLocked(sessionID, turn)
-}
-
-func (s *Service) broadcastAgentTurnLocked(sessionID string, turn api.AgentTurn) {
-	if turn.Status == "" {
-		return
-	}
-	s.broadcastAgentLocked(func(peer *wsPeer) error {
-		return peer.enqueueAgentTurn(sessionID, turn)
-	}, sessionID)
-}
-
-// broadcastAgent delivers one outbound message to terminal peers and
-// agent-only subscribers under the session broadcast lock.
+// broadcastAgentLocked delivers one canonical Agent batch to terminal peers
+// and event subscribers under the session broadcast lock.
 func (s *Service) broadcastAgent(send func(*wsPeer) error, sessionID string) {
 	lock := s.broadcastLock(sessionID)
 	lock.Lock()
@@ -5946,14 +6121,6 @@ func (s *Service) reanchorAtomicOutput(
 		return err
 	}
 
-	if status := s.agentStatus(session.ID); status.Activity != "" {
-		if err := peer.enqueueAgentStatus(session.ID, status); err != nil {
-			return err
-		}
-	}
-	if tail := s.agentTail(session.ID, agentAttachHistoryMaxEvents, agentAttachHistoryMaxBytes); len(tail) > 0 {
-		return peer.enqueueAgentEvents(session.ID, tail)
-	}
 	return nil
 }
 

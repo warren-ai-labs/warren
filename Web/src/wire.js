@@ -94,7 +94,7 @@ export function decodeFrame(bytes) {
   return null;
 }
 
-export function encodeInput(payload, { sessionID = "", attachmentID = "", sequence = 0, version = "2.0" } = {}) {
+export function encodeInput(payload, { sessionID = "", attachmentID = "", sequence = 0, version = "3.0" } = {}) {
   const header = {
     version,
     sessionID,

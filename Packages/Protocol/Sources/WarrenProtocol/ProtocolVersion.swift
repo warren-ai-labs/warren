@@ -8,10 +8,10 @@ public struct ProtocolVersion: Codable, Hashable, Sendable, Comparable {
         self.minor = minor
     }
 
-    /// Protocol 2 is the minimum supported control protocol. Terminal
-    /// recovery is atomic in this version, so older clients cannot safely
-    /// downgrade to the replay-only contract.
-    public static let current = ProtocolVersion(major: 2, minor: 0)
+    /// Protocol 3 is the canonical control protocol. Agent execution events
+    /// use one append-only envelope and older clients cannot safely downgrade
+    /// to the pre-canonical contract.
+    public static let current = ProtocolVersion(major: 3, minor: 0)
 
     public static func < (lhs: ProtocolVersion, rhs: ProtocolVersion) -> Bool {
         (lhs.major, lhs.minor) < (rhs.major, rhs.minor)

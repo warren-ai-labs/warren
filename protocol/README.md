@@ -27,7 +27,7 @@ There are three independent wire surfaces:
    (PTY output, client input, atomic state snapshots). Wire version 1; this
    is the part that has to keep matching across Go, Swift, and TypeScript.
 2. **JSON control envelopes** over the same WebSocket, for the full RPC
-   surface and server-pushed events. Logical version 2.0.
+   surface and server-pushed events. Logical version 3.0.
 3. **BRLY/2 frames** between the Host connector and the Relay control
    plane. Independent wire version 2; clients do not decode these.
 
@@ -65,11 +65,17 @@ you change a constant here, all four rows must move together.
   that wants a new capability must include it in the welcome envelope; the
   Host responds with the intersection in client order. Adding a capability
   without negotiating it is a silent failure on the client.
-- **New `serverEvents` are non-breaking.** Old clients ignore unknown `t`
-  values. Do not change the `t` value of an existing event.
-- **New `rpcMethods` are non-breaking.** Old clients that call new methods
-  just receive an error response. Removing or renaming a method is a hard
-  break.
+- **The logical control version is a hard break.** Protocol 3.0 has one
+  canonical Agent command surface and one `agent.events` event envelope. A
+  2.0 client is rejected during authentication; no Agent aliases or dual
+  event broadcasts are permitted.
+- **Unknown `agent.events` types are data, not transport errors.** Clients
+  persist the event and advance their stream cursor even when their renderer
+  does not know the type.
+- **New `serverEvents` outside Agent are non-breaking within 3.x.** Do not
+  change the `t` value or shape of an existing event.
+- **New `rpcMethods` are additive within 3.x.** Removing or renaming a method
+  requires a new logical major version.
 - **Atomic-state format identifiers are forward-compatible.** A client may
   advertise multiple formats; the Host picks one. To roll a new format,
   add a new entry to `terminalStateFormats` and update the client bindings

@@ -87,24 +87,24 @@ test("agent queue remains immutable while editing, ordering and retrying", () =>
 
 test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {
   const existing = [
-    { seq: 1, type: "system", content: "started" },
-    { seq: 2, type: "user", content: "hello" },
+    { sequence: 1, type: "system", content: "started" },
+    { sequence: 2, type: "user", content: "hello" },
   ];
   const incoming = [
-    { seq: 2, type: "user", content: "hello" },
-    { seq: 3, type: "assistant", content: "hi" },
+    { sequence: 2, type: "user", content: "hello" },
+    { sequence: 3, type: "assistant", content: "hi" },
   ];
   const merged = mergeAgentEvents(existing, incoming);
-  assert.deepEqual(merged.map(event => event.seq), [1, 2, 3]);
+  assert.deepEqual(merged.map(event => event.sequence), [1, 2, 3]);
   assert.deepEqual(merged.map(event => event.content), ["started", "hello", "hi"]);
 });
 
 test("mergeAgentEvents keeps the first event at an immutable sequence", () => {
   const merged = mergeAgentEvents(
-    [{ seq: 7, type: "assistant", content: "first" }],
-    [{ seq: 7, type: "assistant", content: "rewritten" }],
+    [{ sequence: 7, type: "assistant", content: "first" }],
+    [{ sequence: 7, type: "assistant", content: "rewritten" }],
   );
-  assert.deepEqual(merged, [{ seq: 7, type: "assistant", content: "first" }]);
+  assert.deepEqual(merged, [{ sequence: 7, type: "assistant", content: "first", sequence: 7, eventId: "stream:7" }]);
 });
 
 test("agentQueueKey isolates endpoint and session identities", () => {
@@ -118,42 +118,44 @@ test("agentDraftKey keeps separator punctuation collision-safe", () => {
 });
 
 test("mergeAgentEvents caps history at the agent event limit", () => {
-  const existing = Array.from({ length: agentEventLimit }, (_, index) => ({ seq: index, type: "system" }));
-  const incoming = [{ seq: agentEventLimit, type: "user", content: "new" }];
+  const existing = Array.from({ length: agentEventLimit }, (_, index) => ({ sequence: index + 1, type: "system" }));
+  const incoming = [{ sequence: agentEventLimit, type: "user", content: "new" }];
   const merged = mergeAgentEvents(existing, incoming);
   assert.equal(merged.length, agentEventLimit);
-  assert.equal(merged[0].seq, 1);
-  assert.equal(merged.at(-1).seq, agentEventLimit);
+  assert.equal(merged[0].sequence, 1);
+  assert.equal(merged.at(-1).sequence, agentEventLimit);
 });
 
 test("mergeAgentEvents keeps older pages intact when paginating", () => {
   const existing = Array.from({ length: agentEventLimit }, (_, index) => ({
-    seq: index,
+    sequence: index + 2001,
+    eventId: `evt-${index + 2001}`,
     type: "system",
   }));
   const olderPage = Array.from({ length: 200 }, (_, index) => ({
-    seq: index - 200,
+    sequence: index + 1801,
+    eventId: `evt-${index + 1801}`,
     type: "user",
     content: `old-${index}`,
   }));
   const merged = mergeAgentEvents(existing, olderPage, { cap: false });
   assert.equal(merged.length, agentEventLimit + 200);
-  assert.equal(merged[0].seq, -200);
-  assert.equal(merged.at(-1).seq, agentEventLimit - 1);
+  assert.equal(merged[0].sequence, 1801);
+  assert.equal(merged.at(-1).sequence, 4000);
   // No middle gap: every sequence from the oldest loaded event to the newest
   // live event is still present.
   assert.deepEqual(
-    merged.map(event => event.seq),
-    Array.from({ length: agentEventLimit + 200 }, (_, index) => index - 200),
+    merged.map(event => event.sequence),
+    Array.from({ length: agentEventLimit + 200 }, (_, index) => index + 1801),
   );
 });
 
 test("groupAgentEvents pairs tool calls with their outputs", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "user", content: "hello" },
-    { seq: 2, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
-    { seq: 3, type: "tool_output", callId: "call-1", toolStatus: "success", output: "file.txt\n" },
-    { seq: 4, type: "assistant", content: "done" },
+    { sequence: 1, type: "user", content: "hello" },
+    { sequence: 2, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
+    { sequence: 3, type: "tool_output", callId: "call-1", toolStatus: "success", output: "file.txt\n" },
+    { sequence: 4, type: "assistant", content: "done" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["user", "activity_group", "assistant"]);
   assert.equal(blocks[1].tools[0].call.toolName, "shell");
@@ -163,13 +165,13 @@ test("groupAgentEvents pairs tool calls with their outputs", () => {
 
 test("groupAgentEvents splits activity at each visible message", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "user", content: "hello" },
-    { seq: 2, type: "reasoning", content: "think one" },
-    { seq: 3, type: "assistant", content: "checking" },
-    { seq: 4, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
-    { seq: 5, type: "tool_output", callId: "call-1", toolStatus: "success", output: "a\n" },
-    { seq: 6, type: "reasoning", content: "think two" },
-    { seq: 7, type: "assistant", content: "done" },
+    { sequence: 1, type: "user", content: "hello" },
+    { sequence: 2, type: "reasoning", content: "think one" },
+    { sequence: 3, type: "assistant", content: "checking" },
+    { sequence: 4, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
+    { sequence: 5, type: "tool_output", callId: "call-1", toolStatus: "success", output: "a\n" },
+    { sequence: 6, type: "reasoning", content: "think two" },
+    { sequence: 7, type: "assistant", content: "done" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["user", "activity_group", "assistant", "activity_group", "assistant"]);
   assert.deepEqual(blocks[1].reasoning.map(event => event.content), ["think one"]);
@@ -183,10 +185,10 @@ test("groupAgentEvents splits activity at each visible message", () => {
 
 test("groupAgentEvents folds standalone tool runs without a user message", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
-    { seq: 2, type: "tool_output", callId: "call-1", toolStatus: "success", output: "a\n" },
-    { seq: 3, type: "tool_call", callId: "call-2", toolName: "edit", toolInput: { file_path: "x.ts" } },
-    { seq: 4, type: "tool_output", callId: "call-2", toolStatus: "success", output: "ok" },
+    { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
+    { sequence: 2, type: "tool_output", callId: "call-1", toolStatus: "success", output: "a\n" },
+    { sequence: 3, type: "tool_call", callId: "call-2", toolName: "edit", toolInput: { file_path: "x.ts" } },
+    { sequence: 4, type: "tool_output", callId: "call-2", toolStatus: "success", output: "ok" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group"]);
   assert.equal(blocks[0].tools.length, 2);
@@ -195,9 +197,9 @@ test("groupAgentEvents folds standalone tool runs without a user message", () =>
 
 test("groupAgentEvents resets folding at each user message", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
-    { seq: 2, type: "user", content: "again" },
-    { seq: 3, type: "tool_call", callId: "call-2", toolName: "edit", toolInput: { file_path: "x.ts" } },
+    { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell", toolInput: { command: "ls" } },
+    { sequence: 2, type: "user", content: "again" },
+    { sequence: 3, type: "tool_call", callId: "call-2", toolName: "edit", toolInput: { file_path: "x.ts" } },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group", "user", "activity_group"]);
   assert.equal(blocks[0].tools.length, 1);
@@ -206,7 +208,7 @@ test("groupAgentEvents resets folding at each user message", () => {
 
 test("groupAgentEvents keeps unmatched tool outputs standalone", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "tool_output", callId: "unknown", output: "orphan" },
+    { sequence: 1, type: "tool_output", callId: "unknown", output: "orphan" },
   ]);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].kind, "tool_output");
@@ -214,9 +216,9 @@ test("groupAgentEvents keeps unmatched tool outputs standalone", () => {
 
 test("groupAgentEvents does not attach a late tool output to an earlier message", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
-    { seq: 2, type: "assistant", content: "partial reply" },
-    { seq: 3, type: "tool_output", callId: "call-1", output: "late result" },
+    { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
+    { sequence: 2, type: "assistant", content: "partial reply" },
+    { sequence: 3, type: "tool_output", callId: "call-1", output: "late result" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group", "assistant", "tool_output"]);
   assert.equal(blocks[0].tools[0].outputs.length, 0);
@@ -225,11 +227,11 @@ test("groupAgentEvents does not attach a late tool output to an earlier message"
 
 test("projectAgentEvents keeps structured cards as activity boundaries", () => {
   const blocks = projectAgentEvents([
-    { seq: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
-    { seq: 2, id: "question-1", type: "question", payload: { state: "pending" } },
-    { seq: 3, type: "reasoning", content: "after the question" },
-    { seq: 4, id: "question-1", type: "question", payload: { state: "resolved" } },
-    { seq: 5, type: "reasoning", content: "after resolution" },
+    { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
+    { sequence: 2, id: "question-1", type: "question", payload: { state: "pending" } },
+    { sequence: 3, type: "reasoning", content: "after the question" },
+    { sequence: 4, id: "question-1", type: "question", payload: { state: "resolved" } },
+    { sequence: 5, type: "reasoning", content: "after resolution" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group", "structured", "activity_group"]);
   assert.equal(blocks[1].event.payload.state, "resolved");
@@ -238,20 +240,20 @@ test("projectAgentEvents keeps structured cards as activity boundaries", () => {
 
 test("groupAgentEvents treats role-only messages as visible message boundaries", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
-    { seq: 2, type: "message", role: "assistant", content: "progress" },
-    { seq: 3, type: "reasoning", content: "next step" },
+    { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
+    { sequence: 2, type: "message", role: "assistant", content: "progress" },
+    { sequence: 3, type: "reasoning", content: "next step" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group", "assistant", "activity_group"]);
 });
 
 test("groupAgentEvents coalesces OpenCode content deltas by part", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, id: "user-part", type: "user", content: "fix" },
-    { seq: 2, id: "assistant-part", type: "assistant", content: "hel" },
-    { seq: 3, id: "assistant-part", type: "assistant", content: "lo", contentDelta: true },
-    { seq: 4, id: "reasoning-part", type: "reasoning", content: "think" },
-    { seq: 5, id: "reasoning-part", type: "reasoning", content: " more", contentDelta: true },
+    { sequence: 1, id: "user-part", type: "user", content: "fix" },
+    { sequence: 2, id: "assistant-part", type: "assistant", content: "hel" },
+    { sequence: 3, id: "assistant-part", type: "assistant", content: "lo", contentDelta: true },
+    { sequence: 4, id: "reasoning-part", type: "reasoning", content: "think" },
+    { sequence: 5, id: "reasoning-part", type: "reasoning", content: " more", contentDelta: true },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["user", "assistant", "activity_group"]);
   assert.equal(blocks[1].event.content, "hello");
@@ -260,8 +262,8 @@ test("groupAgentEvents coalesces OpenCode content deltas by part", () => {
 
 test("groupAgentEvents replaces a rewritten OpenCode part", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, id: "assistant-part", type: "assistant", content: "draft" },
-    { seq: 2, id: "assistant-part", type: "assistant", content: "final" },
+    { sequence: 1, id: "assistant-part", type: "assistant", content: "draft" },
+    { sequence: 2, id: "assistant-part", type: "assistant", content: "final" },
   ]);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].event.content, "final");
@@ -269,27 +271,27 @@ test("groupAgentEvents replaces a rewritten OpenCode part", () => {
 
 test("latestAgentAction extracts recent tool call and output summaries", () => {
   assert.equal(latestAgentAction([]), "");
-  assert.equal(latestAgentAction([{ seq: 1, type: "user", content: "hi" }]), "");
+  assert.equal(latestAgentAction([{ sequence: 1, type: "user", content: "hi" }]), "");
 
   assert.equal(
     latestAgentAction([
-      { seq: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
+      { sequence: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
     ]),
     "Shell npm test",
   );
 
   assert.equal(
     latestAgentAction([
-      { seq: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
-      { seq: 2, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
+      { sequence: 1, type: "tool_call", toolName: "shell", toolInput: { command: "npm test" } },
+      { sequence: 2, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
     ]),
     "Edit file src/math.ts",
   );
 
   assert.equal(
     latestAgentAction([
-      { seq: 1, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
-      { seq: 2, type: "tool_output", toolName: "edit" },
+      { sequence: 1, type: "tool_call", toolName: "edit", toolInput: { file_path: "src/math.ts" } },
+      { sequence: 2, type: "tool_output", toolName: "edit" },
     ]),
     "Edit file",
   );
@@ -370,14 +372,14 @@ test("toolSummary extracts rich details across Codex and Antigravity tool shapes
 
 test("groupAgentEvents coalesces adjacent activity groups", () => {
   const blocks = groupAgentEvents([
-    { seq: 1, type: "user", content: "inspect" },
-    { seq: 2, type: "reasoning", content: "think step 1" },
-    { seq: 3, type: "tool_call", callId: "c1", toolName: "view_file", toolInput: { AbsolutePath: "/a.js" } },
-    { seq: 4, type: "tool_output", callId: "c1", output: "ok" },
-    { seq: 5, type: "reasoning", content: "think step 2" },
-    { seq: 6, type: "tool_call", callId: "c2", toolName: "grep_search", toolInput: { query: "foo" } },
-    { seq: 7, type: "tool_output", callId: "c2", output: "ok" },
-    { seq: 8, type: "assistant", content: "done" },
+    { sequence: 1, type: "user", content: "inspect" },
+    { sequence: 2, type: "reasoning", content: "think step 1" },
+    { sequence: 3, type: "tool_call", callId: "c1", toolName: "view_file", toolInput: { AbsolutePath: "/a.js" } },
+    { sequence: 4, type: "tool_output", callId: "c1", output: "ok" },
+    { sequence: 5, type: "reasoning", content: "think step 2" },
+    { sequence: 6, type: "tool_call", callId: "c2", toolName: "grep_search", toolInput: { query: "foo" } },
+    { sequence: 7, type: "tool_output", callId: "c2", output: "ok" },
+    { sequence: 8, type: "assistant", content: "done" },
   ]);
   assert.deepEqual(blocks.map(b => b.kind), ["user", "activity_group", "assistant"]);
   assert.equal(blocks[1].reasoning.length, 2);

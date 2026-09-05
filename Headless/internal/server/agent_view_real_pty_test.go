@@ -44,7 +44,7 @@ func TestRealPTYGuardrailsAndBracketedPaste(t *testing.T) {
 
 	// 1. Verify Blocked Guard on real PTY
 	service.agents[sessionID].status = api.AgentStatus{
-		Activity: api.AgentActivityBlocked,
+		Activity:  api.AgentActivityBlocked,
 		Attention: &api.AgentAttention{Kind: "approval", Reason: "permission needed"},
 	}
 	msgBlocked := api.AgentMessageSendRequest{

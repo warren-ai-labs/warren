@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://warren.local/protocol/warren.schema.json",
   "title": "Warren Protocol",
-  "description": "Single source of truth for the Warren wire protocol. Bindings: Headless/internal/output, Headless/internal/api, Headless/internal/server, RelayService/internal/controlplane, Packages/Transport, Packages/Protocol, Web/src/wire.js. The canonical client/server version is 2.0; binary DENB envelopes remain at wire version 1. Treat this document as authoritative — drift between this file and the bindings is a bug to file against whichever binding diverged first.",
+  "description": "Single source of truth for the Warren wire protocol. Bindings: Headless/internal/output, Headless/internal/api, Headless/internal/server, RelayService/internal/controlplane, Packages/Transport, Packages/Protocol, Web/src/wire.js. The canonical client/server control version is 3.0; binary DENB envelopes remain at wire version 1. Treat this document as authoritative — drift between this file and the bindings is a bug to file against whichever binding diverged first.",
   "type": "object",
   "required": [
     "logicalVersion",
@@ -12,14 +12,15 @@
     "terminalStateFormats",
     "rpcMethods",
     "serverEvents",
+    "agentEvents",
     "relayStream",
     "httpRoutes"
   ],
   "properties": {
     "logicalVersion": {
       "type": "string",
-      "const": "2.0",
-      "description": "Header version reported in the welcome message and used to gate capability negotiation. The v1 client surface is intentionally rejected at auth time."
+      "const": "3.0",
+      "description": "Header version reported in the welcome message and used to gate capability negotiation. The v3 client surface is intentionally rejected at auth time."
     },
     "binaryEnvelope": {
       "type": "object",
@@ -97,7 +98,7 @@
               "type": "object",
               "required": ["version", "sessionID", "attachmentID", "payloadLength"],
               "properties": {
-                "version": { "type": "string", "description": "Defaults to '2.0' when absent on the wire." },
+                "version": { "type": "string", "description": "Defaults to '3.0' when absent on the wire." },
                 "sessionID": { "type": "string" },
                 "attachmentID": { "type": "string" },
                 "sequence": { "type": "integer", "minimum": 0 },
@@ -142,7 +143,7 @@
             "t": { "type": "string", "enum": ["request", "ping"] },
             "id": { "type": "string" },
             "token": { "type": "string", "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself." },
-            "version": { "type": "string", "const": "2.0" },
+            "version": { "type": "string", "const": "3.0" },
             "capabilities": { "type": "array", "items": { "type": "string" } },
             "terminalStateFormats": {
               "type": "array",
@@ -218,18 +219,18 @@
       },
       "examples": [
         { "method": "roster", "paramsRef": "free", "resultRef": "api.State (via makeRoster)" },
-        { "method": "agent.history", "paramsRef": "{session: string, since?: string, before?: string, limit?: number, priority?: string, wireOptions?: {omitFields?: ('output'|'toolInput'|'files'|'payload'|'usage')[]}}", "resultRef": "api.AgentHistoryResult" },
-        { "method": "agent.transcript", "paramsRef": "{session?: string}", "resultRef": "[]api.AgentTranscriptChunk" },
-        { "method": "agent.snapshot", "paramsRef": "{session?: string}", "resultRef": "api.AgentSnapshotResult" },
-        { "method": "agent.turn.events", "paramsRef": "{session: string, turn: string, wireOptions?: {omitFields?: ('output'|'toolInput'|'files'|'payload'|'usage')[]}}", "resultRef": "api.AgentEvent[]" },
-        { "method": "agent.interaction.respond", "paramsRef": "{session?: string, kind?: string, title?: string, data?: string}", "resultRef": "void" },
-        { "method": "agent.turn.interrupt", "paramsRef": "{session?: string}", "resultRef": "void" },
-        { "method": "agent.message.send", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
-        { "method": "agent.attachment.prepare", "paramsRef": "{session?: string, ...}", "resultRef": "api.AttachmentHandle" },
-        { "method": "agent.attachment.chunk", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
-        { "method": "agent.attachment.complete", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
-        { "method": "agent.attachment.abort", "paramsRef": "{session?: string, ...}", "resultRef": "void" },
-        { "method": "agent.subscribe", "paramsRef": "{session: string, epoch?: string, lastSequence?: string, wireOptions?: {omitFields?: ('output'|'toolInput'|'files'|'payload'|'usage')[]}}", "resultRef": "api.AgentSubscriptionResult" },
+        { "method": "agent.execution.get", "paramsRef": "{executionId: string}", "resultRef": "api.AgentExecution" },
+        { "method": "agent.events.history", "paramsRef": "{streamId: string, afterSequence?: uint64, beforeSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsHistoryResult" },
+        { "method": "agent.events.subscribe", "paramsRef": "{streamId: string, afterSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsSubscriptionResult" },
+        { "method": "agent.execution.resume", "paramsRef": "api.AgentCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.turn.start", "paramsRef": "api.AgentTurnStartCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.turn.steer", "paramsRef": "api.AgentTurnSteerCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.turn.cancel", "paramsRef": "api.AgentTurnCancelCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.interaction.resolve", "paramsRef": "api.AgentInteractionResolveCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.attachment.prepare", "paramsRef": "api.AgentAttachmentPrepareCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.attachment.chunk", "paramsRef": "api.AgentAttachmentChunkCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.attachment.complete", "paramsRef": "api.AgentAttachmentCompleteCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.attachment.abort", "paramsRef": "api.AgentAttachmentAbortCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "relay.pairing", "paramsRef": "free", "resultRef": "{pairingCode, expiresAt}" },
         { "method": "settings.get", "paramsRef": "free", "resultRef": "api.Settings" },
         { "method": "relay.reset", "paramsRef": "free", "resultRef": "void" },
@@ -288,7 +289,7 @@
     },
     "serverEvents": {
       "type": "array",
-      "description": "Server-pushed event types. Events do not include a request id. Some carry session-level state (attached/synced/exited); others are connection-level (welcome/maintenance).",
+      "description": "Server-pushed event types. Events do not include a request id. Some carry terminal-session state (attached/synced/exited); Agent semantics use the canonical agent.events envelope.",
       "items": {
         "type": "string",
         "enum": [
@@ -301,17 +302,15 @@
           "attached",
           "synced",
           "exited",
-          "agent",
-          "agent.status",
-          "agent.turn",
+          "agent.events",
           "pong"
         ]
       },
       "uniqueItems": true,
       "eventDetails": {
         "welcome": {
-          "fields": { "t": "welcome", "version": "2.0", "host": "api.Host", "capabilities": "string[]" },
-          "notes": "First event after upgrade. Carries the negotiated capabilities; client should ignore unrequested ones."
+          "fields": { "t": "welcome", "version": "3.0", "host": "api.Host", "accessScopeId": "string", "capabilities": "string[]" },
+          "notes": "First event after upgrade. Carries the stable Host identity, the authenticated visibility scope, and negotiated capabilities."
         },
         "maintenance": {
           "fields": { "t": "maintenance", "message": "string", "kind": "string" },
@@ -345,22 +344,67 @@
           "fields": { "t": "exited", "session": "string" },
           "notes": "Session has exited and the binary stream for it is closed."
         },
-        "agent": {
-          "fields": { "t": "agent", "session": "string", "role": "string", "content": "string", "kind": "user|assistant|tool_call|plan|question|response" },
-          "notes": "Streamed agent message part. role='user'/'assistant'/'tool'; kind refines the role's shape."
-        },
-        "agent.status": {
-          "fields": { "t": "agent.status", "session": "string", "status": "api.AgentStatus" },
-          "notes": "Lifecycle event (idle, running, awaiting-input, error, etc.)."
-        },
-        "agent.turn": {
-          "fields": { "t": "agent.turn", "session": "string", "turn": "api.AgentTurn" },
-          "notes": "Whole-turn completion marker. Carries usage and final state."
+        "agent.events": {
+          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "replay": "bool", "events": "api.AgentEvent[]" },
+          "notes": "The only semantic Agent push. Every event carries eventId, streamId, executionId, sequence, type, timestamps, origin, and typed payload."
         },
         "pong": {
           "fields": { "t": "pong", "id": "string" },
           "notes": "Reply to a client ping when capability 'app-heartbeat-v1' is negotiated."
         }
+      }
+    },
+    "agentEvents": {
+      "type": "object",
+      "description": "Canonical append-only Agent event contract. This metadata is consumed by bindings and contract tests; payload schemas are selected by type.",
+      "required": ["envelope", "types", "attentionStreamId"],
+      "properties": {
+        "envelope": {
+          "type": "object",
+          "required": ["eventId", "streamId", "executionId", "sequence", "type", "occurredAt", "recordedAt", "origin", "payload"],
+          "properties": {
+            "eventId": { "type": "string" },
+            "streamId": { "type": "string" },
+            "executionId": { "type": "string" },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "turnId": { "type": "string" },
+            "type": { "type": "string" },
+            "occurredAt": { "type": "string", "format": "date-time" },
+            "recordedAt": { "type": "string", "format": "date-time" },
+            "causedBy": { "type": "string" },
+            "origin": {
+              "type": "object",
+              "required": ["kind", "confidence"],
+              "properties": {
+                "kind": { "type": "string", "enum": ["host", "provider", "client"] },
+                "provider": { "type": "string" },
+                "driver": { "type": "string", "enum": ["tui", "acp", "cloud"] },
+                "channel": { "type": "string" },
+                "confidence": { "type": "string", "enum": ["native", "observed", "derived"] }
+              },
+              "additionalProperties": false
+            },
+            "payload": { "type": "object", "additionalProperties": true }
+          },
+          "additionalProperties": false
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "execution.started", "execution.resumed", "execution.replaced", "execution.failed",
+              "turn.started", "turn.completed", "turn.failed", "turn.cancelled",
+              "message.created", "message.delta", "message.completed", "reasoning.delta",
+              "tool.started", "tool.updated", "tool.completed", "tool.failed",
+              "interaction.requested", "interaction.resolved", "interaction.expired",
+              "plan.updated", "tasks.updated", "context.updated", "status.changed",
+              "attention.changed"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "attentionStreamId": { "type": "string", "const": "host:attention:v1" }
       }
     },
     "relayStream": {

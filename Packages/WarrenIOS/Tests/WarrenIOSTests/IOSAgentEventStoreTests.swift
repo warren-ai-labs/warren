@@ -2,15 +2,17 @@ import XCTest
 @testable import WarrenIOS
 import WarrenTransport
 
-final class IOSAgentEventStoreTests: XCTestCase {
-    var tempDBURL: URL!
-    var store: IOSAgentEventStore!
+final class WarrenAgentEventStoreTests: XCTestCase {
+    private var tempDBURL: URL!
+    private var store: WarrenAgentEventStore!
+    private let owner = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
+    private let shared = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-shared")
 
     override func setUp() async throws {
         try await super.setUp()
-        let filename = "test-agent-\(UUID().uuidString).sqlite3"
-        tempDBURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        store = IOSAgentEventStore(databasePath: tempDBURL.path)
+        tempDBURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-agent-\(UUID().uuidString).sqlite3")
+        store = WarrenAgentEventStore(databasePath: tempDBURL.path)
     }
 
     override func tearDown() async throws {
@@ -18,175 +20,119 @@ final class IOSAgentEventStoreTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testSaveAndLoadRecentEvents() async throws {
-        let sessionID = "test-session-1"
-        let epoch: UInt64 = 100
-
-        let events = [
-            WarrenRemoteAgentEvent(sequence: 1, type: "user", role: "user", content: "hello"),
-            WarrenRemoteAgentEvent(sequence: 2, type: "assistant", role: "assistant", content: "hi there"),
-            WarrenRemoteAgentEvent(sequence: 3, type: "tool_call", toolName: "read_file"),
-            WarrenRemoteAgentEvent(sequence: 4, type: "tool_output", output: "content"),
-        ]
-
-        try await store.saveEvents(events, sessionID: sessionID, epoch: epoch)
-
-        let maxSeq = await store.maxSequence(sessionID: sessionID, epoch: epoch)
-        XCTAssertEqual(maxSeq, 4)
-
-        let loaded = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
-        XCTAssertEqual(loaded.count, 4)
-        XCTAssertEqual(loaded[0].sequence, 1)
-        XCTAssertEqual(loaded[0].content, "hello")
-        XCTAssertEqual(loaded[1].sequence, 2)
-        XCTAssertEqual(loaded[1].content, "hi there")
-        XCTAssertEqual(loaded[2].sequence, 3)
-        XCTAssertEqual(loaded[2].toolName, "read_file")
-        XCTAssertEqual(loaded[3].sequence, 4)
-        XCTAssertEqual(loaded[3].output, "content")
+    private func event(
+        _ sequence: UInt64,
+        id: String,
+        type: String = "message.created",
+        content: String? = nil
+    ) -> WarrenRemoteAgentEvent {
+        WarrenRemoteAgentEvent(
+            sequence: sequence,
+            eventID: id,
+            streamID: "exec-1",
+            executionID: "exec-1",
+            type: type,
+            payload: content.map { ["content": .string($0)] }
+        )
     }
 
-    func testLoadEventsWithRange() async throws {
-        let sessionID = "test-session-range"
-        let epoch: UInt64 = 200
+    func testNamespaceAndStreamKeysAreIsolated() async throws {
+        try await store.saveEvents([event(1, id: "evt-1")], namespace: owner, streamID: "exec-1")
+        try await store.saveEvents([event(1, id: "evt-shared")], namespace: shared, streamID: "exec-1")
+        try await store.saveEvents([event(1, id: "evt-other")], namespace: owner, streamID: "exec-2")
 
-        var events: [WarrenRemoteAgentEvent] = []
-        for i in 1...10 {
-            events.append(WarrenRemoteAgentEvent(sequence: UInt64(i), type: "assistant", content: "msg \(i)"))
+        let ownerEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-1")
+        let sharedEvents = await store.loadRecentEvents(namespace: shared, streamID: "exec-1")
+        let otherEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-2")
+        XCTAssertEqual(ownerEvents.map(\.eventID), ["evt-1"])
+        XCTAssertEqual(sharedEvents.map(\.eventID), ["evt-shared"])
+        XCTAssertEqual(otherEvents.map(\.eventID), ["evt-other"])
+    }
+
+    func testDuplicateIsIdempotentAndConflictsAreRejected() async throws {
+        let first = event(1, id: "evt-1", content: "hello")
+        let state = try await store.saveEvents([first], namespace: owner, streamID: "exec-1")
+        XCTAssertEqual(state.headSequence, 1)
+        XCTAssertEqual(state.contiguousThrough, 1)
+
+        _ = try await store.saveEvents([first], namespace: owner, streamID: "exec-1")
+        let initialEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-1")
+        XCTAssertEqual(initialEvents.count, 1)
+
+        do {
+            _ = try await store.saveEvents(
+                [event(1, id: "evt-other", content: "different")],
+                namespace: owner,
+                streamID: "exec-1"
+            )
+            XCTFail("expected a sequence conflict")
+        } catch {
+            XCTAssertEqual(error as? WarrenAgentEventStoreError, .sequenceConflict(streamID: "exec-1", sequence: 1))
         }
 
-        try await store.saveEvents(events, sessionID: sessionID, epoch: epoch)
-
-        // Query since 3, before 7 -> 3, 4, 5, 6
-        let range = await store.loadEvents(sessionID: sessionID, epoch: epoch, since: 3, before: 7, limit: 10)
-        XCTAssertEqual(range.count, 4)
-        XCTAssertEqual(range.map(\.sequence), [3, 4, 5, 6])
+        do {
+            _ = try await store.saveEvents(
+                [event(2, id: "evt-1", content: "hello")],
+                namespace: owner,
+                streamID: "exec-1"
+            )
+            XCTFail("expected an event conflict")
+        } catch {
+            XCTAssertEqual(error as? WarrenAgentEventStoreError, .eventConflict(streamID: "exec-1", eventID: "evt-1"))
+        }
     }
 
-    func testLoadRecentEventsCanBeScopedToEpoch() async throws {
-        let sessionID = "test-session-epochs"
-        let firstEpoch: UInt64 = 500
-        let secondEpoch: UInt64 = 501
-
-        try await store.saveEvents(
-            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "old")],
-            sessionID: sessionID,
-            epoch: firstEpoch
+    func testGapCursorAndCheckpointRemainExplicit() async throws {
+        _ = try await store.saveEvents(
+            [event(1, id: "evt-1"), event(3, id: "evt-3")],
+            namespace: owner,
+            streamID: "exec-1"
         )
-        try await store.saveEvents(
-            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "new")],
-            sessionID: sessionID,
-            epoch: secondEpoch
+        let initialState = await store.syncState(namespace: owner, streamID: "exec-1")
+        var state = try XCTUnwrap(initialState)
+        XCTAssertEqual(state.headSequence, 3)
+        XCTAssertEqual(state.contiguousThrough, 1)
+
+        state = try await store.saveEvents(
+            [event(2, id: "evt-2")],
+            namespace: owner,
+            streamID: "exec-1",
+            checkpointSequence: 3,
+            checkpoint: ["status": .string("working")]
         )
+        XCTAssertEqual(state.contiguousThrough, 3)
+        XCTAssertEqual(state.checkpointSequence, 3)
+        XCTAssertEqual(state.checkpoint?["status"], .string("working"))
 
-        let loaded = await store.loadRecentEvents(sessionID: sessionID, epoch: secondEpoch, limit: 10)
-        XCTAssertEqual(loaded.map(\.content), ["new"])
+        state = try await store.saveEvents([], namespace: owner, streamID: "exec-1")
+        XCTAssertEqual(state.checkpoint?["status"], .string("working"))
     }
 
-    func testSyncStateResetsMaxSequenceWhenEpochChanges() async throws {
-        let sessionID = "test-session-sync-epoch"
-        try await store.saveEvents(
-            [WarrenRemoteAgentEvent(sequence: 42, type: "assistant", content: "old")],
-            sessionID: sessionID,
-            epoch: 600
+    func testHistoryRangeAndLifecycleCleanup() async throws {
+        _ = try await store.saveEvents(
+            (1...4).map { event(UInt64($0), id: "evt-\($0)") },
+            namespace: owner,
+            streamID: "exec-1"
         )
-        try await store.saveEvents(
-            [WarrenRemoteAgentEvent(sequence: 3, type: "assistant", content: "new")],
-            sessionID: sessionID,
-            epoch: 601
+        let range = await store.loadEvents(
+            namespace: owner,
+            streamID: "exec-1",
+            afterSequence: 1,
+            beforeSequence: 4,
+            limit: 20
         )
+        XCTAssertEqual(range.map(\.sequence), [2, 3])
 
-        let state = await store.syncState(sessionID: sessionID)
-        XCTAssertEqual(state?.epoch, 601)
-        XCTAssertEqual(state?.maxSequence, 3)
-    }
+        await store.clearStream(namespace: owner, streamID: "exec-1")
+        let clearedState = await store.syncState(namespace: owner, streamID: "exec-1")
+        XCTAssertNil(clearedState)
 
-    func testPurgeOrphanSessionsWithEmptyRoster() async throws {
-        let sessionID = "test-session-orphan"
-        try await store.saveEvents(
-            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "orphan")],
-            sessionID: sessionID,
-            epoch: 700
-        )
-
-        await store.purgeOrphanSessions(activeSessionIDs: [])
-
-        let state = await store.syncState(sessionID: sessionID)
-        let events = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
-        XCTAssertNil(state)
-        XCTAssertTrue(events.isEmpty)
-    }
-
-    func testClearSession() async throws {
-        let sessionID = "test-session-clear"
-        let epoch: UInt64 = 300
-
-        let events = [
-            WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "clear me")
-        ]
-        try await store.saveEvents(events, sessionID: sessionID, epoch: epoch)
-
-        var loaded = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
-        XCTAssertEqual(loaded.count, 1)
-
-        await store.clearSession(sessionID: sessionID)
-
-        loaded = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
-        XCTAssertTrue(loaded.isEmpty)
-        let maxSeq = await store.maxSequence(sessionID: sessionID, epoch: epoch)
-        XCTAssertEqual(maxSeq, 0)
-    }
-
-    func testSaveOversizedToolOutputIsClipped() async throws {
-        let sessionID = "test-session-clip"
-        let epoch: UInt64 = 400
-
-        let longOutput = String(repeating: "A", count: 10000)
-        let longContent = String(repeating: "B", count: 50000)
-        let events = [
-            WarrenRemoteAgentEvent(sequence: 1, type: "tool_output", output: longOutput),
-            WarrenRemoteAgentEvent(sequence: 2, type: "assistant", role: "assistant", content: longContent),
-        ]
-
-        try await store.saveEvents(events, sessionID: sessionID, epoch: epoch)
-
-        let loaded = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
-        XCTAssertEqual(loaded.count, 2)
-        XCTAssertTrue((loaded[0].output?.count ?? 0) <= 4097)
-        XCTAssertTrue(loaded[0].output?.hasSuffix("…") == true)
-        // Conversational messages must NEVER be clipped regardless of size
-        XCTAssertEqual(loaded[1].content?.count, 50000)
-        XCTAssertEqual(loaded[1].content, longContent)
-    }
-
-    func testClearSessionsAndClearAll() async throws {
-        let events1 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 1")]
-        let events2 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 2")]
-        let events3 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 3")]
-
-        try await store.saveEvents(events1, sessionID: "s1", epoch: 1)
-        try await store.saveEvents(events2, sessionID: "s2", epoch: 1)
-        try await store.saveEvents(events3, sessionID: "s3", epoch: 1)
-
-        let loaded1 = await store.loadRecentEvents(sessionID: "s1", limit: 5)
-        let loaded2 = await store.loadRecentEvents(sessionID: "s2", limit: 5)
-        let loaded3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
-        XCTAssertEqual(loaded1.count, 1)
-        XCTAssertEqual(loaded2.count, 1)
-        XCTAssertEqual(loaded3.count, 1)
-
-        // Clear specific sessions (s1 and s2)
-        await store.clearSessions(["s1", "s2"])
-        let cleared1 = await store.loadRecentEvents(sessionID: "s1", limit: 5)
-        let cleared2 = await store.loadRecentEvents(sessionID: "s2", limit: 5)
-        let kept3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
-        XCTAssertTrue(cleared1.isEmpty)
-        XCTAssertTrue(cleared2.isEmpty)
-        XCTAssertEqual(kept3.count, 1)
-
-        // Clear all remaining
-        await store.clearAll()
-        let cleared3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
-        XCTAssertTrue(cleared3.isEmpty)
+        _ = try await store.saveEvents([event(1, id: "evt-2")], namespace: owner, streamID: "exec-2")
+        _ = try await store.saveEvents([event(1, id: "evt-3")], namespace: shared, streamID: "exec-1")
+        await store.clearNamespace(owner)
+        let ownerEvents = await store.loadRecentEvents(namespace: owner, streamID: "exec-2")
+        let sharedEvents = await store.loadRecentEvents(namespace: shared, streamID: "exec-1")
+        XCTAssertTrue(ownerEvents.isEmpty)
+        XCTAssertEqual(sharedEvents.count, 1)
     }
 }

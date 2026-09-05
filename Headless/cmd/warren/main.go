@@ -25,6 +25,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/client"
 	"github.com/abcdlsj/warren/Headless/internal/config"
 	"github.com/abcdlsj/warren/Headless/internal/sshclient"
+	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
 var version = "dev"
@@ -1400,7 +1401,7 @@ func agentReadSession(ctx context.Context, c *client.Client, session api.Session
 	if err != nil {
 		return err
 	}
-	events, err := readAgentHistory(ctx, c, session.ID, options)
+	events, err := readAgentHistory(ctx, c, session.AgentExecutionID, options)
 	if err != nil {
 		return err
 	}
@@ -1459,25 +1460,25 @@ func readAgentHistory(ctx context.Context, c *client.Client, sessionID string, o
 	var before uint64
 	var pages []api.AgentEvent
 	for {
-		page, err := c.AgentHistory(ctx, sessionID, before, pageSize)
+		page, err := c.AgentEventsHistory(ctx, api.AgentEventsHistoryRequest{StreamID: sessionID, BeforeSequence: before, Limit: uint32(pageSize)})
 		if err != nil {
 			return nil, err
 		}
 		if len(page.Events) > 0 {
-			pages = append(page.Events, pages...)
+			pages = append(projectCanonicalEvents(page.Events), pages...)
 		}
 		if options.Recent > 0 {
 			projected, projectErr := agent.ProjectEvents(pages, options)
 			if projectErr != nil {
 				return nil, projectErr
 			}
-			if len(projected) >= options.Recent || !page.HasMore || page.Cursor == 0 {
+			if len(projected) >= options.Recent || !page.HasMore || len(page.Events) == 0 {
 				break
 			}
-		} else if !page.HasMore || page.Cursor == 0 {
+		} else if !page.HasMore || len(page.Events) == 0 {
 			break
 		}
-		before = page.Cursor
+		before = page.Events[0].Sequence
 	}
 	return pages, nil
 }
@@ -1486,28 +1487,54 @@ func agentReadTextOnly(params map[string]any) bool {
 	return boolValue(params, "text") || boolValue(params, "text-only") || boolValue(params, "plain")
 }
 
-// agentReadFullTranscript is the rare escape hatch for callers that need the
-// original provider JSONL. It deliberately streams bounded server chunks to
-// stdout instead of retaining an unbounded transcript in the daemon or CLI.
-func agentReadFullTranscript(ctx context.Context, c *client.Client, sessionID string) error {
-	var offset int64
-	for {
-		chunk, err := c.AgentTranscriptChunk(ctx, sessionID, offset, 0)
-		if err != nil {
-			return err
+// projectCanonicalEvents is a disposable presentation projection, never a wire format.
+func projectCanonicalEvents(events []api.CanonicalAgentEvent) []api.AgentEvent {
+	result := make([]api.AgentEvent, 0, len(events))
+	for _, event := range events {
+		var value api.AgentEvent
+		raw, _ := json.Marshal(event.Payload)
+		_ = json.Unmarshal(raw, &value)
+		value.Sequence, value.ID, value.Timestamp = event.Sequence, event.EventID, event.OccurredAt
+		value.Turn, _ = strconv.ParseUint(event.TurnID, 10, 64)
+		value.Payload = event.Payload
+		switch event.Type {
+		case "message.created", "message.completed":
+			value.Type = "message"
+		case "message.delta":
+			value.Type, value.ContentDelta = "message", true
+		case "reasoning.delta":
+			value.Type = "reasoning"
+		case "tool.started", "tool.updated":
+			value.Type = "tool_call"
+		case "tool.completed", "tool.failed":
+			value.Type = "tool_output"
+		default:
+			value.Type = event.Type
 		}
-		if chunk.Data != "" {
-			if _, err := io.WriteString(os.Stdout, chunk.Data); err != nil {
-				return err
+		result = append(result, value)
+	}
+	return result
+}
+
+func readCanonicalTurn(ctx context.Context, c *client.Client, streamID string, turn uint64) ([]api.CanonicalAgentEvent, error) {
+	var result []api.CanonicalAgentEvent
+	var before uint64
+	for {
+		page, err := c.AgentEventsHistory(ctx, api.AgentEventsHistoryRequest{StreamID: streamID, BeforeSequence: before, Limit: 500})
+		if err != nil {
+			return nil, err
+		}
+		var matching []api.CanonicalAgentEvent
+		for _, event := range page.Events {
+			if event.TurnID == strconv.FormatUint(turn, 10) {
+				matching = append(matching, event)
 			}
 		}
-		if chunk.EOF {
-			return nil
+		result = append(matching, result...)
+		if !page.HasMore || len(page.Events) == 0 {
+			return result, nil
 		}
-		if chunk.Next <= offset {
-			return errors.New("agent transcript read did not advance")
-		}
-		offset = chunk.Next
+		before = page.Events[0].Sequence
 	}
 }
 
@@ -1664,8 +1691,8 @@ func agentCreateCommand(args []string) error {
 		if readyErr != nil {
 			return fmt.Errorf("agent %s created with initial prompt but transcript was not ready: %w", session.ID, readyErr)
 		}
-		after, current := agentWaitCursor(subscription.Snapshot)
-		waitResult, err := waitAgentTurnResultForInitialPrompt(c, session.ID, subscription.Snapshot, after, current, waitTimeout)
+		after, current := agentWaitCursor(subscription.Execution)
+		waitResult, err := waitAgentTurnResultForInitialPrompt(c, session.ID, subscription.Execution, after, current, waitTimeout)
 		if err != nil {
 			return err
 		}
@@ -1816,17 +1843,17 @@ func agentSendCommand(args []string) error {
 		return err
 	}
 	if boolValue(params, "wait") {
-		if err := validateAgentSendWait(subscription.Snapshot); err != nil {
+		if err := validateAgentSendWait(subscription.Execution); err != nil {
 			return err
 		}
 	}
-	if err := sendAgentText(ctx, c, text); err != nil {
+	if _, err := c.StartAgentTurn(ctx, api.AgentTurnStartCommand{AgentCommand: api.AgentCommand{CommandID: store.NewID(), ExecutionID: subscription.Execution.ID}, Text: text}); err != nil {
 		return err
 	}
 	if !boolValue(params, "wait") {
-		return printValue(map[string]any{"sent": true, "agent": id})
+		return printValue(map[string]any{"accepted": true, "agent": id})
 	}
-	return waitAndPrintAgentTurn(c, id, subscription.Snapshot, subscription.Snapshot.Turn.ID, 0, waitTimeout)
+	return waitAndPrintAgentTurn(c, id, subscription.Execution, executionTurn(subscription.Execution).ID, 0, waitTimeout)
 }
 
 func agentReadCommand(args []string) error {
@@ -1869,12 +1896,25 @@ func agentReadCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	if boolValue(params, "full") {
-		return agentReadFullTranscript(ctx, c, id)
-	}
 	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
 	if err != nil {
 		return err
+	}
+	if boolValue(params, "full") {
+		var events []api.CanonicalAgentEvent
+		var before uint64
+		for {
+			page, err := c.AgentEventsHistory(ctx, api.AgentEventsHistoryRequest{StreamID: subscription.Execution.StreamID, BeforeSequence: before, Limit: 500})
+			if err != nil {
+				return err
+			}
+			events = append(page.Events, events...)
+			if !page.HasMore || len(page.Events) == 0 {
+				break
+			}
+			before = page.Events[0].Sequence
+		}
+		return printValue(events)
 	}
 	session := subscription.Session
 	if !isAgentSession(session) {
@@ -1967,35 +2007,81 @@ func isAgentSession(session api.Session) bool {
 	}
 }
 
+type agentSubscription struct {
+	Session   api.Session
+	Execution api.AgentExecution
+}
+
+func executionTurn(execution api.AgentExecution) api.AgentTurn {
+	if execution.ActiveTurn != nil {
+		return *execution.ActiveTurn
+	}
+	return api.AgentTurn{}
+}
+
+func subscribeAgentExecution(ctx context.Context, c *client.Client, sessionID string) (agentSubscription, error) {
+	var roster api.State
+	if err := c.Request(ctx, "roster", nil, &roster); err != nil {
+		return agentSubscription{}, err
+	}
+	for _, session := range roster.Sessions {
+		if session.ID != sessionID {
+			continue
+		}
+		if session.AgentExecutionID == "" {
+			return agentSubscription{}, errors.New("agent is still starting")
+		}
+		execution, err := c.AgentExecution(ctx, session.AgentExecutionID)
+		if err != nil {
+			return agentSubscription{}, err
+		}
+		cursor, err := c.AgentContiguousThrough(execution.StreamID)
+		if err != nil {
+			return agentSubscription{}, err
+		}
+		subscription, err := c.SubscribeAgentEvents(ctx, api.AgentEventsSubscriptionRequest{StreamID: execution.StreamID, AfterSequence: cursor, Limit: 500})
+		if err != nil {
+			return agentSubscription{}, err
+		}
+		// The subscription checkpoint closes the execution.get/live race.
+		if turn, ok := subscription.Checkpoint.State["turn"]; ok {
+			raw, _ := json.Marshal(turn)
+			_ = json.Unmarshal(raw, &execution.ActiveTurn)
+		}
+		return agentSubscription{Session: session, Execution: execution}, nil
+	}
+	return agentSubscription{}, errors.New("agent session not found")
+}
+
 func waitForAgentSubscription(
 	parent context.Context,
 	c *client.Client,
 	sessionID string,
 	timeout time.Duration,
-) (api.AgentSubscriptionResult, error) {
+) (agentSubscription, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	var lastErr error
 	for {
-		subscription, err := c.SubscribeAgent(ctx, sessionID)
+		subscription, err := subscribeAgentExecution(ctx, c, sessionID)
 		if err == nil {
 			return subscription, nil
 		}
 		lastErr = err
 		if !retryAgentSubscription(err) {
-			return api.AgentSubscriptionResult{}, err
+			return agentSubscription{}, err
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) && lastErr != nil {
-				return api.AgentSubscriptionResult{}, fmt.Errorf(
+				return agentSubscription{}, fmt.Errorf(
 					"agent is not ready after %s; finish first-time setup in Terminal and retry: %w",
 					timeout,
 					lastErr,
 				)
 			}
-			return api.AgentSubscriptionResult{}, ctx.Err()
+			return agentSubscription{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -2394,15 +2480,15 @@ func agentWaitCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := subscription.Snapshot
+	snapshot := subscription.Execution
 	after, current := agentWaitCursor(snapshot)
 	return waitAndPrintAgentTurn(c, session.ID, snapshot, after, current, timeout)
 }
 
-func agentWaitCursor(snapshot api.AgentSnapshotResult) (after, current uint64) {
-	after = snapshot.Turn.ID
-	if snapshot.Turn.Status == api.AgentTurnStarted {
-		return after, snapshot.Turn.ID
+func agentWaitCursor(snapshot api.AgentExecution) (after, current uint64) {
+	after = executionTurn(snapshot).ID
+	if executionTurn(snapshot).Status == api.AgentTurnStarted {
+		return after, executionTurn(snapshot).ID
 	}
 	if after > 0 {
 		// A turn may complete after the read-only subscription is registered
@@ -2460,8 +2546,8 @@ func agentWaitTimeout(params map[string]any) (time.Duration, error) {
 	return timeout, nil
 }
 
-func validateAgentSendWait(snapshot api.AgentSnapshotResult) error {
-	if snapshot.Turn.Status == api.AgentTurnStarted {
+func validateAgentSendWait(snapshot api.AgentExecution) error {
+	if executionTurn(snapshot).Status == api.AgentTurnStarted {
 		return errors.New("agent already has a running turn; wait for it before using agent send --wait")
 	}
 	return nil
@@ -2470,7 +2556,7 @@ func validateAgentSendWait(snapshot api.AgentSnapshotResult) error {
 func waitAndPrintAgentTurn(
 	c *client.Client,
 	sessionID string,
-	snapshot api.AgentSnapshotResult,
+	snapshot api.AgentExecution,
 	after uint64,
 	current uint64,
 	timeout time.Duration,
@@ -2491,7 +2577,7 @@ func waitAndPrintAgentTurn(
 func waitAgentTurnResult(
 	c *client.Client,
 	sessionID string,
-	snapshot api.AgentSnapshotResult,
+	snapshot api.AgentExecution,
 	after uint64,
 	current uint64,
 	timeout time.Duration,
@@ -2502,7 +2588,7 @@ func waitAgentTurnResult(
 func waitAgentTurnResultForInitialPrompt(
 	c *client.Client,
 	sessionID string,
-	snapshot api.AgentSnapshotResult,
+	snapshot api.AgentExecution,
 	after uint64,
 	current uint64,
 	timeout time.Duration,
@@ -2513,7 +2599,7 @@ func waitAgentTurnResultForInitialPrompt(
 func waitAgentTurnResultMode(
 	c *client.Client,
 	sessionID string,
-	snapshot api.AgentSnapshotResult,
+	snapshot api.AgentExecution,
 	after uint64,
 	current uint64,
 	timeout time.Duration,
@@ -2524,14 +2610,14 @@ func waitAgentTurnResultMode(
 	// subscription was registered, so its terminal snapshot is a valid result.
 	// Standalone `agent wait` deliberately continues to the next turn when the
 	// Agent is idle; otherwise it would repeat the latest historical turn.
-	if acceptCompletedSnapshot && current == 0 && snapshot.Turn.ID > after && terminalAgentTurnStatus(snapshot.Turn.Status) {
+	if acceptCompletedSnapshot && current == 0 && executionTurn(snapshot).ID > after && terminalAgentTurnStatus(executionTurn(snapshot).Status) {
 		return completedAgentTurnResult(c, sessionID, snapshot)
 	}
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	waitContext, cancel := context.WithTimeout(signalContext, timeout)
 	defer cancel()
-	turn, err := c.WaitAgentTurn(waitContext, sessionID, snapshot.Epoch, after, current)
+	turn, err := c.WaitAgentTurn(waitContext, sessionID, snapshot.StreamID, after, current)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return api.AgentWaitResult{}, fmt.Errorf("agent turn did not complete before timeout %s", timeout)
@@ -2540,16 +2626,16 @@ func waitAgentTurnResultMode(
 	}
 	fetchContext, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer fetchCancel()
-	events, err := c.AgentTurnEvents(fetchContext, sessionID, turn.ID)
+	events, err := readCanonicalTurn(fetchContext, c, snapshot.StreamID, turn.ID)
 	if err != nil {
 		return api.AgentWaitResult{}, fmt.Errorf("read completed agent turn %d: %w", turn.ID, err)
 	}
 	return api.AgentWaitResult{
-		Session: sessionID,
-		Epoch:   snapshot.Epoch,
-		Turn:    turn.ID,
-		Status:  turn.Status,
-		Events:  events,
+		Session:     sessionID,
+		ExecutionID: snapshot.ID,
+		Turn:        turn.ID,
+		Status:      turn.Status,
+		Events:      events,
 	}, nil
 }
 
@@ -2565,20 +2651,20 @@ func terminalAgentTurnStatus(status api.AgentTurnStatus) bool {
 func completedAgentTurnResult(
 	c *client.Client,
 	sessionID string,
-	snapshot api.AgentSnapshotResult,
+	snapshot api.AgentExecution,
 ) (api.AgentWaitResult, error) {
 	fetchContext, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer fetchCancel()
-	events, err := c.AgentTurnEvents(fetchContext, sessionID, snapshot.Turn.ID)
+	events, err := readCanonicalTurn(fetchContext, c, snapshot.StreamID, executionTurn(snapshot).ID)
 	if err != nil {
-		return api.AgentWaitResult{}, fmt.Errorf("read completed agent turn %d: %w", snapshot.Turn.ID, err)
+		return api.AgentWaitResult{}, fmt.Errorf("read completed agent turn %d: %w", executionTurn(snapshot).ID, err)
 	}
 	return api.AgentWaitResult{
-		Session: sessionID,
-		Epoch:   snapshot.Epoch,
-		Turn:    snapshot.Turn.ID,
-		Status:  snapshot.Turn.Status,
-		Events:  events,
+		Session:     sessionID,
+		ExecutionID: snapshot.ID,
+		Turn:        executionTurn(snapshot).ID,
+		Status:      executionTurn(snapshot).Status,
+		Events:      events,
 	}, nil
 }
 

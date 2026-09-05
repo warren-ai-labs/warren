@@ -110,7 +110,10 @@ test("async UI requests expire and reject stale workspace/session callbacks", ()
   assert.match(app, /agentHistoryRequestRef\.current\.get\(sessionID\) !== token/);
   assert.match(app, /worktreeImportInFlightRef\.current/);
   assert.match(app, /gitWorkspaceGenerationRef\.current === workspaceGeneration/);
-  assert.match(app, /const sendAgentInput = useCallback\(async text/);
+  assert.doesNotMatch(app, /const sendAgentInput = useCallback/);
+  assert.match(app, /"agent\.turn\.start"/);
+  assert.match(app, /"agent\.turn\.steer"/);
+  assert.match(app, /"agent\.turn\.cancel"/);
   assert.match(app, /attachedSession !== sessionID/);
   assert.match(read("connection.js"), /clearTimeout\(handler\.timer\)/);
 });
