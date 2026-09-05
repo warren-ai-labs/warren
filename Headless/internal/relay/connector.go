@@ -1538,7 +1538,7 @@ func (connector *Connector) sendStream(id connectionID, value frame) error {
 	// Charging their JSON/binary messages to the HTTP body window lets a paused
 	// browser block RPC responses and input for the full flow-control timeout.
 	// Body and upgrade streams remain credit-controlled below.
-	if isControlClass(streamValue.open.Class) && value.Kind != frameData {
+	if !streamFrameNeedsCredit(streamValue, value.Kind) {
 		return connector.send(value)
 	}
 	credit := uint64(len(value.Payload))
@@ -1566,6 +1566,10 @@ func (connector *Connector) sendStream(id connectionID, value frame) error {
 			return errors.New("stream flow-control timeout")
 		}
 	}
+}
+
+func streamFrameNeedsCredit(value *stream, kind byte) bool {
+	return !(value != nil && isControlClass(value.open.Class) && kind != frameData)
 }
 
 func headerPairs(header http.Header) [][2]string {
