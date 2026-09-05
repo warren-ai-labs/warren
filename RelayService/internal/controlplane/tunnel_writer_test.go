@@ -39,3 +39,25 @@ func TestControlRouteFramesDoNotWaitForBodyCredit(t *testing.T) {
 		t.Fatal("public stream bypassed flow control")
 	}
 }
+
+func TestClientRouteRejectsWindowOverCredit(t *testing.T) {
+	route := newClientRoute()
+	if consumed, _ := route.tryConsume(8); !consumed {
+		t.Fatal("failed to consume initial stream credit")
+	}
+	if !route.grant(8) {
+		t.Fatal("valid window credit was rejected")
+	}
+	if route.grant(1) {
+		t.Fatal("window over-credit was accepted")
+	}
+	route.windowMu.Lock()
+	window := route.window
+	route.windowMu.Unlock()
+	if window != initialStreamWindow {
+		t.Fatalf("over-credit changed window to %d, want %d", window, initialStreamWindow)
+	}
+	if !route.grant(0) {
+		t.Fatal("zero window credit should be a no-op")
+	}
+}

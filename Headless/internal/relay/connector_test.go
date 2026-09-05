@@ -187,6 +187,28 @@ func TestControlStreamFramesDoNotWaitForBodyCredit(t *testing.T) {
 	}
 }
 
+func TestStreamRejectsWindowOverCredit(t *testing.T) {
+	streamValue := newStream(streamOpen{Class: "http"}, 1, context.Background(), func() {})
+	streamValue.windowMu.Lock()
+	streamValue.window = initialWindow - 8
+	streamValue.windowMu.Unlock()
+	if !streamValue.grantCredit(8) {
+		t.Fatal("valid window credit was rejected")
+	}
+	if streamValue.grantCredit(1) {
+		t.Fatal("window over-credit was accepted")
+	}
+	streamValue.windowMu.Lock()
+	window := streamValue.window
+	streamValue.windowMu.Unlock()
+	if window != initialWindow {
+		t.Fatalf("over-credit changed window to %d, want %d", window, initialWindow)
+	}
+	if !streamValue.grantCredit(0) {
+		t.Fatal("zero window credit should be a no-op")
+	}
+}
+
 func TestPublicRouteStreamContextIsScopedToMarkedUpgrade(t *testing.T) {
 	plain, plainCancel := streamContext(streamOpen{Class: "upgrade"})
 	defer plainCancel()
