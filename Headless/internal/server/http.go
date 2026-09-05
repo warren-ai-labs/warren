@@ -216,10 +216,19 @@ func (s *HTTPServer) Handler() http.Handler {
 			(relayHealth.State == api.HealthUnconfigured ||
 				relayHealth.State == api.HealthConnected ||
 				relayHealth.State == api.HealthDisconnected)
+		hostID := ""
+		hostName := ""
+		if s.Service != nil && s.Service.Store != nil {
+			snap := s.Service.Store.Snapshot()
+			hostID = snap.Host.ID
+			hostName = snap.Host.Name
+		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"ok":                       true,
 			"ready":                    ready,
 			"version":                  api.Version,
+			"host_id":                  hostID,
+			"host_name":                hostName,
 			"build":                    s.BuildVersion,
 			"revision":                 s.BuildRevision,
 			"dirty":                    s.BuildDirty,
