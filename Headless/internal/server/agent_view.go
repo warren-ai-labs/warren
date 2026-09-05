@@ -1059,6 +1059,117 @@ func interruptAgentTurnInputText(ctx context.Context, runtime Runtime, sessionID
 	return nil
 }
 
+// sendAgentInteractionInput translates an AgentInteractionResponse into precise
+// terminal PTY input bytes, honoring bracketed paste and key sequences as in herdr.
+func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID string, request api.AgentInteractionResponse) error {
+	if request.Response == nil {
+		return runtime.Input(ctx, sessionID, []byte{'\r'})
+	}
+	// Cancellation sends Ctrl+C (0x03) to abort the pending prompt in TUI.
+	if cancelled, _ := request.Response["cancelled"].(bool); cancelled {
+		return runtime.Input(ctx, sessionID, []byte{0x03})
+	}
+	if decision, _ := request.Response["decision"].(string); strings.EqualFold(strings.TrimSpace(decision), "cancel") {
+		return runtime.Input(ctx, sessionID, []byte{0x03})
+	}
+
+	switch request.Kind {
+	case "permission":
+		decision := strings.TrimSpace(agentStringValue(request.Response["decision"]))
+		if decision == "" {
+			decision = strings.TrimSpace(agentStringValue(request.Response["value"]))
+		}
+		switch strings.ToLower(decision) {
+		case "allow", "yes", "approve", "confirm", "proceed", "y":
+			return runtime.Input(ctx, sessionID, []byte("y\r"))
+		case "deny", "no", "reject", "n":
+			return runtime.Input(ctx, sessionID, []byte("n\r"))
+		default:
+			if decision != "" {
+				return runtime.Input(ctx, sessionID, encodeTerminalSubmission(decision))
+			}
+			return runtime.Input(ctx, sessionID, []byte("y\r"))
+		}
+
+	case "question":
+		var answers []string
+		if customAnswers, ok := request.Response["customAnswers"].(map[string]any); ok && len(customAnswers) > 0 {
+			for _, val := range customAnswers {
+				if s := strings.TrimSpace(agentStringValue(val)); s != "" {
+					answers = append(answers, s)
+				}
+			}
+		}
+		if len(answers) == 0 {
+			if selectedAnswers, ok := request.Response["answers"].(map[string]any); ok {
+				for _, val := range selectedAnswers {
+					switch v := val.(type) {
+					case []any:
+						for _, opt := range v {
+							if s := strings.TrimSpace(agentStringValue(opt)); s != "" {
+								answers = append(answers, s)
+							}
+						}
+					case []string:
+						for _, s := range v {
+							if s := strings.TrimSpace(s); s != "" {
+								answers = append(answers, s)
+							}
+						}
+					default:
+						if s := strings.TrimSpace(agentStringValue(val)); s != "" {
+							answers = append(answers, s)
+						}
+					}
+				}
+			}
+		}
+		if len(answers) == 0 {
+			if text := strings.TrimSpace(agentStringValue(request.Response["text"])); text != "" {
+				answers = append(answers, text)
+			}
+		}
+		if len(answers) > 0 {
+			for _, ans := range answers {
+				if err := runtime.Input(ctx, sessionID, encodeTerminalSubmission(ans)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		return runtime.Input(ctx, sessionID, []byte{'\r'})
+
+	default:
+		return runtime.Input(ctx, sessionID, []byte{'\r'})
+	}
+}
+
+func encodeTerminalSubmission(text string) []byte {
+	var buf bytes.Buffer
+	if strings.Contains(text, "\n") {
+		buf.WriteString("\x1b[200~")
+		buf.WriteString(strings.ReplaceAll(text, "\n", "\r"))
+		buf.WriteString("\x1b[201~")
+	} else {
+		buf.WriteString(text)
+	}
+	buf.WriteByte('\r')
+	return buf.Bytes()
+}
+
+func agentStringValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case fmt.Stringer:
+		return val.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(val)
+	}
+}
+
 func (s *Service) respondAgentInteraction(ctx context.Context, request api.AgentInteractionResponse) (api.AgentInteractionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return api.AgentInteractionResult{}, err
@@ -1130,11 +1241,26 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentInteractionResult{}, err
 		}
+	} else if session, ok := s.Session(request.Session); ok && session.Runtime != "" {
+		runtime := s.runtimeForKind(s.runtimeKindFor(session))
+		if runtime == nil {
+			err := errors.New("agent interaction transport is unavailable")
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
+		unlock := s.lockAgentSessionAction(session.ID)
+		err := sendAgentInteractionInput(ctx, runtime, session.Runtime, request)
+		unlock()
+		if err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
 	} else {
 		err := errors.New("agent interaction transport is unavailable")
 		s.finishAgentAction(actionKey, call, nil, err)
 		return api.AgentInteractionResult{}, err
 	}
+	s.recordAgentInteractionResolved(request)
 	result := api.AgentInteractionResult{Accepted: true, Session: request.Session, RequestID: request.RequestID, Kind: request.Kind}
 	s.agentViewMu.Lock()
 	s.agentInteractionResults[cacheKey] = result
@@ -1142,6 +1268,60 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 	s.agentViewMu.Unlock()
 	s.finishAgentAction(actionKey, call, result, nil)
 	return result, nil
+}
+
+func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionResponse) {
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry, ok := s.agents[request.Session]
+	if !ok || entry == nil {
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	streamID := strings.TrimSpace(entry.executionID)
+	if streamID == "" {
+		if s.Store != nil {
+			streamID = s.ensureAgentExecutionID(nil, request.Session, false)
+		} else {
+			streamID = store.NewID()
+		}
+		entry.executionID = streamID
+	}
+	payload := map[string]any{
+		"interactionId": request.RequestID,
+		"requestId":     request.RequestID,
+		"kind":          request.Kind,
+		"state":         "resolved",
+		"response":      request.Response,
+	}
+	now := time.Now().UTC()
+	resolvedEvent := api.AgentEvent{
+		ID:        request.RequestID,
+		Type:      request.Kind,
+		Payload:   payload,
+		Timestamp: now,
+	}
+	entry.events = append(entry.events, resolvedEvent)
+	if len(entry.events) > 2000 {
+		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
+	}
+	canonicalEvent := api.CanonicalAgentEvent{
+		EventID:    store.NewID(),
+		Type:       "interaction.resolved",
+		OccurredAt: now,
+		RecordedAt: now,
+		StreamID:   streamID,
+		Payload:    payload,
+	}
+	canonical, appendErr := s.appendCanonicalEventsLockedWithCheckpoint(request.Session, entry, []api.CanonicalAgentEvent{canonicalEvent}, nil)
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+	if appendErr != nil {
+		s.logWarn("append canonical interaction.resolved", "session", request.Session, "error", appendErr)
+		return
+	}
+	s.broadcastCanonicalAgentIncrements(request.Session, canonical, streamID, streamID)
 }
 
 func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnInterruptRequest) (api.AgentTurnInterruptResult, error) {

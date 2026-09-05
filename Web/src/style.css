@@ -2531,6 +2531,139 @@ button:disabled {
   cursor: default;
   transform: none;
 }
+
+/* Docked active interaction at bottom of conversation */
+.agent-docked-interaction {
+  padding: 0 16px 8px;
+  z-index: var(--layer-inline-overlay);
+  flex-shrink: 0;
+}
+.agent-docked-interaction .agent-structured.docked {
+  margin: 0;
+  border: 1px solid var(--color-agent-card-border);
+  border-radius: 8px;
+  background: #1a1c20;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  padding: 10px 14px;
+}
+.agent-docked-interaction .nodehead strong {
+  font-size: 13px;
+  color: var(--color-agent-primary);
+}
+
+/* Simple interaction card in message flow (resolved state) */
+.agent-interaction-card {
+  margin: 4px 0;
+  border: 1px solid var(--color-agent-card-border);
+  border-radius: 6px;
+  background: #16181b;
+  overflow: hidden;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.agent-interaction-card:hover {
+  border-color: var(--color-border-default);
+}
+.agent-interaction-card-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--color-agent-primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.agent-interaction-card-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #99a1af;
+}
+.agent-interaction-card-summary {
+  flex: 1;
+  font-size: var(--text-2sm);
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-interaction-card-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.agent-interaction-card-status.resolved,
+.agent-interaction-card-status.approved {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+}
+.agent-interaction-card-status.denied,
+.agent-interaction-card-status.cancelled {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+.agent-interaction-card-caret {
+  color: var(--color-agent-meta);
+  font-size: 10px;
+}
+.agent-interaction-card-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--color-agent-card-border);
+  background: #141518;
+  font-size: var(--text-2sm);
+  color: var(--color-agent-secondary);
+}
+.agent-interaction-card-desc {
+  margin: 0 0 6px;
+  color: var(--color-agent-primary);
+}
+.agent-interaction-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.agent-interaction-card-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-2sm);
+  color: #6b7280;
+}
+.agent-interaction-card-opt.chosen {
+  color: var(--color-agent-primary);
+  font-weight: 500;
+}
+.agent-interaction-card-opt.chosen .agent-interaction-opt-marker {
+  color: #10b981;
+}
+.agent-interaction-opt-marker {
+  font-size: 11px;
+}
+.agent-interaction-card-custom-ans {
+  margin-top: 4px;
+  font-size: var(--text-2sm);
+  color: var(--color-agent-primary);
+}
+.agent-interaction-card-custom-ans em {
+  color: #6b7280;
+  font-style: normal;
+  margin-right: 4px;
+}
+.agent-interaction-card-decision {
+  margin-top: 6px;
+  font-size: var(--text-2sm);
+  color: var(--color-agent-secondary);
+}
+.agent-interaction-card-decision strong {
+  color: var(--color-agent-primary);
+  margin-left: 4px;
+}
 .agent-message-actions { display: flex; gap: 4px; margin-top: 4px; opacity: .72; transition: opacity var(--duration-fast) var(--ease-out); }
 .agent-message-actions:focus-within { opacity: 1; }
 .agent-message-actions button,
