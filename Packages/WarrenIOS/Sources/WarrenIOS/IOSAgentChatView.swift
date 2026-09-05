@@ -3417,7 +3417,44 @@ func formatFileList(_ list: [String]) -> String {
     return "\(firstTwo) (+\(valid.count - 2) more)"
 }
 
+/// Bounded memoization for tool summaries. Titles, previews, and the working
+/// footer recompute the same rows on every transcript rebuild; the underlying
+/// events are value types, so a matching (identity, hash) entry is exact.
+private final class ToolSummaryCache: @unchecked Sendable {
+    static let shared = ToolSummaryCache()
+    private var values: [String: (hash: Int, summary: String?)] = [:]
+    private let lock = NSLock()
+
+    func get(_ key: String, matches hash: Int) -> (found: Bool, summary: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = values[key], entry.hash == hash else { return (false, nil) }
+        return (true, entry.summary)
+    }
+
+    func set(_ key: String, hash: Int, summary: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if values.count > 1024 {
+            values.removeAll(keepingCapacity: true)
+        }
+        values[key] = (hash, summary)
+    }
+}
+
 func toolSummary(for event: WarrenRemoteAgentEvent) -> String? {
+    let key = "\(event.callID ?? event.id)\u{1F}\(event.sequence)"
+    let hash = event.hashValue
+    let cached = ToolSummaryCache.shared.get(key, matches: hash)
+    if cached.found {
+        return cached.summary
+    }
+    let result = uncachedToolSummary(for: event)
+    ToolSummaryCache.shared.set(key, hash: hash, summary: result)
+    return result
+}
+
+private func uncachedToolSummary(for event: WarrenRemoteAgentEvent) -> String? {
     let files = (event.files ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
 
     if let input = event.toolInput {
