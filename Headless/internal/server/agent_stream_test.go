@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,26 +66,29 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	if _, err := service.ensureAgent(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
+	execution, ok := service.canonicalExecutionForSession(session.ID)
+	if !ok || execution.StreamID == "" {
+		t.Fatal("agent execution identity was not created")
+	}
 	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
 	defer httpServer.Close()
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
-	attachBrowser(t, connection, "session-agent", nil)
-	readBrowserMessage(t, connection, "attached")
-	readBinaryFrame(t, connection)
-	readBrowserMessage(t, connection, "synced")
-
-	initialStatus := readAgentStatus(t, connection)
-	if initialStatus.Activity != api.AgentActivityReady {
-		t.Fatalf("initial status = %#v, want ready", initialStatus)
+	subscription := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
+		"streamId": execution.StreamID,
+	})
+	if len(subscription.Events) == 0 {
+		t.Fatal("canonical subscription returned no initial events")
 	}
-	initial := readAgentEvents(t, connection)
-	if len(initial) != 1 {
-		t.Fatalf("initial agent tail = %#v, want 1", initial)
+	var initialMessage bool
+	for _, event := range subscription.Events {
+		if event.Type == "message.created" && event.Payload["content"] == "Hello" {
+			initialMessage = true
+		}
 	}
-	if initial[0]["type"] != "assistant" {
-		t.Fatalf("initial event type = %#v", initial[0]["type"])
+	if !initialMessage {
+		t.Fatalf("initial canonical events = %#v, want Hello message", subscription.Events)
 	}
 
 	file, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -103,18 +104,29 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 		t.Fatal(closeErr)
 	}
 
-	live := readAgentEvents(t, connection)
-	if len(live) != 1 || live[0]["content"] != "live prompt" {
-		t.Fatalf("live agent events = %#v", live)
+	var liveMessage, liveStatus, liveTurn bool
+	for attempts := 0; attempts < 4 && !(liveMessage && liveStatus && liveTurn); attempts++ {
+		for _, event := range readCanonicalEvents(t, connection) {
+			switch event.Type {
+			case "message.created":
+				if event.Payload["content"] == "live prompt" {
+					liveMessage = true
+				}
+			case "status.changed":
+				if event.Payload["activity"] == string(api.AgentActivityWorking) {
+					liveStatus = true
+				}
+			case "turn.started":
+				if event.TurnID == "1" {
+					liveTurn = true
+				}
+			}
+		}
 	}
-	liveStatus := readAgentStatus(t, connection)
-	if liveStatus.Activity != api.AgentActivityWorking {
-		t.Fatalf("live status = %#v, want working", liveStatus)
+	if !liveMessage || !liveStatus || !liveTurn {
+		t.Fatalf("live canonical events missing message=%t status=%t turn=%t", liveMessage, liveStatus, liveTurn)
 	}
-	liveTurn := readAgentTurn(t, connection)
-	if liveTurn != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) {
-		t.Fatalf("live turn = %#v, want turn 1 started", liveTurn)
-	}
+	wantTurn := api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}
 	roster := service.Roster(context.Background())
 	for _, candidate := range roster.Sessions {
 		if candidate.ID != "session-agent" {
@@ -123,15 +135,16 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 		if candidate.AgentStatus == nil || candidate.AgentStatus.Activity != api.AgentActivityWorking {
 			t.Fatalf("roster status = %#v, want working", candidate.AgentStatus)
 		}
-		if candidate.AgentTurn == nil || *candidate.AgentTurn != liveTurn {
-			t.Fatalf("roster turn = %#v, want %#v", candidate.AgentTurn, liveTurn)
+		if candidate.AgentTurn == nil || *candidate.AgentTurn != wantTurn {
+			t.Fatalf("roster turn = %#v, want %#v", candidate.AgentTurn, wantTurn)
 		}
 	}
 	if history := service.agentHistory("session-agent"); len(history) != 2 || history[1].Turn != 1 {
 		t.Fatalf("history = %#v, want second event on turn 1", history)
 	}
-	if snapshot := service.agentSnapshot("session-agent"); snapshot.Turn != liveTurn || snapshot.Sequence != 2 {
-		t.Fatalf("snapshot = %#v, want live turn and sequence 2", snapshot)
+	canonical, err := service.canonicalHistoryPage(context.Background(), execution.StreamID, 0, 0, 100)
+	if err != nil || canonical.HeadSequence < 3 {
+		t.Fatalf("canonical history = %#v, err=%v; want live event, status, and turn", canonical, err)
 	}
 }
 
@@ -598,10 +611,10 @@ func TestExitedAgentActivityIsNotResurrectedByWatcher(t *testing.T) {
 	}
 }
 
-func readAgentEvents(t *testing.T, connection interface {
+func readCanonicalEvents(t *testing.T, connection interface {
 	SetReadDeadline(time.Time) error
 	ReadMessage() (int, []byte, error)
-}) []map[string]any {
+}) []api.CanonicalAgentEvent {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	if err := connection.SetReadDeadline(deadline); err != nil {
@@ -611,65 +624,13 @@ func readAgentEvents(t *testing.T, connection interface {
 	for {
 		_, data, err := connection.ReadMessage()
 		if err != nil {
-			t.Fatalf("agent message never arrived: %v", err)
+			t.Fatalf("canonical agent event never arrived: %v", err)
 		}
-		var message struct {
-			Type   string           `json:"t"`
-			Events []map[string]any `json:"events"`
-		}
-		if json.Unmarshal(data, &message) != nil || message.Type != "agent" {
+		var message api.CanonicalAgentEventsMessage
+		if json.Unmarshal(data, &message) != nil || message.Type != "agent.events" {
 			continue
 		}
 		return message.Events
-	}
-}
-
-func readAgentStatus(t *testing.T, connection interface {
-	SetReadDeadline(time.Time) error
-	ReadMessage() (int, []byte, error)
-}) api.AgentStatus {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	if err := connection.SetReadDeadline(deadline); err != nil {
-		t.Fatal(err)
-	}
-	defer connection.SetReadDeadline(time.Time{})
-	for {
-		_, data, err := connection.ReadMessage()
-		if err != nil {
-			t.Fatalf("agent status message never arrived: %v", err)
-		}
-		var message struct {
-			Type   string          `json:"t"`
-			Status api.AgentStatus `json:"status"`
-		}
-		if json.Unmarshal(data, &message) != nil || message.Type != "agent.status" {
-			continue
-		}
-		return message.Status
-	}
-}
-
-func readAgentTurn(t *testing.T, connection interface {
-	SetReadDeadline(time.Time) error
-	ReadMessage() (int, []byte, error)
-}) api.AgentTurn {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	if err := connection.SetReadDeadline(deadline); err != nil {
-		t.Fatal(err)
-	}
-	defer connection.SetReadDeadline(time.Time{})
-	for {
-		_, data, err := connection.ReadMessage()
-		if err != nil {
-			t.Fatalf("agent turn message never arrived: %v", err)
-		}
-		var message api.AgentTurnMessage
-		if json.Unmarshal(data, &message) != nil || message.Type != "agent.turn" {
-			continue
-		}
-		return api.AgentTurn{ID: message.Turn, Status: message.Status}
 	}
 }
 
@@ -717,238 +678,6 @@ func TestAgentHistoryIncludesInitialAndLiveEvents(t *testing.T) {
 	}
 	if history := service.agentHistory("session-history"); len(history) != 1 {
 		t.Fatalf("history length = %d, want 1", len(history))
-	}
-}
-
-func TestAgentHistoryPagePaginates(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	service.agentsMu.Lock()
-	service.agents["session-page"] = &agentSession{}
-	service.agentsMu.Unlock()
-	events := make([]api.AgentEvent, 5)
-	for index := range events {
-		events[index] = api.AgentEvent{
-			Sequence: uint64(index + 1),
-			Type:     "assistant",
-			Content:  strings.Repeat("x", 64),
-		}
-	}
-	service.recordAgentEvents("session-page", events, api.AgentStatus{Activity: api.AgentActivityWorking})
-
-	first := service.agentHistoryPage("session-page", 0, 2)
-	if len(first.Events) != 2 || first.Events[0].Sequence != 4 || first.Events[1].Sequence != 5 {
-		t.Fatalf("first page = %#v, want sequences 4,5", first.Events)
-	}
-	if first.Cursor != 4 || !first.HasMore {
-		t.Fatalf("first page cursor=%d hasMore=%t, want cursor=4 hasMore=true", first.Cursor, first.HasMore)
-	}
-
-	second := service.agentHistoryPage("session-page", first.Cursor, 2)
-	if len(second.Events) != 2 || second.Events[0].Sequence != 2 || second.Events[1].Sequence != 3 {
-		t.Fatalf("second page = %#v, want sequences 2,3", second.Events)
-	}
-	if second.Cursor != 2 || !second.HasMore {
-		t.Fatalf("second page cursor=%d hasMore=%t, want cursor=2 hasMore=true", second.Cursor, second.HasMore)
-	}
-
-	third := service.agentHistoryPage("session-page", second.Cursor, 2)
-	if len(third.Events) != 1 || third.Events[0].Sequence != 1 {
-		t.Fatalf("third page = %#v, want sequence 1", third.Events)
-	}
-	if third.Cursor != 1 || third.HasMore {
-		t.Fatalf("third page cursor=%d hasMore=%t, want cursor=1 hasMore=false", third.Cursor, third.HasMore)
-	}
-}
-
-func TestAgentHistoryConversationPrioritySkipsToolBurst(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	service.agentsMu.Lock()
-	service.agents["session-conversation-priority"] = &agentSession{}
-	service.agentsMu.Unlock()
-
-	events := []api.AgentEvent{
-		{Sequence: 1, Type: "user", Content: "first prompt"},
-		{Sequence: 2, Type: "assistant", Content: "first answer"},
-	}
-	for sequence := uint64(3); sequence <= 102; sequence++ {
-		events = append(events, api.AgentEvent{
-			Sequence:  sequence,
-			Type:      "tool_call",
-			ToolName:  "shell",
-			ToolInput: map[string]any{"command": "echo noisy"},
-		})
-	}
-	events = append(events,
-		api.AgentEvent{Sequence: 103, Type: "user", Content: "second prompt"},
-		api.AgentEvent{Sequence: 104, Type: "assistant", Content: "second answer"},
-	)
-	service.recordAgentEvents(
-		"session-conversation-priority",
-		events,
-		api.AgentStatus{Activity: api.AgentActivityReady},
-	)
-
-	first := service.agentHistoryPageWithOptions(
-		"session-conversation-priority", 0, 0, 2, true,
-	)
-	if got := first.Events; len(got) != 2 || got[0].Sequence != 103 || got[1].Sequence != 104 {
-		t.Fatalf("priority page = %#v, want conversation sequences 103,104", got)
-	}
-	if first.Cursor != 103 || !first.HasMore {
-		t.Fatalf("priority metadata = cursor=%d hasMore=%t, want cursor=103 hasMore=true", first.Cursor, first.HasMore)
-	}
-
-	second := service.agentHistoryPageWithOptions(
-		"session-conversation-priority", 0, first.Cursor, 2, true,
-	)
-	if got := second.Events; len(got) != 2 || got[0].Sequence != 1 || got[1].Sequence != 2 {
-		t.Fatalf("older priority page = %#v, want conversation sequences 1,2", got)
-	}
-	if second.Cursor != 1 || second.HasMore {
-		t.Fatalf("older priority metadata = cursor=%d hasMore=%t, want cursor=1 hasMore=false", second.Cursor, second.HasMore)
-	}
-}
-
-func TestAgentHistoryConversationPriorityCoalescesOpenCodeDeltas(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	service.agentsMu.Lock()
-	service.agents["session-conversation-deltas"] = &agentSession{}
-	service.agentsMu.Unlock()
-
-	service.recordAgentEvents(
-		"session-conversation-deltas",
-		[]api.AgentEvent{
-			{Sequence: 1, Provider: "opencode", ID: "part-1", Type: "user", Content: "fix"},
-			{Sequence: 2, Provider: "opencode", ID: "part-2", Type: "assistant", Content: "hel"},
-			{Sequence: 3, Provider: "opencode", ID: "part-2", Type: "assistant", Content: "lo", ContentDelta: true},
-			{Sequence: 4, Type: "tool_call", ToolName: "shell"},
-		},
-		api.AgentStatus{Activity: api.AgentActivityReady},
-	)
-
-	page := service.agentHistoryPageWithOptions(
-		"session-conversation-deltas", 0, 0, 1, true,
-	)
-	if len(page.Events) != 1 || page.Events[0].Content != "hello" {
-		t.Fatalf("priority page = %#v, want one coalesced assistant message", page.Events)
-	}
-	if page.Events[0].Sequence != 2 || page.Cursor != 2 || !page.HasMore {
-		t.Fatalf("priority cursor = event=%d cursor=%d hasMore=%t, want event=2 cursor=2 hasMore=true", page.Events[0].Sequence, page.Cursor, page.HasMore)
-	}
-
-	older := service.agentHistoryPageWithOptions(
-		"session-conversation-deltas", 0, page.Cursor, 1, true,
-	)
-	if len(older.Events) != 1 || older.Events[0].Content != "fix" || older.Events[0].Sequence != 1 {
-		t.Fatalf("older priority page = %#v, want user event sequence 1", older.Events)
-	}
-	if older.HasMore {
-		t.Fatal("older priority page unexpectedly reports more events")
-	}
-}
-
-func TestAgentHistoryConversationPriorityKeepsStructuredEvents(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	service.agentsMu.Lock()
-	service.agents["session-conversation-structured"] = &agentSession{}
-	service.agentsMu.Unlock()
-
-	service.recordAgentEvents(
-		"session-conversation-structured",
-		[]api.AgentEvent{
-			{Sequence: 1, Type: "user", Content: "prompt"},
-			{Sequence: 2, Type: "question", ID: "question-1", Payload: map[string]any{
-				"requestId": "request-1", "state": "pending", "questions": []any{},
-			}},
-			{Sequence: 3, Type: "tool_call", ToolName: "shell"},
-			{Sequence: 4, Type: "plan", ID: "plan-1", Payload: map[string]any{
-				"planId": "plan-1", "state": "in_progress", "items": []any{},
-			}},
-			{Sequence: 5, Type: "assistant", Content: "answer"},
-		},
-		api.AgentStatus{Activity: api.AgentActivityReady},
-	)
-
-	page := service.agentHistoryPageWithOptions(
-		"session-conversation-structured", 0, 0, 3, true,
-	)
-	if got := page.Events; len(got) != 3 || got[0].Sequence != 2 || got[1].Sequence != 4 || got[2].Sequence != 5 {
-		t.Fatalf("priority page = %#v, want structured sequences 2,4 and assistant 5", got)
-	}
-	if page.Cursor != 2 || !page.HasMore {
-		t.Fatalf("priority metadata = cursor=%d hasMore=%t, want cursor=2 hasMore=true", page.Cursor, page.HasMore)
-	}
-
-	older := service.agentHistoryPageWithOptions(
-		"session-conversation-structured", 0, page.Cursor, 3, true,
-	)
-	if got := older.Events; len(got) != 1 || got[0].Sequence != 1 {
-		t.Fatalf("older priority page = %#v, want user sequence 1", got)
-	}
-}
-
-func TestSplitAgentEventsBoundsBatches(t *testing.T) {
-	events := make([]api.AgentEvent, 100)
-	for index := range events {
-		events[index] = api.AgentEvent{
-			Sequence: uint64(index + 1),
-			Type:     "assistant",
-			Content:  strings.Repeat("x", 10*1024),
-		}
-	}
-	batches := splitAgentEvents(events, 256*1024)
-	if len(batches) < 2 {
-		t.Fatalf("batches = %d, want multiple batches", len(batches))
-	}
-	total := 0
-	for index, batch := range batches {
-		total += len(batch)
-		encoded, err := json.Marshal(api.AgentMessage{Type: "agent", Events: batch})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(encoded) > 256*1024 {
-			t.Fatalf("batch %d encoded %d bytes, want <= 256 KiB", index, len(encoded))
-		}
-	}
-	if total != len(events) {
-		t.Fatalf("split total = %d, want %d", total, len(events))
-	}
-}
-
-func TestAgentTailIsBounded(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	service.agentsMu.Lock()
-	service.agents["session-tail"] = &agentSession{}
-	service.agentsMu.Unlock()
-	events := make([]api.AgentEvent, 200)
-	for index := range events {
-		events[index] = api.AgentEvent{
-			Sequence: uint64(index + 1),
-			Type:     "assistant",
-			Content:  strings.Repeat("x", 4*1024),
-		}
-	}
-	service.recordAgentEvents("session-tail", events, api.AgentStatus{Activity: api.AgentActivityWorking})
-
-	tail := service.agentTail("session-tail", agentAttachHistoryMaxEvents, agentAttachHistoryMaxBytes)
-	if len(tail) > agentAttachHistoryMaxEvents {
-		t.Fatalf("tail length = %d, want <= %d", len(tail), agentAttachHistoryMaxEvents)
-	}
-	encoded, err := json.Marshal(api.AgentMessage{Type: "agent", Events: tail})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(encoded) > agentAttachHistoryMaxBytes {
-		t.Fatalf("tail encoded %d bytes, want <= %d", len(encoded), agentAttachHistoryMaxBytes)
-	}
-	if got := tail[len(tail)-1].Sequence; got != 200 {
-		t.Fatalf("tail newest sequence = %d, want 200", got)
 	}
 }
 
@@ -1008,112 +737,53 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	result := requestResult[map[string]any](t, connection, "agent.history", map[string]any{
-		"session": "session-history-ws",
-		"limit":   2,
+	execution, ok := service.canonicalExecutionForSession(session.ID)
+	if !ok || execution.StreamID == "" {
+		t.Fatal("agent execution identity was not created")
+	}
+	result := requestResult[api.AgentEventsHistoryResult](t, connection, "agent.events.history", map[string]any{
+		"streamId": execution.StreamID,
+		"limit":    2,
 	})
-	events, ok := result["events"].([]any)
-	if !ok || len(events) != 2 {
-		t.Fatalf("history events = %#v, want 2", result["events"])
+	if len(result.Events) != 2 || !result.HasMore {
+		t.Fatalf("history result = %#v, want a two-event latest page", result)
 	}
-	first, ok := events[0].(map[string]any)
-	if !ok || first["seq"] != float64(2) {
-		t.Fatalf("first history event = %#v, want seq 2", events[0])
+	if result.Events[0].Sequence != 1 || result.Events[1].Sequence != 2 || result.NextAfterSequence != 2 {
+		t.Fatalf("history events are not ordered: %#v", result.Events)
 	}
-	if result["cursor"] != float64(2) || result["hasMore"] != true {
-		t.Fatalf("history metadata = cursor %v hasMore %v, want cursor 2 hasMore true", result["cursor"], result["hasMore"])
-	}
-
-	previous := requestResult[map[string]any](t, connection, "agent.history", map[string]any{
-		"session": "session-history-ws",
-		"before":  float64(2),
-		"limit":   2,
+	next := requestResult[api.AgentEventsHistoryResult](t, connection, "agent.events.history", map[string]any{
+		"streamId":      execution.StreamID,
+		"afterSequence": result.NextAfterSequence,
+		"limit":         2,
 	})
-	previousEvents, ok := previous["events"].([]any)
-	if !ok || len(previousEvents) != 1 {
-		t.Fatalf("previous history events = %#v, want 1", previous["events"])
-	}
-	previousFirst, ok := previousEvents[0].(map[string]any)
-	if !ok || previousFirst["seq"] != float64(1) {
-		t.Fatalf("previous first event = %#v, want seq 1", previousEvents[0])
-	}
-	if previous["hasMore"] != false {
-		t.Fatalf("previous history hasMore = %v, want false", previous["hasMore"])
+	if len(next.Events) != 2 || next.Events[0].Sequence != 3 || next.Events[1].Sequence != 4 {
+		t.Fatalf("next history result = %#v, want the second page", next)
 	}
 
 	service.recordAgentEvents("session-history-ws", []api.AgentEvent{{
 		Sequence: 4, Type: "tool_output", Output: "hidden",
 	}}, api.AgentStatus{Activity: api.AgentActivityReady})
-	projected := requestResult[map[string]any](t, connection, "agent.history", map[string]any{
-		"session":     "session-history-ws",
-		"since":       "4",
-		"wireOptions": map[string]any{"omitFields": []string{"output"}},
+	updated := requestResult[api.AgentEventsHistoryResult](t, connection, "agent.events.history", map[string]any{
+		"streamId":      execution.StreamID,
+		"afterSequence": next.HeadSequence,
 	})
-	projectedEvents := projected["events"].([]any)
-	if event := projectedEvents[0].(map[string]any); event["output"] != nil {
-		t.Fatalf("history event retained omitted output: %#v", event)
-	}
-}
-
-func TestAgentTranscriptChunkOverWebSocketStreamsOnlyBoundJSONL(t *testing.T) {
-	directory := t.TempDir()
-	transcriptPath := filepath.Join(directory, "rollout-raw.jsonl")
-	want := "{\"type\":\"user\",\"message\":\"first\"}\n{\"type\":\"assistant\",\"message\":\"second\"}\n"
-	if err := os.WriteFile(transcriptPath, []byte(want), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := state.Update(func(value *api.State) error {
-		value.Sessions = []api.Session{{
-			ID: "session-raw", Kind: "codex", Lifecycle: "running",
-			TranscriptPath: transcriptPath, CreatedAt: time.Now().UTC(),
-		}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	service := &Service{Store: state}
-	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
-	defer httpServer.Close()
-	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
-	defer connection.Close()
-
-	var got strings.Builder
-	var offset int64
-	for {
-		chunk := requestResult[api.AgentTranscriptChunk](t, connection, "agent.transcript", map[string]any{
-			"session": "session-raw",
-			"offset":  strconv.FormatInt(offset, 10),
-			"limit":   "11",
-		})
-		got.WriteString(chunk.Data)
-		if chunk.EOF {
-			break
-		}
-		if chunk.Next <= offset {
-			t.Fatalf("transcript chunk did not advance: %d -> %d", offset, chunk.Next)
-		}
-		offset = chunk.Next
-	}
-	if got.String() != want {
-		t.Fatalf("raw transcript = %q, want %q", got.String(), want)
-	}
-
-	if _, err := service.agentTranscriptChunk(context.Background(), "session-raw", 0, agentTranscriptChunkBytes+1); err == nil {
-		t.Fatal("oversized transcript chunk was accepted")
-	}
-	if _, err := service.agentTranscriptChunk(context.Background(), "missing", 0, 1); err == nil {
-		t.Fatal("missing session was accepted")
+	if len(updated.Events) != 1 || updated.Events[0].Payload["output"] != "hidden" {
+		t.Fatalf("updated canonical history = %#v, want the appended output", updated)
 	}
 }
 
 func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: "session-turn", Kind: "codex", Lifecycle: "running",
+			CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	service := &Service{Store: state}
@@ -1128,24 +798,32 @@ func TestAgentTurnSnapshotAndEventsOverWebSocket(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	snapshot := requestResult[map[string]any](t, connection, "agent.snapshot", map[string]any{
-		"session": "session-turn",
+	execution := requestResult[api.AgentExecution](t, connection, "agent.execution.get", map[string]any{
+		"executionId": service.canonicalExecutionID("session-turn"),
 	})
-	turn, ok := snapshot["turn"].(map[string]any)
-	if !ok || turn["id"] != float64(3) || turn["status"] != string(api.AgentTurnCompleted) {
-		t.Fatalf("snapshot turn = %#v, want turn 3 completed", snapshot["turn"])
+	if execution.ActiveTurn == nil || execution.ActiveTurn.ID != 3 || execution.ActiveTurn.Status != api.AgentTurnCompleted {
+		t.Fatalf("execution turn = %#v, want turn 3 completed", execution.ActiveTurn)
 	}
-	events := requestResult[[]any](t, connection, "agent.turn.events", map[string]any{
-		"session":     "session-turn",
-		"turn":        float64(3),
-		"wireOptions": map[string]any{"omitFields": []string{"output"}},
+	history := requestResult[api.AgentEventsHistoryResult](t, connection, "agent.events.history", map[string]any{
+		"streamId": execution.StreamID,
 	})
-	if len(events) != 1 {
-		t.Fatalf("turn events = %#v, want one event", events)
+	if len(history.Events) < 2 {
+		t.Fatalf("canonical history = %#v, want turn and provider events", history)
 	}
-	event, ok := events[0].(map[string]any)
-	if !ok || event["content"] != "done" || event["output"] != nil {
-		t.Fatalf("turn event = %#v, want assistant result", events[0])
+	var foundMessage, foundTurn bool
+	for _, event := range history.Events {
+		if event.TurnID != "3" {
+			continue
+		}
+		if event.Type == "message.created" && event.Payload["content"] == "done" && event.Payload["output"] == "hidden" {
+			foundMessage = true
+		}
+		if event.Type == "turn.completed" {
+			foundTurn = true
+		}
+	}
+	if !foundMessage || !foundTurn {
+		t.Fatalf("canonical turn events = %#v, want completed turn and message payload", history.Events)
 	}
 }
 
@@ -1184,10 +862,15 @@ func TestAgentSubscribeDoesNotAttachTerminalOutput(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	subscription := requestResult[map[string]any](t, connection, "agent.subscribe", map[string]any{"session": session.ID})
-	snapshot, ok := subscription["snapshot"].(map[string]any)
-	if !ok || snapshot["epoch"] == nil || snapshot["turn"] == nil {
-		t.Fatalf("subscription snapshot = %#v", subscription["snapshot"])
+	execution, ok := service.canonicalExecutionForSession(session.ID)
+	if !ok || execution.StreamID == "" {
+		t.Fatal("agent execution identity was not created")
+	}
+	subscription := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
+		"streamId": execution.StreamID,
+	})
+	if !subscription.Live || subscription.StreamID != execution.StreamID {
+		t.Fatalf("subscription result = %#v, want a live canonical subscription", subscription)
 	}
 	service.outputMu.Lock()
 	terminalPeers := len(service.peers[session.ID])
@@ -1198,8 +881,16 @@ func TestAgentSubscribeDoesNotAttachTerminalOutput(t *testing.T) {
 	}
 
 	service.recordAgentTurns(session.ID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, true)
-	if turn := readAgentTurn(t, connection); turn != (api.AgentTurn{ID: 1, Status: api.AgentTurnStarted}) {
-		t.Fatalf("subscribed turn = %#v", turn)
+	var turnEvent bool
+	for attempts := 0; attempts < 2 && !turnEvent; attempts++ {
+		for _, event := range readCanonicalEvents(t, connection) {
+			if event.Type == "turn.started" && event.TurnID == "1" {
+				turnEvent = true
+			}
+		}
+	}
+	if !turnEvent {
+		t.Fatal("subscribed canonical stream did not receive turn.started")
 	}
 	service.stopOutput(session.ID, true)
 	readBrowserMessage(t, connection, "exited")
@@ -1217,49 +908,6 @@ func waitForAgentHistory(t *testing.T, service *Service, sessionID, content stri
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("event %q never appeared in agent history", content)
-}
-
-func TestAgentHistorySinceRange(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "agent-events.db")
-
-	service := &Service{
-		AgentStorePath: dbPath,
-	}
-	service.lazyInit()
-
-	sessionID := "session-since-test"
-	events := []api.AgentEvent{
-		{Sequence: 1, Type: "user", Content: "1"},
-		{Sequence: 2, Type: "assistant", Content: "2"},
-		{Sequence: 3, Type: "tool_call", Content: "3"},
-		{Sequence: 4, Type: "tool_output", Content: "4"},
-		{Sequence: 5, Type: "assistant", Content: "5"},
-	}
-
-	service.agentsMu.Lock()
-	service.agents[sessionID] = &agentSession{}
-	service.agentsMu.Unlock()
-
-	service.recordAgentEvents(sessionID, events, api.AgentStatus{Activity: api.AgentActivityReady})
-
-	// Query since 2, before 5 -> sequence 2, 3, 4
-	page := service.agentHistoryPageWithOptions(sessionID, 2, 5, 10, false)
-	if len(page.Events) != 3 {
-		t.Fatalf("page len = %d, want 3", len(page.Events))
-	}
-	if page.Events[0].Sequence != 2 || page.Events[1].Sequence != 3 || page.Events[2].Sequence != 4 {
-		t.Fatalf("page sequences = %d, %d, %d, want 2, 3, 4", page.Events[0].Sequence, page.Events[1].Sequence, page.Events[2].Sequence)
-	}
-
-	// Query since 4 -> sequence 4, 5
-	sincePage := service.agentHistoryPageWithOptions(sessionID, 4, 0, 10, false)
-	if len(sincePage.Events) != 2 {
-		t.Fatalf("sincePage len = %d, want 2", len(sincePage.Events))
-	}
-	if sincePage.Events[0].Sequence != 4 || sincePage.Events[1].Sequence != 5 {
-		t.Fatalf("sincePage sequences = %d, %d, want 4, 5", sincePage.Events[0].Sequence, sincePage.Events[1].Sequence)
-	}
 }
 
 func TestAgentSubscribeWithGapEvents(t *testing.T) {
@@ -1312,51 +960,29 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	// Subscribe with lastSequence: 1 -> should return gapEvents 2 and 3
-	epoch := service.currentAgentEpoch()
-	subResult := requestResult[map[string]any](t, connection, "agent.subscribe", map[string]any{
-		"session":      session.ID,
-		"epoch":        strconv.FormatUint(epoch, 10),
-		"lastSequence": 1,
-		"wireOptions":  map[string]any{"omitFields": []string{"output"}},
+	execution, ok := service.canonicalExecutionForSession(session.ID)
+	if !ok || execution.StreamID == "" {
+		t.Fatal("agent execution identity was not created")
+	}
+	// Subscribe after sequence 1: the Host returns the immutable suffix and
+	// registers the socket for subsequent canonical increments.
+	subResult := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
+		"streamId":      execution.StreamID,
+		"afterSequence": 1,
 	})
-	gapEventsRaw, ok := subResult["gapEvents"].([]any)
-	if !ok || len(gapEventsRaw) != 2 {
-		t.Fatalf("gapEvents = %#v, want 2 events", subResult["gapEvents"])
+	if len(subResult.Events) < 2 {
+		t.Fatalf("subscription events = %#v, want the suffix after sequence 1", subResult.Events)
 	}
-	if event, ok := gapEventsRaw[0].(map[string]any); !ok || event["output"] != nil {
-		t.Fatalf("gap event retained omitted output: %#v", gapEventsRaw[0])
+	for _, event := range subResult.Events {
+		if event.Sequence <= 1 {
+			t.Fatalf("subscription returned event at or before requested sequence: %#v", event)
+		}
 	}
 
-	service.broadcastAgentBatch(session.ID, []api.AgentEvent{{Sequence: 4, Type: "tool_output", Output: "hidden"}})
-	message := readBrowserMessage(t, connection, "agent")
-	liveEvents := message["events"].([]any)
-	if event := liveEvents[0].(map[string]any); event["output"] != nil {
-		t.Fatalf("live event retained omitted output: %#v", event)
-	}
-}
-
-func TestSessionSubscribeProjectsAgentTail(t *testing.T) {
-	const sessionID = "session-wire-tail"
-	service, _, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
-	service.agentsMu.Lock()
-	service.agents[sessionID] = &agentSession{}
-	service.agentsMu.Unlock()
-	service.recordAgentEvents(sessionID, []api.AgentEvent{{
-		Sequence: 1, Type: "tool_output", Output: "hidden",
-	}}, api.AgentStatus{Activity: api.AgentActivityReady})
-
-	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
-	defer connection.Close()
-	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{
-		"id":          sessionID,
-		"wireOptions": map[string]any{"omitFields": []string{"output"}},
-	})
-	readBrowserMessage(t, connection, "synced")
-	message := readBrowserMessage(t, connection, "agent")
-	events := message["events"].([]any)
-	if event := events[0].(map[string]any); event["output"] != nil {
-		t.Fatalf("attach tail retained omitted output: %#v", event)
+	service.recordAgentEvents(session.ID, []api.AgentEvent{{Sequence: 4, Type: "tool_output", Output: "hidden"}}, api.AgentStatus{Activity: api.AgentActivityReady})
+	liveEvents := readCanonicalEvents(t, connection)
+	if len(liveEvents) != 1 || liveEvents[0].Type != "tool.completed" || liveEvents[0].Payload["output"] != "hidden" {
+		t.Fatalf("live canonical events = %#v, want tool output payload", liveEvents)
 	}
 }
 
@@ -1774,179 +1400,5 @@ func TestAntigravitySessionIsolationInSameWorkspace(t *testing.T) {
 		}
 	} else {
 		t.Fatal("handle does not implement BindingMetadata")
-	}
-}
-
-func TestAgentHistoryClipsToolOutput(t *testing.T) {
-	service := &Service{
-		AgentStorePath: filepath.Join(t.TempDir(), "agent_store.db"),
-	}
-	service.lazyInit()
-	sessionID := "session-clip-test"
-
-	service.agentsMu.Lock()
-	service.agents[sessionID] = &agentSession{}
-	service.agentsMu.Unlock()
-
-	longOutput := strings.Repeat("A", 10000)
-	longContent := strings.Repeat("B", 50000)
-	events := []api.AgentEvent{
-		{
-			Sequence: 1,
-			Type:     "tool_output",
-			Output:   longOutput,
-		},
-		{
-			Sequence: 2,
-			Type:     "message",
-			Role:     "assistant",
-			Content:  longContent,
-		},
-		{
-			Sequence: 3,
-			Type:     "tool_call",
-			ToolName: "execute",
-			ToolInput: map[string]any{
-				"cmd": strings.Repeat("C", 8000),
-			},
-		},
-	}
-
-	service.recordAgentEvents(sessionID, events, api.AgentStatus{Activity: api.AgentActivityReady})
-
-	// Default clipping (4096)
-	page := service.agentHistoryPageWithOptions(sessionID, 0, 0, 10, false)
-	if len(page.Events) != 3 {
-		t.Fatalf("expected 3 events, got %d", len(page.Events))
-	}
-
-	// Tool output must be clipped to 4096 runes + ellipsis
-	if len(page.Events[0].Output) > 4096+len("…") {
-		t.Fatalf("tool output length = %d, want <= %d", len(page.Events[0].Output), 4096+len("…"))
-	}
-	if !strings.HasSuffix(page.Events[0].Output, "…") {
-		t.Fatalf("expected tool output to end with ellipsis")
-	}
-
-	// Assistant conversational Content must NEVER be clipped regardless of size
-	if len(page.Events[1].Content) != 50000 {
-		t.Fatalf("assistant content was clipped: got len %d, want 50000", len(page.Events[1].Content))
-	}
-
-	// Tool input must be clipped
-	inputMap, ok := page.Events[2].ToolInput.(map[string]any)
-	if !ok {
-		t.Fatalf("expected tool input to be map[string]any, got %T", page.Events[2].ToolInput)
-	}
-	cmdStr, ok := inputMap["cmd"].(string)
-	if !ok || len(cmdStr) > 4096+len("…") {
-		t.Fatalf("tool input cmd length = %d, want <= %d", len(cmdStr), 4096+len("…"))
-	}
-
-}
-
-func TestClipWireEvents(t *testing.T) {
-	// Test multi-byte UTF-8 string truncation
-	chineseStr := strings.Repeat("中", 100)
-	clipped := truncateString(chineseStr, 10)
-	if clipped != strings.Repeat("中", 10)+"…" {
-		t.Fatalf("unexpected utf-8 truncation result: %s", clipped)
-	}
-
-	// Test nested tool input
-	nested := map[string]any{
-		"nested": []any{
-			map[string]any{
-				"key": strings.Repeat("X", 20),
-			},
-			strings.Repeat("Y", 20),
-		},
-	}
-	limited := limitToolInput(nested, 5).(map[string]any)
-	arr := limited["nested"].([]any)
-	innerMap := arr[0].(map[string]any)
-	if innerMap["key"] != "XXXXX…" {
-		t.Fatalf("inner key = %v, want XXXXX…", innerMap["key"])
-	}
-	if arr[1] != "YYYYY…" {
-		t.Fatalf("inner array item = %v, want YYYYY…", arr[1])
-	}
-}
-
-func TestProjectWireEventsOmitsRequestedFields(t *testing.T) {
-	original := []api.AgentEvent{{
-		Sequence:  1,
-		Type:      "tool_output",
-		Output:    "secret output",
-		ToolInput: map[string]any{"cmd": "pwd"},
-		Files:     []string{"result.txt"},
-		Payload:   map[string]any{"state": "done"},
-		Usage:     &api.AgentUsage{TotalTokens: 3},
-	}}
-
-	projected := projectWireEvents(original, wireOptions{omitFields: map[string]struct{}{
-		"output": {}, "toolInput": {}, "files": {}, "payload": {}, "usage": {},
-	}})
-	if projected[0].Output != "" || projected[0].ToolInput != nil || projected[0].Files != nil || projected[0].Payload != nil || projected[0].Usage != nil {
-		t.Fatalf("requested fields were not omitted: %#v", projected[0])
-	}
-	if original[0].Output == "" || original[0].ToolInput == nil || original[0].Files == nil || original[0].Payload == nil || original[0].Usage == nil {
-		t.Fatalf("wire projection mutated the source event: %#v", original[0])
-	}
-	encoded, err := json.Marshal(projected[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, field := range []string{"output", "toolInput", "files", "payload", "usage"} {
-		if bytes.Contains(encoded, []byte(`"`+field+`"`)) {
-			t.Fatalf("JSON contains omitted field %q: %s", field, encoded)
-		}
-	}
-}
-
-func TestPeerProjectsAgentEventsPerSession(t *testing.T) {
-	service := &Service{}
-	service.lazyInit()
-	var messages []api.AgentMessage
-	messageReady := make(chan struct{}, 2)
-	peer := newRelayPeer(&HTTPServer{Service: service}, func(item outboundMessage) bool {
-		var message api.AgentMessage
-		if err := json.Unmarshal(item.data, &message); err != nil {
-			t.Fatal(err)
-		}
-		messages = append(messages, message)
-		messageReady <- struct{}{}
-		return true
-	})
-	peer.agentWireOptions = map[string]wireOptions{
-		"lean": {omitFields: map[string]struct{}{"output": {}}},
-		"full": {},
-	}
-	event := []api.AgentEvent{{Sequence: 1, Type: "tool_output", Output: "visible"}}
-	if err := peer.enqueueAgentEvents("lean", event); err != nil {
-		t.Fatal(err)
-	}
-	if err := peer.enqueueAgentEvents("full", event); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		select {
-		case <-messageReady:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for Relay peer writer")
-		}
-	}
-	if len(messages) != 2 || messages[0].Events[0].Output != "" || messages[1].Events[0].Output != "visible" {
-		t.Fatalf("per-session projection = %#v", messages)
-	}
-	peer.close()
-}
-
-func TestParseWireOptionsRejectsUnsupportedFields(t *testing.T) {
-	_, err := parseWireOptions(map[string]any{
-		"wireOptions": map[string]any{"omitFields": []any{"content"}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "content") {
-		t.Fatalf("protected field error = %v", err)
 	}
 }

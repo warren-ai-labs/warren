@@ -205,7 +205,108 @@ func (s *Service) ensureAgentViewState() {
 	if s.agentSessionActionLocks == nil {
 		s.agentSessionActionLocks = make(map[string]*sync.Mutex)
 	}
+	if s.canonicalCommandResults == nil {
+		s.canonicalCommandResults = make(map[string]canonicalCommandResult)
+	}
 	s.agentViewMu.Unlock()
+}
+
+// runCanonicalCommand gives every canonical mutation one admission identity.
+// The command ID is scoped to an execution, while the fingerprint protects
+// against accidentally reusing that ID for a different payload. Results and
+// failures are retained so retries after a reconnect cannot invoke a provider
+// twice. The journal-backed event stream remains the completion authority.
+func (s *Service) runCanonicalCommand(
+	ctx context.Context,
+	executionID, commandID string,
+	payload any,
+	fn func() (any, error),
+) (any, error) {
+	executionID = strings.TrimSpace(executionID)
+	commandID = strings.TrimSpace(commandID)
+	if executionID == "" || commandID == "" {
+		return nil, errors.New("commandId and executionId are required")
+	}
+	fingerprint, err := agentActionFingerprint(payload)
+	if err != nil {
+		return nil, err
+	}
+	key := "canonical:" + executionID + ":" + commandID
+	s.ensureAgentViewState()
+	s.agentViewMu.Lock()
+	if prior, ok := s.canonicalCommandResults[key]; ok {
+		s.agentViewMu.Unlock()
+		if prior.fingerprint != fingerprint {
+			return nil, errors.New("idempotency key was reused with different payload")
+		}
+		return prior.result, prior.err
+	}
+	s.agentViewMu.Unlock()
+	call, leader, beginErr := s.beginAgentAction(key, fingerprint)
+	if beginErr != nil {
+		return nil, beginErr
+	}
+	if !leader {
+		return waitAgentAction(ctx, call)
+	}
+	if s.AgentStore != nil {
+		record, durableLeader, err := s.AgentStore.BeginCanonicalCommand(
+			ctx, executionID, commandID, fingerprint,
+		)
+		if err != nil {
+			s.finishAgentAction(key, call, nil, err)
+			return nil, err
+		}
+		if !durableLeader {
+			if record.Status == store.CanonicalCommandPending {
+				err = fmt.Errorf("%w: executionId=%s commandId=%s", store.ErrCanonicalCommandPending, executionID, commandID)
+				s.finishAgentAction(key, call, nil, err)
+				return nil, err
+			}
+			result, replayErr := canonicalCommandRecordResult(record)
+			s.agentViewMu.Lock()
+			s.canonicalCommandResults[key] = canonicalCommandResult{
+				fingerprint: fingerprint, result: result, err: replayErr,
+			}
+			s.agentViewMu.Unlock()
+			s.finishAgentAction(key, call, result, replayErr)
+			return result, replayErr
+		}
+	}
+	result, callErr := fn()
+	if s.AgentStore != nil {
+		if persistErr := s.AgentStore.CompleteCanonicalCommand(
+			context.Background(), executionID, commandID, fingerprint, result, callErr,
+		); persistErr != nil {
+			if callErr == nil {
+				callErr = fmt.Errorf("persist canonical command result: %w", persistErr)
+			} else {
+				callErr = fmt.Errorf("%w (persist command result: %v)", callErr, persistErr)
+			}
+		}
+	}
+	s.agentViewMu.Lock()
+	s.canonicalCommandResults[key] = canonicalCommandResult{
+		fingerprint: fingerprint,
+		result:      result,
+		err:         callErr,
+	}
+	s.agentViewMu.Unlock()
+	s.finishAgentAction(key, call, result, callErr)
+	return result, callErr
+}
+
+func canonicalCommandRecordResult(record store.CanonicalCommandRecord) (any, error) {
+	if record.Status == store.CanonicalCommandFailed {
+		if strings.TrimSpace(record.Error) == "" {
+			return nil, errors.New("canonical command failed")
+		}
+		return nil, errors.New(record.Error)
+	}
+	if record.Status != store.CanonicalCommandCompleted {
+		return nil, fmt.Errorf("canonical command has unknown status: %s", record.Status)
+	}
+	return record.Result, nil
 }
 
 func (s *Service) beginAgentAction(key, fingerprint string) (*agentActionCall, bool, error) {
@@ -940,6 +1041,9 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 	// response as an idempotent replay and never invoke a provider bridge twice.
 	s.ensureAgentViewState()
 	cacheKey := request.Session + ":" + request.RequestID
+	if commandID := strings.TrimSpace(request.CommandID); commandID != "" {
+		cacheKey = "command:" + commandID
+	}
 	actionKey := "interaction:" + cacheKey
 	s.agentViewMu.Lock()
 	if prior, ok := s.agentInteractionResults[cacheKey]; ok {
@@ -1051,6 +1155,9 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 	}
 	s.ensureAgentViewState()
 	cacheKey := fmt.Sprintf("%s:%d:%s:%s", request.Session, request.Turn, request.Reason, replacementID(request.Replacement))
+	if commandID := strings.TrimSpace(request.CommandID); commandID != "" {
+		cacheKey = "command:" + commandID
+	}
 	actionKey := "interrupt:" + cacheKey
 	s.agentViewMu.Lock()
 	if prior, ok := s.agentInterruptResults[cacheKey]; ok {

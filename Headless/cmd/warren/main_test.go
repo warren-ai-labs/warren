@@ -965,33 +965,33 @@ func TestAgentWaitTimeout(t *testing.T) {
 }
 
 func TestValidateAgentSendWaitRejectsRunningTurn(t *testing.T) {
-	if err := validateAgentSendWait(api.AgentSnapshotResult{
-		Turn: api.AgentTurn{ID: 2, Status: api.AgentTurnStarted},
+	if err := validateAgentSendWait(api.AgentExecution{
+		ActiveTurn: &api.AgentTurn{ID: 2, Status: api.AgentTurnStarted},
 	}); err == nil || !strings.Contains(err.Error(), "already has a running turn") {
 		t.Fatalf("running turn error = %v", err)
 	}
-	if err := validateAgentSendWait(api.AgentSnapshotResult{
-		Turn: api.AgentTurn{ID: 2, Status: api.AgentTurnCompleted},
+	if err := validateAgentSendWait(api.AgentExecution{
+		ActiveTurn: &api.AgentTurn{ID: 2, Status: api.AgentTurnCompleted},
 	}); err != nil {
 		t.Fatalf("completed baseline rejected: %v", err)
 	}
 }
 
 func TestAgentWaitCursorJoinsRunningOrJustCompletedTurn(t *testing.T) {
-	after, current := agentWaitCursor(api.AgentSnapshotResult{
-		Turn: api.AgentTurn{ID: 4, Status: api.AgentTurnStarted},
+	after, current := agentWaitCursor(api.AgentExecution{
+		ActiveTurn: &api.AgentTurn{ID: 4, Status: api.AgentTurnStarted},
 	})
 	if after != 4 || current != 4 {
 		t.Fatalf("running cursor = after %d current %d, want 4 and 4", after, current)
 	}
-	after, current = agentWaitCursor(api.AgentSnapshotResult{
-		Turn: api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
+	after, current = agentWaitCursor(api.AgentExecution{
+		ActiveTurn: &api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
 	})
 	if after != 3 || current != 0 {
 		t.Fatalf("completed cursor = after %d current %d, want 3 and 0", after, current)
 	}
-	after, current = agentWaitCursor(api.AgentSnapshotResult{
-		Turn: api.AgentTurn{Status: api.AgentTurnIdle},
+	after, current = agentWaitCursor(api.AgentExecution{
+		ActiveTurn: &api.AgentTurn{Status: api.AgentTurnIdle},
 	})
 	if after != 0 || current != 0 {
 		t.Fatalf("idle cursor = after %d current %d, want zeroes", after, current)

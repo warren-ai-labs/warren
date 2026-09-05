@@ -156,6 +156,11 @@ type Session struct {
 	// Claude session ID, or OpenCode SQLite session ID) bound to this Warren
 	// session.
 	AgentSessionID string `json:"agentSessionId,omitempty"`
+	// AgentExecutionID is the Host-owned execution identity. It is stable for
+	// one provider conversation and changes when the conversation is replaced.
+	// Clients use it as the semantic event stream ID; provider IDs remain opaque
+	// metadata and are never used as the primary event key.
+	AgentExecutionID string `json:"agentExecutionId,omitempty"`
 	// TranscriptPath is the JSONL transcript projected by the agent watcher.
 	TranscriptPath string `json:"transcriptPath,omitempty"`
 	// AgentStatus is the live activity and human-attention projection of an
@@ -311,83 +316,13 @@ type AgentUsage struct {
 	TotalTokens              int64 `json:"totalTokens,omitempty"`
 }
 
-// AgentMessage carries a live batch of normalized agent events for one
-// session. Batches are bounded so a single WebSocket message stays well
-// below client message-size limits; full history is fetched separately via
-// the agent.history request.
-type AgentMessage struct {
-	Type    string `json:"t"`
-	Session string `json:"session"`
-	// Epoch identifies one Host process's agent projection. Clients reset
-	// their event history when the epoch changes after a daemon restart.
-	Epoch  uint64       `json:"epoch,omitempty"`
-	Events []AgentEvent `json:"events"`
-}
-
-// AgentStatusMessage is the lightweight live status update for one session.
-// It is deliberately a small standalone message so clients that only render
-// the status light never have to receive full event batches.
-type AgentStatusMessage struct {
-	Type    string      `json:"t"`
-	Session string      `json:"session"`
-	Epoch   uint64      `json:"epoch,omitempty"`
-	Status  AgentStatus `json:"status"`
-}
-
-// AgentTurnMessage carries explicit turn boundaries for blocking clients.
-// Activity remains presentation state; callers must use this message instead
-// of treating the ambiguous ready state as proof that a new turn completed.
-type AgentTurnMessage struct {
-	Type    string          `json:"t"`
-	Session string          `json:"session"`
-	Epoch   uint64          `json:"epoch,omitempty"`
-	Turn    uint64          `json:"turn"`
-	Status  AgentTurnStatus `json:"status"`
-}
-
-// AgentSnapshotResult is the subscription baseline used before a caller sends
-// input or starts waiting. Event sequence is included for diagnostics.
-type AgentSnapshotResult struct {
-	Epoch    uint64    `json:"epoch"`
-	Turn     AgentTurn `json:"turn"`
-	Sequence uint64    `json:"sequence"`
-}
-
-// AgentSubscriptionResult binds a read-only subscriber to a session and
-// returns the turn baseline established before live boundaries can interleave.
-type AgentSubscriptionResult struct {
-	Session   Session             `json:"session"`
-	Snapshot  AgentSnapshotResult `json:"snapshot"`
-	GapEvents []AgentEvent        `json:"gapEvents,omitempty"`
-}
-
-// AgentWaitResult is printed by the blocking CLI once a turn reaches a
-// terminal state.
+// AgentWaitResult is printed after a canonical turn completion event.
 type AgentWaitResult struct {
-	Session string          `json:"session"`
-	Epoch   uint64          `json:"epoch"`
-	Turn    uint64          `json:"turn"`
-	Status  AgentTurnStatus `json:"status"`
-	Events  []AgentEvent    `json:"events"`
-}
-
-// AgentHistoryResult is one page of the agent event history. Cursor is the
-// sequence of the first event in the page and can be passed back as `before`
-// to load the previous page; HasMore reports whether older events exist.
-type AgentHistoryResult struct {
-	Epoch   uint64       `json:"epoch,omitempty"`
-	Events  []AgentEvent `json:"events"`
-	Cursor  uint64       `json:"cursor,omitempty"`
-	HasMore bool         `json:"hasMore"`
-}
-
-// AgentTranscriptChunk is one bounded raw JSONL segment from the transcript
-// bound to a Warren Agent session. Paths are intentionally not exposed: the
-// Host resolves the binding from the session ID before every read.
-type AgentTranscriptChunk struct {
-	Data string `json:"data"`
-	Next int64  `json:"next"`
-	EOF  bool   `json:"eof"`
+	Session     string                `json:"session"`
+	ExecutionID string                `json:"executionId"`
+	Turn        uint64                `json:"turn"`
+	Status      AgentTurnStatus       `json:"status"`
+	Events      []CanonicalAgentEvent `json:"events"`
 }
 
 type State struct {
@@ -479,7 +414,7 @@ type Envelope struct {
 	Version      string   `json:"version,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 	// TerminalStateFormats lists opaque terminal-state encodings the client
-	// can install atomically. Protocol 2 requires at least one format shared
+	// can install atomically. Protocol 3 requires at least one format shared
 	// with the Host; protocol 1 clients are rejected during authentication.
 	TerminalStateFormats []string       `json:"terminalStateFormats,omitempty"`
 	Method               string         `json:"method,omitempty"`
@@ -498,11 +433,13 @@ type Envelope struct {
 }
 
 type Response struct {
-	Type   string `json:"t"`
-	ID     string `json:"id,omitempty"`
-	OK     bool   `json:"ok"`
-	Result any    `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Type    string `json:"t"`
+	ID      string `json:"id,omitempty"`
+	OK      bool   `json:"ok"`
+	Result  any    `json:"result,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Details any    `json:"details,omitempty"`
 }
 
 // GitPanel is the aggregated Git projection for one workspace.

@@ -532,4 +532,3 @@ func TestACPAgentProviderRegistrationAndHandle(t *testing.T) {
 		t.Fatalf("embedded handle is %T, want *acpAgentHandle", handleEmbedded)
 	}
 }
-

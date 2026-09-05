@@ -106,6 +106,7 @@ public final class IOSApplicationModel: ObservableObject {
     /// explicit denial for a modern Session.
     @Published public private(set) var agentCapabilitiesBySessionID: [String: Set<String>] = [:]
     @Published public private(set) var agentActionError: String?
+    @Published public private(set) var agentEventErrorBySessionID: [String: String] = [:]
     @Published public private(set) var historyLoadingBySessionID: Set<String> = []
     @Published public private(set) var historyErrorBySessionID: [String: String] = [:]
     @Published public private(set) var navigation: IOSNavigationState
@@ -212,7 +213,12 @@ public final class IOSApplicationModel: ObservableObject {
     private var mutationGeneration: UInt64 = 0
     private var clientGeneration: UInt64 = 0
     private var hasReceivedAuthoritativeRoster = false
-    private var agentEpochBySessionID: [String: UInt64] = [:]
+    /// Set only from the authenticated welcome. URL and endpoint names are
+    /// routing metadata and must never identify an event replica.
+    private var agentReplicaNamespaceStorage: WarrenAgentEventStore.Namespace?
+    private var agentExecutionIDBySessionID: [String: String] = [:]
+    private var agentEventWriteTasks: [String: Task<Void, Never>] = [:]
+    private var agentProjectionSequenceBySessionID: [String: UInt64] = [:]
     private var agentEventKeysBySessionID: [String: Set<String>] = [:]
     private var agentSubscribedSessionIDs: Set<String> = []
     private var agentHighestSequenceBySessionID: [String: UInt64] = [:]
@@ -360,6 +366,23 @@ public final class IOSApplicationModel: ObservableObject {
         draftSaveTasksBySessionID.values.forEach { $0.cancel() }
     }
 
+    private var agentReplicaNamespace: WarrenAgentEventStore.Namespace? {
+        agentReplicaNamespaceStorage
+    }
+
+    private func agentExecutionID(for sessionID: String) -> String? {
+        guard let value = sessionByID[sessionID]?.agentExecutionID?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private func sessionID(forAgentExecutionID executionID: String) -> String? {
+        let value = executionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return sessionByID.first { $0.value.agentExecutionID == value }?.key
+    }
+
     /// Starts the actor-owned connection and consumes its event stream. The
     /// previous roster remains visible while a reconnect is in progress.
     public func start() {
@@ -399,6 +422,7 @@ public final class IOSApplicationModel: ObservableObject {
         mutationGeneration &+= 1
         clientGeneration &+= 1
         hasReceivedAuthoritativeRoster = false
+        agentReplicaNamespaceStorage = nil
         isMutating = false
         terminalResizeTasksBySessionID.values.forEach { $0.cancel() }
         terminalResizeTasksBySessionID.removeAll()
@@ -406,6 +430,8 @@ public final class IOSApplicationModel: ObservableObject {
         historyRequestTokenBySessionID.removeAll()
         historyLoadingBySessionID.removeAll()
         historyErrorBySessionID.removeAll()
+        agentEventErrorBySessionID.removeAll()
+        agentProjectionSequenceBySessionID.removeAll()
         terminalFocusGeneration &+= 1
         terminalFocusRequestsBySessionID.removeAll()
         let client = client
@@ -862,6 +888,7 @@ public final class IOSApplicationModel: ObservableObject {
         let values = localStore.endpoints
         guard values.contains(where: { $0.name == name }) else { return false }
         let wasActive = endpointMetadata.name == name
+        let removedConfiguration = values.first(where: { $0.name == name })
 
         // Collect all session IDs belonging to this host from cached rosters and active roster
         var sessionIDsToPurge: Set<String> = []
@@ -880,14 +907,17 @@ public final class IOSApplicationModel: ObservableObject {
 
         guard localStore.removeEndpoint(named: name) else { return false }
 
-        // Clean up SQLite event store
-        let sids = Array(sessionIDsToPurge)
+        // Clean up the complete Host namespace. A saved endpoint may have
+        // several access scopes cached over its lifetime, so deleting by
+        // session ID would leave orphaned canonical streams behind.
         let hasRemainingHosts = !localStore.endpoints.isEmpty
         Task {
             if !hasRemainingHosts {
-                await IOSAgentEventStore.shared.clearAll()
-            } else if !sids.isEmpty {
-                await IOSAgentEventStore.shared.clearSessions(sids)
+                await WarrenAgentEventStore.shared.clearAll()
+            } else if let hostID = removedConfiguration?.hostID, !hostID.isEmpty {
+                await WarrenAgentEventStore.shared.clearHost(hostID: hostID)
+            } else if wasActive, let namespace = self.agentReplicaNamespace {
+                await WarrenAgentEventStore.shared.clearNamespace(namespace)
             }
         }
 
@@ -916,6 +946,7 @@ public final class IOSApplicationModel: ObservableObject {
         mutationGeneration &+= 1
         clientGeneration &+= 1
         hasReceivedAuthoritativeRoster = false
+        agentReplicaNamespaceStorage = nil
         isMutating = false
         historyRequestTokenBySessionID.removeAll()
         historyLoadingBySessionID.removeAll()
@@ -945,6 +976,8 @@ public final class IOSApplicationModel: ObservableObject {
         hasControlLease = false
         terminalState.reset()
         agentState.reset()
+        agentEventErrorBySessionID.removeAll()
+        agentProjectionSequenceBySessionID.removeAll()
         agentStatusBySessionID = [:]
         agentTurnBySessionID = [:]
         agentCapabilities = []
@@ -954,7 +987,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentQueueBySessionID = [:]
         pendingAgentMessagesBySessionID = [:]
         agentHighestSequenceBySessionID.removeAll()
-        agentEpochBySessionID.removeAll()
+        agentExecutionIDBySessionID.removeAll()
         agentSubscribedSessionIDs.removeAll()
         terminalSubscriptionRequests.removeAll()
         navigation = IOSNavigationState()
@@ -1041,7 +1074,9 @@ public final class IOSApplicationModel: ObservableObject {
             hasControlLease = false
             terminalState.reset()
             agentState.reset()
-            agentStatusBySessionID = [:]
+            agentEventErrorBySessionID.removeAll()
+        agentProjectionSequenceBySessionID.removeAll()
+        agentStatusBySessionID = [:]
             agentTurnBySessionID = [:]
             agentCapabilities = []
             agentActionError = nil
@@ -1053,7 +1088,7 @@ public final class IOSApplicationModel: ObservableObject {
             agentMessageSubmissionTokenBySessionID = [:]
             agentInterruptInFlightBySessionID = [:]
             invalidatedAgentDraftKeys = []
-            agentEpochBySessionID = [:]
+            agentExecutionIDBySessionID = [:]
             agentEventKeysBySessionID = [:]
             agentHighestSequenceBySessionID = [:]
             historyCursorBySessionID = [:]
@@ -1396,11 +1431,17 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.subscribe(
                     sessionID: sessionID,
                     anchor: anchor,
-                    claimControl: false,
-                    omitAgentOutput: true
+                    claimControl: false
                 )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")
+                }
+                await MainActor.run {
+                    guard self.sessionSelectionGeneration == generation,
+                          self.currentSessionID == sessionID else { return }
+                    if self.sessionByID[sessionID]?.isAgentBacked == true {
+                        self.ensureAgentSubscribed(for: sessionID)
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -1571,8 +1612,7 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.subscribe(
                     sessionID: sessionID,
                     anchor: anchor,
-                    claimControl: false,
-                    omitAgentOutput: true
+                    claimControl: false
                 )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")
@@ -1907,6 +1947,7 @@ public final class IOSApplicationModel: ObservableObject {
     public func cancelAgentTurn() -> Bool {
         guard supportsAgentCapability(WarrenRemoteAgentCapability.interrupt),
               let sessionID = currentSessionID,
+              let executionID = agentExecutionID(for: sessionID),
               let status = agentStatus(for: sessionID), status.activity == .working else { return false }
         let turn = agentTurnBySessionID[sessionID]?.id
             ?? agentEventsBySessionID[sessionID]?.last?.turn
@@ -1918,8 +1959,11 @@ public final class IOSApplicationModel: ObservableObject {
         agentActionError = nil
         Task { [weak self] in
             do {
-                _ = try await client.interruptAgentTurn(
-                    WarrenRemoteAgentTurnInterruptRequest(session: sessionID, turn: turn, reason: "cancel")
+                _ = try await client.cancelAgentTurn(
+                    executionID: executionID,
+                    commandID: "cancel-(UUID().uuidString.lowercased())",
+                    turnID: String(turn),
+                    reason: "cancel"
                 )
                 await MainActor.run {
                     guard let self,
@@ -1952,6 +1996,7 @@ public final class IOSApplicationModel: ObservableObject {
         guard (!value.isEmpty || !attachments.isEmpty),
               supportsAgentCapability(WarrenRemoteAgentCapability.interrupt),
               let sessionID = currentSessionID,
+              let executionID = agentExecutionID(for: sessionID),
               hasControlLease,
               let status = agentStatus(for: sessionID), status.activity == .working,
               let turn = agentTurnBySessionID[sessionID]?.id ?? agentEventsBySessionID[sessionID]?.last?.turn,
@@ -1974,22 +2019,15 @@ public final class IOSApplicationModel: ObservableObject {
         let selectionGeneration = sessionSelectionGeneration
         let currentClientGeneration = clientGeneration
         let client = client
-        let replacement = WarrenRemoteAgentMessageSendRequest(
-            session: sessionID,
-            clientMessageID: item.id,
-            text: value,
-            attachments: attachments
-        )
         agentActionError = nil
         Task { [weak self] in
             do {
-                let result = try await client.interruptAgentTurn(
-                    WarrenRemoteAgentTurnInterruptRequest(
-                        session: sessionID,
-                        turn: turn,
-                        reason: "send_now",
-                        replacement: replacement
-                    )
+                let result = try await client.steerAgentTurn(
+                    executionID: executionID,
+                    commandID: item.id,
+                    turnID: String(turn),
+                    text: value,
+                    attachments: attachments
                 )
                 guard result.accepted else {
                     throw WarrenRemoteClientError.requestFailed("Host did not accept Send now.")
@@ -2070,20 +2108,20 @@ public final class IOSApplicationModel: ObservableObject {
         kind: String,
         response: [String: WarrenRemoteJSONValue]
     ) -> Task<Bool, Never> {
-        guard supportsAgentCapability(WarrenRemoteAgentCapability.interactions) else {
+        guard supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
+              let executionID = agentExecutionID(for: sessionID) else {
             return Task { false }
         }
         let client = client
         agentActionError = nil
         return Task { [weak self] in
             do {
-                _ = try await client.respondAgentInteraction(
-                    WarrenRemoteAgentInteractionResponse(
-                        session: sessionID,
-                        requestID: requestID,
-                        kind: kind,
-                        response: response
-                    )
+                _ = try await client.resolveAgentInteraction(
+                    executionID: executionID,
+                    commandID: "resolve-(requestID)-(UUID().uuidString.lowercased())",
+                    interactionID: requestID,
+                    version: 1,
+                    resolution: response
                 )
                 return true
             } catch {
@@ -2131,14 +2169,17 @@ public final class IOSApplicationModel: ObservableObject {
         // safe, but the MainActor-bound parameter cannot cross isolation).
         let sharedBytes = SendableDataBox(data)
         let digest = await Task.detached(priority: .utility) { agentSHA256(sharedBytes.data) }.value
+        guard let executionID = agentExecutionID(for: sessionID) else {
+            throw WarrenRemoteClientError.requestFailed("Agent execution is unavailable.")
+        }
+        let uploadCommandID = "attachment-(UUID().uuidString.lowercased())"
         let prepared = try await client.prepareAgentAttachment(
-            WarrenRemoteAgentAttachmentPrepareRequest(
-                session: sessionID,
-                name: name,
-                mime: mime,
-                size: Int64(data.count),
-                sha256: digest
-            )
+            executionID: executionID,
+            commandID: uploadCommandID,
+            name: name,
+            mime: mime,
+            size: Int64(data.count),
+            sha256: digest
         )
         try ensureCurrentSession()
         let chunkSize = max(1, prepared.chunkSize)
@@ -2166,14 +2207,13 @@ public final class IOSApplicationModel: ObservableObject {
                     return (slice, agentSHA256(slice), slice.base64EncodedString())
                 }.value
                 let result = try await client.uploadAgentAttachmentChunk(
-                    WarrenRemoteAgentAttachmentChunkRequest(
-                        session: sessionID,
-                        uploadID: uploadID,
-                        sequence: sequence,
-                        length: chunkPayload.0.count,
-                        sha256: chunkPayload.1,
-                        data: chunkPayload.2
-                    )
+                    executionID: executionID,
+                    commandID: "(uploadID)-chunk-(sequence)",
+                    uploadID: uploadID,
+                    chunk: sequence,
+                    length: chunkPayload.0.count,
+                    sha256: chunkPayload.1,
+                    data: chunkPayload.2
                 )
                 try ensureCurrentSession()
                 guard result.accepted else {
@@ -2185,12 +2225,11 @@ public final class IOSApplicationModel: ObservableObject {
             }
             try ensureCurrentSession()
             let completed = try await client.completeAgentAttachment(
-                WarrenRemoteAgentAttachmentCompleteRequest(
-                    session: sessionID,
-                    uploadID: uploadID,
-                    length: Int64(data.count),
-                    sha256: digest
-                )
+                executionID: executionID,
+                commandID: "(uploadID)-complete",
+                uploadID: uploadID,
+                length: Int64(data.count),
+                sha256: digest
             )
             try ensureCurrentSession()
             guard completed.accepted,
@@ -2206,7 +2245,9 @@ public final class IOSApplicationModel: ObservableObject {
             )
         } catch {
             _ = try? await client.abortAgentAttachment(
-                WarrenRemoteAgentAttachmentAbortRequest(session: sessionID, uploadID: uploadID)
+                executionID: executionID,
+                commandID: "(uploadID)-abort",
+                uploadID: uploadID
             )
             throw error
         }
@@ -2225,7 +2266,6 @@ public final class IOSApplicationModel: ObservableObject {
         let selectionGeneration = sessionSelectionGeneration
         let currentClientGeneration = clientGeneration
         let client = client
-        let timelineSupported = supportsAgentCapability(WarrenRemoteAgentCapability.timeline)
         let attachmentsSupported = supportsAgentCapability(WarrenRemoteAgentCapability.attachments)
         Task { [weak self] in
             do {
@@ -2251,20 +2291,39 @@ public final class IOSApplicationModel: ObservableObject {
                 if !item.attachments.isEmpty && !attachmentsSupported {
                     throw WarrenRemoteClientError.requestFailed("This Host does not support attachments.")
                 }
-                if timelineSupported || !item.attachments.isEmpty {
-                    let result = try await client.sendAgentMessage(
-                        WarrenRemoteAgentMessageSendRequest(
-                            session: sessionID,
-                            clientMessageID: item.id,
-                            text: item.text,
-                            attachments: item.attachments
-                        )
+                let context = await MainActor.run { () -> (String?, WarrenRemoteAgentStatus?) in
+                    guard let self else { return (nil, nil) }
+                    return (self.agentExecutionID(for: sessionID), self.agentStatus(for: sessionID))
+                }
+                guard let executionID = context.0 else {
+                    throw WarrenRemoteClientError.requestFailed("Agent execution is unavailable.")
+                }
+                if context.1?.activity == .blocked {
+                    guard let interactionID = context.1?.attention?.requestID,
+                          !interactionID.isEmpty,
+                          item.attachments.isEmpty else {
+                        throw WarrenRemoteClientError.requestFailed("Agent interaction is unavailable.")
+                    }
+                    let result = try await client.resolveAgentInteraction(
+                        executionID: executionID,
+                        commandID: item.id,
+                        interactionID: interactionID,
+                        version: 1,
+                        resolution: ["text": .string(item.text)]
+                    )
+                    guard result.accepted else {
+                        throw WarrenRemoteClientError.requestFailed("Host did not accept the interaction response.")
+                    }
+                } else {
+                    let result = try await client.startAgentTurn(
+                        executionID: executionID,
+                        commandID: item.id,
+                        text: item.text,
+                        attachments: item.attachments
                     )
                     guard result.accepted else {
                         throw WarrenRemoteClientError.requestFailed("Host did not accept the message.")
                     }
-                } else {
-                    try await client.sendAgentInput(item.text, sessionID: sessionID)
                 }
                 await MainActor.run {
                     guard let self,
@@ -2605,6 +2664,9 @@ public final class IOSApplicationModel: ObservableObject {
         _ sessionID: String,
         endpointIdentity: String
     ) {
+        let streamID = agentExecutionIDBySessionID[sessionID]
+            ?? sessionByID[sessionID]?.agentExecutionID
+        let namespace = agentReplicaNamespace
         invalidateAgentHistoryRequest(for: sessionID)
         historyCursorBySessionID.removeValue(forKey: sessionID)
         historyHasMoreBySessionID.removeValue(forKey: sessionID)
@@ -2625,16 +2687,20 @@ public final class IOSApplicationModel: ObservableObject {
         agentState.agentEventsBySessionID.removeValue(forKey: sessionID)
         agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
         agentEventKeysBySessionID.removeValue(forKey: sessionID)
+        agentEventErrorBySessionID.removeValue(forKey: sessionID)
+        agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
         agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
-        agentEpochBySessionID.removeValue(forKey: sessionID)
+        agentExecutionIDBySessionID.removeValue(forKey: sessionID)
         agentSubscribedSessionIDs.remove(sessionID)
         terminalState.terminalOutputBySessionID.removeValue(forKey: sessionID)
         terminalState.terminalOutputRevisionBySessionID[sessionID, default: 0] &+= 1
         terminalState.terminalSnapshotBySessionID.removeValue(forKey: sessionID)
         terminalEpochBySessionID.removeValue(forKey: sessionID)
         terminalNextSequenceBySessionID.removeValue(forKey: sessionID)
-        Task {
-            await IOSAgentEventStore.shared.clearSession(sessionID: sessionID)
+        if let namespace, let streamID, !streamID.isEmpty {
+            Task {
+                await WarrenAgentEventStore.shared.clearStream(namespace: namespace, streamID: streamID)
+            }
         }
     }
 
@@ -2902,6 +2968,8 @@ public final class IOSApplicationModel: ObservableObject {
     public func loadOlderAgentHistory() {
         guard let sessionID = currentSessionID,
               sessionByID[sessionID]?.isAgentBacked == true,
+              let streamID = agentExecutionID(for: sessionID),
+              agentReplicaNamespace != nil,
               historyLoadingBySessionID.insert(sessionID).inserted else { return }
         let before = historyCursorBySessionID[sessionID]
             ?? agentState.agentEventsBySessionID[sessionID]?.first?.sequence
@@ -2914,15 +2982,19 @@ public final class IOSApplicationModel: ObservableObject {
         historyErrorBySessionID.removeValue(forKey: sessionID)
         Task { [weak self] in
             do {
-                // Mobile history is a conversation surface. Tool and
-                // reasoning events remain available in the live tail, but
-                // must not consume the entire page before older user/
-                // assistant messages arrive.
-                let page = try await client.agentHistory(
-                    sessionID: sessionID,
-                    before: before,
-                    conversationOnly: true
+                let page = try await client.agentEventsHistory(
+                    streamID: streamID,
+                    beforeSequence: before,
+                    limit: 200
                 )
+                let namespace = await MainActor.run { self?.agentReplicaNamespace }
+                if let namespace {
+                    _ = try await WarrenAgentEventStore.shared.saveEvents(
+                        page.events,
+                        namespace: namespace,
+                        streamID: streamID
+                    )
+                }
                 await MainActor.run {
                     guard let self,
                           self.historyRequestTokenBySessionID[sessionID] == requestToken,
@@ -2931,23 +3003,14 @@ public final class IOSApplicationModel: ObservableObject {
                           self.currentSessionID == sessionID else { return }
                     self.historyRequestTokenBySessionID.removeValue(forKey: sessionID)
                     self.historyLoadingBySessionID.remove(sessionID)
-                    if let pageEpoch = page.epoch,
-                       pageEpoch != 0,
-                       let currentEpoch = self.agentEpochBySessionID[sessionID],
-                       currentEpoch != 0,
-                       pageEpoch != currentEpoch {
-                        self.historyErrorBySessionID[sessionID] = "Conversation changed. Try again."
-                        return
-                    }
-                    self.mergeAgentEvents(
+                    self.mergeCanonicalAgentEvents(
                         page.events,
                         sessionID: sessionID,
-                        epoch: page.epoch ?? 0,
                         prepend: true
                     )
                     self.historyLoadedBySessionID.insert(sessionID)
                     self.historyErrorBySessionID.removeValue(forKey: sessionID)
-                    if let cursor = page.cursor ?? page.events.first?.sequence {
+                    if let cursor = page.events.first?.sequence {
                         self.historyCursorBySessionID[sessionID] = cursor
                     }
                     self.historyHasMoreBySessionID[sessionID] = page.hasMore
@@ -2973,58 +3036,63 @@ public final class IOSApplicationModel: ObservableObject {
     private func fillAgentSequenceGap(
         sessionID: String,
         since: UInt64,
-        before: UInt64,
-        epoch: UInt64? = nil
+        before: UInt64
     ) {
-        guard since < before else { return }
+        guard since < before,
+              let streamID = agentExecutionID(for: sessionID),
+              agentReplicaNamespace != nil else { return }
         let client = client
         let currentClientGeneration = clientGeneration
-        let initialEpoch = epoch ?? agentEpochBySessionID[sessionID] ?? 0
         Task { [weak self] in
-            var nextSince = since
-            var expectedEpoch = initialEpoch
-            while nextSince < before && !Task.isCancelled {
+            var nextAfter = since == 0 ? 0 : since - 1
+            while nextAfter < before && !Task.isCancelled {
                 do {
-                    let page = try await client.agentHistory(
-                        sessionID: sessionID,
-                        since: nextSince,
-                        before: before,
-                        limit: 100,
-                        conversationOnly: false
+                    let page = try await client.agentEventsHistory(
+                        streamID: streamID,
+                        afterSequence: nextAfter,
+                        beforeSequence: before,
+                        limit: 200
                     )
                     guard let pageMax = page.events.map(\.sequence).max(),
-                          pageMax >= nextSince else {
+                          pageMax > nextAfter else {
                         break
                     }
-
-                    let pageEpoch = page.epoch ?? 0
+                    let namespace: WarrenAgentEventStore.Namespace? = await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration,
+                              self.agentExecutionID(for: sessionID) == streamID else { return nil }
+                        return self.agentReplicaNamespace
+                    }
+                    guard let namespace else { break }
+                    _ = try await WarrenAgentEventStore.shared.saveEvents(
+                        page.events,
+                        namespace: namespace,
+                        streamID: streamID
+                    )
                     let applied = await MainActor.run { [weak self] in
                         guard let self,
                               self.clientGeneration == currentClientGeneration,
                               self.sessionByID[sessionID]?.isAgentBacked == true,
-                              expectedEpoch == 0 || self.agentEpochBySessionID[sessionID] == expectedEpoch,
-                              pageEpoch == 0 || expectedEpoch == 0 || pageEpoch == expectedEpoch else {
+                              self.agentExecutionID(for: sessionID) == streamID else {
                             return false
                         }
-                        self.mergeAgentEvents(
+                        self.mergeCanonicalAgentEvents(
                             page.events,
                             sessionID: sessionID,
-                            epoch: pageEpoch == 0 ? expectedEpoch : pageEpoch,
                             prepend: false
                         )
                         return true
                     }
                     guard applied else { break }
-
-                    if expectedEpoch == 0, pageEpoch != 0 {
-                        expectedEpoch = pageEpoch
-                    }
                     guard page.hasMore else { break }
-                    let next = pageMax.addingReportingOverflow(1)
-                    guard !next.overflow, next.partialValue > nextSince else { break }
-                    nextSince = next.partialValue
+                    guard pageMax > nextAfter else { break }
+                    nextAfter = pageMax
                 } catch {
-                    // Gap recovery will retry on subsequent message boundaries.
+                    await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration else { return }
+                        self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                    }
                     break
                 }
             }
@@ -3046,59 +3114,108 @@ public final class IOSApplicationModel: ObservableObject {
         historyErrorBySessionID[sessionID]
     }
 
+    private func quarantineAgentStream(sessionID: String, streamID: String, error: Error) {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        agentEventErrorBySessionID[sessionID] = detail.isEmpty
+            ? "Agent stream \(streamID) failed its integrity check."
+            : detail
+        agentSubscribedSessionIDs.remove(sessionID)
+        // Keep the last verified projection visible, but stop accepting rows
+        // from a stream whose immutable sequence or event identity conflicted.
+    }
+
+    private func applyCanonicalCheckpoint(
+        _ checkpoint: WarrenRemoteAgentProjectionCheckpoint,
+        sessionID: String
+    ) {
+        let state = checkpoint.state
+        func string(_ key: String) -> String? {
+            guard case .string(let value) = state[key] else { return nil }
+            return value
+        }
+        if let value = state["status"],
+           let data = try? JSONEncoder().encode(value),
+           let status = try? JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: data) {
+            agentStatusBySessionID[sessionID] = status
+        }
+        if let turnID = string("turnId").flatMap(UInt64.init), turnID > 0 {
+            let turnStatus = WarrenRemoteAgentTurnStatus(rawValue: string("turnStatus") ?? "unknown")
+            agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: turnStatus)
+        }
+    }
+
     public func ensureAgentSubscribed(for sessionID: String) {
-        guard !agentSubscribedSessionIDs.contains(sessionID) else { return }
+        guard !agentSubscribedSessionIDs.contains(sessionID),
+              let streamID = agentExecutionID(for: sessionID),
+              let namespace = agentReplicaNamespace else { return }
+        if let previousStream = agentExecutionIDBySessionID[sessionID], previousStream != streamID {
+            // A replaced execution gets a new stream. Keep the old stream in
+            // SQLite for historical browsing, but never mix its rows into the
+            // current Session projection.
+            agentState.agentEventsBySessionID[sessionID] = []
+            agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
+            agentEventKeysBySessionID[sessionID] = []
+            agentEventErrorBySessionID.removeValue(forKey: sessionID)
+        agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
+        agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
+            historyCursorBySessionID.removeValue(forKey: sessionID)
+            historyHasMoreBySessionID.removeValue(forKey: sessionID)
+            historyLoadedBySessionID.remove(sessionID)
+            historyErrorBySessionID.removeValue(forKey: sessionID)
+            invalidateAgentHistoryRequest(for: sessionID)
+        }
+        agentExecutionIDBySessionID[sessionID] = streamID
         agentSubscribedSessionIDs.insert(sessionID)
         let currentClientGeneration = clientGeneration
         let client = client
         Task { [weak self] in
             guard let self else { return }
-            let syncState = await IOSAgentEventStore.shared.syncState(sessionID: sessionID)
-            let cached = await IOSAgentEventStore.shared.loadRecentEvents(
-                sessionID: sessionID,
-                epoch: syncState?.epoch,
+            let syncState = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
+            let cached = await WarrenAgentEventStore.shared.loadRecentEvents(
+                namespace: namespace,
+                streamID: streamID,
                 limit: 100
             )
 
-            let target: (epoch: UInt64, sequence: UInt64)? = await MainActor.run {
+            let target: UInt64? = await MainActor.run {
                 guard self.clientGeneration == currentClientGeneration,
                       self.sessionByID[sessionID]?.isAgentBacked == true,
+                      self.agentExecutionID(for: sessionID) == streamID,
                       self.agentSubscribedSessionIDs.contains(sessionID) else {
                     return nil
                 }
                 if let syncState {
-                    if self.agentEpochBySessionID[sessionID] == nil || self.agentEpochBySessionID[sessionID] == 0 {
-                        self.agentEpochBySessionID[sessionID] = syncState.epoch
-                    }
-                    if self.agentHighestSequenceBySessionID[sessionID] == nil || self.agentHighestSequenceBySessionID[sessionID] == 0 {
-                        self.agentHighestSequenceBySessionID[sessionID] = syncState.maxSequence
+                    if self.agentHighestSequenceBySessionID[sessionID] == nil {
+                        self.agentHighestSequenceBySessionID[sessionID] = syncState.headSequence
                     }
                 }
                 if !cached.isEmpty {
                     let existing = self.agentState.agentEventsBySessionID[sessionID] ?? []
                     if existing.isEmpty {
-                        self.agentState.agentEventsBySessionID[sessionID] = cached
-                        let epoch = self.agentEpochBySessionID[sessionID] ?? syncState?.epoch ?? 0
+                        let projected = cached.map { self.projectCanonicalEvent($0) }
+                        self.agentState.agentEventsBySessionID[sessionID] = projected
                         var keys = self.agentEventKeysBySessionID[sessionID] ?? []
-                        for event in cached {
-                            keys.insert("\(epoch):\(event.sequence)")
+                        for event in projected {
+                            keys.insert("0:\(event.sequence)")
                         }
                         self.agentEventKeysBySessionID[sessionID] = keys
-                        if let maxSeq = cached.map(\.sequence).max() {
+                        if let maxSeq = projected.map(\.sequence).max() {
                             self.agentHighestSequenceBySessionID[sessionID] = max(
                                 self.agentHighestSequenceBySessionID[sessionID] ?? 0,
                                 maxSeq
                             )
                         }
-                        if self.historyCursorBySessionID[sessionID] == nil, let minSeq = cached.map(\.sequence).min() {
+                        if self.historyCursorBySessionID[sessionID] == nil, let minSeq = projected.map(\.sequence).min() {
                             self.historyCursorBySessionID[sessionID] = minSeq
                         }
                         self.agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
                     }
                 }
-                let currentEpoch = self.agentEpochBySessionID[sessionID] ?? syncState?.epoch ?? 0
-                let currentMaxSeq = self.agentHighestSequenceBySessionID[sessionID] ?? syncState?.maxSequence ?? 0
-                return (epoch: currentEpoch, sequence: currentMaxSeq)
+                return self.agentReplicaNamespace == namespace
+                    ? (syncState?.contiguousThrough
+                        ?? self.agentHighestSequenceBySessionID[sessionID]
+                        ?? 0)
+                    : nil
             }
             guard let target else {
                 await MainActor.run {
@@ -3109,34 +3226,32 @@ public final class IOSApplicationModel: ObservableObject {
             }
 
             do {
-                let subResult = try await client.subscribeAgent(
-                    sessionID: sessionID,
-                    epoch: target.epoch > 0 ? target.epoch : nil,
-                    lastSequence: target.sequence > 0 ? target.sequence : nil
+                let subResult = try await client.subscribeAgentEvents(
+                    streamID: streamID,
+                    afterSequence: target,
+                    limit: 200
+                )
+                // Persist the checkpoint and catch-up batch before exposing
+                // them to SwiftUI. A live batch can arrive during this RPC;
+                // the SQLite uniqueness constraints make the overlap a no-op.
+                _ = try await WarrenAgentEventStore.shared.saveEvents(
+                    subResult.events,
+                    namespace: namespace,
+                    streamID: streamID,
+                    checkpointSequence: subResult.checkpoint.sequence,
+                    checkpoint: subResult.checkpoint.state
                 )
                 _ = await MainActor.run {
                     guard self.clientGeneration == currentClientGeneration,
                           self.sessionByID[sessionID]?.isAgentBacked == true,
+                          self.agentExecutionID(for: sessionID) == streamID,
                           self.agentSubscribedSessionIDs.contains(sessionID) else { return }
-                    // Route the snapshot through the same epoch transition
-                    // path as live events. Assigning the new epoch first
-                    // would leave cached events from the previous Host
-                    // projection in the visible transcript.
-                    self.mergeAgentEvents(
-                        subResult.gapEvents ?? [],
+                    self.mergeCanonicalAgentEvents(
+                        subResult.events,
                         sessionID: sessionID,
-                        epoch: subResult.snapshot.epoch,
                         prepend: false
                     )
-                    let knownHighest = self.agentHighestSequenceBySessionID[sessionID] ?? 0
-                    if subResult.snapshot.sequence > knownHighest {
-                        self.fillAgentSequenceGap(
-                            sessionID: sessionID,
-                            since: knownHighest + 1,
-                            before: subResult.snapshot.sequence + 1,
-                            epoch: subResult.snapshot.epoch
-                        )
-                    }
+                    self.applyCanonicalCheckpoint(subResult.checkpoint, sessionID: sessionID)
                     if self.historyCursorBySessionID[sessionID] == nil,
                        let minSeq = self.agentState.agentEventsBySessionID[sessionID]?.first?.sequence {
                         self.historyCursorBySessionID[sessionID] = minSeq
@@ -3146,7 +3261,11 @@ public final class IOSApplicationModel: ObservableObject {
             } catch {
                 _ = await MainActor.run {
                     guard self.clientGeneration == currentClientGeneration else { return }
-                    _ = self.agentSubscribedSessionIDs.remove(sessionID)
+                    if error is WarrenAgentEventStoreError {
+                        self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                    } else {
+                        _ = self.agentSubscribedSessionIDs.remove(sessionID)
+                    }
                 }
             }
         }
@@ -3206,16 +3325,45 @@ public final class IOSApplicationModel: ObservableObject {
             let client = client
             Task { [weak self] in
                 let capabilities = await client.capabilities()
-                await MainActor.run { self?.agentCapabilities = capabilities }
+                let identity = await client.replicaNamespace()
+                await MainActor.run {
+                    guard let self else { return }
+                    self.agentCapabilities = capabilities
+                    let nextNamespace = identity.map {
+                        WarrenAgentEventStore.Namespace(hostID: $0.hostID, accessScopeID: $0.accessScopeID)
+                    }
+                    if self.agentReplicaNamespaceStorage != nextNamespace {
+                        self.agentReplicaNamespaceStorage = nextNamespace
+                        self.agentState.reset()
+                        self.agentEventKeysBySessionID.removeAll()
+                        self.agentHighestSequenceBySessionID.removeAll()
+                        self.agentExecutionIDBySessionID.removeAll()
+                        self.historyCursorBySessionID.removeAll()
+                        self.historyHasMoreBySessionID.removeAll()
+                        self.historyLoadedBySessionID.removeAll()
+                        self.agentEventErrorBySessionID.removeAll()
+        agentProjectionSequenceBySessionID.removeAll()
+                        if let currentSessionID = self.currentSessionID,
+                           self.sessionByID[currentSessionID]?.isAgentBacked == true {
+                            self.agentSubscribedSessionIDs.remove(currentSessionID)
+                            self.ensureAgentSubscribed(for: currentSessionID)
+                        }
+                    }
+                }
             }
         case .roster(let next):
             if !hasReceivedAuthoritativeRoster {
                 hasReceivedAuthoritativeRoster = true
                 applyRoster(next)
                 syncLiveActivity()
-                let activeIDs = Set(next.sessions.map(\.id))
-                Task {
-                    await IOSAgentEventStore.shared.purgeOrphanSessions(activeSessionIDs: activeIDs)
+                if let namespace = agentReplicaNamespace {
+                    let activeStreams = Set(next.sessions.compactMap(\.agentExecutionID))
+                    Task {
+                        await WarrenAgentEventStore.shared.purgeOrphanStreams(
+                            namespace: namespace,
+                            activeStreamIDs: activeStreams
+                        )
+                    }
                 }
                 return
             }
@@ -3271,54 +3419,46 @@ public final class IOSApplicationModel: ObservableObject {
                 terminalSubscriptionRequests.remove(anchor.sessionID)
                 drainPendingTerminalFocus(for: anchor.sessionID)
             }
-        case .agent(let sessionID, let epoch, let events):
-            mergeAgentEvents(events, sessionID: sessionID, epoch: epoch, prepend: false)
-        case .agentStatus(let sessionID, let epoch, let status):
-            if epoch != 0,
-               let previous = agentEpochBySessionID[sessionID], previous != epoch {
-                agentState.agentEventsBySessionID[sessionID] = []
-                agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
-                agentEventKeysBySessionID[sessionID] = []
-                historyCursorBySessionID.removeValue(forKey: sessionID)
-                historyHasMoreBySessionID.removeValue(forKey: sessionID)
-                historyLoadedBySessionID.remove(sessionID)
-                historyErrorBySessionID.removeValue(forKey: sessionID)
-                invalidateAgentHistoryRequest(for: sessionID)
+        case .agentEvents(let streamID, let executionID, let events):
+            guard let sessionID = sessionID(forAgentExecutionID: streamID)
+                ?? sessionID(forAgentExecutionID: executionID),
+                  sessionByID[sessionID]?.isAgentBacked == true,
+                  agentEventErrorBySessionID[sessionID] == nil,
+                  let namespace = agentReplicaNamespace,
+                  !events.isEmpty else { break }
+            agentExecutionIDBySessionID[sessionID] = streamID
+            let currentClientGeneration = clientGeneration
+            let writeKey = "\(namespace.hostID)|\(namespace.accessScopeID)|\(streamID)"
+            let previousWrite = agentEventWriteTasks[writeKey]
+            agentEventWriteTasks[writeKey] = Task { [weak self] in
+                await previousWrite?.value
+                do {
+                    _ = try await WarrenAgentEventStore.shared.saveEvents(
+                        events,
+                        namespace: namespace,
+                        streamID: streamID
+                    )
+                    await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration,
+                              self.agentEventErrorBySessionID[sessionID] == nil,
+                              self.agentExecutionID(for: sessionID) == streamID,
+                              self.sessionByID[sessionID]?.isAgentBacked == true else { return }
+                        self.mergeCanonicalAgentEvents(
+                            events,
+                            sessionID: sessionID,
+                            prepend: false
+                        )
+                        self.drainQueueAfterLiveAgentEvent(for: sessionID)
+                    }
+                } catch {
+                    await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration else { return }
+                        self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                    }
+                }
             }
-            if epoch != 0 {
-                agentEpochBySessionID[sessionID] = epoch
-            }
-            agentStatusBySessionID[sessionID] = status
-            if status.activity == .ready {
-                drainQueuedAgentMessages(for: sessionID)
-            } else if status.activity == .blocked, status.attention?.kind == .input {
-                // A queued message can be the answer to a provider question.
-                // Treat blocked/input as an executable boundary just like the
-                // Web reducer so the first queued answer is submitted without
-                // waiting for a synthetic ready event.
-                submitBlockedAgentMessage(for: sessionID)
-            }
-            syncLiveActivity()
-        case .agentTurn(let sessionID, let epoch, let turn):
-            if epoch != 0,
-               let previous = agentEpochBySessionID[sessionID], previous != epoch {
-                agentState.agentEventsBySessionID[sessionID] = []
-                agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
-                agentEventKeysBySessionID[sessionID] = []
-                historyCursorBySessionID.removeValue(forKey: sessionID)
-                historyHasMoreBySessionID.removeValue(forKey: sessionID)
-                historyLoadedBySessionID.remove(sessionID)
-                historyErrorBySessionID.removeValue(forKey: sessionID)
-                invalidateAgentHistoryRequest(for: sessionID)
-            }
-            if epoch != 0 {
-                agentEpochBySessionID[sessionID] = epoch
-            }
-            agentTurnBySessionID[sessionID] = turn
-            if turn.status == .completed || turn.status == .failed || turn.status == .aborted {
-                drainQueuedAgentMessages(for: sessionID)
-            }
-            syncLiveActivity()
         case .maintenance(let message):
             maintenanceMessage = message ?? "Host is updating."
             connectionState = .reconnecting
@@ -3381,37 +3521,230 @@ public final class IOSApplicationModel: ObservableObject {
         terminalNextSequenceBySessionID[frame.sessionID] = endSequence
     }
 
+    /// Projects the canonical envelope into the existing presentation row.
+    /// The raw envelope is still what the local store receives; this mapping
+    /// is intentionally lossy and exists only at the UI boundary.
+    private func projectCanonicalEvent(_ event: WarrenRemoteAgentEvent) -> WarrenRemoteAgentEvent {
+        let canonicalType = event.type.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+        guard canonicalType.contains(".") else { return event }
+        let payload = event.payload ?? [:]
+        func string(_ key: String) -> String? {
+            guard case .string(let value) = payload[key], !value.isEmpty else { return nil }
+            return value
+        }
+        func bool(_ key: String) -> Bool? {
+            guard case .boolean(let value) = payload[key] else { return nil }
+            return value
+        }
+        func integer(_ key: String) -> Int64? {
+            guard case .number(let value) = payload[key] else { return nil }
+            return Int64(value)
+        }
+        let role = string("role") ?? event.role
+        let messageID = string("messageId") ?? string("id")
+        let callID = string("callId") ?? string("toolCallId")
+        let interactionID = string("interactionId") ?? string("requestId")
+        var type = event.type
+        var id = event.id
+        var content = event.content
+        var contentDelta = event.contentDelta
+        var toolName = event.toolName
+        var toolInput = event.toolInput
+        var toolStatus = event.toolStatus
+        var output = event.output
+        var error = event.error
+        var model = event.model
+        var stopReason = event.stopReason
+        var files = event.files
+        var durationMs = event.durationMs
+        var sidechain = event.sidechain
+
+        switch canonicalType {
+        case "message.created", "message.delta", "message.completed":
+            type = role ?? "assistant"
+            id = messageID ?? id
+            content = string("content") ?? content
+            contentDelta = canonicalType == "message.delta" || bool("contentDelta") == true
+            model = string("model") ?? model
+            stopReason = string("stopReason") ?? stopReason
+        case "reasoning.delta":
+            type = "reasoning"
+            id = messageID ?? id
+            content = string("content") ?? content
+            contentDelta = true
+        case "tool.started":
+            type = "tool_call"
+            id = callID ?? id
+            toolName = string("toolName") ?? toolName
+            toolInput = payload["toolInput"] ?? toolInput
+            toolStatus = string("toolStatus") ?? toolStatus ?? "running"
+        case "tool.updated", "tool.completed", "tool.failed":
+            type = "tool_output"
+            id = callID ?? id
+            toolName = string("toolName") ?? toolName
+            toolInput = payload["toolInput"] ?? toolInput
+            output = string("output") ?? output
+            error = string("error") ?? error
+            toolStatus = string("toolStatus") ?? toolStatus
+                ?? (canonicalType == "tool.failed" ? "error" : canonicalType == "tool.completed" ? "success" : "running")
+        case "interaction.requested", "interaction.resolved", "interaction.expired":
+            type = string("kind") ?? "question"
+            id = interactionID ?? id
+            content = string("title") ?? string("description") ?? content
+        case "plan.updated":
+            type = "plan"
+            id = string("planId") ?? id
+            content = string("content") ?? string("title") ?? content
+        case "tasks.updated":
+            type = "todo"
+            id = string("taskListId") ?? id
+            content = string("content") ?? content
+        case "context.updated":
+            type = "context"
+            content = string("content") ?? string("summary") ?? content
+        case "status.changed":
+            type = "status"
+            content = string("activity") ?? content
+        case "turn.started", "turn.completed", "turn.failed", "turn.cancelled":
+            type = "turn"
+            id = string("turnId") ?? id
+            content = string("status") ?? content
+        case "execution.started", "execution.resumed", "execution.replaced", "execution.failed":
+            type = "execution"
+            content = string("state") ?? string("reason") ?? content
+        default:
+            content = string("content") ?? content
+        }
+
+        files = files ?? {
+            guard case .array(let values) = payload["files"] else { return nil }
+            return values.compactMap { value in
+                guard case .string(let value) = value else { return nil }
+                return value
+            }
+        }()
+        output = output ?? string("output")
+        error = error ?? string("error")
+        durationMs = durationMs ?? integer("durationMs")
+        sidechain = sidechain || bool("sidechain") == true
+        let usage: WarrenRemoteAgentUsage? = event.usage ?? {
+            guard let value = payload["usage"],
+                  let data = try? JSONEncoder().encode(value) else { return nil }
+            return try? JSONDecoder().decode(WarrenRemoteAgentUsage.self, from: data)
+        }()
+        return WarrenRemoteAgentEvent(
+            sequence: event.sequence,
+            eventID: event.eventID,
+            streamID: event.streamID,
+            executionID: event.executionID,
+            turn: event.turn,
+            id: id,
+            provider: event.provider,
+            type: type,
+            role: role,
+            content: content,
+            contentDelta: contentDelta,
+            model: model,
+            stopReason: stopReason,
+            toolName: toolName,
+            toolInput: toolInput,
+            toolStatus: toolStatus,
+            callID: callID ?? event.callID,
+            output: output,
+            files: files,
+            error: error,
+            usage: usage,
+            durationMs: durationMs,
+            sidechain: sidechain,
+            timestamp: event.occurredAt ?? event.timestamp,
+            occurredAt: event.occurredAt,
+            recordedAt: event.recordedAt,
+            causedBy: event.causedBy,
+            origin: event.origin,
+            payload: event.payload
+        )
+    }
+
+    private func applyCanonicalProjection(_ event: WarrenRemoteAgentEvent, sessionID: String) {
+        let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let payload = event.payload ?? [:]
+        func string(_ key: String) -> String? {
+            guard case .string(let value) = payload[key] else { return nil }
+            return value
+        }
+        switch type {
+        case "status.changed":
+            if let data = try? JSONEncoder().encode(payload),
+               let status = try? JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: data) {
+                agentStatusBySessionID[sessionID] = status
+            }
+        case "turn.started", "turn.completed", "turn.failed", "turn.cancelled":
+            let rawStatus = string("status") ?? type.split(separator: ".").last.map(String.init) ?? "unknown"
+            let status: WarrenRemoteAgentTurnStatus = rawStatus == "cancelled"
+                ? .aborted
+                : WarrenRemoteAgentTurnStatus(rawValue: rawStatus)
+            let turnID = event.turn
+                ?? string("turnId").flatMap(UInt64.init)
+                ?? UInt64(event.id)
+                ?? 0
+            agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: status)
+        case "interaction.requested":
+            let kind = string("kind")?.lowercased()
+            let attentionKind: WarrenRemoteAgentAttentionKind = kind == "permission" ? .approval : .input
+            let reason = string("title") ?? string("description") ?? "Agent is waiting for input."
+            let requestID = string("interactionId") ?? string("requestId")
+            agentStatusBySessionID[sessionID] = WarrenRemoteAgentStatus(
+                activity: .blocked,
+                attention: WarrenRemoteAgentAttention(kind: attentionKind, reason: reason, requestID: requestID)
+            )
+        case "execution.failed":
+            agentStatusBySessionID[sessionID] = WarrenRemoteAgentStatus(activity: .failed)
+        default:
+            break
+        }
+    }
+
+    private func mergeCanonicalAgentEvents(
+        _ incoming: [WarrenRemoteAgentEvent],
+        sessionID: String,
+        prepend: Bool
+    ) {
+        for event in incoming.sorted(by: { $0.sequence < $1.sequence }) {
+            guard event.sequence > (agentProjectionSequenceBySessionID[sessionID] ?? 0) else { continue }
+            applyCanonicalProjection(event, sessionID: sessionID)
+            agentProjectionSequenceBySessionID[sessionID] = event.sequence
+        }
+        mergeAgentEvents(
+            incoming.map { projectCanonicalEvent($0) },
+            sessionID: sessionID,
+            prepend: prepend
+        )
+    }
+
+    /// A live status event can open an executable boundary for the local
+    /// queue. History and subscription replay deliberately do not call this
+    /// helper: replaying a cached `blocked` row must never submit a new
+    /// command as a side effect of rendering history.
+    private func drainQueueAfterLiveAgentEvent(for sessionID: String) {
+        guard currentSessionID == sessionID else { return }
+        guard let status = agentStatus(for: sessionID) else { return }
+        switch status.activity {
+        case .ready:
+            drainQueuedAgentMessages(for: sessionID)
+        case .blocked where status.attention?.kind == .input:
+            submitBlockedAgentMessage(for: sessionID)
+        default:
+            break
+        }
+    }
+
     private func mergeAgentEvents(
         _ incoming: [WarrenRemoteAgentEvent],
         sessionID: String,
-        epoch: UInt64,
         prepend: Bool
     ) {
-        if epoch != 0,
-           let previous = agentEpochBySessionID[sessionID], previous != epoch {
-            agentState.agentEventsBySessionID[sessionID] = []
-            agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
-            agentEventKeysBySessionID[sessionID] = []
-            agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
-            agentSubscribedSessionIDs.remove(sessionID)
-            historyCursorBySessionID.removeValue(forKey: sessionID)
-            historyHasMoreBySessionID.removeValue(forKey: sessionID)
-            historyLoadedBySessionID.remove(sessionID)
-            historyErrorBySessionID.removeValue(forKey: sessionID)
-            invalidateAgentHistoryRequest(for: sessionID)
-            agentQueueBySessionID.removeValue(forKey: sessionID)
-            agentQueuedMessageCountBySessionID.removeValue(forKey: sessionID)
-            pendingAgentMessagesBySessionID.removeValue(forKey: sessionID)
-            updateAgentDraft("", for: sessionID)
-            flushAgentDraft("", for: sessionID)
-            Task {
-                await IOSAgentEventStore.shared.clearSession(sessionID: sessionID)
-            }
-        }
-        if epoch != 0 {
-            agentEpochBySessionID[sessionID] = epoch
-        }
-        let eventEpoch = agentEpochBySessionID[sessionID] ?? epoch
         // Take ownership of the buffers while merging. Agent deltas can be
         // frequent; mutating a value left in the dictionary would trigger a
         // full copy of the transcript for each delta.
@@ -3419,7 +3752,7 @@ public final class IOSApplicationModel: ObservableObject {
         var keys = agentEventKeysBySessionID.removeValue(forKey: sessionID) ?? []
         if keys.isEmpty && !events.isEmpty {
             for e in events {
-                keys.insert("\(eventEpoch):\(e.sequence)")
+                keys.insert("\(e.sequence)")
             }
         }
         let currentHighest = agentHighestSequenceBySessionID[sessionID] ?? 0
@@ -3442,7 +3775,7 @@ public final class IOSApplicationModel: ObservableObject {
         }
         var needsSort = prepend
         for event in incoming {
-            let key = "\(eventEpoch):\(event.sequence)"
+            let key = "\(event.sequence)"
             if event.sequence > (agentHighestSequenceBySessionID[sessionID] ?? 0) {
                 agentHighestSequenceBySessionID[sessionID] = event.sequence
             }
@@ -3530,14 +3863,13 @@ public final class IOSApplicationModel: ObservableObject {
                 fillAgentSequenceGap(
                     sessionID: sessionID,
                     since: gapStart,
-                    before: minIncoming,
-                    epoch: eventEpoch > 0 ? eventEpoch : nil
+                    before: minIncoming
                 )
             }
         }
-        Task {
-            try? await IOSAgentEventStore.shared.saveEvents(incoming, sessionID: sessionID, epoch: eventEpoch)
-        }
+        // Canonical rows are persisted by the caller before this reducer is
+        // invoked. Keeping storage out of this synchronous projection makes
+        // the Host event commit the clear boundary visible to the UI.
     }
 
     private func shouldApplyRoster(_ next: WarrenRemoteRoster) -> Bool {
@@ -3559,6 +3891,27 @@ public final class IOSApplicationModel: ObservableObject {
                 sessionID,
                 endpointIdentity: "\(endpointMetadata.name)|\(endpointMetadata.url)"
             )
+        }
+        for session in next.sessions {
+            guard let nextStream = session.agentExecutionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !nextStream.isEmpty,
+                  let previousStream = agentExecutionIDBySessionID[session.id],
+                  previousStream != nextStream else { continue }
+            // Execution replacement is a new stream, not an epoch reset. The
+            // old stream remains available in the replica for history, while
+            // this Session starts with a clean in-memory projection.
+            agentState.agentEventsBySessionID[session.id] = []
+            agentState.agentEventRevisionBySessionID[session.id, default: 0] &+= 1
+            agentEventKeysBySessionID[session.id] = []
+            agentEventErrorBySessionID.removeValue(forKey: session.id)
+            agentProjectionSequenceBySessionID.removeValue(forKey: session.id)
+            agentHighestSequenceBySessionID.removeValue(forKey: session.id)
+            historyCursorBySessionID.removeValue(forKey: session.id)
+            historyHasMoreBySessionID.removeValue(forKey: session.id)
+            historyLoadedBySessionID.remove(session.id)
+            historyErrorBySessionID.removeValue(forKey: session.id)
+            invalidateAgentHistoryRequest(for: session.id)
+            agentSubscribedSessionIDs.remove(session.id)
         }
         if let currentEndpoint = localStore.endpoint(named: endpointMetadata.name),
            currentEndpoint.hostID != next.host.id {
@@ -3620,8 +3973,7 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.subscribe(
                     sessionID: sessionID,
                     anchor: nil,
-                    claimControl: false,
-                    omitAgentOutput: true
+                    claimControl: false
                 )
                 guard result.subscribed else {
                     throw WarrenRemoteClientError.requestFailed("session subscription was not accepted")

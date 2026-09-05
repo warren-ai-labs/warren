@@ -6,10 +6,10 @@ package api
 // separate so a degraded but-running daemon can be observed without flipping
 // menu bar / probe liveness lights.
 type HealthStatus struct {
-	OK      bool                `json:"ok"`
-	Ready   bool                `json:"ready"`
-	Version string              `json:"version,omitempty"`
-	Build   string              `json:"build,omitempty"`
+	OK      bool   `json:"ok"`
+	Ready   bool   `json:"ready"`
+	Version string `json:"version,omitempty"`
+	Build   string `json:"build,omitempty"`
 	// Subsystem fields, in the order a probe should check them.
 	Status HealthSubsystems `json:"status"`
 }

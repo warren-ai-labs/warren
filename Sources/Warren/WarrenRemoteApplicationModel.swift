@@ -398,6 +398,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let pinned: Bool?
         let agentStatus: AgentStatus?
         let agentTurn: AgentTurn?
+        var agentExecutionId: String? = nil
     }
     struct AgentTurn: Decodable, Sendable, Equatable {
         let id: UInt64
@@ -684,7 +685,7 @@ struct WarrenResizeRequestBuffer: Sendable {
 private enum RemoteWireEvent: Sendable {
     case roster
     case rosterDelta(RemoteRoster.Delta)
-    case agent(sessionID: TerminalSessionID, status: AgentStatus)
+    case agentProjection(sessionID: TerminalSessionID, status: AgentStatus)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
     case atomicState(
         sessionID: TerminalSessionID,
@@ -882,6 +883,11 @@ private actor WarrenRemoteWire {
     private var requestContexts: [String: WarrenRemoteRequestContext] = [:]
     private var requestTimeoutTasks: [String: Task<Void, Never>] = [:]
     private var daemonProtocolVersion: String?
+    private var agentNamespace: WarrenAgentEventStore.Namespace?
+    private var agentSessions: [String: TerminalSessionID] = [:]
+    private var agentSubscriptions: Set<String> = []
+    private var agentQuarantined: Set<String> = []
+    private var agentProjectionSequence: [String: UInt64] = [:]
     private var pendingInput = Data()
     private var inputTask: Task<Void, Never>?
     // Rosters are snapshots, so intermediate states have no value once a
@@ -994,8 +1000,8 @@ private actor WarrenRemoteWire {
                 group.addTask {
                     var auth: [String: Any] = [
                         "t": "auth",
-                        "version": "2.0",
-                        "capabilities": ["roster-delta"],
+                        "version": "3.0",
+                        "capabilities": ["roster-delta", "agent-timeline-v1"],
                         "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
                     ]
                     auth[isRelay ? "access_token" : "token"] = token
@@ -1086,13 +1092,19 @@ private actor WarrenRemoteWire {
                 userInfo: [NSLocalizedDescriptionKey: "The daemon returned an unexpected handshake message."]
             )
         }
+        guard let host = object["host"] as? [String: Any],
+              let hostID = host["id"] as? String, !hostID.isEmpty,
+              let scopeID = object["accessScopeId"] as? String, !scopeID.isEmpty else {
+            throw NSError(domain: "WarrenRemote", code: 5, userInfo: [NSLocalizedDescriptionKey: "The Host omitted the Agent replica namespace."])
+        }
+        agentNamespace = .init(hostID: hostID, accessScopeID: scopeID)
         let version = object["version"] as? String ?? "unknown"
         daemonProtocolVersion = version
-        guard Self.compatibleProtocolVersion(version, with: "2.0") else {
+        guard Self.compatibleProtocolVersion(version, with: "3.0") else {
             throw NSError(
                 domain: "WarrenRemote",
                 code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Warren Desktop is incompatible with the daemon protocol (desktop=2.0, daemon=\(version)); update both together."]
+                userInfo: [NSLocalizedDescriptionKey: "Warren Desktop is incompatible with the daemon protocol (desktop=3.0, daemon=\(version)); update both together."]
             )
         }
     }
@@ -1341,20 +1353,21 @@ private actor WarrenRemoteWire {
         } else if type == "welcome" {
             let version = object["version"] as? String ?? "unknown"
             daemonProtocolVersion = version
-            guard version == "2.0" else {
+            guard version == "3.0" else {
                 return await eventBuffer.send(.disconnected(
                     "Warren Desktop is incompatible with the daemon protocol "
-                        + "(desktop=2.0, daemon=\(version)); update both together."
+                        + "(desktop=3.0, daemon=\(version)); update both together."
                 ))
             }
-        } else if type == "agent.status",
-                  let sessionString = object["session"] as? String,
-                  let sessionID = TerminalSessionID(uuidString: sessionString),
-                  let rawStatus = object["status"],
-                  let encodedStatus = try? JSONSerialization.data(withJSONObject: rawStatus),
-                  let remoteStatus = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: encodedStatus),
-                  let status = Self.agentStatus(from: remoteStatus) {
-            return await eventBuffer.send(.agent(sessionID: sessionID, status: status))
+        } else if type == "agent.events" {
+            struct Batch: Decodable {
+                let streamId: String
+                let events: [WarrenRemoteAgentEvent]
+            }
+            guard let batch = try? JSONDecoder().decode(Batch.self, from: data) else {
+                return await eventBuffer.send(.disconnected("Invalid canonical Agent event envelope."))
+            }
+            await receiveAgentEvents(batch.events, streamID: batch.streamId)
         } else if type == "maintenance" {
             return await eventBuffer.send(.maintenance(message: object["message"] as? String))
         } else if type == "attached" || type == "synced" {
@@ -1382,6 +1395,72 @@ private actor WarrenRemoteWire {
             ))
         }
         return true
+    }
+
+    func syncAgentSubscriptions(_ roster: RemoteRoster) {
+        agentSessions = Dictionary(uniqueKeysWithValues: roster.sessions.compactMap { session in
+            guard let streamID = session.agentExecutionId, !streamID.isEmpty,
+                  let sessionID = TerminalSessionID(uuidString: session.id) else { return nil }
+            return (streamID, sessionID)
+        })
+        guard let namespace = agentNamespace else { return }
+        for streamID in agentSessions.keys where !agentSubscriptions.contains(streamID) && !agentQuarantined.contains(streamID) {
+            agentSubscriptions.insert(streamID)
+            Task {
+                do {
+                    let state = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
+                    let cached = await WarrenAgentEventStore.shared.loadRecentEvents(namespace: namespace, streamID: streamID)
+                    await projectAgentEvents(cached, streamID: streamID)
+                    let data = try await request("agent.events.subscribe", params: ["streamId": streamID, "afterSequence": String(state?.contiguousThrough ?? 0), "limit": "500"])
+                    let result = try JSONDecoder().decode(WarrenRemoteAgentEventsSubscriptionResult.self, from: data)
+                    _ = try await WarrenAgentEventStore.shared.saveEvents(result.events, namespace: namespace, streamID: streamID, checkpoint: result.checkpoint)
+                    await projectAgentEvents(result.events, streamID: streamID)
+                } catch {
+                    agentQuarantined.insert(streamID)
+                    _ = await eventBuffer.send(.disconnected("Agent stream integrity or subscription failure: \(error.localizedDescription)"))
+                }
+            }
+        }
+    }
+
+    private func receiveAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
+        guard let namespace = agentNamespace, agentSessions[streamID] != nil,
+              !agentQuarantined.contains(streamID) else { return }
+        do {
+            _ = try await WarrenAgentEventStore.shared.saveEvents(events, namespace: namespace, streamID: streamID)
+            await projectAgentEvents(events, streamID: streamID)
+            let state = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
+            if let state, state.contiguousThrough < state.headSequence {
+                // Request outside the receive loop so its response can be read.
+                Task {
+                    do {
+                        let data = try await request("agent.events.history", params: ["streamId": streamID, "afterSequence": String(state.contiguousThrough), "limit": "500"])
+                        let page = try JSONDecoder().decode(WarrenRemoteAgentEventsHistoryResult.self, from: data)
+                        await receiveAgentEvents(page.events, streamID: streamID)
+                    } catch {
+                        agentQuarantined.insert(streamID)
+                        _ = await eventBuffer.send(.disconnected("Unable to recover Agent event gap: \(error.localizedDescription)"))
+                    }
+                }
+            }
+        } catch {
+            agentQuarantined.insert(streamID)
+            _ = await eventBuffer.send(.disconnected("Agent stream integrity failure: \(error.localizedDescription)"))
+        }
+    }
+
+    private func projectAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
+        guard let sessionID = agentSessions[streamID] else { return }
+        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+            guard event.sequence > (agentProjectionSequence[streamID] ?? 0) else { continue }
+            agentProjectionSequence[streamID] = event.sequence
+            guard event.type == "status.changed", let payload = event.payload else { continue }
+            let statusPayload: WarrenRemoteJSONValue = payload["status"] ?? .object(payload)
+            guard let data = try? JSONEncoder().encode(statusPayload),
+                  let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+                  let status = Self.agentStatus(from: remote) else { continue }
+            _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
+        }
     }
 
     private nonisolated static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
@@ -1440,7 +1519,7 @@ private enum WarrenRemoteDiagnostics {
             "selectedSession: \(selectedSessionID?.description ?? "none")",
             "attachedSession: \(attachedSessionID?.description ?? "none")",
             "focusedSession: \(focusedSessionID?.description ?? "none")",
-            "clientProtocol: 2.0",
+            "clientProtocol: 3.0",
             "daemonProtocol: \(daemonProtocol)",
             "appVersion: \(appVersion())",
             "os: \(ProcessInfo.processInfo.operatingSystemVersionString)",
@@ -4222,6 +4301,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 return
             }
             currentRoster = roster
+            await wire.syncAgentSubscriptions(roster)
             apply(roster)
             ensureDeletionReconciliation(using: wire)
         case .rosterDelta(let delta):
@@ -4241,9 +4321,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             clearMaintenance()
             guard Self.shouldApplyRoster(roster, after: currentRoster) else { return }
             currentRoster = roster
+            await wire.syncAgentSubscriptions(roster)
             apply(roster)
             ensureDeletionReconciliation(using: wire)
-        case .agent(let sessionID, let status):
+        case .agentProjection(let sessionID, let status):
             let previousActivity = lastObservedActivityBySessionID[sessionID]
             lastObservedActivityBySessionID[sessionID] = status.activity
             if status.activity == .ready, previousActivity != .ready {

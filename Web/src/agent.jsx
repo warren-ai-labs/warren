@@ -249,7 +249,7 @@ export function AgentView({
     }
     return null;
   }, [events]);
-  const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.seq || ""}` : "";
+  const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.sequence || ""}` : "";
 
   const editAndResend = value => {
     if (onEditResend) onEditResend(value);
@@ -647,7 +647,7 @@ export function AgentView({
                   onInteraction={onInteraction}
                   canInteract={canInteract}
                   onEditResend={editAndResend}
-                  isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
+                  isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.sequence || ""}` === lastUserEventKey)}
                 />
             ))}
             {queueItems.map(item => (
@@ -1063,7 +1063,7 @@ function agentTurnKey(turn, events) {
   if (latestUser) {
     const eventTurn = Number(latestUser.turn);
     if (Number.isSafeInteger(eventTurn) && eventTurn > 0) return `turn:${eventTurn}`;
-    const identity = String(latestUser.id || latestUser.seq || latestUser.timestamp || "").trim();
+    const identity = String(latestUser.id || latestUser.sequence || latestUser.timestamp || "").trim();
     if (identity) return `user:${identity}`;
   }
   const eventTurn = agentTurnID(null, values);
@@ -1108,8 +1108,8 @@ function isUserAgentEvent(event) {
 }
 
 function blockKindKey(block, index) {
-  const id = block.call?.id || block.event?.id || block.event?.seq || block.call?.seq;
-  const sequence = block.call?.seq || block.event?.seq;
+  const id = block.call?.id || block.event?.id || block.event?.sequence || block.call?.sequence;
+  const sequence = block.call?.sequence || block.event?.sequence;
   // Provider IDs identify logical parts, not always individual events (an
   // OpenCode part can emit several deltas). Include the normalized sequence
   // so a fallback or repeated provider ID can never collide in React.
@@ -1529,7 +1529,7 @@ function ActivityGroup({ block }) {
             if (item.kind === "reasoning") {
               step += 1;
               return (
-                <div className="agent-reasoning-item" key={item.event.seq ?? index}>
+                <div className="agent-reasoning-item" key={item.event.sequence ?? index}>
                   {reasoning.length > 1 && (
                     <div className="agent-reasoning-item-label">Step {step}</div>
                   )}
@@ -1610,7 +1610,7 @@ function CoalescedToolCard({ group, defaultOpen = false }) {
                   {!isCommand && (
                     <>
                       {block.outputs.map((out, oIdx) => (
-                        <ToolOutputBody key={out.seq ?? oIdx} event={out} />
+                        <ToolOutputBody key={out.sequence ?? oIdx} event={out} />
                       ))}
                       {block.call.files?.length > 0 && <FileList files={block.call.files} />}
                     </>
@@ -1664,7 +1664,7 @@ function ToolCard({ block, defaultOpen = false }) {
             <span className="agent-tool-waiting">Running…</span>
           )}
           {block.outputs.map((output, idx) => (
-            <ToolOutputBody key={output.seq ?? idx} event={output} />
+            <ToolOutputBody key={output.sequence ?? idx} event={output} />
           ))}
           {call.files?.length > 0 && <FileList files={call.files} />}
         </div>

@@ -608,6 +608,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let sequence: UInt64?
         public let pinned: Bool
         public let agentSessionID: String?
+        public let agentExecutionID: String?
         public let transcriptPath: String?
         public let agentStatus: WarrenRemoteAgentStatus?
         public let agentTurn: WarrenRemoteAgentTurn?
@@ -637,6 +638,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             sequence: UInt64? = nil,
             pinned: Bool = false,
             agentSessionID: String? = nil,
+            agentExecutionID: String? = nil,
             transcriptPath: String? = nil,
             agentStatus: WarrenRemoteAgentStatus? = nil,
             agentTurn: WarrenRemoteAgentTurn? = nil,
@@ -666,6 +668,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.sequence = sequence
             self.pinned = pinned
             self.agentSessionID = agentSessionID
+            self.agentExecutionID = agentExecutionID
             self.transcriptPath = transcriptPath
             self.agentStatus = agentStatus
             self.agentTurn = agentTurn
@@ -736,6 +739,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case scope, title, customTitle, kind, agentHandler, command, process, directory, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
+            case agentExecutionID = "agentExecutionId"
             case transcriptPath, agentStatus, agentTurn, agentCapabilities, createdAt, endedAt
         }
 
@@ -768,6 +772,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             sequence = try values.decodeIfPresent(UInt64.self, forKey: .sequence)
             pinned = try values.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
             agentSessionID = try values.decodeIfPresent(String.self, forKey: .agentSessionID)
+            agentExecutionID = try values.decodeIfPresent(String.self, forKey: .agentExecutionID)
             transcriptPath = try values.decodeIfPresent(String.self, forKey: .transcriptPath)
             agentStatus = try values.decodeIfPresent(WarrenRemoteAgentStatus.self, forKey: .agentStatus)
             agentTurn = try values.decodeIfPresent(WarrenRemoteAgentTurn.self, forKey: .agentTurn)
@@ -1234,140 +1239,12 @@ public struct WarrenRemoteAgentAttachmentRef: Codable, Equatable, Hashable, Send
     }
 }
 
-public struct WarrenRemoteAgentMessageSendRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let clientMessageID: String
-    public let text: String
-    public let attachments: [WarrenRemoteAgentAttachmentRef]
 
-    public init(session: String, clientMessageID: String, text: String, attachments: [WarrenRemoteAgentAttachmentRef] = []) {
-        self.session = session
-        self.clientMessageID = clientMessageID
-        self.text = text
-        self.attachments = attachments
-    }
 
-    private enum CodingKeys: String, CodingKey {
-        case session
-        case clientMessageID = "clientMessageId"
-        case text, attachments
-    }
-}
 
-public struct WarrenRemoteAgentInteractionResponse: Codable, Equatable, Sendable {
-    public let session: String
-    public let requestID: String
-    public let kind: String
-    public let response: [String: WarrenRemoteJSONValue]
 
-    public init(session: String, requestID: String, kind: String, response: [String: WarrenRemoteJSONValue] = [:]) {
-        self.session = session
-        self.requestID = requestID
-        self.kind = kind
-        self.response = response
-    }
 
-    private enum CodingKeys: String, CodingKey {
-        case session
-        case requestID = "requestId"
-        case kind, response
-    }
-}
 
-public struct WarrenRemoteAgentTurnInterruptRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let turn: UInt64
-    public let reason: String
-    public let replacement: WarrenRemoteAgentMessageSendRequest?
-
-    public init(session: String, turn: UInt64, reason: String, replacement: WarrenRemoteAgentMessageSendRequest? = nil) {
-        self.session = session
-        self.turn = turn
-        self.reason = reason
-        self.replacement = replacement
-    }
-}
-
-public struct WarrenRemoteAgentTurnInterruptResult: Codable, Equatable, Sendable {
-    public let accepted: Bool
-    public let session: String
-    public let turn: UInt64
-    public let clientMessageID: String?
-    public let status: String?
-
-    public init(
-        accepted: Bool,
-        session: String,
-        turn: UInt64,
-        clientMessageID: String? = nil,
-        status: String? = nil
-    ) {
-        self.accepted = accepted
-        self.session = session
-        self.turn = turn
-        self.clientMessageID = clientMessageID
-        self.status = status
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case accepted, session, turn
-        case clientMessageID = "clientMessageId"
-        case status
-    }
-}
-
-public struct WarrenRemoteAgentMessageSendResult: Codable, Equatable, Sendable {
-    public let accepted: Bool
-    public let session: String
-    public let clientMessageID: String
-
-    public init(accepted: Bool, session: String, clientMessageID: String) {
-        self.accepted = accepted
-        self.session = session
-        self.clientMessageID = clientMessageID
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case accepted, session
-        case clientMessageID = "clientMessageId"
-    }
-}
-
-public struct WarrenRemoteAgentInteractionResult: Codable, Equatable, Sendable {
-    public let accepted: Bool
-    public let session: String
-    public let requestID: String
-    public let kind: String
-
-    public init(accepted: Bool, session: String, requestID: String, kind: String) {
-        self.accepted = accepted
-        self.session = session
-        self.requestID = requestID
-        self.kind = kind
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case accepted, session
-        case requestID = "requestId"
-        case kind
-    }
-}
-
-public struct WarrenRemoteAgentAttachmentPrepareRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let name: String
-    public let mime: String
-    public let size: Int64
-    public let sha256: String?
-
-    public init(session: String, name: String, mime: String, size: Int64, sha256: String? = nil) {
-        self.session = session
-        self.name = name
-        self.mime = mime
-        self.size = size
-        self.sha256 = sha256
-    }
-}
 
 public struct WarrenRemoteAgentAttachmentPrepareResult: Codable, Equatable, Sendable {
     public let attachmentID: String
@@ -1394,64 +1271,8 @@ public struct WarrenRemoteAgentAttachmentPrepareResult: Codable, Equatable, Send
     }
 }
 
-public struct WarrenRemoteAgentAttachmentChunkRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let uploadID: String
-    public let sequence: UInt64
-    public let length: Int
-    public let sha256: String?
-    public let data: String
 
-    public init(session: String, uploadID: String, sequence: UInt64, length: Int, sha256: String? = nil, data: String) {
-        self.session = session
-        self.uploadID = uploadID
-        self.sequence = sequence
-        self.length = length
-        self.sha256 = sha256
-        self.data = data
-    }
 
-    private enum CodingKeys: String, CodingKey {
-        case session
-        case uploadID = "uploadId"
-        case sequence, length, sha256, data
-    }
-}
-
-public struct WarrenRemoteAgentAttachmentCompleteRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let uploadID: String
-    public let length: Int64
-    public let sha256: String?
-
-    public init(session: String, uploadID: String, length: Int64, sha256: String? = nil) {
-        self.session = session
-        self.uploadID = uploadID
-        self.length = length
-        self.sha256 = sha256
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case session
-        case uploadID = "uploadId"
-        case length, sha256
-    }
-}
-
-public struct WarrenRemoteAgentAttachmentAbortRequest: Codable, Equatable, Sendable {
-    public let session: String
-    public let uploadID: String
-
-    public init(session: String, uploadID: String) {
-        self.session = session
-        self.uploadID = uploadID
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case session
-        case uploadID = "uploadId"
-    }
-}
 
 public struct WarrenRemoteAgentAttachmentResult: Codable, Equatable, Sendable {
     public let accepted: Bool
@@ -1528,8 +1349,27 @@ public struct WarrenRemoteAgentUsage: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public struct WarrenRemoteAgentEventOrigin: Codable, Equatable, Hashable, Sendable {
+    public let kind: String
+    public let provider: String?
+    public let driver: String?
+    public let channel: String?
+    public let confidence: String
+
+    public init(kind: String, provider: String? = nil, driver: String? = nil, channel: String? = nil, confidence: String = "observed") {
+        self.kind = kind
+        self.provider = provider
+        self.driver = driver
+        self.channel = channel
+        self.confidence = confidence
+    }
+}
+
 public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Identifiable {
     public let sequence: UInt64
+    public let eventID: String
+    public let streamID: String?
+    public let executionID: String?
     public let turn: UInt64?
     public let id: String
     public let provider: String
@@ -1550,6 +1390,10 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
     public let durationMs: Int64?
     public let sidechain: Bool
     public let timestamp: String?
+    public let occurredAt: String?
+    public let recordedAt: String?
+    public let causedBy: String?
+    public let origin: WarrenRemoteAgentEventOrigin?
     /// Optional structured payload used by RFC 0010 timeline events. Keeping
     /// this as a JSON value lets older clients decode and advance sequence
     /// numbers without understanding newly introduced event types.
@@ -1557,6 +1401,9 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
 
     public init(
         sequence: UInt64,
+        eventID: String = "",
+        streamID: String? = nil,
+        executionID: String? = nil,
         turn: UInt64? = nil,
         id: String = "",
         provider: String = "",
@@ -1577,9 +1424,16 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         durationMs: Int64? = nil,
         sidechain: Bool = false,
         timestamp: String? = nil,
+        occurredAt: String? = nil,
+        recordedAt: String? = nil,
+        causedBy: String? = nil,
+        origin: WarrenRemoteAgentEventOrigin? = nil,
         payload: [String: WarrenRemoteJSONValue]? = nil
     ) {
         self.sequence = sequence
+        self.eventID = eventID.isEmpty ? id : eventID
+        self.streamID = streamID
+        self.executionID = executionID
         self.turn = turn
         self.id = id
         self.provider = provider
@@ -1600,32 +1454,49 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         self.durationMs = durationMs
         self.sidechain = sidechain
         self.timestamp = timestamp
+        self.occurredAt = occurredAt ?? timestamp
+        self.recordedAt = recordedAt
+        self.causedBy = causedBy
+        self.origin = origin
         self.payload = payload
     }
 
     public var stableID: String {
-        id.isEmpty ? "seq-\(sequence)" : id
+        !eventID.isEmpty ? eventID : (id.isEmpty ? "seq-\(sequence)" : id)
     }
 
     public var identifiableID: String { "\(sequence)-\(stableID)" }
     public var rawID: String { id }
 
     private enum CodingKeys: String, CodingKey {
-        case sequence = "seq"
-        case turn, id, provider, type, role, content
+        case sequence
+        case eventID = "eventId"
+        case streamID = "streamId"
+        case executionID = "executionId"
+        case turnID = "turnId"
+        case type, occurredAt, recordedAt, causedBy, origin, payload
+        // These fields are accepted only for local UI projections produced by
+        // the public initializer; Host wire decoding never relies on them.
+        case turn, id, provider, role, content
         case contentDelta, model, stopReason, toolName, toolInput, toolStatus
         case callID = "callId"
         case output, files, error, usage, durationMs, sidechain, timestamp
-        case payload
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         sequence = try values.decode(UInt64.self, forKey: .sequence)
-        turn = try values.decodeIfPresent(UInt64.self, forKey: .turn)
-        id = try values.decodeIfPresent(String.self, forKey: .id) ?? ""
-        provider = try values.decodeIfPresent(String.self, forKey: .provider) ?? ""
-        type = try values.decodeIfPresent(String.self, forKey: .type) ?? "unknown"
+        eventID = try values.decode(String.self, forKey: .eventID)
+        streamID = try values.decode(String.self, forKey: .streamID)
+        executionID = try values.decode(String.self, forKey: .executionID)
+        type = try values.decode(String.self, forKey: .type)
+        _ = try values.decode(String.self, forKey: .occurredAt)
+        _ = try values.decode(String.self, forKey: .recordedAt)
+        _ = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
+        _ = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
+        id = try values.decodeIfPresent(String.self, forKey: .id) ?? eventID
+        provider = try values.decodeIfPresent(String.self, forKey: .provider)
+            ?? (try values.decodeIfPresent(WarrenRemoteAgentEventOrigin.self, forKey: .origin)?.provider ?? "")
         role = try values.decodeIfPresent(String.self, forKey: .role)
         content = try values.decodeIfPresent(String.self, forKey: .content)
         contentDelta = try values.decodeIfPresent(Bool.self, forKey: .contentDelta) ?? false
@@ -1642,109 +1513,176 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         durationMs = try values.decodeIfPresent(Int64.self, forKey: .durationMs)
         sidechain = try values.decodeIfPresent(Bool.self, forKey: .sidechain) ?? false
         timestamp = try values.decodeIfPresent(String.self, forKey: .timestamp)
-        // Payload is optional extension data. A newer Host can accidentally
-        // send a scalar or otherwise malformed object; retain the event so
-        // sequence recovery continues and let the View ignore the payload.
-        do {
-            payload = try values.decodeIfPresent([String: WarrenRemoteJSONValue].self, forKey: .payload)
-        } catch {
-            payload = nil
+        occurredAt = try values.decodeIfPresent(String.self, forKey: .occurredAt)
+        recordedAt = try values.decodeIfPresent(String.self, forKey: .recordedAt)
+        causedBy = try values.decodeIfPresent(String.self, forKey: .causedBy)
+        origin = try values.decodeIfPresent(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
+        if let rawTurnID = try values.decodeIfPresent(String.self, forKey: .turnID) {
+            turn = UInt64(rawTurnID)
+        } else {
+            turn = try values.decodeIfPresent(UInt64.self, forKey: .turn)
+        }
+        payload = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(sequence, forKey: .sequence)
+        let canonicalEventID = eventID.isEmpty ? stableID : eventID
+        let canonicalStreamID = streamID ?? "local"
+        try values.encode(canonicalEventID, forKey: .eventID)
+        try values.encode(canonicalStreamID, forKey: .streamID)
+        try values.encode(executionID ?? canonicalStreamID, forKey: .executionID)
+        try values.encode(type, forKey: .type)
+        try values.encode(occurredAt ?? timestamp ?? "", forKey: .occurredAt)
+        try values.encode(recordedAt ?? occurredAt ?? timestamp ?? "", forKey: .recordedAt)
+        try values.encode(origin ?? WarrenRemoteAgentEventOrigin(kind: "client", confidence: "derived"), forKey: .origin)
+        try values.encode(payload ?? [:], forKey: .payload)
+        if let turn {
+            // The canonical wire shape carries turnId as an opaque string.
+            try values.encode(String(turn), forKey: .turnID)
         }
     }
 }
 
 public extension WarrenRemoteAgentEvent {
     var idForSwiftUI: String { identifiableID }
-
-    func clipped(limit: Int = 4096) -> WarrenRemoteAgentEvent {
-        guard limit > 0 else { return self }
-        // Conversational messages (user, assistant, system) and their Content text are
-        // intentionally NEVER clipped regardless of length.
-        // Clipping is strictly confined to tool executions: tool_output (output) and tool_call (toolInput).
-        let isToolOutput = (type == "tool_output" || type == "tool")
-        let isToolCall = (type == "tool_call" || type == "tool_use")
-        let needsOutputClip = isToolOutput && (output != nil && output!.count > limit)
-        let needsInputClip = isToolCall && (toolInput != nil)
-        if !needsOutputClip && !needsInputClip {
-            return self
-        }
-        var nextOutput = output
-        if needsOutputClip, let output {
-            let index = output.index(output.startIndex, offsetBy: limit)
-            nextOutput = String(output[..<index]) + "…"
-        }
-        var nextInput = toolInput
-        if needsInputClip {
-            nextInput = toolInput?.clipped(limit: limit)
-        }
-        return WarrenRemoteAgentEvent(
-            sequence: sequence,
-            turn: turn,
-            id: id,
-            provider: provider,
-            type: type,
-            role: role,
-            content: content,
-            contentDelta: contentDelta,
-            model: model,
-            stopReason: stopReason,
-            toolName: toolName,
-            toolInput: nextInput,
-            toolStatus: toolStatus,
-            callID: callID,
-            output: nextOutput,
-            files: files,
-            error: error,
-            usage: usage,
-            durationMs: durationMs,
-            sidechain: sidechain,
-            timestamp: timestamp,
-            payload: payload
-        )
-    }
 }
 
-public struct WarrenRemoteAgentHistoryPage: Codable, Equatable, Sendable {
-    public let epoch: UInt64?
-    public let events: [WarrenRemoteAgentEvent]
-    public let cursor: UInt64?
-    public let hasMore: Bool
 
-    public init(epoch: UInt64? = nil, events: [WarrenRemoteAgentEvent] = [], cursor: UInt64? = nil, hasMore: Bool = false) {
-        self.epoch = epoch
-        self.events = events
-        self.cursor = cursor
-        self.hasMore = hasMore
-    }
-}
-
-public struct WarrenRemoteAgentSnapshotResult: Codable, Equatable, Sendable {
-    public let epoch: UInt64
-    public let turn: WarrenRemoteAgentTurn
-    public let sequence: UInt64
-
-    public init(epoch: UInt64, turn: WarrenRemoteAgentTurn, sequence: UInt64) {
-        self.epoch = epoch
-        self.turn = turn
-        self.sequence = sequence
-    }
-}
-
-public struct WarrenRemoteAgentSubscriptionResult: Codable, Equatable, Sendable {
-    public let session: WarrenRemoteSession
-    public let snapshot: WarrenRemoteAgentSnapshotResult
-    public let gapEvents: [WarrenRemoteAgentEvent]?
+/// Host-owned execution metadata returned by the canonical Agent API. The
+/// provider conversation reference is intentionally opaque to clients.
+public struct WarrenRemoteAgentExecution: Codable, Equatable, Sendable {
+    public let id: String
+    public let streamID: String
+    public let provider: String
+    public let driver: String
+    public let state: String
+    public let status: WarrenRemoteAgentStatus
+    public let activeTurn: WarrenRemoteAgentTurn?
+    public let headSequence: UInt64
 
     public init(
-        session: WarrenRemoteSession,
-        snapshot: WarrenRemoteAgentSnapshotResult,
-        gapEvents: [WarrenRemoteAgentEvent]? = nil
+        id: String,
+        streamID: String,
+        provider: String = "",
+        driver: String = "",
+        state: String = "",
+        status: WarrenRemoteAgentStatus = WarrenRemoteAgentStatus(activity: .unknown),
+        activeTurn: WarrenRemoteAgentTurn? = nil,
+        headSequence: UInt64 = 0
     ) {
-        self.session = session
-        self.snapshot = snapshot
-        self.gapEvents = gapEvents
+        self.id = id
+        self.streamID = streamID
+        self.provider = provider
+        self.driver = driver
+        self.state = state
+        self.status = status
+        self.activeTurn = activeTurn
+        self.headSequence = headSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case streamID = "streamId"
+        case provider, driver, state, status
+        case activeTurn
+        case headSequence
     }
 }
+
+public struct WarrenRemoteAgentProjectionCheckpoint: Codable, Equatable, Sendable {
+    public let sequence: UInt64
+    public let state: [String: WarrenRemoteJSONValue]
+
+    public init(sequence: UInt64, state: [String: WarrenRemoteJSONValue] = [:]) {
+        self.sequence = sequence
+        self.state = state
+    }
+}
+
+public struct WarrenRemoteAgentEventsHistoryResult: Codable, Equatable, Sendable {
+    public let streamID: String
+    public let executionID: String?
+    public let events: [WarrenRemoteAgentEvent]
+    public let nextAfterSequence: UInt64?
+    public let headSequence: UInt64
+    public let hasMore: Bool
+    public let retainedFromSequence: UInt64?
+
+    public init(
+        streamID: String,
+        executionID: String? = nil,
+        events: [WarrenRemoteAgentEvent] = [],
+        nextAfterSequence: UInt64? = nil,
+        headSequence: UInt64 = 0,
+        hasMore: Bool = false,
+        retainedFromSequence: UInt64? = nil
+    ) {
+        self.streamID = streamID
+        self.executionID = executionID
+        self.events = events
+        self.nextAfterSequence = nextAfterSequence
+        self.headSequence = headSequence
+        self.hasMore = hasMore
+        self.retainedFromSequence = retainedFromSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case streamID = "streamId"
+        case executionID = "executionId"
+        case events
+        case nextAfterSequence
+        case headSequence
+        case hasMore
+        case retainedFromSequence
+    }
+}
+
+public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sendable {
+    public let streamID: String
+    public let executionID: String?
+    public let checkpoint: WarrenRemoteAgentProjectionCheckpoint
+    public let events: [WarrenRemoteAgentEvent]
+    public let live: Bool
+
+    public init(
+        streamID: String,
+        executionID: String? = nil,
+        checkpoint: WarrenRemoteAgentProjectionCheckpoint,
+        events: [WarrenRemoteAgentEvent] = [],
+        live: Bool = false
+    ) {
+        self.streamID = streamID
+        self.executionID = executionID
+        self.checkpoint = checkpoint
+        self.events = events
+        self.live = live
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case streamID = "streamId"
+        case executionID = "executionId"
+        case checkpoint, events, live
+    }
+}
+
+public struct WarrenRemoteAgentCommandReceipt: Codable, Equatable, Sendable {
+    public let commandID: String
+    public let accepted: Bool
+
+    public init(commandID: String, accepted: Bool) {
+        self.commandID = commandID
+        self.accepted = accepted
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case commandID = "commandId"
+        case accepted
+    }
+}
+
+
 
 public struct WarrenRemoteOutputFrame: Hashable, Sendable {
     public let sessionID: String
@@ -1819,9 +1757,7 @@ public enum WarrenRemoteEvent: Sendable {
     case output(WarrenRemoteOutputFrame)
     case atomicState(WarrenRemoteAtomicState)
     case anchor(WarrenRemoteOutputAnchor)
-    case agent(sessionID: String, epoch: UInt64, events: [WarrenRemoteAgentEvent])
-    case agentStatus(sessionID: String, epoch: UInt64, status: WarrenRemoteAgentStatus)
-    case agentTurn(sessionID: String, epoch: UInt64, turn: WarrenRemoteAgentTurn)
+    case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
     case maintenance(message: String?)
     case disconnected(reason: String)
 }

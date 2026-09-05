@@ -5,7 +5,6 @@
 - For UI, installers/packages, or TUI, verify the real running artifact; test-data changes cannot replace real behavior validation.
 - Run checks relevant to the change scope. If a check cannot run, explain why and note the unverified risks.
 - Do not commit credentials, personal paths, private hostnames, or sensitive terminal output.
-- Use `.local/` freely for personal development context; it is excluded from Git and available to both agents and humans.
 - When multiple people edit the same file, preserve existing changes where possible and explain conflicts or trade-offs when needed.
 - After making code or documentation changes, promptly commit with a concise English message using a typed prefix such as `fix:`, `feat:`, `refactor:`, `test:`, or `docs:`. Squash repeated trial commits yourself.
 - Follow [`REVIEW.md`](REVIEW.md) for code reviews and [`RELEASE.md`](RELEASE.md) for releases.

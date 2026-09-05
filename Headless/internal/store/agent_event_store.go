@@ -80,6 +80,48 @@ func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 		updated_at   INTEGER NOT NULL,
 		PRIMARY KEY (session_id, epoch)
 	);
+
+	-- Canonical Agent journal. Rows are immutable and keyed by the Host-owned
+	-- stream position; projections must never use INSERT OR REPLACE here.
+	CREATE TABLE IF NOT EXISTS agent_event_journal (
+		stream_id      TEXT NOT NULL,
+		execution_id   TEXT NOT NULL,
+		sequence       INTEGER NOT NULL,
+		event_id       TEXT NOT NULL,
+		event_type     TEXT NOT NULL,
+		event_json     TEXT NOT NULL,
+		recorded_at    INTEGER NOT NULL,
+		PRIMARY KEY (stream_id, sequence),
+		UNIQUE (stream_id, event_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_agent_event_journal_event
+	ON agent_event_journal(stream_id, event_id);
+
+	CREATE TABLE IF NOT EXISTS agent_stream_state (
+		stream_id              TEXT NOT NULL PRIMARY KEY,
+		execution_id           TEXT NOT NULL,
+		retained_from_sequence INTEGER NOT NULL DEFAULT 0,
+		head_sequence          INTEGER NOT NULL DEFAULT 0,
+		checkpoint_sequence    INTEGER NOT NULL DEFAULT 0,
+		checkpoint_json        TEXT,
+		updated_at             INTEGER NOT NULL
+	);
+
+	-- Canonical command admission journal. A command is first recorded as
+	-- pending, then transitioned exactly once to completed or failed. Keeping
+	-- the fingerprint and result here makes retries safe across Host restarts.
+	CREATE TABLE IF NOT EXISTS agent_command_journal (
+		execution_id  TEXT NOT NULL,
+		command_id    TEXT NOT NULL,
+		fingerprint   TEXT NOT NULL,
+		status        TEXT NOT NULL,
+		result_json   TEXT,
+		error_text    TEXT,
+		created_at    INTEGER NOT NULL,
+		completed_at  INTEGER,
+		PRIMARY KEY (execution_id, command_id)
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

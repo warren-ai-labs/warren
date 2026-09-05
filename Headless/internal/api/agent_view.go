@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Agent View capabilities are negotiated independently from protocol 2.0.
+// Agent View capabilities are negotiated independently from protocol 3.0.
 // Keep these strings stable: clients persist no capability state and may
 // safely ignore names introduced by a newer Host.
 const (
@@ -100,6 +100,7 @@ func SupportsCapability(capabilities []string, wanted string) bool {
 // permission cards. Response is intentionally JSON-shaped so a Host can add
 // bounded option values without changing the wire envelope.
 type AgentInteractionResponse struct {
+	CommandID string         `json:"commandId,omitempty"`
 	Session   string         `json:"session"`
 	RequestID string         `json:"requestId"`
 	Kind      string         `json:"kind"`
@@ -126,6 +127,7 @@ type AgentAttachmentRef struct {
 // Replacement is present the Host must accept it only as part of the same
 // interrupt transaction.
 type AgentTurnInterruptRequest struct {
+	CommandID  string                   `json:"commandId,omitempty"`
 	Session     string                   `json:"session"`
 	Turn        uint64                   `json:"turn"`
 	Reason      string                   `json:"reason"`

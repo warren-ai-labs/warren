@@ -12,6 +12,91 @@ export const agentStructuredEventTypes = new Set([
   "attachment",
 ]);
 
+export function agentEventSequence(event) {
+  const value = Number(event?.sequence);
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Converts the Host-owned canonical envelope into the provider-neutral shape
+ * consumed by the existing presentation reducer. No transcript parsing occurs
+ * here: payload fields are selected solely by the canonical event type.
+ */
+export function normalizeCanonicalAgentEvent(event) {
+  if (!event || !agentEventSequence(event)) return null;
+  const sequence = agentEventSequence(event);
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const originProvider = event.origin?.provider || "";
+  const type = String(event.type || "").trim().toLowerCase();
+  let projectedType = type;
+  let role = payload.role || null;
+  let content = payload.content ?? payload.contentDelta ?? null;
+  let contentDelta = type === "message.delta";
+  const projected = { ...event, sequence, eventId: event.eventId || event.id || `${event.streamId || "stream"}:${sequence}` };
+  if (!projected.provider && originProvider) projected.provider = originProvider;
+  switch (type) {
+    case "message.created":
+      projectedType = "message";
+      break;
+    case "message.delta":
+      projectedType = "message";
+      break;
+    case "message.completed":
+      projectedType = "message";
+      contentDelta = false;
+      break;
+    case "reasoning.delta":
+      projectedType = "reasoning";
+      break;
+    case "tool.started":
+      projectedType = "tool_call";
+      break;
+    case "tool.updated":
+      projectedType = "tool_call";
+      break;
+    case "tool.completed":
+      projectedType = "tool_output";
+      break;
+    case "tool.failed":
+      projectedType = "tool_output";
+      break;
+    case "interaction.requested":
+      projectedType = payload.kind || "question";
+      break;
+    case "interaction.resolved":
+      projectedType = "response";
+      break;
+    case "plan.updated":
+      projectedType = "plan";
+      break;
+    case "tasks.updated":
+      projectedType = "todo";
+      break;
+    case "context.updated":
+      projectedType = "context";
+      break;
+    default:
+      break;
+  }
+  if (projectedType === "message" && !role) role = "assistant";
+  projected.type = projectedType;
+  if (role) projected.role = role;
+  if (content !== null && content !== undefined) projected.content = String(content);
+  if (contentDelta) projected.contentDelta = true;
+  if (payload.messageId && !projected.id) projected.id = String(payload.messageId);
+  if (payload.toolName !== undefined) projected.toolName = payload.toolName;
+  if (payload.toolInput !== undefined) projected.toolInput = payload.toolInput;
+  if (payload.toolStatus !== undefined) projected.toolStatus = payload.toolStatus;
+  if (payload.callId !== undefined) projected.callId = payload.callId;
+  if (payload.output !== undefined) projected.output = payload.output;
+  if (payload.error !== undefined) projected.error = payload.error;
+  if (payload.files !== undefined) projected.files = payload.files;
+  if (payload.model !== undefined) projected.model = payload.model;
+  if (payload.stopReason !== undefined) projected.stopReason = payload.stopReason;
+  if (payload.usage !== undefined) projected.usage = payload.usage;
+  return projected;
+}
+
 export function normalizeAgentEventType(type) {
   return String(type || "").trim().toLowerCase().replaceAll("-", "_");
 }
@@ -284,20 +369,24 @@ export function retryAgentQueueItem(queue = [], id) {
 export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = {}) {
   const bySequence = new Map();
   for (const event of existing || []) {
-    if (event && Number.isFinite(event.seq) && !bySequence.has(event.seq)) {
-      bySequence.set(event.seq, event);
+    const normalized = normalizeCanonicalAgentEvent(event) || event;
+    const sequence = agentEventSequence(normalized);
+    if (normalized && sequence && !bySequence.has(sequence)) {
+      bySequence.set(sequence, normalized);
     }
   }
   for (const event of incoming || []) {
     // Sequence numbers identify immutable positions in an epoch. A replayed
     // history/live overlap must retain the first observed event rather than
     // letting a later payload rewrite that position.
-    if (event && Number.isFinite(event.seq) && !bySequence.has(event.seq)) {
-      bySequence.set(event.seq, event);
+    const normalized = normalizeCanonicalAgentEvent(event) || event;
+    const sequence = agentEventSequence(normalized);
+    if (normalized && sequence && !bySequence.has(sequence)) {
+      bySequence.set(sequence, normalized);
     }
   }
   return [...bySequence.values()]
-    .sort((left, right) => left.seq - right.seq)
+    .sort((left, right) => agentEventSequence(left) - agentEventSequence(right))
     .slice(cap ? -agentEventLimit : undefined);
 }
 
@@ -386,17 +475,17 @@ export function reduceAgentTimeline(
 ) {
   const nextEpoch = Number(epoch) || 0;
   const reset = state.epoch !== null && nextEpoch !== 0 && state.epoch !== nextEpoch;
-  const bySequence = new Map((reset ? [] : state.events || []).map(event => [event.seq, event]));
+  const bySequence = new Map((reset ? [] : state.events || []).map(event => [event.sequence, event]));
   let lastSequence = reset ? 0 : Number(state.lastSequence) || 0;
   for (const event of events || []) {
-    if (!event || !Number.isFinite(event.seq)) continue;
-    lastSequence = Math.max(lastSequence, event.seq);
-    if (!bySequence.has(event.seq)) bySequence.set(event.seq, event);
+    if (!event || !Number.isFinite(event.sequence)) continue;
+    lastSequence = Math.max(lastSequence, event.sequence);
+    if (!bySequence.has(event.sequence)) bySequence.set(event.sequence, event);
   }
   return {
     epoch: nextEpoch || (reset ? null : state.epoch),
     lastSequence,
-    events: [...bySequence.values()].sort((left, right) => left.seq - right.seq),
+    events: [...bySequence.values()].sort((left, right) => left.sequence - right.sequence),
   };
 }
 
@@ -407,7 +496,7 @@ export function projectAgentEvents(events = []) {
   for (const event of events || []) {
     if (isStructuredAgentEvent(event)) {
       const type = normalizeAgentEventType(event.type);
-      const stableID = String(event.id || `seq-${event.seq}`);
+      const stableID = String(event.id || `sequence-${event.sequence}`);
       latestStructured.set(`${type}:${stableID}`, event);
     } else {
       projected.push(event);
@@ -417,7 +506,7 @@ export function projectAgentEvents(events = []) {
   // structured event is also a message boundary: removing it first would let
   // activity from either side of a question/plan card collapse into one row.
   projected.push(...latestStructured.values());
-  projected.sort((left, right) => (left?.seq ?? 0) - (right?.seq ?? 0));
+  projected.sort((left, right) => (left?.sequence ?? 0) - (right?.sequence ?? 0));
   return groupAgentEvents(projected);
 }
 
@@ -748,7 +837,7 @@ function coalesceAgentContent(events) {
       // Keep the first sequence so the merged block stays at the point where
       // the provider first emitted the part. The latest metadata (especially
       // model and stopReason) still comes from the newest update.
-      seq: previous.seq,
+      sequence: previous.sequence,
       content: source.contentDelta
         ? `${previous.content || ""}${source.content || ""}`
         : (source.content || previous.content || ""),

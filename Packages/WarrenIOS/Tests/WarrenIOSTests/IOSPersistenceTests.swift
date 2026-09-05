@@ -195,7 +195,7 @@ final class IOSPersistenceTests: XCTestCase {
     func testCreatedAgentSessionDefaultsToAgentDisplayMode() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "44444444-4444-4444-4444-444444444444"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[{\"id\":\"workspace-1\",\"name\":\"Workspace\",\"path\":\"/tmp/workspace\"}],\"terminalGroups\":[],\"sessions\":[]}}"
         ))
@@ -240,7 +240,7 @@ final class IOSPersistenceTests: XCTestCase {
     @MainActor
     func testBufferedStopDoesNotPublishOfflineWhileConnectionIsRequested() async throws {
         let task = IOSScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[]}}"
         ))
@@ -276,9 +276,11 @@ final class IOSPersistenceTests: XCTestCase {
     func testAgentHistoryLoadsOlderConversationPages() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "55555555-5555-5555-5555-555555555555"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        let namespace = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
+        await WarrenAgentEventStore.shared.clearStream(namespace: namespace, streamID: "exec-history")
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
-            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"agentExecutionId\":\"exec-history\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -298,22 +300,25 @@ final class IOSPersistenceTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         model.selectSession(sessionID)
-        let subscriptionMessages = await waitForSentMessages(task, count: 2)
-        let subscribeID = try XCTUnwrap(
-            subscriptionMessages.first(where: { requestMethod($0) == "session.subscribe" }).flatMap { try? requestID(from: $0) }
-        )
-        await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        let subscriptionMessages = await waitForSentMessages(task, count: 3)
+        let subscribeID = try requestID(from: try XCTUnwrap(
+            subscriptionMessages.first(where: { requestMethod($0) == "session.subscribe" })
         ))
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true}}"))
+        let agentSubscribeMessages = await waitForSentMessages(task, count: 3)
+        let agentSubscribeID = try requestID(from: try XCTUnwrap(
+            agentSubscribeMessages.first(where: { requestMethod($0) == "agent.events.subscribe" })
+        ))
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(agentSubscribeID)\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"checkpoint\":{\"sequence\":0,\"state\":{}},\"events\":[],\"live\":true}}"))
 
         model.loadOlderAgentHistory()
-        var messages = await waitForSentMessages(task, count: 3)
-        let firstHistory = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
-        XCTAssertEqual(requestParams(firstHistory)?["priority"], "conversation")
-        XCTAssertEqual(requestParams(firstHistory)?["before"], nil)
+        var messages = await waitForSentMessages(task, count: 4)
+        let firstHistory = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.events.history" }))
+        XCTAssertEqual(requestParams(firstHistory)?["streamId"], "exec-history")
+        XCTAssertEqual(requestParams(firstHistory)?["beforeSequence"], nil)
         let firstHistoryID = try requestID(from: firstHistory)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + firstHistoryID + "\",\"ok\":true,\"result\":{\"epoch\":1,\"events\":[{\"seq\":2,\"type\":\"user\",\"role\":\"user\",\"content\":\"Earlier prompt\"},{\"seq\":3,\"type\":\"assistant\",\"role\":\"assistant\",\"content\":\"Earlier answer\"}],\"cursor\":2,\"hasMore\":true}}"
+            "{\"t\":\"response\",\"id\":\"" + firstHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":2,\"eventId\":\"evt-2\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-2\",\"role\":\"user\",\"content\":\"Earlier prompt\"}},{\"sequence\":3,\"eventId\":\"evt-3\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-3\",\"role\":\"assistant\",\"content\":\"Earlier answer\"}}],\"nextAfterSequence\":3,\"headSequence\":3,\"hasMore\":true}}"
         ))
         for _ in 0..<400 {
             if model.agentEventsBySessionID[sessionID]?.count == 2,
@@ -323,12 +328,12 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.map(\.sequence), [2, 3])
 
         model.loadOlderAgentHistory()
-        messages = await waitForSentMessages(task, count: 4)
-        let secondHistory = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
-        XCTAssertEqual(requestParams(secondHistory)?["before"], "2")
+        messages = await waitForSentMessages(task, count: 5)
+        let secondHistory = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.events.history" }))
+        XCTAssertEqual(requestParams(secondHistory)?["beforeSequence"], "2")
         let secondHistoryID = try requestID(from: secondHistory)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + secondHistoryID + "\",\"ok\":true,\"result\":{\"epoch\":1,\"events\":[{\"seq\":1,\"type\":\"user\",\"role\":\"user\",\"content\":\"Oldest prompt\"}],\"cursor\":1,\"hasMore\":false}}"
+            "{\"t\":\"response\",\"id\":\"" + secondHistoryID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"events\":[{\"sequence\":1,\"eventId\":\"evt-1\",\"streamId\":\"exec-history\",\"executionId\":\"exec-history\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-1\",\"role\":\"user\",\"content\":\"Oldest prompt\"}}],\"nextAfterSequence\":1,\"headSequence\":3,\"hasMore\":false}}"
         ))
         for _ in 0..<400 {
             if model.agentEventsBySessionID[sessionID]?.count == 3,
@@ -350,11 +355,16 @@ final class IOSPersistenceTests: XCTestCase {
             role: "assistant",
             content: "Cached tail"
         )
-        try await IOSAgentEventStore.shared.saveEvents([cachedEvent], sessionID: sessionID, epoch: 1)
+        let namespace = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
+        try await WarrenAgentEventStore.shared.saveEvents(
+            [cachedEvent],
+            namespace: namespace,
+            streamID: "exec-cache"
+        )
 
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
-            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"agentExecutionId\":\"exec-cache\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -370,7 +380,7 @@ final class IOSPersistenceTests: XCTestCase {
         )
         defer {
             model.stop()
-            Task { await IOSAgentEventStore.shared.clearSession(sessionID: sessionID) }
+            Task { await WarrenAgentEventStore.shared.clearStream(namespace: namespace, streamID: "exec-cache") }
         }
 
         model.start()
@@ -382,17 +392,17 @@ final class IOSPersistenceTests: XCTestCase {
         model.ensureAgentSubscribed(for: sessionID)
         let messages = await waitForSentMessages(task, count: 3)
         let sessionSubscribe = try XCTUnwrap(messages.first(where: { requestMethod($0) == "session.subscribe" }))
-        let agentSubscribe = try XCTUnwrap(messages.first(where: { requestMethod($0) == "agent.subscribe" }))
+        let agentSubscribe = try XCTUnwrap(messages.first(where: { requestMethod($0) == "agent.events.subscribe" }))
         let sessionSubscribeID = try requestID(from: sessionSubscribe)
         let agentSubscribeID = try requestID(from: agentSubscribe)
-        XCTAssertEqual(requestParams(agentSubscribe)?["epoch"], "1")
-        XCTAssertEqual(requestParams(agentSubscribe)?["lastSequence"], "99")
+        XCTAssertEqual(requestParams(agentSubscribe)?["streamId"], "exec-cache")
+        XCTAssertEqual(requestParams(agentSubscribe)?["afterSequence"], "99")
 
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + sessionSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
         ))
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"session\":{\"id\":\"" + sessionID + "\",\"kind\":\"codex\",\"lifecycle\":\"running\"},\"snapshot\":{\"epoch\":1,\"turn\":{\"id\":0,\"status\":\"idle\"},\"sequence\":99}}}"
+            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-cache\",\"executionId\":\"exec-cache\",\"checkpoint\":{\"sequence\":99,\"state\":{}},\"events\":[],\"live\":true}}"
         ))
         for _ in 0..<400 {
             if model.agentEventsBySessionID[sessionID]?.contains(where: { $0.sequence == cachedEvent.sequence }) == true {
@@ -409,9 +419,11 @@ final class IOSPersistenceTests: XCTestCase {
     func testAgentSequenceGapIsFilledAcrossMultiplePages() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "77777777-7777-7777-7777-777777777777"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        let namespace = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
+        await WarrenAgentEventStore.shared.clearStream(namespace: namespace, streamID: "exec-gap")
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
-            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"agentExecutionId\":\"exec-gap\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -433,17 +445,17 @@ final class IOSPersistenceTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         model.selectSession(sessionID)
-        model.ensureAgentSubscribed(for: sessionID)
         let initial = await waitForSentMessages(task, count: 3)
         let sessionSubscribe = try XCTUnwrap(initial.first(where: { requestMethod($0) == "session.subscribe" }))
-        let agentSubscribe = try XCTUnwrap(initial.first(where: { requestMethod($0) == "agent.subscribe" }))
         let sessionSubscribeID = try requestID(from: sessionSubscribe)
-        let agentSubscribeID = try requestID(from: agentSubscribe)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + sessionSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
         ))
+        let agentMessages = await waitForSentMessages(task, count: 3)
+        let agentSubscribe = try XCTUnwrap(agentMessages.first(where: { requestMethod($0) == "agent.events.subscribe" }))
+        let agentSubscribeID = try requestID(from: agentSubscribe)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"session\":{\"id\":\"" + sessionID + "\",\"kind\":\"codex\",\"lifecycle\":\"running\"},\"snapshot\":{\"epoch\":1,\"turn\":{\"id\":1,\"status\":\"started\"},\"sequence\":250}}}"
+            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"checkpoint\":{\"sequence\":250,\"state\":{}},\"events\":[{\"sequence\":250,\"eventId\":\"evt-250\",\"streamId\":\"exec-gap\",\"executionId\":\"exec-gap\",\"type\":\"message.created\",\"payload\":{\"messageId\":\"msg-250\",\"role\":\"assistant\",\"content\":\"event 250\"}}],\"live\":true}}"
         ))
 
         func historyResponse(
@@ -453,15 +465,24 @@ final class IOSPersistenceTests: XCTestCase {
         ) throws -> String {
             let events: [[String: Any]] = range.map { sequence in
                 [
-                    "seq": sequence,
-                    "type": "assistant",
-                    "role": "assistant",
-                    "content": "event \(sequence)",
+                    "sequence": sequence,
+                    "eventId": "evt-\(sequence)",
+                    "streamId": "exec-gap",
+                    "executionId": "exec-gap",
+                    "type": "message.created",
+                    "payload": [
+                        "messageId": "msg-\(sequence)",
+                        "role": "assistant",
+                        "content": "event \(sequence)",
+                    ],
                 ]
             }
             let result: [String: Any] = [
-                "epoch": 1,
+                "streamId": "exec-gap",
+                "executionId": "exec-gap",
                 "events": events,
+                "headSequence": 250,
+                "nextAfterSequence": range.last.map(UInt64.init) ?? 0,
                 "hasMore": hasMore,
             ]
             let envelope: [String: Any] = [
@@ -475,19 +496,19 @@ final class IOSPersistenceTests: XCTestCase {
         }
 
         var messages = await waitForSentMessages(task, count: 4)
-        var history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
-        XCTAssertEqual(requestParams(history)?["since"], "1")
-        XCTAssertEqual(requestParams(history)?["before"], "251")
+        var history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.events.history" }))
+        XCTAssertEqual(requestParams(history)?["afterSequence"], "0")
+        XCTAssertEqual(requestParams(history)?["beforeSequence"], "250")
         await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 1...100, hasMore: true)))
 
         messages = await waitForSentMessages(task, count: 5)
-        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
-        XCTAssertEqual(requestParams(history)?["since"], "101")
+        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.events.history" }))
+        XCTAssertEqual(requestParams(history)?["afterSequence"], "100")
         await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 101...200, hasMore: true)))
 
         messages = await waitForSentMessages(task, count: 6)
-        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
-        XCTAssertEqual(requestParams(history)?["since"], "201")
+        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.events.history" }))
+        XCTAssertEqual(requestParams(history)?["afterSequence"], "200")
         await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 201...250, hasMore: false)))
 
         for _ in 0..<400 {
@@ -766,7 +787,7 @@ final class IOSPersistenceTests: XCTestCase {
     func testDeletingCurrentSessionReturnsToItsScopeWhenNoSiblingRemains() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text("{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -820,7 +841,7 @@ final class IOSPersistenceTests: XCTestCase {
         let firstID = "11111111-1111-1111-1111-111111111111"
         let siblingID = "22222222-2222-2222-2222-222222222222"
         let otherWorkspaceID = "33333333-3333-3333-3333-333333333333"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[{\"id\":\"workspace-1\",\"name\":\"Workspace\",\"path\":\"/tmp/workspace\"},{\"id\":\"workspace-2\",\"name\":\"Other\",\"path\":\"/tmp/other\"}],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + firstID + "\",\"workspace\":\"workspace-1\",\"title\":\"First\",\"kind\":\"shell\",\"lifecycle\":\"running\"},{\"id\":\"" + siblingID + "\",\"workspace\":\"workspace-1\",\"title\":\"Sibling\",\"kind\":\"shell\",\"lifecycle\":\"running\"},{\"id\":\"" + otherWorkspaceID + "\",\"workspace\":\"workspace-2\",\"title\":\"Other\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
         ))
@@ -878,7 +899,7 @@ final class IOSPersistenceTests: XCTestCase {
         let task = IOSScriptedWebSocketTask()
         let firstID = "aaaaaaaa-1111-1111-1111-111111111111"
         let secondID = "bbbbbbbb-2222-2222-2222-222222222222"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + firstID + "\",\"title\":\"First\",\"kind\":\"shell\",\"lifecycle\":\"running\"},{\"id\":\"" + secondID + "\",\"title\":\"Second\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
         ))
@@ -933,12 +954,12 @@ final class IOSPersistenceTests: XCTestCase {
         let firstID = "cccccccc-1111-1111-1111-111111111111"
         let secondID = "dddddddd-2222-2222-2222-222222222222"
         await task.enqueue(.text(
-            "{\"t\":\"welcome\",\"version\":\"2.0\",\"capabilities\":[\"agent-interrupt-v1\"]}"
+            "{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-interrupt-v1\"]}"
         ))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":["
-                + "{\"id\":\"" + firstID + "\",\"title\":\"First\",\"kind\":\"codex\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"working\"},\"agentTurn\":{\"id\":1,\"status\":\"working\"}},"
-                + "{\"id\":\"" + secondID + "\",\"title\":\"Second\",\"kind\":\"codex\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+                + "{\"id\":\"" + firstID + "\",\"title\":\"First\",\"kind\":\"codex\",\"agentExecutionId\":\"exec-first\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"working\"},\"agentTurn\":{\"id\":1,\"status\":\"working\"}},"
+                + "{\"id\":\"" + secondID + "\",\"title\":\"Second\",\"kind\":\"codex\",\"agentExecutionId\":\"exec-second\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -959,18 +980,24 @@ final class IOSPersistenceTests: XCTestCase {
         }
 
         model.selectSession(firstID)
-        var messages = await waitForSentMessages(task, count: 2)
+        var messages = await waitForSentMessages(task, count: 3)
         let subscribeID = try XCTUnwrap(
             messages.last(where: { requestMethod($0) == "session.subscribe" }).flatMap { try? requestID(from: $0) }
         )
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
         ))
+        if let agentSubscribe = messages.first(where: { requestMethod($0) == "agent.events.subscribe" }) {
+            let agentSubscribeID = try requestID(from: agentSubscribe)
+            await task.enqueue(.text(
+                "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-first\",\"executionId\":\"exec-first\",\"checkpoint\":{\"sequence\":0,\"state\":{}},\"events\":[],\"live\":true}}"
+            ))
+        }
         await task.enqueue(.text(
             "{\"t\":\"attached\",\"session\":\"" + firstID + "\",\"epoch\":1,\"sequence\":0,\"reanchor\":true}"
         ))
         model.focusTerminal()
-        messages = await waitForSentMessages(task, count: 3)
+        messages = await waitForSentMessages(task, count: 4)
         let focusID = try XCTUnwrap(
             messages.last(where: { requestMethod($0) == "session.focus" }).flatMap { try? requestID(from: $0) }
         )
@@ -984,26 +1011,26 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertTrue(model.hasControlLease)
 
         XCTAssertTrue(model.sendAgentMessageNow("replace me"))
-        messages = await waitForSentMessages(task, count: 4)
-        let interrupt = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.turn.interrupt" }))
-        let interruptID = try requestID(from: interrupt)
+        messages = await waitForSentMessages(task, count: 5)
+        let steer = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.turn.steer" }))
+        let steerID = try requestID(from: steer)
         let queuedID = try XCTUnwrap(model.agentQueueBySessionID[firstID]?.items.first?.id)
 
         model.selectSession(secondID)
-        messages = await waitForSentMessages(task, count: 5)
+        messages = await waitForSentMessages(task, count: 6)
         let unsubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.unsubscribe" }))
         let unsubscribeID = try requestID(from: unsubscribe)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + unsubscribeID + "\",\"ok\":true,\"result\":{\"unsubscribed\":true}}"
         ))
-        messages = await waitForSentMessages(task, count: 6)
+        messages = await waitForSentMessages(task, count: 7)
         let secondSubscribe = try XCTUnwrap(messages.last(where: { requestMethod($0) == "session.subscribe" }))
         let secondSubscribeID = try requestID(from: secondSubscribe)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + secondSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
         ))
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + interruptID + "\",\"ok\":true,\"result\":{\"accepted\":true,\"session\":\"" + firstID + "\",\"turn\":1,\"clientMessageId\":\"" + queuedID + "\"}}"
+            "{\"t\":\"response\",\"id\":\"" + steerID + "\",\"ok\":true,\"result\":{\"commandId\":\"" + queuedID + "\",\"accepted\":true}}"
         ))
 
         for _ in 0..<400 {
@@ -1018,7 +1045,7 @@ final class IOSPersistenceTests: XCTestCase {
     func testControlWaitsForOutputRegistrationBeforePromotingFocus() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text("{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -1076,9 +1103,11 @@ final class IOSPersistenceTests: XCTestCase {
     func testQueuesAgentMessagesWhileWorkingUntilExecutableBoundary() async throws {
         let task = IOSScriptedWebSocketTask()
         let sessionID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        let namespace = WarrenAgentEventStore.Namespace(hostID: "host-1", accessScopeID: "scope-owner")
+        await WarrenAgentEventStore.shared.clearStream(namespace: namespace, streamID: "exec-queue")
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
-            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"working\"}}]}}"
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentExecutionId\":\"exec-queue\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"working\"}}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -1101,18 +1130,26 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.connectionState, .connected)
         model.selectSession(sessionID)
 
-        let subscribeMessages = await waitForSentMessages(task, count: 2)
-        let subscribeID = try requestID(from: subscribeMessages[1])
+        let subscribeMessages = await waitForSentMessages(task, count: 3)
+        let subscribe = try XCTUnwrap(subscribeMessages.first(where: { requestMethod($0) == "session.subscribe" }))
+        let subscribeID = try requestID(from: subscribe)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + subscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
         ))
+        if let agentSubscribe = subscribeMessages.first(where: { requestMethod($0) == "agent.events.subscribe" }) {
+            let agentSubscribeID = try requestID(from: agentSubscribe)
+            await task.enqueue(.text(
+                "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"checkpoint\":{\"sequence\":0,\"state\":{}},\"events\":[],\"live\":true}}"
+            ))
+        }
         await task.enqueue(.text(
             "{\"t\":\"attached\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"sequence\":0,\"reanchor\":true}"
         ))
 
         model.focusTerminal()
-        let focusMessages = await waitForSentMessages(task, count: 3)
-        let focusID = try requestID(from: focusMessages[2])
+        let focusMessages = await waitForSentMessages(task, count: 4)
+        let focus = try XCTUnwrap(focusMessages.last(where: { requestMethod($0) == "session.focus" }))
+        let focusID = try requestID(from: focus)
         await task.enqueue(.text(
             "{\"t\":\"response\",\"id\":\"" + focusID + "\",\"ok\":true,\"result\":{\"focused\":true,\"resized\":false}}"
         ))
@@ -1132,27 +1169,35 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.agentQueueBySessionID[sessionID]?.items.first?.text, "edited locally")
         XCTAssertTrue(model.deleteQueuedAgentMessage(sessionID: sessionID, itemID: removable.id))
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], 1)
-        XCTAssertEqual(model.agentEventsBySessionID[sessionID] ?? [], [])
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.map(\.sequence) ?? [], [])
         let sentWhileWorking = await task.sentMessages
         XCTAssertEqual(binaryPayloads(from: sentWhileWorking).count, 0)
 
         await task.enqueue(.text(
-            "{\"t\":\"agent.status\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"status\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\"}}}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"events\":[{\"eventId\":\"evt-blocked\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"sequence\":1,\"type\":\"status.changed\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"provider\",\"confidence\":\"observed\"},\"payload\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\",\"requestId\":\"interaction-1\"}}}] }"
         ))
         var sent = await task.sentMessages
         for _ in 0..<400 {
             sent = await task.sentMessages
-            if binaryPayloads(from: sent).count >= 2,
+            if sent.contains(where: { requestMethod($0) == "agent.interaction.resolve" }),
                model.agentQueuedMessageCountBySessionID[sessionID] == nil {
                 break
             }
             try await Task.sleep(for: .milliseconds(5))
         }
-        let payloads = binaryPayloads(from: sent)
+        let resolution = try XCTUnwrap(sent.last(where: { requestMethod($0) == "agent.interaction.resolve" }))
+        let params = try XCTUnwrap(requestParams(resolution))
+        let resolutionID = try requestID(from: resolution)
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + resolutionID + "\",\"ok\":true,\"result\":{\"commandId\":\"" + (params["commandId"] ?? "") + "\",\"accepted\":true}}"
+        ))
+        for _ in 0..<400 {
+            if model.agentQueuedMessageCountBySessionID[sessionID] == nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], nil)
-        XCTAssertGreaterThanOrEqual(payloads.count, 2)
-        XCTAssertEqual(payloads[0], Data("edited locally".utf8))
-        XCTAssertEqual(payloads[1], Data([0x1B, 0x5B, 0x31, 0x33, 0x75]))
+        XCTAssertEqual(params["executionId"], "exec-queue")
+        XCTAssertEqual(params["interactionId"], "interaction-1")
         model.stop()
     }
 
@@ -1160,9 +1205,9 @@ final class IOSPersistenceTests: XCTestCase {
     func testAgentStreamingContentDeltasAreCoalescedIntoSingleMessage() async throws {
         let sessionID = "agent-stream-test"
         let task = IOSScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
-            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Agent\",\"kind\":\"claude\",\"lifecycle\":\"running\"}]}}"
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Agent\",\"kind\":\"claude\",\"agentExecutionId\":\"exec-deltas\",\"lifecycle\":\"running\"}]}}"
         ))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -1176,6 +1221,7 @@ final class IOSPersistenceTests: XCTestCase {
                 keychain: IOSKeychainStore(service: "warren-ios-agent-deltas")
             )
         )
+        await WarrenAgentEventStore.shared.clearStream(namespace: .init(hostID: "host-1", accessScopeID: "scope-owner"), streamID: "exec-deltas")
         model.start()
 
         for _ in 0..<400 {
@@ -1196,7 +1242,7 @@ final class IOSPersistenceTests: XCTestCase {
 
         // 1. Initial seed event with contentDelta=false
         await task.enqueue(.text(
-            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":1,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hello\",\"contentDelta\":false}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-1\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":1,\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\"Hello\"}}]}"
         ))
         for _ in 0..<200 {
             if (model.agentEventsBySessionID[sessionID]?.count ?? 0) >= 1 { break }
@@ -1207,7 +1253,7 @@ final class IOSPersistenceTests: XCTestCase {
 
         // 2. Stream delta 1 with contentDelta=true
         await task.enqueue(.text(
-            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":2,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\" world\",\"contentDelta\":true}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-2\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":2,\"type\":\"message.delta\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\" world\"}}]}"
         ))
         for _ in 0..<200 {
             if model.agentEventsBySessionID[sessionID]?.first?.content == "Hello world" { break }
@@ -1218,7 +1264,7 @@ final class IOSPersistenceTests: XCTestCase {
 
         // 3. Stream delta 2 with contentDelta=true
         await task.enqueue(.text(
-            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":3,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"!\",\"contentDelta\":true}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-3\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":3,\"type\":\"message.delta\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\"!\"}}]}"
         ))
         for _ in 0..<200 {
             if model.agentEventsBySessionID[sessionID]?.first?.content == "Hello world!" { break }
@@ -1229,7 +1275,7 @@ final class IOSPersistenceTests: XCTestCase {
 
         // 4. Duplicate sequence delivery does not duplicate content
         await task.enqueue(.text(
-            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":3,\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"!\",\"contentDelta\":true}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-3\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":3,\"type\":\"message.delta\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\"!\"}}]}"
         ))
         try await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
@@ -1237,7 +1283,7 @@ final class IOSPersistenceTests: XCTestCase {
 
         // 5. New independent message creates a second event
         await task.enqueue(.text(
-            "{\"t\":\"agent\",\"session\":\"" + sessionID + "\",\"epoch\":1,\"events\":[{\"seq\":4,\"id\":\"msg-2\",\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Next\",\"contentDelta\":false}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-4\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":4,\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-2\",\"role\":\"assistant\",\"content\":\"Next\"}}]}"
         ))
         for _ in 0..<200 {
             if (model.agentEventsBySessionID[sessionID]?.count ?? 0) >= 2 { break }
@@ -1254,7 +1300,7 @@ final class IOSPersistenceTests: XCTestCase {
         let sessionUUID = UUID()
         let sessionID = sessionUUID.uuidString.lowercased()
         let task = IOSScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"agent-timeline-v1\"]}"))
         await task.enqueue(.text(
             "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
         ))
@@ -1358,7 +1404,11 @@ final class IOSPersistenceTests: XCTestCase {
               let params = object["params"] as? [String: Any] else {
             return nil
         }
-        return params.compactMapValues { $0 as? String }
+        return params.compactMapValues {
+            if let value = $0 as? String { return value }
+            if let value = $0 as? NSNumber { return value.stringValue }
+            return nil
+        }
     }
 
     private func binaryPayloads(from messages: [WarrenWebSocketMessage]) -> [Data] {

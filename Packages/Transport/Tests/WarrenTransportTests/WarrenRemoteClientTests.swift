@@ -9,7 +9,7 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     func testAuthAndImmediateWelcomeAreHandledWithoutAReceiveRace() async throws {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -27,7 +27,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         }
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(auth.utf8)) as? [String: Any])
         XCTAssertEqual(object["t"] as? String, "auth")
-        XCTAssertEqual(object["version"] as? String, "2.0")
+        XCTAssertEqual(object["version"] as? String, "3.0")
         XCTAssertEqual(object["terminalStateFormats"] as? [String], ["ghostline-vt-replay-v1"])
         XCTAssertEqual(object["capabilities"] as? [String], ["roster-delta"])
 
@@ -35,7 +35,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         let initialRevision = await client.roster()?.revision
         XCTAssertEqual(initialRevision, 1)
         let sawWelcome = await recorder.contains { event in
-            if case .welcome(version: "2.0") = event { return true }
+            if case .welcome(version: "3.0") = event { return true }
             return false
         }
         XCTAssertTrue(sawWelcome)
@@ -45,7 +45,7 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     func testRelayAuthUsesAccessTokenAndHostScopedEndpoint() async throws {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let endpoint = WarrenRemoteEndpointConfiguration(
             name: "Relay",
@@ -230,17 +230,9 @@ final class WarrenRemoteClientTests: XCTestCase {
     func testSubscribeThenUnsubscribeAreSentInOrder() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let sessionID = sessionUUID.uuidString.lowercased()
-        let subscribe = Task { try await client.subscribe(sessionID: sessionID, omitAgentOutput: true) }
+        let subscribe = Task { try await client.subscribe(sessionID: sessionID) }
         let subscribeMessages = await waitForSentMessages(task, count: 2)
         let subscribeMessage = try XCTUnwrap(subscribeMessages.dropFirst().first)
-        guard case .text(let subscribeText) = subscribeMessage,
-              let subscribeObject = try JSONSerialization.jsonObject(with: Data(subscribeText.utf8)) as? [String: Any],
-              let subscribeParams = subscribeObject["params"] as? [String: Any],
-              let wireOptions = subscribeParams["wireOptions"] as? [String: Any] else {
-            XCTFail("session subscription wire options are malformed")
-            return
-        }
-        XCTAssertEqual(wireOptions["omitFields"] as? [String], ["output"])
         let subscribeID = try requestID(from: subscribeMessage)
         await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true}}"))
         let subscribeResult = try await subscribe.value
@@ -256,15 +248,14 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
-    func testAgentHistoryCanRequestConversationPriority() async throws {
+    func testAgentEventsHistoryUsesCanonicalCursors() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let sessionID = sessionUUID.uuidString.lowercased()
         let request = Task {
-            try await client.agentHistory(
-                sessionID: sessionID,
-                before: 42,
-                limit: 12,
-                conversationOnly: true
+            try await client.agentEventsHistory(
+                streamID: "exec-001",
+                beforeSequence: 42,
+                limit: 12
             )
         }
         let messages = await waitForSentMessages(task, count: 2)
@@ -275,63 +266,18 @@ final class WarrenRemoteClientTests: XCTestCase {
             XCTFail("agent history request is malformed")
             return
         }
-        XCTAssertEqual(params["session"] as? String, sessionID)
-        XCTAssertEqual(params["before"] as? String, "42")
-        XCTAssertEqual(params["limit"] as? String, "12")
-        XCTAssertEqual(params["priority"] as? String, "conversation")
-        let wireOptions = try XCTUnwrap(params["wireOptions"] as? [String: Any])
-        XCTAssertEqual(wireOptions["omitFields"] as? [String], ["output"])
+        XCTAssertEqual(params["streamId"] as? String, "exec-001")
+        XCTAssertEqual(params["beforeSequence"] as? UInt64, 42)
+        XCTAssertEqual(params["limit"] as? Int, 12)
         let id = try XCTUnwrap(object["id"] as? String)
         await task.enqueue(.text(
-            "{\"t\":\"response\",\"id\":\"" + id + "\",\"ok\":true,\"result\":{\"epoch\":1,\"events\":[],\"hasMore\":false}}"
+            "{\"t\":\"response\",\"id\":\"" + id + "\",\"ok\":true,\"result\":{\"streamId\":\"exec-001\",\"events\":[],\"headSequence\":0,\"hasMore\":false}}"
         ))
         let page = try await request.value
         XCTAssertTrue(page.events.isEmpty)
         XCTAssertFalse(page.hasMore)
         await client.stop()
         consuming.cancel()
-    }
-
-    func testAgentEventClipped() {
-        let longOutput = String(repeating: "A", count: 10000)
-        let toolOutputEvent = WarrenRemoteAgentEvent(
-            sequence: 1,
-            type: "tool_output",
-            output: longOutput
-        )
-
-        let clippedOutput = toolOutputEvent.clipped(limit: 100)
-        XCTAssertEqual(clippedOutput.output?.count, 101) // 100 chars + "…"
-        XCTAssertTrue(clippedOutput.output?.hasSuffix("…") == true)
-
-        let toolCallEvent = WarrenRemoteAgentEvent(
-            sequence: 2,
-            type: "tool_call",
-            toolName: "execute",
-            toolInput: .object([
-                "cmd": .string(String(repeating: "C", count: 5000))
-            ])
-        )
-
-        let clippedCall = toolCallEvent.clipped(limit: 100)
-        if case .object(let dict) = clippedCall.toolInput,
-           case .string(let str) = dict["cmd"] {
-            XCTAssertEqual(str.count, 101)
-            XCTAssertTrue(str.hasSuffix("…"))
-        } else {
-            XCTFail("toolInput was not clipped as expected")
-        }
-
-        // Conversational message must NEVER be clipped regardless of size
-        let messageEvent = WarrenRemoteAgentEvent(
-            sequence: 3,
-            type: "assistant",
-            role: "assistant",
-            content: String(repeating: "M", count: 50000)
-        )
-        let messageClipped = messageEvent.clipped(limit: 100)
-        XCTAssertEqual(messageClipped.content?.count, 50000)
-        XCTAssertEqual(messageClipped, messageEvent)
     }
 
     private func connectedClient() async throws -> (
@@ -341,7 +287,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         EventRecorder
     ) {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),

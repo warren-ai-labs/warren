@@ -1,49 +1,39 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  saveAgentEvents,
-  loadRecentAgentEvents,
-  getAgentMaxSequence,
-  clearAgentSession,
+  agentReplicaNamespace,
+  saveAgentEventsForStream,
+  loadRecentAgentEventsForStream,
+  getAgentSyncState,
+  clearAgentStream,
 } from "./agent-store.js";
 
-test("saveAgentEvents and loadRecentAgentEvents round trips events", async () => {
-  const sessionID = "sess-web-1";
-  const epoch = 100;
+test("namespace-aware replica isolates scopes and advances the contiguous cursor", async () => {
+  const owner = agentReplicaNamespace("host-a", "scope-owner");
+  const shared = agentReplicaNamespace("host-a", "scope-shared");
+  await saveAgentEventsForStream(owner, "exec-1", [
+    { sequence: 1, eventId: "evt-1", type: "message.created" },
+    { sequence: 2, eventId: "evt-2", type: "message.delta" },
+    { sequence: 4, eventId: "evt-4", type: "message.delta" },
+  ]);
+  await saveAgentEventsForStream(shared, "exec-1", [
+    { sequence: 1, eventId: "shared-evt-1", type: "message.created" },
+  ]);
 
-  const events = [
-    { seq: 1, type: "user", role: "user", content: "hello" },
-    { seq: 2, type: "message", role: "assistant", content: "world" },
-    { seq: 3, type: "tool_call", toolName: "view_file" },
-  ];
+  let state = await getAgentSyncState(owner, "exec-1");
+  assert.equal(state.headSequence, 4);
+  assert.equal(state.contiguousThrough, 2);
+  assert.equal((await loadRecentAgentEventsForStream(shared, "exec-1")).length, 1);
+  assert.equal((await loadRecentAgentEventsForStream(owner, "exec-1")).length, 3);
 
-  await saveAgentEvents(sessionID, epoch, events);
-
-  const maxSeq = await getAgentMaxSequence(sessionID, epoch);
-  assert.equal(maxSeq, 3);
-
-  const loaded = await loadRecentAgentEvents(sessionID, 10);
-  assert.equal(loaded.length, 3);
-  assert.equal(loaded[0].seq, 1);
-  assert.equal(loaded[0].content, "hello");
-  assert.equal(loaded[1].seq, 2);
-  assert.equal(loaded[1].content, "world");
-  assert.equal(loaded[2].seq, 3);
-  assert.equal(loaded[2].toolName, "view_file");
-});
-
-test("clearAgentSession removes stored events and reset maxSequence", async () => {
-  const sessionID = "sess-web-clear";
-  const epoch = 200;
-
-  await saveAgentEvents(sessionID, epoch, [{ seq: 1, content: "to be cleared" }]);
-  let loaded = await loadRecentAgentEvents(sessionID, 10);
-  assert.equal(loaded.length, 1);
-
-  await clearAgentSession(sessionID);
-
-  loaded = await loadRecentAgentEvents(sessionID, 10);
-  assert.equal(loaded.length, 0);
-  const maxSeq = await getAgentMaxSequence(sessionID, epoch);
-  assert.equal(maxSeq, 0);
+  await saveAgentEventsForStream(owner, "exec-1", [
+    { sequence: 3, eventId: "evt-3", type: "message.delta" },
+  ]);
+  state = await getAgentSyncState(owner, "exec-1");
+  assert.equal(state.contiguousThrough, 4);
+  await assert.rejects(
+    saveAgentEventsForStream(owner, "exec-1", [{ sequence: 3, eventId: "evt-3", type: "message.delta", payload: { changed: true } }]),
+    /sequence conflict/,
+  );
+  await clearAgentStream(owner, "exec-1");
 });

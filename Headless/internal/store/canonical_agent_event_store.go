@@ -1,0 +1,524 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/abcdlsj/warren/Headless/internal/api"
+)
+
+// Canonical event persistence is intentionally separate from the old
+// projection table. The latter is kept only for source-level migration of
+// existing tests/embedders; all new Host code uses this journal.
+
+var (
+	ErrCanonicalSequenceConflict = errors.New("canonical agent event sequence conflict")
+	ErrCanonicalEventConflict    = errors.New("canonical agent event identity conflict")
+	ErrCanonicalHistoryBoundary  = errors.New("canonical agent history boundary")
+	ErrCanonicalCommandConflict  = errors.New("canonical agent command identity conflict")
+	ErrCanonicalCommandPending   = errors.New("canonical agent command is pending")
+)
+
+// CanonicalCommandRecord is the durable admission record for one mutation.
+// Result is decoded as generic JSON because command result types belong to the
+// wire method, not to the journal. A pending row means another Host process
+// may still be executing the command; it is never re-run implicitly.
+type CanonicalCommandRecord struct {
+	ExecutionID string
+	CommandID   string
+	Fingerprint string
+	Status      string
+	Result      any
+	Error       string
+}
+
+const (
+	CanonicalCommandPending   = "pending"
+	CanonicalCommandCompleted = "completed"
+	CanonicalCommandFailed    = "failed"
+)
+
+// CanonicalHistoryBoundary carries the first sequence still retained by the
+// Host. Callers should return this as a structured history_boundary error and
+// install a replacement checkpoint rather than guessing a cursor.
+type CanonicalHistoryBoundary struct {
+	StreamID             string
+	RetainedFromSequence uint64
+	HeadSequence         uint64
+	CheckpointSequence   uint64
+	Checkpoint           map[string]any
+}
+
+func (e *CanonicalHistoryBoundary) Error() string {
+	if e == nil {
+		return ErrCanonicalHistoryBoundary.Error()
+	}
+	return fmt.Sprintf("agent history for %s is retained from sequence %d", e.StreamID, e.RetainedFromSequence)
+}
+
+// GetCanonicalCommand returns the durable admission record for one command.
+// The boolean is false when the command has never been admitted.
+func (s *AgentEventStore) GetCanonicalCommand(
+	ctx context.Context,
+	executionID, commandID string,
+) (CanonicalCommandRecord, bool, error) {
+	executionID = strings.TrimSpace(executionID)
+	commandID = strings.TrimSpace(commandID)
+	if executionID == "" || commandID == "" {
+		return CanonicalCommandRecord{}, false, errors.New("canonical command executionId and commandId are required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return queryCanonicalCommand(ctx, s.db, executionID, commandID)
+}
+
+// BeginCanonicalCommand atomically admits a command. The caller becomes the
+// leader only when it inserted a new pending row. A completed or failed row is
+// returned for idempotent replay; a pending row belongs to another attempt.
+func (s *AgentEventStore) BeginCanonicalCommand(
+	ctx context.Context,
+	executionID, commandID, fingerprint string,
+) (CanonicalCommandRecord, bool, error) {
+	executionID = strings.TrimSpace(executionID)
+	commandID = strings.TrimSpace(commandID)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if executionID == "" || commandID == "" || fingerprint == "" {
+		return CanonicalCommandRecord{}, false, errors.New("canonical command executionId, commandId and fingerprint are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CanonicalCommandRecord{}, false, fmt.Errorf("begin canonical command tx: %w", err)
+	}
+	defer tx.Rollback()
+	record, found, err := queryCanonicalCommand(ctx, tx, executionID, commandID)
+	if err != nil {
+		return CanonicalCommandRecord{}, false, err
+	}
+	if found {
+		if record.Fingerprint != fingerprint {
+			return CanonicalCommandRecord{}, false, fmt.Errorf("%w: executionId=%s commandId=%s", ErrCanonicalCommandConflict, executionID, commandID)
+		}
+		return record, false, nil
+	}
+	now := time.Now().UTC().UnixMilli()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_command_journal
+		(execution_id, command_id, fingerprint, status, result_json, error_text, created_at, completed_at)
+		VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL)
+	`, executionID, commandID, fingerprint, CanonicalCommandPending, now); err != nil {
+		return CanonicalCommandRecord{}, false, fmt.Errorf("insert canonical command: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return CanonicalCommandRecord{}, false, fmt.Errorf("commit canonical command admission: %w", err)
+	}
+	return CanonicalCommandRecord{
+		ExecutionID: executionID,
+		CommandID:   commandID,
+		Fingerprint: fingerprint,
+		Status:      CanonicalCommandPending,
+	}, true, nil
+}
+
+// CompleteCanonicalCommand records the immutable result of an admitted
+// command. Completion is intentionally independent from the request context:
+// a disconnected client must not leave a successful provider call pending.
+func (s *AgentEventStore) CompleteCanonicalCommand(
+	ctx context.Context,
+	executionID, commandID, fingerprint string,
+	result any,
+	callErr error,
+) error {
+	executionID = strings.TrimSpace(executionID)
+	commandID = strings.TrimSpace(commandID)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if executionID == "" || commandID == "" || fingerprint == "" {
+		return errors.New("canonical command executionId, commandId and fingerprint are required")
+	}
+	var encoded []byte
+	var err error
+	if result != nil {
+		encoded, err = json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("marshal canonical command result: %w", err)
+		}
+	}
+	status := CanonicalCommandCompleted
+	errorText := ""
+	if callErr != nil {
+		status = CanonicalCommandFailed
+		errorText = callErr.Error()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin canonical command completion tx: %w", err)
+	}
+	defer tx.Rollback()
+	var storedFingerprint, storedStatus string
+	err = tx.QueryRowContext(ctx, `
+		SELECT fingerprint, status FROM agent_command_journal
+		WHERE execution_id = ? AND command_id = ?
+	`, executionID, commandID).Scan(&storedFingerprint, &storedStatus)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("canonical command was not admitted: %s", commandID)
+	}
+	if err != nil {
+		return fmt.Errorf("read canonical command completion: %w", err)
+	}
+	if storedFingerprint != fingerprint {
+		return fmt.Errorf("%w: executionId=%s commandId=%s", ErrCanonicalCommandConflict, executionID, commandID)
+	}
+	if storedStatus != CanonicalCommandPending {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE agent_command_journal
+		SET status = ?, result_json = ?, error_text = ?, completed_at = ?
+		WHERE execution_id = ? AND command_id = ? AND status = ?
+	`, status, nullableString(encoded), nullableString([]byte(errorText)), time.Now().UTC().UnixMilli(), executionID, commandID, CanonicalCommandPending); err != nil {
+		return fmt.Errorf("update canonical command result: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit canonical command result: %w", err)
+	}
+	return nil
+}
+
+func queryCanonicalCommand(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, executionID, commandID string) (CanonicalCommandRecord, bool, error) {
+	var record CanonicalCommandRecord
+	var resultJSON, errorText sql.NullString
+	err := queryer.QueryRowContext(ctx, `
+		SELECT execution_id, command_id, fingerprint, status, result_json, error_text
+		FROM agent_command_journal
+		WHERE execution_id = ? AND command_id = ?
+	`, executionID, commandID).Scan(
+		&record.ExecutionID, &record.CommandID, &record.Fingerprint, &record.Status,
+		&resultJSON, &errorText,
+	)
+	if err == sql.ErrNoRows {
+		return CanonicalCommandRecord{}, false, nil
+	}
+	if err != nil {
+		return CanonicalCommandRecord{}, false, fmt.Errorf("query canonical command: %w", err)
+	}
+	if resultJSON.Valid && strings.TrimSpace(resultJSON.String) != "" {
+		if err := json.Unmarshal([]byte(resultJSON.String), &record.Result); err != nil {
+			return CanonicalCommandRecord{}, false, fmt.Errorf("decode canonical command result: %w", err)
+		}
+	}
+	if errorText.Valid {
+		record.Error = errorText.String
+	}
+	return record, true, nil
+}
+
+func nullableString(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
+}
+
+// AppendCanonicalEvents appends one batch atomically. A zero sequence is
+// assigned by the Host; explicit sequences are accepted only when they match
+// an existing immutable row. Replayed event IDs and positions are idempotent,
+// while a different payload at either identity is a hard integrity error.
+func (s *AgentEventStore) AppendCanonicalEvents(
+	ctx context.Context,
+	streamID, executionID string,
+	events []api.CanonicalAgentEvent,
+) ([]api.CanonicalAgentEvent, error) {
+	streamID = strings.TrimSpace(streamID)
+	executionID = strings.TrimSpace(executionID)
+	if streamID == "" {
+		return nil, errors.New("canonical agent streamId is required")
+	}
+	if executionID == "" {
+		executionID = streamID
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin canonical append tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var head uint64
+	_ = tx.QueryRowContext(ctx,
+		`SELECT head_sequence FROM agent_stream_state WHERE stream_id = ?`, streamID,
+	).Scan(&head)
+	if head == 0 {
+		_ = tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(sequence), 0) FROM agent_event_journal WHERE stream_id = ?`, streamID,
+		).Scan(&head)
+	}
+
+	resolved := make([]api.CanonicalAgentEvent, 0, len(events))
+	now := time.Now().UTC()
+	for _, source := range events {
+		event := source
+		if strings.TrimSpace(event.StreamID) == "" {
+			event.StreamID = streamID
+		}
+		if event.StreamID != streamID {
+			return nil, fmt.Errorf("canonical event stream mismatch: %s", event.StreamID)
+		}
+		if strings.TrimSpace(event.ExecutionID) == "" {
+			event.ExecutionID = executionID
+		}
+		if event.ExecutionID != executionID {
+			return nil, fmt.Errorf("canonical event execution mismatch: %s", event.ExecutionID)
+		}
+		if event.EventID == "" {
+			event.EventID = NewID()
+		}
+		if event.RecordedAt.IsZero() {
+			event.RecordedAt = now
+		}
+		if event.OccurredAt.IsZero() {
+			event.OccurredAt = event.RecordedAt
+		}
+
+		// An existing event ID is checked before sequence assignment. This is
+		// what makes retries with a zero sequence resolve to their original
+		// Host position.
+		var existingSequence uint64
+		var existingJSON string
+		err := tx.QueryRowContext(ctx,
+			`SELECT sequence, event_json FROM agent_event_journal WHERE stream_id = ? AND event_id = ?`,
+			streamID, event.EventID,
+		).Scan(&existingSequence, &existingJSON)
+		if err == nil {
+			var existing api.CanonicalAgentEvent
+			if json.Unmarshal([]byte(existingJSON), &existing) != nil || !canonicalEventsEquivalent(existing, event) {
+				return nil, fmt.Errorf("%w: stream=%s eventId=%s", ErrCanonicalEventConflict, streamID, event.EventID)
+			}
+			if event.Sequence != 0 && event.Sequence != existingSequence {
+				return nil, fmt.Errorf("%w: stream=%s sequence=%d", ErrCanonicalSequenceConflict, streamID, event.Sequence)
+			}
+			event = existing
+			resolved = append(resolved, event)
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("lookup canonical event identity: %w", err)
+		}
+
+		if event.Sequence == 0 {
+			head++
+			event.Sequence = head
+		} else {
+			var positionJSON, positionEventID string
+			positionErr := tx.QueryRowContext(ctx,
+				`SELECT event_id, event_json FROM agent_event_journal WHERE stream_id = ? AND sequence = ?`,
+				streamID, event.Sequence,
+			).Scan(&positionEventID, &positionJSON)
+			if positionErr == nil {
+				var position api.CanonicalAgentEvent
+				if json.Unmarshal([]byte(positionJSON), &position) != nil || positionEventID != event.EventID || !canonicalEventsEquivalent(position, event) {
+					return nil, fmt.Errorf("%w: stream=%s sequence=%d", ErrCanonicalSequenceConflict, streamID, event.Sequence)
+				}
+				resolved = append(resolved, event)
+				if event.Sequence > head {
+					head = event.Sequence
+				}
+				continue
+			}
+			if positionErr != sql.ErrNoRows {
+				return nil, fmt.Errorf("lookup canonical event position: %w", positionErr)
+			}
+			if event.Sequence > head {
+				head = event.Sequence
+			}
+		}
+
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("marshal canonical event %s: %w", event.EventID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO agent_event_journal
+			(stream_id, execution_id, sequence, event_id, event_type, event_json, recorded_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, streamID, executionID, event.Sequence, event.EventID, event.Type, string(encoded), event.RecordedAt.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("insert canonical event %s: %w", event.EventID, err)
+		}
+		resolved = append(resolved, event)
+	}
+
+	var retained uint64
+	_ = tx.QueryRowContext(ctx,
+		`SELECT retained_from_sequence FROM agent_stream_state WHERE stream_id = ?`, streamID,
+	).Scan(&retained)
+	if retained == 0 {
+		_ = tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MIN(sequence), 0) FROM agent_event_journal WHERE stream_id = ?`, streamID,
+		).Scan(&retained)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_stream_state
+		(stream_id, execution_id, retained_from_sequence, head_sequence, checkpoint_sequence, checkpoint_json, updated_at)
+		VALUES (?, ?, ?, ?, 0, NULL, ?)
+		ON CONFLICT(stream_id) DO UPDATE SET
+			execution_id = excluded.execution_id,
+			head_sequence = MAX(agent_stream_state.head_sequence, excluded.head_sequence),
+			updated_at = excluded.updated_at
+	`, streamID, executionID, retained, head, now.UnixMilli()); err != nil {
+		return nil, fmt.Errorf("update canonical stream state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit canonical append tx: %w", err)
+	}
+	return resolved, nil
+}
+
+// QueryCanonicalEvents returns an ascending page. afterSequence is exclusive;
+// beforeSequence is exclusive. With neither bound the newest page is returned.
+func (s *AgentEventStore) QueryCanonicalEvents(
+	ctx context.Context,
+	streamID string,
+	afterSequence, beforeSequence uint64,
+	limit int,
+) (api.AgentEventsHistoryResult, error) {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return api.AgentEventsHistoryResult{}, errors.New("canonical agent streamId is required")
+	}
+	if limit <= 0 {
+		limit = defaultHistoryLimit
+	}
+	if limit > maxHistoryLimit {
+		limit = maxHistoryLimit
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var state struct {
+		executionID, checkpointJSON string
+		retained, head, checkpoint  uint64
+	}
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT execution_id, retained_from_sequence, head_sequence, checkpoint_sequence, checkpoint_json
+		FROM agent_stream_state WHERE stream_id = ?
+	`, streamID).Scan(&state.executionID, &state.retained, &state.head, &state.checkpoint, &state.checkpointJSON)
+	if state.retained == 0 {
+		_ = s.db.QueryRowContext(ctx,
+			`SELECT COALESCE(MIN(sequence), 0), COALESCE(MAX(sequence), 0), COALESCE(MAX(execution_id), '') FROM agent_event_journal WHERE stream_id = ?`,
+			streamID,
+		).Scan(&state.retained, &state.head, &state.executionID)
+	}
+	if state.retained > 0 && afterSequence > 0 && afterSequence+1 < state.retained {
+		return api.AgentEventsHistoryResult{}, &CanonicalHistoryBoundary{
+			StreamID: streamID, RetainedFromSequence: state.retained, HeadSequence: state.head,
+			CheckpointSequence: state.checkpoint, Checkpoint: decodeCheckpoint(state.checkpointJSON),
+		}
+	}
+
+	query := `SELECT event_json FROM agent_event_journal WHERE stream_id = ?`
+	args := []any{streamID}
+	if afterSequence > 0 {
+		query += ` AND sequence > ?`
+		args = append(args, afterSequence)
+	}
+	if beforeSequence > 0 {
+		query += ` AND sequence < ?`
+		args = append(args, beforeSequence)
+	}
+	reversePage := afterSequence == 0 && (beforeSequence == 0 || beforeSequence > 0)
+	if reversePage {
+		query += ` ORDER BY sequence DESC LIMIT ?`
+	} else {
+		query += ` ORDER BY sequence ASC LIMIT ?`
+	}
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return api.AgentEventsHistoryResult{}, fmt.Errorf("query canonical events: %w", err)
+	}
+	defer rows.Close()
+	result := api.AgentEventsHistoryResult{StreamID: streamID, ExecutionID: state.executionID, HeadSequence: state.head, RetainedFrom: state.retained}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return api.AgentEventsHistoryResult{}, fmt.Errorf("scan canonical event: %w", err)
+		}
+		var event api.CanonicalAgentEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return api.AgentEventsHistoryResult{}, fmt.Errorf("decode canonical event: %w", err)
+		}
+		result.Events = append(result.Events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return api.AgentEventsHistoryResult{}, err
+	}
+	if len(result.Events) > limit {
+		result.HasMore = true
+		result.Events = result.Events[:limit]
+	}
+	if reversePage {
+		for left, right := 0, len(result.Events)-1; left < right; left, right = left+1, right-1 {
+			result.Events[left], result.Events[right] = result.Events[right], result.Events[left]
+		}
+	}
+	if len(result.Events) > 0 {
+		result.NextAfterSequence = result.Events[len(result.Events)-1].Sequence
+	}
+	return result, nil
+}
+
+func (s *AgentEventStore) CanonicalExecution(ctx context.Context, streamID string) (api.AgentExecution, bool, error) {
+	result, err := s.QueryCanonicalEvents(ctx, streamID, 0, 0, maxHistoryLimit)
+	if err != nil {
+		return api.AgentExecution{}, false, err
+	}
+	if result.ExecutionID == "" {
+		return api.AgentExecution{}, false, nil
+	}
+	return api.AgentExecution{ID: result.ExecutionID, StreamID: streamID, HeadSequence: result.HeadSequence}, true, nil
+}
+
+// canonicalEventsEquivalent compares the immutable semantic identity of an
+// event while ignoring Host-assigned sequence and recording time. A retried
+// provider observation has the same event ID/payload but is normalized at a
+// later wall-clock instant; treating that as a conflict would make at-least
+// once delivery impossible.
+func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool {
+	existing.Sequence = 0
+	incoming.Sequence = 0
+	existing.OccurredAt = time.Time{}
+	incoming.OccurredAt = time.Time{}
+	existing.RecordedAt = time.Time{}
+	incoming.RecordedAt = time.Time{}
+	encodedExisting, errExisting := json.Marshal(existing)
+	encodedIncoming, errIncoming := json.Marshal(incoming)
+	return errExisting == nil && errIncoming == nil && string(encodedExisting) == string(encodedIncoming)
+}
+
+func decodeCheckpoint(raw string) map[string]any {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var value map[string]any
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return nil
+	}
+	return value
+}

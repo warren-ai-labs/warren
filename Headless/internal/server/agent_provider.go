@@ -935,6 +935,9 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 	if registry == nil {
 		return nil, nil
 	}
+	if strings.TrimSpace(session.AgentExecutionID) == "" {
+		session.AgentExecutionID = s.ensureAgentExecutionID(state, session.ID, false)
+	}
 	contextValue, err := s.agentSessionContext(*state, session)
 	if err != nil {
 		s.stopAgent(session.ID)
@@ -990,6 +993,24 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 	if key == "" {
 		return entry, errors.New("agent handle binding key is required")
 	}
+	executionID := strings.TrimSpace(session.AgentExecutionID)
+	s.agentsMu.Lock()
+	currentEntry := s.agents[session.ID]
+	var oldKey string
+	var replacing bool
+	if currentEntry != nil {
+		currentEntry.mu.Lock()
+		oldKey = currentEntry.bindingKey
+		replacing = currentEntry.handle != nil || currentEntry.watcher != nil || currentEntry.tailer != nil
+		currentEntry.mu.Unlock()
+	}
+	s.agentsMu.Unlock()
+	if replacing && oldKey != "" && oldKey != key {
+		executionID = s.ensureAgentExecutionID(state, session.ID, true)
+	}
+	if executionID == "" {
+		executionID = s.ensureAgentExecutionID(state, session.ID, false)
+	}
 
 	// Detach the old handle before invoking Close. A callback emitted during
 	// Close must fail the identity check below and cannot append stale events.
@@ -1003,7 +1024,7 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 	oldHandle := entry.handle
 	oldWatcher := entry.watcher
 	oldTailer := entry.tailer
-	oldKey := entry.bindingKey
+	oldKey = entry.bindingKey
 	if oldHandle != nil && oldKey == key {
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
@@ -1029,6 +1050,7 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 		resetAgentProjectionLocked(entry)
 	}
 	entry.handle = handle
+	entry.executionID = executionID
 	entry.bindingKey = key
 	entry.providerKind = contextValue.Kind
 	entry.handlerKind = contextValue.Handler
@@ -1065,7 +1087,6 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 		}
 		s.bumpAgentEpoch()
 		s.bumpAgentRosterRevision()
-		s.broadcastAgentReset(session.ID)
 	}
 
 	sink := serviceAgentEventSink{service: s, sessionID: session.ID, handle: handle}
@@ -1228,6 +1249,7 @@ func (s *Service) currentAgentHandle(sessionID string) AgentHandle {
 
 func resetAgentProjectionLocked(entry *agentSession) {
 	entry.events = nil
+	entry.canonicalEvents = nil
 	entry.status = api.AgentStatus{}
 	entry.turn = api.AgentTurn{}
 	entry.titleUser = ""
@@ -1804,4 +1826,3 @@ func (handle *acpAgentHandle) Close() error {
 var _ AgentProvider = (*ACPAgentProvider)(nil)
 var _ AgentProviderCapabilities = (*ACPAgentProvider)(nil)
 var _ AgentHandle = (*acpAgentHandle)(nil)
-

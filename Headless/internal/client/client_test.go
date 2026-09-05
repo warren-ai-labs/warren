@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,7 +34,7 @@ func TestDialRelayUsesScopedPathAndAccessAuthentication(t *testing.T) {
 			path string
 			auth map[string]any
 		}{path: request.URL.Path, auth: auth}
-		_ = connection.WriteJSON(map[string]any{"t": "welcome"})
+		_ = connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"})
 		<-request.Context().Done()
 	}))
 	defer server.Close()
@@ -47,7 +48,7 @@ func TestDialRelayUsesScopedPathAndAccessAuthentication(t *testing.T) {
 	if result.path != "/relay/h/00000000-0000-4000-8000-000000000001/v1/client/connect" {
 		t.Fatalf("path = %q, want scoped Relay path", result.path)
 	}
-	if result.auth["t"] != "auth" || result.auth["version"] != "2.0" || result.auth["access_token"] != "access-token" {
+	if result.auth["t"] != "auth" || result.auth["version"] != "3.0" || result.auth["access_token"] != "access-token" {
 		t.Fatalf("unexpected Relay auth: %#v", result.auth)
 	}
 	if _, ok := result.auth["client_id"].(string); !ok {
@@ -102,7 +103,7 @@ func TestReadOutputHonorsContextDeadline(t *testing.T) {
 		if err := connection.ReadJSON(&envelope); err != nil {
 			return
 		}
-		if err := connection.WriteJSON(map[string]any{"t": "welcome"}); err != nil {
+		if err := connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}); err != nil {
 			return
 		}
 		// Hold the connection open without sending terminal output.
@@ -139,15 +140,15 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 		name     string
 		after    uint64
 		current  uint64
-		messages []api.AgentTurnMessage
+		messages []api.CanonicalAgentEventsMessage
 		want     api.AgentTurn
 	}{
 		{
 			name:  "next turn",
 			after: 3,
-			messages: []api.AgentTurnMessage{
-				{Type: "agent.turn", Session: "session-1", Epoch: 7, Turn: 4, Status: api.AgentTurnStarted},
-				{Type: "agent.turn", Session: "session-1", Epoch: 7, Turn: 4, Status: api.AgentTurnCompleted},
+			messages: []api.CanonicalAgentEventsMessage{
+				canonicalTurnBatch(4, "started"),
+				canonicalTurnBatch(4, "completed"),
 			},
 			want: api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
 		},
@@ -155,8 +156,8 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 			name:    "current turn",
 			after:   3,
 			current: 3,
-			messages: []api.AgentTurnMessage{
-				{Type: "agent.turn", Session: "session-1", Epoch: 7, Turn: 3, Status: api.AgentTurnFailed},
+			messages: []api.CanonicalAgentEventsMessage{
+				canonicalTurnBatch(3, "failed"),
 			},
 			want: api.AgentTurn{ID: 3, Status: api.AgentTurnFailed},
 		},
@@ -171,7 +172,7 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 				}
 				defer connection.Close()
 				var envelope map[string]any
-				if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome"}) != nil {
+				if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
 					return
 				}
 				for _, message := range test.messages {
@@ -190,7 +191,7 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 			defer value.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			got, err := value.WaitAgentTurn(ctx, "session-1", 7, test.after, test.current)
+			got, err := value.WaitAgentTurn(ctx, "session-1", "exec-1", test.after, test.current)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,7 +212,7 @@ func TestWaitAgentTurnHonorsContextDeadline(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
 		<-release
@@ -226,7 +227,7 @@ func TestWaitAgentTurnHonorsContextDeadline(t *testing.T) {
 	defer value.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err = value.WaitAgentTurn(ctx, "session-1", 1, 0, 0)
+	_, err = value.WaitAgentTurn(ctx, "session-1", "exec-1", 0, 0)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("WaitAgentTurn error = %v, want deadline exceeded", err)
 	}
@@ -241,20 +242,18 @@ func TestRequestPreservesAgentTurnArrivingBeforeResponse(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
 		if connection.ReadJSON(&envelope) != nil {
 			return
 		}
-		if connection.WriteJSON(api.AgentTurnMessage{
-			Type: "agent.turn", Session: "session-1", Epoch: 9, Turn: 1, Status: api.AgentTurnCompleted,
-		}) != nil {
+		if connection.WriteJSON(canonicalTurnBatch(1, "completed")) != nil {
 			return
 		}
 		_ = connection.WriteJSON(map[string]any{
 			"t": "response", "id": envelope["id"], "ok": true,
-			"result": api.AgentSnapshotResult{Epoch: 9, Turn: api.AgentTurn{Status: api.AgentTurnIdle}},
+			"result": api.AgentExecution{ID: "exec-1", StreamID: "exec-1"},
 		})
 		<-r.Context().Done()
 	}))
@@ -265,12 +264,12 @@ func TestRequestPreservesAgentTurnArrivingBeforeResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer value.Close()
-	if _, err := value.AgentSnapshot(context.Background(), "session-1"); err != nil {
+	if _, err := value.AgentExecution(context.Background(), "exec-1"); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	turn, err := value.WaitAgentTurn(ctx, "session-1", 9, 0, 0)
+	turn, err := value.WaitAgentTurn(ctx, "session-1", "exec-1", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,13 +287,10 @@ func TestWaitAgentTurnReportsAgentProcessExit(t *testing.T) {
 		}
 		defer connection.Close()
 		var envelope map[string]any
-		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome"}) != nil {
+		if connection.ReadJSON(&envelope) != nil || connection.WriteJSON(map[string]any{"t": "welcome", "version": api.Version, "host": map[string]any{"id": t.Name()}, "accessScopeId": "test-scope"}) != nil {
 			return
 		}
-		_ = connection.WriteJSON(api.AgentStatusMessage{
-			Type: "agent.status", Session: "session-1", Epoch: 2,
-			Status: api.AgentStatus{Activity: api.AgentActivityExited},
-		})
+		_ = connection.WriteJSON(canonicalExitBatch())
 		<-r.Context().Done()
 	}))
 	defer server.Close()
@@ -306,8 +302,27 @@ func TestWaitAgentTurnReportsAgentProcessExit(t *testing.T) {
 	defer value.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = value.WaitAgentTurn(ctx, "session-1", 2, 0, 0)
+	_, err = value.WaitAgentTurn(ctx, "session-1", "exec-1", 0, 0)
 	if err == nil || !strings.Contains(err.Error(), "agent process exited") {
 		t.Fatalf("exit error = %v", err)
 	}
+}
+
+func canonicalTurnBatch(turn uint64, status string) api.CanonicalAgentEventsMessage {
+	sequence := turn * 2
+	if status == "started" {
+		sequence--
+	}
+	return api.CanonicalAgentEventsMessage{Type: "agent.events", StreamID: "exec-1", Events: []api.CanonicalAgentEvent{{
+		EventID: fmt.Sprintf("evt-%d", sequence), StreamID: "exec-1", ExecutionID: "exec-1", Sequence: sequence,
+		TurnID: fmt.Sprint(turn), Type: "turn." + status, Payload: map[string]any{},
+		OccurredAt: time.Unix(1, 0).UTC(), RecordedAt: time.Unix(1, 0).UTC(), Origin: api.AgentEventOrigin{Kind: "host", Confidence: "native"},
+	}}}
+}
+
+func canonicalExitBatch() api.CanonicalAgentEventsMessage {
+	batch := canonicalTurnBatch(1, "completed")
+	batch.Events[0].Type = "status.changed"
+	batch.Events[0].Payload = map[string]any{"status": map[string]any{"activity": "exited"}}
+	return batch
 }
