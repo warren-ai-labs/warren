@@ -1365,6 +1365,25 @@ private struct AgentQueuedMessageBlock: View {
                     )
                 }
                 .frame(maxWidth: 420, alignment: .trailing)
+                .contextMenu {
+                    if !item.text.isEmpty {
+                        Button {
+                            #if canImport(UIKit)
+                            UIPasteboard.general.string = item.text
+                            #endif
+                        } label: {
+                            Label("Copy Text", systemImage: "doc.on.doc")
+                        }
+                    }
+                    if item.status == .failed {
+                        Button(action: onRetry) {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
 
             HStack(spacing: 8) {
