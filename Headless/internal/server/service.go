@@ -4528,6 +4528,107 @@ func canonicalProjectionState(status api.AgentStatus, turn api.AgentTurn) map[st
 	return state
 }
 
+// canonicalProjectionFromState decodes the small replaceable checkpoint
+// persisted alongside the immutable journal. Checkpoints are JSON maps by
+// design, so decoding through the public API types keeps unknown projection
+// fields forward-compatible and avoids coupling the store to Service state.
+func canonicalProjectionFromState(state map[string]any) (api.AgentStatus, api.AgentTurn) {
+	status := api.AgentStatus{}
+	turn := api.AgentTurn{Status: api.AgentTurnIdle}
+	if len(state) == 0 {
+		return status, turn
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return status, turn
+	}
+	var value struct {
+		Status     api.AgentStatus     `json:"status"`
+		TurnID     string              `json:"turnId"`
+		TurnStatus api.AgentTurnStatus `json:"turnStatus"`
+	}
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		return status, turn
+	}
+	status = value.Status
+	if value.TurnID != "" {
+		if id, err := strconv.ParseUint(value.TurnID, 10, 64); err == nil {
+			turn.ID = id
+		}
+	}
+	if value.TurnStatus != "" {
+		turn.Status = value.TurnStatus
+	}
+	return status, turn
+}
+
+func canonicalProjectionFromEvent(status api.AgentStatus, turn api.AgentTurn, event api.CanonicalAgentEvent) (api.AgentStatus, api.AgentTurn) {
+	switch event.Type {
+	case "status.changed":
+		var value api.AgentStatus
+		encoded, err := json.Marshal(event.Payload)
+		if err == nil && json.Unmarshal(encoded, &value) == nil && value.Activity != "" {
+			status = value
+		}
+	case "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.aborted":
+		turnID := strings.TrimSpace(event.TurnID)
+		if value, ok := event.Payload["turnId"].(string); ok && value != "" {
+			turnID = value
+		}
+		if id, err := strconv.ParseUint(turnID, 10, 64); err == nil && id > 0 {
+			turn.ID = id
+		}
+		if value, ok := event.Payload["status"].(string); ok {
+			turn.Status = api.AgentTurnStatus(value)
+		} else {
+			switch event.Type {
+			case "turn.started":
+				turn.Status = api.AgentTurnStarted
+			case "turn.completed":
+				turn.Status = api.AgentTurnCompleted
+			case "turn.failed":
+				turn.Status = api.AgentTurnFailed
+			case "turn.cancelled", "turn.aborted":
+				turn.Status = api.AgentTurnAborted
+			}
+		}
+	}
+	return status, turn
+}
+
+// restoreCanonicalProjection rebuilds the replaceable in-memory projection
+// after a Host restart. The durable checkpoint is the fast path; any events
+// committed after it are replayed from the same journal before the projection
+// becomes visible to command validation and roster consumers.
+func (s *Service) restoreCanonicalProjection(executionID string) (api.AgentStatus, api.AgentTurn, bool) {
+	if s.AgentStore == nil || strings.TrimSpace(executionID) == "" {
+		return api.AgentStatus{}, api.AgentTurn{Status: api.AgentTurnIdle}, false
+	}
+	status := api.AgentStatus{}
+	turn := api.AgentTurn{Status: api.AgentTurnIdle}
+	var after uint64
+	if checkpoint, ok, err := s.AgentStore.CanonicalCheckpoint(context.Background(), executionID); err == nil && ok {
+		status, turn = canonicalProjectionFromState(checkpoint.State)
+		after = checkpoint.Sequence
+	}
+	result, err := s.AgentStore.QueryCanonicalEvents(context.Background(), executionID, after, 0, agentHistoryMaxLimit)
+	if err != nil {
+		// A checkpoint at or before the retention boundary can be rebuilt from
+		// the retained tail. Do not make a cold start fail merely because the
+		// cache was pruned between the two reads.
+		if _, boundary := err.(*store.CanonicalHistoryBoundary); boundary {
+			result, err = s.AgentStore.QueryCanonicalEvents(context.Background(), executionID, 0, 0, agentHistoryMaxLimit)
+		}
+	}
+	if err != nil {
+		return status, turn, status.Activity != "" || turn.ID > 0
+	}
+	for _, event := range result.Events {
+		status, turn = canonicalProjectionFromEvent(status, turn, event)
+	}
+	return status, turn, status.Activity != "" || turn.ID > 0
+}
+
 func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string) api.CanonicalAgentEvent {
 	eventType := "turn." + string(turn.Status)
 	if turn.Status == api.AgentTurnAborted {
@@ -5264,6 +5365,23 @@ func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecu
 	}
 	if executionID == "" {
 		executionID = s.canonicalExecutionID(sessionID)
+	}
+	if status.Activity == "" && s.AgentStore != nil {
+		restoredStatus, restoredTurn, restored := s.restoreCanonicalProjection(executionID)
+		if restored {
+			status, turn = restoredStatus, restoredTurn
+			if entry != nil {
+				entry.mu.Lock()
+				if entry.status.Activity == "" {
+					entry.status = restoredStatus
+				}
+				if entry.turn.ID == 0 {
+					entry.turn = restoredTurn
+				}
+				status, turn = entry.status, entry.turn
+				entry.mu.Unlock()
+			}
+		}
 	}
 	if provider == "" {
 		provider = normalizeProviderKind(session.Kind)
