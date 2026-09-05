@@ -52,7 +52,8 @@ final class WarrenRemoteClientTests: XCTestCase {
             url: "https://relay.example.test/relay",
             token: "relay-access",
             type: "relay",
-            hostID: "host-123"
+            hostID: "host-123",
+            clientID: "desktop-client-1"
         )
         let client = WarrenRemoteClient(configuration: endpoint, task: task)
         let consuming = recordEvents(from: client.events(), into: EventRecorder())
@@ -66,6 +67,7 @@ final class WarrenRemoteClientTests: XCTestCase {
             return
         }
         XCTAssertEqual(object["access_token"] as? String, "relay-access")
+        XCTAssertEqual(object["client_id"] as? String, "desktop-client-1")
         XCTAssertNil(object["token"])
         XCTAssertEqual(endpoint.webSocketURL?.absoluteString, "wss://relay.example.test/relay/h/host-123/v1/client/connect")
         await client.stop()

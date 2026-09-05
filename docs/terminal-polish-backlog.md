@@ -68,7 +68,7 @@ This file collects polish that is **lossless** (presentation-only, no change to 
 **Effort:** M (needs JS bridge)
 
 #### 8. Hard-upgrade notice + menubar hint
-**Problem:** Protocol 2 `http.go:923 upgrade required` currently surfaces as generic `Reconnecting…`.
+**Problem:** Protocol 3 `http.go:923 upgrade required` currently surfaces as generic `Reconnecting…`.
 **Proposal:** Promote to `WarrenRemoteApplicationModel.swift:905 notices` (`NoticeKind.upgradeRequired`) + top-bar `EndpointControl:698` amber badge. `disconnected(String):353` already carries the string.
 **Files:** `Headless/internal/server/http.go:923`, `Sources/Warren/WarrenRemoteApplicationModel.swift:737`, `Packages/Desktop/WarrenDesktopTabBarView.swift:698`
 **Effort:** S

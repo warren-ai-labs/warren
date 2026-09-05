@@ -197,7 +197,8 @@ enum WarrenEndpointCatalog {
                 sshRemote: endpoint.sshRemote,
                 type: endpoint.type,
                 hostID: endpoint.hostID,
-                routeID: endpoint.routeID
+                routeID: endpoint.routeID,
+                clientID: endpoint.clientID
             )
         }
         return WarrenLoadedEndpointConfiguration(
@@ -222,7 +223,8 @@ enum WarrenEndpointCatalog {
                 sshRemote: endpoint.sshRemote,
                 type: endpoint.type,
                 hostID: endpoint.hostID,
-                routeID: endpoint.routeID
+                routeID: endpoint.routeID,
+                clientID: endpoint.clientID
             )
         }
         let normalizedFile = WarrenEndpointConfigurationFile(
@@ -990,6 +992,7 @@ private actor WarrenRemoteWire {
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = Self.maximumWebSocketMessageBytes
         let token = accessToken
+        let configuredClientID = configuration.clientID
         task = socket
         socket.resume()
         do {
@@ -1007,8 +1010,9 @@ private actor WarrenRemoteWire {
                         "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
                     ]
                     auth[isRelay ? "access_token" : "token"] = token
-                    if isRelay {
-                        auth["client_id"] = UUID().uuidString.lowercased()
+                    if isRelay, let clientID = configuredClientID,
+                       !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        auth["client_id"] = clientID
                     }
                     try await socket.send(.string(Self.json(auth)))
                 }
@@ -1783,6 +1787,32 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    private func resolvedConnectionConfiguration(
+        _ configuration: WarrenRemoteEndpointConfiguration
+    ) -> WarrenRemoteEndpointConfiguration {
+        guard configuration.isRelay else { return configuration }
+        let configuredID = configuration.clientID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let persistedID = WarrenEndpointCatalog.load().endpoints
+            .first(where: { $0.name == configuration.name })?.clientID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let clientID: String
+        if let configuredID, !configuredID.isEmpty {
+            clientID = configuredID
+        } else if let persistedID, !persistedID.isEmpty {
+            clientID = persistedID
+        } else {
+            clientID = UUID().uuidString.lowercased()
+        }
+        let resolved = configuration.withClientID(clientID)
+        if resolved != configuration {
+            // Relay capabilities may bind access to client_id. Persist the
+            // identity before opening the first socket so retry and token
+            // refresh paths all use the same device association.
+            try? WarrenEndpointCatalog.upsert(resolved, current: configuration.name)
+        }
+        return resolved
+    }
+
     func connect(
         _ configuration: WarrenRemoteEndpointConfiguration,
         isLocal: Bool = false
@@ -1796,7 +1826,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             self.failedAtomicRecoverySessions.remove(sessionID)
             self.unsubscribeFromOutput(sessionID)
         }
-        guard endpointConfiguration != configuration
+        let resolvedConfiguration = resolvedConnectionConfiguration(configuration)
+        guard endpointConfiguration != resolvedConfiguration
             || eventTask == nil
             || isLocalEndpoint != isLocal else {
             // The root view's `.task` can restart on window transitions such
@@ -1808,13 +1839,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // Endpoint URLs may be user-supplied and can carry credentials in a
         // query or fragment. Diagnostics only need the stable endpoint name;
         // never put the URL (or a bearer token embedded in it) in logs.
-        TerminalDiagnostics.log("remote_connect_begin", ["endpoint": configuration.name])
+        TerminalDiagnostics.log("remote_connect_begin", ["endpoint": resolvedConfiguration.name])
         disconnect()
         connectionGeneration &+= 1
         let generation = connectionGeneration
         cancelTransientConnectionIssue()
         restorePersistedTabOrders()
-        endpointConfiguration = configuration
+        endpointConfiguration = resolvedConfiguration
         activeEndpointConfiguration = nil
         isLocalEndpoint = isLocal
         settingsLoaded = false
@@ -1825,13 +1856,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAIModel = ""
         openAITitleEnabled = false
         relaySettings = WarrenDesktopRelaySettings()
-        if configuration.url.hasPrefix("http://127.0.0.1:8789"),
-           !configuration.token.isEmpty,
+        if resolvedConfiguration.url.hasPrefix("http://127.0.0.1:8789"),
+           !resolvedConfiguration.token.isEmpty,
            let localBaseURL = URL(string: "http://127.0.0.1:8789/") {
-            let url = Self.authenticatedWebURL(localBaseURL, daemonToken: configuration.token)
+            let url = Self.authenticatedWebURL(localBaseURL, daemonToken: resolvedConfiguration.token)
             let lanURL: URL? = WarrenLANAddress.primaryIPv4().flatMap { ip in
                 guard let baseURL = URL(string: "http://\(ip):8789/") else { return nil }
-                return Self.authenticatedWebURL(baseURL, daemonToken: configuration.token)
+                return Self.authenticatedWebURL(baseURL, daemonToken: resolvedConfiguration.token)
             }
             webStatus = WarrenDesktopWebStatus(
                 isRunning: true,
@@ -1842,11 +1873,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         publishProjectionIfChanged(
             WarrenDesktopProjection
-                .empty(host: WarrenDomain.Host(name: configuration.name))
+                .empty(host: WarrenDomain.Host(name: resolvedConfiguration.name))
                 .withConnectionState(.connecting)
         )
         eventTask = Task { @MainActor [weak self] in
-            await self?.runConnectionLoop(configuration, generation: generation)
+            await self?.runConnectionLoop(resolvedConfiguration, generation: generation)
         }
     }
 
@@ -5073,7 +5104,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     /// Subscribes the daemon-side output stream for one session without
-    /// claiming focus or input authority. Protocol 2 has no attach fallback:
+    /// claiming focus or input authority. Protocol 3 has no attach fallback:
     /// an older daemon is an explicit connection error.
     private func seedSessionSubscription(
         sessionID: TerminalSessionID,

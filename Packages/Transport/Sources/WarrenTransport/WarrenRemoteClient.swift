@@ -509,9 +509,10 @@ public actor WarrenRemoteClient {
     private var refreshToken: String?  // OAuth2-style refresh token for Relay
     private let refreshTokenHandler: (@Sendable (String) -> Void)?
     private let tokenUpdateHandler: (@Sendable (String, String?) -> Void)?
-    /// A native pairing intentionally leaves the Relay capability's client_id
-    /// empty. Keeping this optional also lets a future enrollment flow pin a
-    /// stable client identity without changing the WebSocket protocol.
+    /// Native pairing supplies a stable device identity so Relay capabilities
+    /// remain bound to the same client across reconnects. Keeping this
+    /// optional preserves compatibility with older capabilities that have no
+    /// client_id claim.
     private let clientID: String?
     private var injectedTask: (any WarrenWebSocketTaskAdapter)?
     private let codec: WarrenWireCodec
@@ -552,7 +553,7 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
         ]
-        self.clientID = clientID
+        self.clientID = clientID ?? configuration.clientID
         self.codec = codec
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
         self.eventStream = pair.stream
@@ -577,7 +578,7 @@ public actor WarrenRemoteClient {
         self.refreshTokenHandler = refreshTokenHandler
         self.tokenUpdateHandler = tokenUpdateHandler
         self.advertisedCapabilities = capabilities
-        self.clientID = clientID
+        self.clientID = clientID ?? configuration.clientID
         self.injectedTask = task
         self.codec = codec
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()

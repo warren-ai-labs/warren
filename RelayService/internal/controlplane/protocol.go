@@ -52,6 +52,10 @@ type streamOpen struct {
 	HostID     string `json:"host_id,omitempty"`
 	ClientID   string `json:"client_id,omitempty"`
 	Token      string `json:"access_token,omitempty"`
+	// PublicRoute is emitted only for an explicitly public route. The Host
+	// uses it to authenticate the public WebSocket without exposing a daemon
+	// token through Relay headers or URL fragments.
+	PublicRoute bool `json:"public_route,omitempty"`
 }
 
 func (open streamOpen) encode() ([]byte, error) {

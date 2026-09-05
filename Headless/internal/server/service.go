@@ -164,7 +164,7 @@ type Service struct {
 	gitMutationLocks      map[string]*sync.Mutex
 	outputs               map[string]*outputSession
 	peers                 map[string]map[*wsPeer]struct{}
-	// peerOutputs owns one Ghostline cursor reader per protocol-2 terminal
+	// peerOutputs owns one Ghostline cursor reader per protocol-3 terminal
 	// subscription. Independent readers let a cold peer start exactly at its
 	// snapshot cursor; the shared reader is paused only for the short checkpoint
 	// boundary so existing subscribers never receive a partial recovery.
@@ -566,7 +566,7 @@ func (s *Service) Shutdown() {
 		}
 		outputSession.mu.Unlock()
 	}
-	// Protocol-2 subscriptions own independent Ghostline readers. They are
+	// Protocol-3 subscriptions own independent Ghostline readers. They are
 	// not represented by outputSession.reader, so a service shutdown must
 	// close and join them explicitly; otherwise a test or embedded daemon can
 	// leave blocked reader goroutines behind after the shared reader stops.
@@ -5926,7 +5926,7 @@ func (s *Service) broadcastLock(sessionID string) *sessionLock {
 }
 
 // forceSessionReanchor drops slow or stale peers when output cannot acquire
-// the session broadcast lock. Reconnecting protocol-2 peers always receive a
+// the session broadcast lock. Reconnecting protocol-3 peers always receive a
 // fresh atomic state, so no recovery mode needs to be carried in the ring.
 func (s *Service) forceSessionReanchor(sessionID string) {
 	s.lazyInit()

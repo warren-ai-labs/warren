@@ -612,7 +612,7 @@ func TestUnsubscribeCancelsBlockedSubscriptionBeforeReturning(t *testing.T) {
 			continue
 		}
 		if response.ID == subscribeID {
-			// Protocol 2 acknowledges the subscription before replay so input
+			// Protocol 3 acknowledges the subscription before replay so input
 			// remains responsive. Cancellation may therefore produce a later
 			// best-effort error for the same id; the unsubscribe boundary is the
 			// authoritative completion signal for this test.

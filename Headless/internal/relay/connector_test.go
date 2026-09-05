@@ -186,3 +186,35 @@ func TestControlStreamFramesDoNotWaitForBodyCredit(t *testing.T) {
 		t.Fatal("HTTP frame bypassed flow control")
 	}
 }
+
+func TestPublicRouteStreamContextIsScopedToMarkedUpgrade(t *testing.T) {
+	plain, plainCancel := streamContext(streamOpen{Class: "upgrade"})
+	defer plainCancel()
+	if IsPublicRoute(plain) {
+		t.Fatal("unmarked stream inherited public route context")
+	}
+
+	marked, markedCancel := streamContext(streamOpen{Class: "upgrade", PublicRoute: true})
+	defer markedCancel()
+	if !IsPublicRoute(marked) {
+		t.Fatal("marked public stream did not carry route context")
+	}
+
+	if IsPublicRoute(context.Background()) {
+		t.Fatal("background context unexpectedly carried public route marker")
+	}
+}
+
+func TestPublicRouteMetadataRejectsNonUpgradeStream(t *testing.T) {
+	connector := &Connector{}
+	id := connectionID{1}
+	err := connector.dispatch(frame{Kind: frameOpen, ID: id, Payload: mustJSON(streamOpen{
+		Class:       "http",
+		Version:     version,
+		PublicRoute: true,
+		Token:       "capability",
+	})})
+	if err == nil || !strings.Contains(err.Error(), "websocket upgrade") {
+		t.Fatalf("public HTTP stream was not rejected: %v", err)
+	}
+}

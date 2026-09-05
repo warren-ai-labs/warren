@@ -164,4 +164,25 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertEqual(catalog.current, endpoint.name)
         XCTAssertEqual(catalog.endpoints, [endpoint])
     }
+
+    func testRelayClientIdentityRoundTripsThroughCatalog() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "relay",
+            url: "https://relay.example",
+            token: "access-token",
+            type: "relay",
+            hostID: "00000000-0000-4000-8000-000000000001",
+            clientID: "desktop-client-1"
+        )
+
+        try WarrenEndpointCatalog.save(endpoints: [endpoint], current: endpoint.name, to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.endpoints.first?.clientID, "desktop-client-1")
+    }
 }
