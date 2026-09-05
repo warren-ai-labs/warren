@@ -35,6 +35,7 @@ type CanonicalCommandRecord struct {
 	Status      string
 	Result      any
 	Error       string
+	CreatedAt   int64
 }
 
 const (
@@ -201,12 +202,12 @@ func queryCanonicalCommand(ctx context.Context, queryer interface {
 	var record CanonicalCommandRecord
 	var resultJSON, errorText sql.NullString
 	err := queryer.QueryRowContext(ctx, `
-		SELECT execution_id, command_id, fingerprint, status, result_json, error_text
+		SELECT execution_id, command_id, fingerprint, status, result_json, error_text, created_at
 		FROM agent_command_journal
 		WHERE execution_id = ? AND command_id = ?
 	`, executionID, commandID).Scan(
 		&record.ExecutionID, &record.CommandID, &record.Fingerprint, &record.Status,
-		&resultJSON, &errorText,
+		&resultJSON, &errorText, &record.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return CanonicalCommandRecord{}, false, nil
@@ -240,6 +241,28 @@ func (s *AgentEventStore) AppendCanonicalEvents(
 	ctx context.Context,
 	streamID, executionID string,
 	events []api.CanonicalAgentEvent,
+) ([]api.CanonicalAgentEvent, error) {
+	return s.appendCanonicalEvents(ctx, streamID, executionID, events, nil)
+}
+
+// AppendCanonicalEventsWithCheckpoint commits the immutable event batch and
+// the replaceable projection checkpoint in the same SQLite transaction. A
+// checkpoint is only written when the argument is non-nil; callers that do
+// not have a projection update retain the last durable checkpoint.
+func (s *AgentEventStore) AppendCanonicalEventsWithCheckpoint(
+	ctx context.Context,
+	streamID, executionID string,
+	events []api.CanonicalAgentEvent,
+	checkpoint map[string]any,
+) ([]api.CanonicalAgentEvent, error) {
+	return s.appendCanonicalEvents(ctx, streamID, executionID, events, checkpoint)
+}
+
+func (s *AgentEventStore) appendCanonicalEvents(
+	ctx context.Context,
+	streamID, executionID string,
+	events []api.CanonicalAgentEvent,
+	checkpoint map[string]any,
 ) ([]api.CanonicalAgentEvent, error) {
 	streamID = strings.TrimSpace(streamID)
 	executionID = strings.TrimSpace(executionID)
@@ -373,15 +396,27 @@ func (s *AgentEventStore) AppendCanonicalEvents(
 			`SELECT COALESCE(MIN(sequence), 0) FROM agent_event_journal WHERE stream_id = ?`, streamID,
 		).Scan(&retained)
 	}
+	checkpointSequence := uint64(0)
+	var checkpointJSON any
+	if checkpoint != nil {
+		encoded, err := json.Marshal(checkpoint)
+		if err != nil {
+			return nil, fmt.Errorf("marshal canonical checkpoint: %w", err)
+		}
+		checkpointSequence = head
+		checkpointJSON = string(encoded)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_stream_state
 		(stream_id, execution_id, retained_from_sequence, head_sequence, checkpoint_sequence, checkpoint_json, updated_at)
-		VALUES (?, ?, ?, ?, 0, NULL, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(stream_id) DO UPDATE SET
 			execution_id = excluded.execution_id,
 			head_sequence = MAX(agent_stream_state.head_sequence, excluded.head_sequence),
+			checkpoint_sequence = CASE WHEN excluded.checkpoint_sequence > 0 THEN excluded.checkpoint_sequence ELSE agent_stream_state.checkpoint_sequence END,
+			checkpoint_json = CASE WHEN excluded.checkpoint_sequence > 0 THEN excluded.checkpoint_json ELSE agent_stream_state.checkpoint_json END,
 			updated_at = excluded.updated_at
-	`, streamID, executionID, retained, head, now.UnixMilli()); err != nil {
+	`, streamID, executionID, retained, head, checkpointSequence, checkpointJSON, now.UnixMilli()); err != nil {
 		return nil, fmt.Errorf("update canonical stream state: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -412,8 +447,9 @@ func (s *AgentEventStore) QueryCanonicalEvents(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var state struct {
-		executionID, checkpointJSON string
-		retained, head, checkpoint  uint64
+		executionID                string
+		checkpointJSON             sql.NullString
+		retained, head, checkpoint uint64
 	}
 	_ = s.db.QueryRowContext(ctx, `
 		SELECT execution_id, retained_from_sequence, head_sequence, checkpoint_sequence, checkpoint_json
@@ -425,10 +461,19 @@ func (s *AgentEventStore) QueryCanonicalEvents(
 			streamID,
 		).Scan(&state.retained, &state.head, &state.executionID)
 	}
-	if state.retained > 0 && afterSequence > 0 && afterSequence+1 < state.retained {
+	if state.retained > 0 && ((afterSequence > 0 && afterSequence+1 < state.retained) ||
+		(afterSequence == 0 && beforeSequence > 0 && beforeSequence <= state.retained)) {
+		checkpointSequence := state.checkpoint
+		checkpoint := decodeCheckpoint(state.checkpointJSON.String)
+		if checkpointSequence == 0 {
+			// A stream created before durable checkpoints were introduced still
+			// has a safe replacement cursor: the current journal head. Clients
+			// must render the supplied projection and continue after this point.
+			checkpointSequence = state.head
+		}
 		return api.AgentEventsHistoryResult{}, &CanonicalHistoryBoundary{
 			StreamID: streamID, RetainedFromSequence: state.retained, HeadSequence: state.head,
-			CheckpointSequence: state.checkpoint, Checkpoint: decodeCheckpoint(state.checkpointJSON),
+			CheckpointSequence: checkpointSequence, Checkpoint: checkpoint,
 		}
 	}
 
@@ -482,6 +527,37 @@ func (s *AgentEventStore) QueryCanonicalEvents(
 		result.NextAfterSequence = result.Events[len(result.Events)-1].Sequence
 	}
 	return result, nil
+}
+
+// CanonicalCheckpoint returns the last checkpoint committed with a stream.
+// It is deliberately separate from the event page so subscription code can
+// establish a coherent snapshot while holding its broadcast fence.
+func (s *AgentEventStore) CanonicalCheckpoint(
+	ctx context.Context,
+	streamID string,
+) (api.AgentProjectionCheckpoint, bool, error) {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return api.AgentProjectionCheckpoint{}, false, errors.New("canonical agent streamId is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var sequence uint64
+	var raw sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT checkpoint_sequence, checkpoint_json
+		FROM agent_stream_state WHERE stream_id = ?
+	`, streamID).Scan(&sequence, &raw)
+	if err == sql.ErrNoRows {
+		return api.AgentProjectionCheckpoint{}, false, nil
+	}
+	if err != nil {
+		return api.AgentProjectionCheckpoint{}, false, fmt.Errorf("query canonical checkpoint: %w", err)
+	}
+	if sequence == 0 {
+		return api.AgentProjectionCheckpoint{}, false, nil
+	}
+	return api.AgentProjectionCheckpoint{Sequence: sequence, State: decodeCheckpoint(raw.String)}, true, nil
 }
 
 func (s *AgentEventStore) CanonicalExecution(ctx context.Context, streamID string) (api.AgentExecution, bool, error) {

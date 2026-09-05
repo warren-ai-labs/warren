@@ -153,7 +153,8 @@ public actor WarrenAgentEventStore {
         namespace: Namespace,
         streamID: String,
         checkpointSequence: UInt64 = 0,
-        checkpoint: [String: WarrenRemoteJSONValue]? = nil
+        checkpoint: [String: WarrenRemoteJSONValue]? = nil,
+        retainedFromSequence: UInt64? = nil
     ) throws -> SyncState {
         guard namespace.isValid else { throw WarrenAgentEventStoreError.invalidNamespace }
         let streamID = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -215,20 +216,33 @@ public actor WarrenAgentEventStore {
         var state = readState(db, namespace: namespace, streamID: streamID)
             ?? SyncState(namespace: namespace, streamID: streamID)
         let rows = loadAll(db, namespace: namespace, streamID: streamID)
+        let explicitBoundary = retainedFromSequence.map { min($0, UInt64(Int64.max)) }
         if let maxSequence = rows.map(\.sequence).max() {
             let retained = rows.map(\.sequence).min() ?? maxSequence
+            let baseline = explicitBoundary.map { max(0, $0 - 1) } ?? state.contiguousThrough
             state = SyncState(
                 namespace: namespace,
                 streamID: streamID,
-                retainedFromSequence: retained,
+                retainedFromSequence: min(retained, explicitBoundary ?? retained),
                 headSequence: max(state.headSequence, maxSequence),
                 contiguousThrough: contiguousThrough(
-                    after: state.contiguousThrough,
+                    after: baseline,
                     sequences: Set(rows.map(\.sequence))
                 ),
                 checkpointSequence: state.checkpointSequence,
                 checkpoint: state.checkpoint,
                 hasMoreBefore: retained > 1
+            )
+        } else if let explicitBoundary {
+            state = SyncState(
+                namespace: namespace,
+                streamID: streamID,
+                retainedFromSequence: explicitBoundary,
+                headSequence: state.headSequence,
+                contiguousThrough: max(state.contiguousThrough, max(0, explicitBoundary - 1)),
+                checkpointSequence: state.checkpointSequence,
+                checkpoint: state.checkpoint,
+                hasMoreBefore: false
             )
         }
         if let checkpoint {
@@ -269,6 +283,61 @@ public actor WarrenAgentEventStore {
                 hasMoreBefore: retained > 1
             )
         }
+        try writeState(db, state)
+        try exec(db, "COMMIT;")
+        committed = true
+        return state
+    }
+
+    /// Installs the replacement snapshot supplied by a Host
+    /// `history_boundary` error. Local rows before the Host's retained prefix
+    /// are disposable cache data and are removed atomically with the cursor.
+    public func installHistoryBoundary(
+        namespace: Namespace,
+        streamID: String,
+        retainedFromSequence: UInt64,
+        headSequence: UInt64,
+        checkpointSequence: UInt64,
+        checkpoint: [String: WarrenRemoteJSONValue]?
+    ) throws -> SyncState {
+        guard namespace.isValid else { throw WarrenAgentEventStoreError.invalidNamespace }
+        let streamID = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !streamID.isEmpty else { throw WarrenAgentEventStoreError.invalidStream }
+        guard let db else { throw WarrenAgentEventStoreError.unavailable }
+        let retained = min(retainedFromSequence, UInt64(Int64.max))
+        let head = min(headSequence, UInt64(Int64.max))
+        let checkpointSequence = min(checkpointSequence, UInt64(Int64.max))
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        var committed = false
+        defer {
+            if !committed { sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) }
+        }
+        if retained > 0 {
+            let sql = "DELETE FROM agent_events WHERE host_id = ? AND access_scope_id = ? AND stream_id = ? AND sequence < ?;"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            bind(statement, 1, namespace.hostID)
+            bind(statement, 2, namespace.accessScopeID)
+            bind(statement, 3, streamID)
+            sqlite3_bind_int64(statement, 4, Int64(retained))
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            sqlite3_finalize(statement)
+        }
+        let state = SyncState(
+            namespace: namespace,
+            streamID: streamID,
+            retainedFromSequence: retained,
+            headSequence: max(head, checkpointSequence),
+            contiguousThrough: min(max(checkpointSequence, max(0, retained - 1)), max(head, checkpointSequence)),
+            checkpointSequence: checkpointSequence,
+            checkpoint: checkpoint,
+            hasMoreBefore: false
+        )
         try writeState(db, state)
         try exec(db, "COMMIT;")
         committed = true

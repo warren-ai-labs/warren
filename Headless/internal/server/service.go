@@ -4519,6 +4519,15 @@ func canonicalStatusPayload(status api.AgentStatus) map[string]any {
 	return payload
 }
 
+func canonicalProjectionState(status api.AgentStatus, turn api.AgentTurn) map[string]any {
+	state := map[string]any{"status": canonicalStatusPayload(status)}
+	if turn.ID > 0 {
+		state["turnId"] = strconv.FormatUint(turn.ID, 10)
+		state["turnStatus"] = string(turn.Status)
+	}
+	return state
+}
+
 func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string) api.CanonicalAgentEvent {
 	eventType := "turn." + string(turn.Status)
 	if turn.Status == api.AgentTurnAborted {
@@ -4602,6 +4611,10 @@ func canonicalProviderEvent(source api.AgentEvent, streamID, executionID string)
 // exact Host-assigned rows. The caller owns entry.mu. The memory path mirrors
 // the SQLite journal for tests and embedders that do not configure AgentStore.
 func (s *Service) appendCanonicalEventsLocked(sessionID string, entry *agentSession, events []api.CanonicalAgentEvent) ([]api.CanonicalAgentEvent, error) {
+	return s.appendCanonicalEventsLockedWithCheckpoint(sessionID, entry, events, nil)
+}
+
+func (s *Service) appendCanonicalEventsLockedWithCheckpoint(sessionID string, entry *agentSession, events []api.CanonicalAgentEvent, checkpoint map[string]any) ([]api.CanonicalAgentEvent, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -4615,7 +4628,7 @@ func (s *Service) appendCanonicalEventsLocked(sessionID string, entry *agentSess
 		entry.executionID = streamID
 	}
 	if s.AgentStore != nil {
-		assigned, err := s.AgentStore.AppendCanonicalEvents(context.Background(), streamID, streamID, events)
+		assigned, err := s.AgentStore.AppendCanonicalEventsWithCheckpoint(context.Background(), streamID, streamID, events, checkpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -4754,7 +4767,9 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 	if statusChanged {
 		canonical = append(canonical, canonicalStatusEvent(status, streamID, streamID))
 	}
-	assignedCanonical, appendErr := s.appendCanonicalEventsLocked(sessionID, entry, canonical)
+	assignedCanonical, appendErr := s.appendCanonicalEventsLockedWithCheckpoint(
+		sessionID, entry, canonical, canonicalProjectionState(effectiveStatus, entry.turn),
+	)
 	if appendErr != nil {
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
@@ -4863,9 +4878,9 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 		var canonical []api.CanonicalAgentEvent
 		if changed {
 			var appendErr error
-			canonical, appendErr = s.appendCanonicalEventsLocked(sessionID, entry, []api.CanonicalAgentEvent{
+			canonical, appendErr = s.appendCanonicalEventsLockedWithCheckpoint(sessionID, entry, []api.CanonicalAgentEvent{
 				canonicalTurnEvent(turn, streamID, streamID),
-			})
+			}, canonicalProjectionState(entry.status, turn))
 			if appendErr != nil {
 				entry.mu.Unlock()
 				s.agentsMu.Unlock()
@@ -5097,9 +5112,9 @@ func (s *Service) setAgentStatusForHandle(sessionID string, expected AgentHandle
 		}
 		entry.executionID = streamID
 	}
-	canonical, appendErr := s.appendCanonicalEventsLocked(sessionID, entry, []api.CanonicalAgentEvent{
+	canonical, appendErr := s.appendCanonicalEventsLockedWithCheckpoint(sessionID, entry, []api.CanonicalAgentEvent{
 		canonicalStatusEvent(status, streamID, streamID),
-	})
+	}, canonicalProjectionState(status, entry.turn))
 	if appendErr != nil {
 		entry.mu.Unlock()
 		s.agentsMu.Unlock()
@@ -5132,7 +5147,24 @@ func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
 
 func (s *Service) canonicalHistoryPage(ctx context.Context, streamID string, after, before uint64, limit int) (api.AgentEventsHistoryResult, error) {
 	if s.AgentStore != nil {
-		return s.AgentStore.QueryCanonicalEvents(ctx, streamID, after, before, limit)
+		result, err := s.AgentStore.QueryCanonicalEvents(ctx, streamID, after, before, limit)
+		if boundary, ok := err.(*store.CanonicalHistoryBoundary); ok {
+			// Older databases may have journal rows but no checkpoint row. Resolve
+			// the active Session projection as a compatibility fallback; the
+			// returned error remains structured and clients can install it without
+			// inventing a cursor.
+			if boundary.Checkpoint == nil {
+				if session, found := s.sessionForCanonicalStream(streamID); found {
+					checkpoint := s.canonicalProjectionCheckpoint(session.ID, boundary.HeadSequence)
+					boundary.CheckpointSequence = checkpoint.Sequence
+					boundary.Checkpoint = checkpoint.State
+				}
+			}
+			if boundary.CheckpointSequence == 0 {
+				boundary.CheckpointSequence = boundary.HeadSequence
+			}
+		}
+		return result, err
 	}
 	streamID = strings.TrimSpace(streamID)
 	if streamID == "" {
@@ -5298,14 +5330,15 @@ func (s *Service) sessionForCanonicalStream(streamID string) (api.Session, bool)
 }
 
 func (s *Service) canonicalProjectionCheckpoint(sessionID string, sequence uint64) api.AgentProjectionCheckpoint {
+	if s.AgentStore != nil {
+		if checkpoint, ok, err := s.AgentStore.CanonicalCheckpoint(context.Background(), s.canonicalExecutionID(sessionID)); err == nil && ok &&
+			(checkpoint.Sequence == sequence || sequence == 0) {
+			return checkpoint
+		}
+	}
 	status := s.agentStatus(sessionID)
 	turn := s.agentTurn(sessionID)
-	state := map[string]any{"status": canonicalStatusPayload(status)}
-	if turn.ID > 0 {
-		state["turnId"] = strconv.FormatUint(turn.ID, 10)
-		state["turnStatus"] = string(turn.Status)
-	}
-	return api.AgentProjectionCheckpoint{Sequence: sequence, State: state}
+	return api.AgentProjectionCheckpoint{Sequence: sequence, State: canonicalProjectionState(status, turn)}
 }
 
 type canonicalInteractionProjection struct {

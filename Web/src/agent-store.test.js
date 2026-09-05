@@ -6,6 +6,7 @@ import {
   loadRecentAgentEventsForStream,
   getAgentSyncState,
   clearAgentStream,
+  installAgentHistoryBoundary,
 } from "./agent-store.js";
 
 test("namespace-aware replica isolates scopes and advances the contiguous cursor", async () => {
@@ -50,4 +51,21 @@ test("replica rejects malformed envelopes and rolls back a conflicting batch", a
   await assert.rejects(saveAgentEventsForStream(scope, "exec-1", [event(2, "evt-2", "future.event"), { ...first, payload: { conflict: true } }]), /conflict/);
   assert.equal((await loadRecentAgentEventsForStream(scope, "exec-1")).length, 1);
   await assert.rejects(saveAgentEventsForStream(scope, "exec-1", [{ ...first, sequence: 2 }]), /conflict/);
+});
+
+test("history boundary installs an explicit replacement cursor", async () => {
+  const scope = agentReplicaNamespace("host-boundary", "owner");
+  await saveAgentEventsForStream(scope, "exec-1", [event(1, "evt-1", "message.created")]);
+  const state = await installAgentHistoryBoundary(scope, "exec-1", {
+    retainedFromSequence: 3,
+    headSequence: 5,
+    checkpointSequence: 5,
+    checkpoint: { status: { activity: "ready" } },
+  });
+  assert.equal(state.retainedFromSequence, 3);
+  assert.equal(state.contiguousThrough, 5);
+  assert.equal(state.headSequence, 5);
+  assert.equal(state.checkpointSequence, 5);
+  assert.equal((await loadRecentAgentEventsForStream(scope, "exec-1")).length, 0);
+  await clearAgentStream(scope, "exec-1");
 });
