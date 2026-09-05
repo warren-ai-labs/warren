@@ -202,7 +202,7 @@ private struct HostDashboardView: View {
         for ws in workspaces {
             ids.insert(sessionScopeID(kind: "workspace", id: ws.id))
         }
-        for grp in model.roster?.terminalGroups ?? [] {
+        for grp in model.cachedTerminalGroups {
             ids.insert(sessionScopeID(kind: "group", id: grp.id))
         }
         return ids

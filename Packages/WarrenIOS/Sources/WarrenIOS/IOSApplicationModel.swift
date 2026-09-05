@@ -7,6 +7,14 @@ import WarrenTransport
 import CryptoKit
 #endif
 
+/// Immutable Data wrapper for crossing isolation boundaries. Upload chunks
+/// are only ever read (hash + base64) on background tasks while the main
+/// actor keeps the original; concurrent reads of unmutated Data are safe.
+private final class SendableDataBox: @unchecked Sendable {
+    let data: Data
+    init(_ data: Data) { self.data = data }
+}
+
 private func agentSHA256(_ data: Data) -> String {
 #if canImport(CryptoKit)
     return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -546,6 +554,7 @@ public final class IOSApplicationModel: ObservableObject {
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
         let probeSession = URLSession(configuration: config)
+        defer { probeSession.finishTasksAndInvalidate() }
 
         do {
             let (data, response) = try await probeSession.data(for: request)
@@ -574,7 +583,10 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
-    public func resolveActiveRoute(
+    /// Resolves which route (direct LAN vs Relay) to use. Nonisolated so the
+    /// synchronous Keychain reads stay off the main actor; it only touches
+    /// the Sendable local store and the static probe.
+    public nonisolated func resolveActiveRoute(
         for config: WarrenRemoteEndpointConfiguration
     ) async -> (url: String, type: String, token: String) {
         let preference = config.routePreference ?? "auto"
@@ -1269,43 +1281,18 @@ public final class IOSApplicationModel: ObservableObject {
     /// keyboard is a local presentation action, not a collaboration action.
     public func dismissKeyboard() {
         #if canImport(UIKit)
-        // First, try to resign the terminal's text view
-        if let window = UIApplication.shared.windows.first {
-            for subview in window.subviews where subview.isKind(of: UIView.classForCoder()) {
-                subview.resignFirstResponder()
-            }
-        }
-        
-        // Then try the standard approach
+        // The responder chain resignation covers both SwiftTerm's terminal
+        // view and the composer text view. The previous implementation walked
+        // the entire window hierarchy recursively (via the deprecated
+        // `windows.first`) on every invocation.
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
             from: nil,
             for: nil
         )
-        
-        // Finally, try to find and resign any UITextView
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.findAndResignTextView()
-        }
         #endif
     }
-    
-    #if canImport(UIKit)
-    private func findAndResignTextView() {
-        guard let window = UIApplication.shared.windows.first else { return }
-        self.resignFromView(window)
-    }
-    
-    private func resignFromView(_ view: UIView) {
-        if view.isKind(of: UITextView.classForCoder()), let textView = view as? UITextView {
-            textView.resignFirstResponder()
-        }
-        for subview in view.subviews {
-            resignFromView(subview)
-        }
-    }
-    #endif
 
     public func selectWorkspace(_ workspaceID: String) {
         pendingSessionDeletion = nil
@@ -2138,7 +2125,12 @@ public final class IOSApplicationModel: ObservableObject {
                 throw WarrenRemoteClientError.requestFailed("Session changed; attachment upload canceled.")
             }
         }
-        let digest = agentSHA256(data)
+        // The attachment bytes never mutate after selection; share them with
+        // background tasks through an unchecked box so hashing and base64
+        // stay off the main actor (concurrent reads of immutable Data are
+        // safe, but the MainActor-bound parameter cannot cross isolation).
+        let sharedBytes = SendableDataBox(data)
+        let digest = await Task.detached(priority: .utility) { agentSHA256(sharedBytes.data) }.value
         let prepared = try await client.prepareAgentAttachment(
             WarrenRemoteAgentAttachmentPrepareRequest(
                 session: sessionID,
@@ -2151,22 +2143,36 @@ public final class IOSApplicationModel: ObservableObject {
         try ensureCurrentSession()
         let chunkSize = max(1, prepared.chunkSize)
         let uploadID = prepared.uploadID
+        // Progress updates re-render the composer; throttle to whole percent
+        // steps so large uploads don't invalidate the view per chunk.
+        var lastReportedProgress = -1.0
+        func reportProgress(_ value: Double) {
+            guard value - lastReportedProgress >= 0.01 || value >= 1 else { return }
+            lastReportedProgress = value
+            progress(value)
+        }
         do {
             var offset = 0
             var sequence: UInt64 = 0
             while offset < data.count {
                 try ensureCurrentSession()
                 let end = min(offset + chunkSize, data.count)
-                let chunk = Data(data[offset..<end])
-                let chunkHash = agentSHA256(chunk)
+                // Hashing and base64 are CPU-heavy for large attachments;
+                // keep them off the main actor.
+                let chunkStart = offset
+                let chunkEnd = end
+                let chunkPayload = await Task.detached(priority: .utility) { () -> (Data, String, String) in
+                    let slice = Data(sharedBytes.data[chunkStart..<chunkEnd])
+                    return (slice, agentSHA256(slice), slice.base64EncodedString())
+                }.value
                 let result = try await client.uploadAgentAttachmentChunk(
                     WarrenRemoteAgentAttachmentChunkRequest(
                         session: sessionID,
                         uploadID: uploadID,
                         sequence: sequence,
-                        length: chunk.count,
-                        sha256: chunkHash,
-                        data: chunk.base64EncodedString()
+                        length: chunkPayload.0.count,
+                        sha256: chunkPayload.1,
+                        data: chunkPayload.2
                     )
                 )
                 try ensureCurrentSession()
@@ -2175,7 +2181,7 @@ public final class IOSApplicationModel: ObservableObject {
                 }
                 offset = end
                 sequence &+= 1
-                progress(Double(offset) / Double(max(data.count, 1)))
+                reportProgress(Double(offset) / Double(max(data.count, 1)))
             }
             try ensureCurrentSession()
             let completed = try await client.completeAgentAttachment(
@@ -2413,13 +2419,14 @@ public final class IOSApplicationModel: ObservableObject {
     /// inferred from provider text or Agent timing.
     public func agentModel(for sessionID: String) -> String? {
         guard let events = agentEventsBySessionID[sessionID] else { return nil }
-        return events
-            .reversed()
-            .compactMap { event in
-                let value = event.model?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return value?.isEmpty == false ? value : nil
-            }
-            .first
+        // Early exit: the previous reversed().compactMap().first mapped the
+        // whole transcript on every composer render.
+        for event in events.reversed() {
+            guard let raw = event.model?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else { continue }
+            return raw
+        }
+        return nil
     }
 
     public func sessions(inWorkspace workspaceID: String) -> [WarrenRemoteRoster.Session] {
