@@ -1150,6 +1150,8 @@ func (s *Service) agentCapabilitiesForSession(sessionID string, session api.Sess
 	if len(result) > 0 && !hasHandle {
 		if nonNilInterface(s.AgentController) {
 			result[CapabilityInteractions] = struct{}{}
+		}
+		if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
 			result[CapabilityInterrupt] = struct{}{}
 		}
 		if s.hasRuntimeAdapter() || nonNilInterface(s.AgentController) {
@@ -1381,6 +1383,8 @@ func (provider *TUIAgentProvider) Capabilities() CapabilitySet {
 	}
 	if nonNilInterface(provider.service.AgentController) {
 		result[CapabilityInteractions] = struct{}{}
+	}
+	if nonNilInterface(provider.service.AgentController) || provider.service.hasRuntimeAdapter() {
 		result[CapabilityInterrupt] = struct{}{}
 	}
 	return result
@@ -1616,6 +1620,8 @@ func (handle *tuiAgentHandle) Capabilities() CapabilitySet {
 		}
 		if nonNilInterface(handle.service.AgentController) {
 			result[CapabilityInteractions] = struct{}{}
+		}
+		if nonNilInterface(handle.service.AgentController) || handle.service.hasRuntimeAdapter() {
 			result[CapabilityInterrupt] = struct{}{}
 		}
 	}
@@ -1771,22 +1777,17 @@ func (provider *ACPAgentProvider) HandlerKind() string { return AgentHandlerACP 
 
 // Capabilities advertises Track 2 native bidirectional capabilities.
 func (provider *ACPAgentProvider) Capabilities() CapabilitySet {
-	return NewCapabilitySet(
-		CapabilityTimeline,
-		CapabilityInteractions,
-		CapabilityInterrupt,
-		CapabilityAttachments,
-	)
+	// The ACP transport is intentionally not advertised until its bidirectional
+	// stream and mutation methods are implemented. Advertising a capability
+	// whose handle returns "not implemented" creates an unusable client card.
+	return NewCapabilitySet()
 }
 
 func (provider *ACPAgentProvider) Ensure(ctx context.Context, value AgentSessionContext) (AgentHandle, error) {
 	if provider == nil || provider.service == nil {
 		return nil, ErrAgentNotReady
 	}
-	return &acpAgentHandle{
-		provider: provider,
-		value:    value,
-	}, nil
+	return nil, ErrAgentNotReady
 }
 
 type acpAgentHandle struct {

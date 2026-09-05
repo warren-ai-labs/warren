@@ -274,7 +274,7 @@ public struct AgentChatView: View {
         for event in currentEvents.reversed() {
             let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 .replacingOccurrences(of: "-", with: "_")
-            if type == "question" || type == "permission" || type == "interaction_requested" {
+            if type == "question" || type == "permission" || type == "confirmation" || type == "interaction_requested" {
                 let state = (event.payload?.string("state") ?? "pending").lowercased()
                 if state == "pending" || state == "submitting" {
                     return event
@@ -2825,7 +2825,7 @@ private struct AgentStructuredEventBlock: View {
     }
 
     private var isInteraction: Bool {
-        kind == "question" || kind == "permission"
+        kind == "question" || kind == "permission" || kind == "confirmation"
     }
 
     var body: some View {
@@ -2900,6 +2900,7 @@ private struct AgentStructuredEventBlock: View {
     private var categoryLabel: String {
         if kind == "question" { return "Ask" }
         if kind == "permission" { return "Permission" }
+        if kind == "confirmation" { return "Confirmation" }
         return title
     }
 
@@ -2915,7 +2916,7 @@ private struct AgentStructuredEventBlock: View {
                 return desc
             }
             return "Question"
-        } else if kind == "permission" {
+        } else if kind == "permission" || kind == "confirmation" {
             if let desc = payload.string("description"), !desc.isEmpty {
                 return desc
             }
@@ -2974,7 +2975,7 @@ private struct AgentStructuredEventBlock: View {
     }
 
     private var resolutionLabel: String {
-        if kind == "permission" {
+        if kind == "permission" || kind == "confirmation" {
             let decision = (resolvedDecision ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if ["allow", "yes", "approve", "confirm", "proceed", "y"].contains(decision) {
                 return "Approved"
@@ -3091,7 +3092,7 @@ private struct AgentStructuredEventBlock: View {
                                 }
                             }
                         }
-                    } else if kind == "permission" {
+                    } else if kind == "permission" || kind == "confirmation" {
                         HStack(spacing: 6) {
                             Text("Decision:")
                                 .font(IOSTypography.metadata)
@@ -3231,11 +3232,13 @@ private struct AgentStructuredEventBlock: View {
                     .buttonStyle(.plain)
                     .disabled(submitting || state != "pending")
                 }
-            } else if kind == "permission" {
-                let effectiveOptions: [AgentInteractionOption] = !options.isEmpty ? options : [
+            } else if kind == "permission" || kind == "confirmation" {
+                let effectiveOptions: [AgentInteractionOption] = !options.isEmpty ? options : (kind == "confirmation" ? [
+                    AgentInteractionOption(id: "confirm", questionID: "decision", label: "Confirm", description: nil)
+                ] : [
                     AgentInteractionOption(id: "allow", questionID: "decision", label: "Allow", description: nil),
                     AgentInteractionOption(id: "deny", questionID: "decision", label: "Deny", description: nil)
-                ]
+                ])
 
                 VStack(spacing: 8) {
                     ForEach(effectiveOptions) { option in
@@ -3433,6 +3436,51 @@ private struct AgentStructuredEventBlock: View {
                     .font(IOSTypography.status)
                     .foregroundStyle(stateColor)
             }
+        case "confirmation":
+            if let requestID, !requestID.isEmpty, state == "pending" || state == "submitting" {
+                if let description = payload.string("description"), !description.isEmpty {
+                    Text(description)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                }
+                let effectiveOptions: [AgentInteractionOption] = !options.isEmpty ? options : [
+                    AgentInteractionOption(id: "confirm", questionID: "decision", label: "Confirm", description: nil)
+                ]
+                ForEach(effectiveOptions) { option in
+                    if canInteract {
+                        Button {
+                            guard !submitting, state == "pending" else { return }
+                            submitting = true
+                            selectedOption = option.id
+                            let task = onInteraction(requestID, kind, ["decision": .string(option.id)])
+                            Task { @MainActor in
+                                if await !task.value { submitting = false }
+                            }
+                        } label: {
+                            interactionOptionRow(option, selected: selectedOption == option.id)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(IOSTheme.text)
+                        .disabled(submitting || state != "pending")
+                    } else {
+                        interactionOptionRow(option, selected: false)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .accessibilityValue("Read only")
+                    }
+                }
+                if canInteract {
+                    Button("Cancel", role: .cancel) {
+                        cancelInteraction(requestID: requestID, kind: kind)
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .font(IOSTypography.label)
+                    .disabled(submitting || state != "pending")
+                }
+            } else if !state.isEmpty, !isFailure {
+                Text(stateLabel)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(stateColor)
+            }
         case "plan", "todo":
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(planItems) { item in
@@ -3495,6 +3543,7 @@ private struct AgentStructuredEventBlock: View {
         switch kind {
         case "question": return payload.string("title") ?? "Question"
         case "permission": return payload.string("title") ?? "Permission"
+        case "confirmation": return payload.string("title") ?? "Confirmation"
         case "plan": return payload.string("title") ?? "Plan"
         case "todo": return "Todo"
         case "activity": return payload.string("label") ?? "Activity"
@@ -3509,6 +3558,7 @@ private struct AgentStructuredEventBlock: View {
         switch kind {
         case "question": return "questionmark.circle"
         case "permission": return "checkmark.shield"
+        case "confirmation": return "checkmark.circle"
         case "plan", "todo": return "checklist"
         case "activity": return "bolt"
         case "plugin": return "puzzlepiece.extension"
@@ -3563,7 +3613,7 @@ private struct AgentStructuredEventBlock: View {
     }
 
     private var options: [AgentInteractionOption] {
-        if kind == "permission" {
+        if kind == "permission" || kind == "confirmation" {
             return payload.array("options").compactMap { value in
                 guard case .object(let object) = value,
                       let id = object.string("id") ?? object.string("value") else { return nil }

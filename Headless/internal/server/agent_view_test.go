@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -565,7 +566,7 @@ func TestSendAgentInteractionInputPTYSemantics(t *testing.T) {
 	}
 }
 
-func TestAgentViewRespondInteractionPTYFallback(t *testing.T) {
+func TestAgentViewDoesNotGuessPTYInteractionAnswers(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "pty-fallback-test")
 	if err != nil {
 		t.Fatal(err)
@@ -598,31 +599,123 @@ func TestAgentViewRespondInteractionPTYFallback(t *testing.T) {
 		},
 	}}, api.AgentStatus{Activity: api.AgentActivityBlocked})
 
-	// Respond with allow
+	// A transcript-only TUI has no provider-native interaction bridge. The
+	// Host must not guess that the current prompt still means "allow".
 	request := api.AgentInteractionResponse{
 		Session: sessionID, RequestID: "req-perm-1", Kind: "permission",
 		Response: map[string]any{"decision": "allow"},
 	}
-	res, err := service.respondAgentInteraction(context.Background(), request)
-	if err != nil {
-		t.Fatalf("respondAgentInteraction failed: %v", err)
-	}
-	if !res.Accepted {
-		t.Fatalf("result not accepted: %#v", res)
+	if _, err := service.respondAgentInteraction(context.Background(), request); err == nil || !strings.Contains(err.Error(), "transport is unavailable") {
+		t.Fatalf("respondAgentInteraction error = %v, want unavailable transport", err)
 	}
 
-	// Verify runtime received y\r
+	// Verify no guessed y\r reached the terminal.
 	captured, err := runtime.Capture(context.Background(), "runtime")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(captured, []byte("y\r")) {
-		t.Fatalf("captured = %q, want containing %q", string(captured), "y\r")
+	if bytes.Contains(captured, []byte("y\r")) {
+		t.Fatalf("captured = %q, did not expect guessed permission input", string(captured))
 	}
 
-	// Verify state is now resolved
+	// The interaction remains pending for a native bridge/client retry.
 	stateStr, found := service.agentInteractionState(sessionID, "req-perm-1", "permission")
-	if !found || stateStr != "resolved" {
-		t.Fatalf("agentInteractionState = (%q, %v), want (\"resolved\", true)", stateStr, found)
+	if !found || stateStr != "pending" {
+		t.Fatalf("agentInteractionState = (%q, %v), want (\"pending\", true)", stateStr, found)
+	}
+}
+
+func TestCanonicalInteractionResolutionValidationIsBounded(t *testing.T) {
+	permission := canonicalInteractionProjection{
+		kind:      "permission",
+		version:   1,
+		optionIDs: map[string]struct{}{"allow": {}, "deny": {}},
+	}
+	if err := validateCanonicalInteractionResolution(permission, map[string]any{"decision": "allow"}); err != nil {
+		t.Fatalf("valid permission resolution rejected: %v", err)
+	}
+	if err := validateCanonicalInteractionResolution(permission, map[string]any{"decision": "maybe"}); err == nil {
+		t.Fatal("unknown permission option was accepted")
+	}
+	if err := validateCanonicalInteractionResolution(permission, map[string]any{}); err == nil {
+		t.Fatal("empty permission resolution was accepted")
+	}
+
+	question := canonicalInteractionProjection{
+		kind:      "question",
+		version:   1,
+		optionIDs: map[string]struct{}{"one": {}, "two": {}},
+	}
+	if err := validateCanonicalInteractionResolution(question, map[string]any{
+		"answers": map[string]any{"q1": []any{"one"}},
+	}); err != nil {
+		t.Fatalf("valid question resolution rejected: %v", err)
+	}
+	if err := validateCanonicalInteractionResolution(question, map[string]any{
+		"answers": map[string]any{"q1": []any{"three"}},
+	}); err == nil {
+		t.Fatal("unknown question option was accepted")
+	}
+
+	confirmation := canonicalInteractionProjection{kind: "confirmation", version: 1}
+	if err := validateCanonicalInteractionResolution(confirmation, map[string]any{"decision": "confirm"}); err != nil {
+		t.Fatalf("valid confirmation resolution rejected: %v", err)
+	}
+	if err := validateCanonicalInteractionResolution(confirmation, map[string]any{"cancelled": true}); err != nil {
+		t.Fatalf("cancelled confirmation rejected: %v", err)
+	}
+}
+
+func TestProviderInteractionResolvedDoesNotDuplicateHostResolution(t *testing.T) {
+	service := newAgentViewTestService(t, &recordingAgentViewController{})
+	sessionID := "agent-view-session"
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Type: "question",
+		ID:   "question-duplicate",
+		Payload: map[string]any{
+			"requestId": "request-duplicate",
+			"kind":      "question",
+			"state":     "pending",
+		},
+	}}, api.AgentStatus{Activity: api.AgentActivityBlocked})
+	if _, err := service.respondAgentInteraction(context.Background(), api.AgentInteractionResponse{
+		Session:   sessionID,
+		RequestID: "request-duplicate",
+		Kind:      "question",
+		Response:  map[string]any{"text": "answer"},
+	}); err != nil {
+		t.Fatalf("host interaction response failed: %v", err)
+	}
+	before, err := service.canonicalHistoryPage(context.Background(), service.canonicalExecutionID(sessionID), 0, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedBefore := 0
+	for _, event := range before.Events {
+		if event.Type == "interaction.resolved" {
+			resolvedBefore++
+		}
+	}
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Type: "interaction.resolved",
+		ID:   "provider-resolution",
+		Payload: map[string]any{
+			"interactionId": "request-duplicate",
+			"kind":          "question",
+			"state":         "resolved",
+		},
+	}}, api.AgentStatus{Activity: api.AgentActivityReady})
+	after, err := service.canonicalHistoryPage(context.Background(), service.canonicalExecutionID(sessionID), 0, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedAfter := 0
+	for _, event := range after.Events {
+		if event.Type == "interaction.resolved" {
+			resolvedAfter++
+		}
+	}
+	if resolvedBefore != 1 || resolvedAfter != resolvedBefore {
+		t.Fatalf("resolved event count before=%d after=%d, want one stable row", resolvedBefore, resolvedAfter)
 	}
 }

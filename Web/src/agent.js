@@ -6,6 +6,7 @@ export const agentAttachmentChunkSize = 256 * 1024;
 export const agentStructuredEventTypes = new Set([
   "question",
   "permission",
+  "confirmation",
   "plan",
   "todo",
   "activity",
