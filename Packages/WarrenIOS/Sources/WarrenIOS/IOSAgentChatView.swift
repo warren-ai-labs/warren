@@ -3362,8 +3362,7 @@ func extractPatchFiles(_ patch: String) -> [String] {
 
 func extractExecCommands(_ raw: String) -> [String] {
     var commands: [String] = []
-    let callPattern = #"(?:exec_command|exec|execute)\s*\(\s*\{[^\n}]*["']?(?:cmd|command)["']?\s*:\s*"((?:[^"\\]|\\.)*)""#
-    if let regex = try? NSRegularExpression(pattern: callPattern, options: []) {
+    if let regex = execCommandCallRegex {
         let nsString = raw as NSString
         let matches = regex.matches(in: raw, options: [], range: NSRange(location: 0, length: nsString.length))
         for match in matches {
@@ -3378,8 +3377,7 @@ func extractExecCommands(_ raw: String) -> [String] {
         }
     }
     if commands.isEmpty {
-        let jsonPattern = #"["'](?:cmd|command|CommandLine|code|script)["']\s*:\s*"((?:[^"\\]|\\.)*)""#
-        if let regex = try? NSRegularExpression(pattern: jsonPattern, options: []) {
+        if let regex = execCommandJSONRegex {
             let nsString = raw as NSString
             let matches = regex.matches(in: raw, options: [], range: NSRange(location: 0, length: nsString.length))
             for match in matches {
@@ -3396,6 +3394,17 @@ func extractExecCommands(_ raw: String) -> [String] {
     }
     return commands
 }
+
+// Compiled once: extractExecCommands runs per tool row on every transcript
+// rebuild, and compiling both patterns per call dominated that cost.
+private let execCommandCallRegex: NSRegularExpression? = try? NSRegularExpression(
+    pattern: #"(?:exec_command|exec|execute)\s*\(\s*\{[^\n}]*["']?(?:cmd|command)["']?\s*:\s*"((?:[^"\\]|\\.)*)""#,
+    options: []
+)
+private let execCommandJSONRegex: NSRegularExpression? = try? NSRegularExpression(
+    pattern: #"["'](?:cmd|command|CommandLine|code|script)["']\s*:\s*"((?:[^"\\]|\\.)*)""#,
+    options: []
+)
 
 func formatFileList(_ list: [String]) -> String {
     let valid = list.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
