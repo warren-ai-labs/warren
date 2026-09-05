@@ -46,9 +46,43 @@ you want a structured conversation around the same session.
 
 Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
 
+### Client surface priority: Desktop & Mobile first
+
+Warren's product design and interactive capabilities follow a strict surface hierarchy:
+- **macOS Desktop & iOS Mobile (First-Class Surfaces)**: Primary design, native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction reside here. All new interaction paradigms (including task handoffs, interaction cards, and session controls) are designed and verified for Desktop and Mobile first.
+- **Web / PWA (Fallback Surface)**: Exclusively a fallback for the desktop client and a lightweight remote viewer under Public Access or Relay pairing. It does not carry primary design or feature priority.
+
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
 The current code is licensed under [Apache-2.0](LICENSE). This permits commercial use of the present open-source code without implying that Warren currently offers a hosted or enterprise product.
+
+## Agent Task Handoff & Context Architecture
+
+Warren connects to multiple agent CLIs (Claude Code, Codex, OpenCode, Qoder, and Antigravity). In complex workflows, tasks frequently need to transition across agents—such as unsticking a difficult bug by handing off to a reasoning model, switching from an implementation agent to an unpolluted reviewer agent, or moving from high-level planning to terminal execution.
+
+### The Core Axiom: Context & Prompt Over Mechanical Plumbing
+
+Spawning a target agent process or piping text across sessions is mechanically trivial ("the plumbing is easy"). The true engineering bottleneck and product leverage lies in **Context Engineering and Prompt Synthesis**:
+
+- **Avoid raw history dumping**: Transmitting 50k+ tokens of raw transcripts, internal thinking loops, tool calls, and ANSI bytes causes context window exhaustion, attention dilution ("Lost in the Middle"), and forces the target agent to inherit the predecessor's hallucinations and circular failure loops.
+- **Avoid naive prompt forwarding**: Passing only the initial user request discards all progress, forcing the receiving agent to repeat already completed investigations.
+- **Synthesize around physical ground truth**: Context must be anchored in physical filesystem facts, concrete diffs, and explicit negative context (what was attempted and failed).
+
+### The Four Pillars of High-Fidelity Handoff
+
+Every handoff synthesizes a dense, structured Markdown brief containing:
+
+1. **Physical Ground Truth**: Git branch/worktree, `git status`, `git diff --stat`, modified file paths, and physical artifacts (e.g. `.warren/plan.md`). Per [RFC 0014](docs/rfc/0014-autonomous-engineering-pipeline.md), the filesystem is the sole authority of truth.
+2. **Dead Ends & Negative Context**: Discarded approaches and non-zero exit code outputs / failing test stack traces (`${command.output}`). This prevents the receiving agent from repeating failed attempts.
+3. **Objective & Scope Constraints**: Original user goal combined with intermediate human steering and invariants.
+4. **Actionable Call-to-Action**: Clear instruction on the exact next milestone for the receiving agent.
+
+### Native Desktop & Mobile Experience
+
+Handoff is an explicit, steerable human-in-the-loop action:
+- **macOS Desktop (`⌘⌥H`) & iOS Mobile**: Triggers a native review sheet displaying the synthesized handoff brief.
+- **Interactive Review**: The developer can inspect and adjust the synthesized prompt, pick the receiving agent preset (Claude, Codex, OpenCode, Antigravity), choose the execution scope (same worktree vs isolated branch), and dispatch.
+- Full protocol specification and data flow are defined in [RFC 0017: Agent Task Handoff and Structured Context Synthesis](docs/rfc/0017-agent-task-handoff.md).
 
 ## Repository Layout
 
@@ -264,6 +298,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 
 - [DESIGN.md](DESIGN.md) — product and system design, domain model, architecture, and acceptance criteria
 - [GLOSSARY.md](GLOSSARY.md) — shared terminology
+- [docs/rfc/0017-agent-task-handoff.md](docs/rfc/0017-agent-task-handoff.md) — agent task handoff, structured context synthesis, and Desktop/Mobile priority
 - [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md) — terminal black screen and missing text troubleshooting
 - [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
 - [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
