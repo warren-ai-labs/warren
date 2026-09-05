@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -110,4 +111,62 @@ func TestConnectorStateCallback(t *testing.T) {
 	if currentState != "open" {
 		t.Fatalf("last state not retained: %q", currentState)
 	}
+}
+
+func TestCloseStreamsOnlyClosesTheDisconnectedEpoch(t *testing.T) {
+	oldContext, oldCancel := context.WithCancel(context.Background())
+	currentContext, currentCancel := context.WithCancel(context.Background())
+	defer currentCancel()
+	old := newStream(streamOpen{Class: "http"}, 1, oldContext, oldCancel)
+	current := newStream(streamOpen{Class: "http"}, 2, currentContext, currentCancel)
+	idOld := connectionID{1}
+	idCurrent := connectionID{2}
+	connector := &Connector{
+		streams: map[connectionID]*stream{idOld: old, idCurrent: current},
+		usedIDs: map[connectionID]uint64{idOld: 1, idCurrent: 2},
+	}
+
+	connector.closeStreams(1)
+
+	connector.mu.Lock()
+	_, oldPresent := connector.streams[idOld]
+	_, currentPresent := connector.streams[idCurrent]
+	connector.mu.Unlock()
+	if oldPresent || !currentPresent {
+		t.Fatalf("epoch fence removed wrong streams: old=%v current=%v", oldPresent, currentPresent)
+	}
+	select {
+	case <-old.ctx.Done():
+	default:
+		t.Fatal("old stream context was not canceled")
+	}
+}
+
+func TestSendDataRejectsStreamFromPreviousEpoch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	id := connectionID{3}
+	connector := &Connector{
+		connectionEpoch: 2,
+		streams:         map[connectionID]*stream{id: newStream(streamOpen{Class: "http"}, 1, ctx, cancel)},
+	}
+	if err := connector.sendData(id, []byte("stale")); err == nil || !strings.Contains(err.Error(), "stream closed") {
+		t.Fatalf("sendData accepted stale stream: %v", err)
+	}
+}
+
+func TestConnectionWriterReservesControlQueue(t *testing.T) {
+	writer := newConnectionWriter(nil, 1)
+	for index := 0; index < connectorDataQueueCapacity; index++ {
+		if err := writer.enqueue(queuedWrite{done: make(chan error, 1)}, false); err != nil {
+			t.Fatalf("data enqueue %d: %v", index, err)
+		}
+	}
+	if err := writer.enqueue(queuedWrite{done: make(chan error, 1)}, false); err == nil {
+		t.Fatal("data queue accepted an item beyond its bound")
+	}
+	if err := writer.enqueue(queuedWrite{done: make(chan error, 1)}, true); err != nil {
+		t.Fatalf("control queue was starved by data: %v", err)
+	}
+	writer.stopWith(nil)
 }
