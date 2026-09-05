@@ -158,4 +158,35 @@ final class IOSAgentEventStoreTests: XCTestCase {
         XCTAssertEqual(loaded[1].content?.count, 50000)
         XCTAssertEqual(loaded[1].content, longContent)
     }
+
+    func testClearSessionsAndClearAll() async throws {
+        let events1 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 1")]
+        let events2 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 2")]
+        let events3 = [WarrenRemoteAgentEvent(sequence: 1, type: "user", content: "session 3")]
+
+        try await store.saveEvents(events1, sessionID: "s1", epoch: 1)
+        try await store.saveEvents(events2, sessionID: "s2", epoch: 1)
+        try await store.saveEvents(events3, sessionID: "s3", epoch: 1)
+
+        let loaded1 = await store.loadRecentEvents(sessionID: "s1", limit: 5)
+        let loaded2 = await store.loadRecentEvents(sessionID: "s2", limit: 5)
+        let loaded3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
+        XCTAssertEqual(loaded1.count, 1)
+        XCTAssertEqual(loaded2.count, 1)
+        XCTAssertEqual(loaded3.count, 1)
+
+        // Clear specific sessions (s1 and s2)
+        await store.clearSessions(["s1", "s2"])
+        let cleared1 = await store.loadRecentEvents(sessionID: "s1", limit: 5)
+        let cleared2 = await store.loadRecentEvents(sessionID: "s2", limit: 5)
+        let kept3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
+        XCTAssertTrue(cleared1.isEmpty)
+        XCTAssertTrue(cleared2.isEmpty)
+        XCTAssertEqual(kept3.count, 1)
+
+        // Clear all remaining
+        await store.clearAll()
+        let cleared3 = await store.loadRecentEvents(sessionID: "s3", limit: 5)
+        XCTAssertTrue(cleared3.isEmpty)
+    }
 }
