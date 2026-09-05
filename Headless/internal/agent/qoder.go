@@ -589,8 +589,19 @@ func (p *qoderParser) parseQoderAssistant(record qoderRecord, message qoderMessa
 		if text == "" {
 			return nil
 		}
-		event.Type = "assistant"
-		event.Content = text
+		if record.IsSidechain {
+			event.Type = "subagent"
+			event.Payload = map[string]any{
+				"subagentId": record.UUID,
+				"title":      "Subagent",
+				"label":      "Subagent",
+				"state":      "completed",
+				"summary":    text,
+			}
+		} else {
+			event.Type = "assistant"
+			event.Content = text
+		}
 	case "thinking":
 		thinking := p.clip(blocks[0].Thinking)
 		if thinking == "" {

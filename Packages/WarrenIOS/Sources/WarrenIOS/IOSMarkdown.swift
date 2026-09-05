@@ -550,7 +550,7 @@ final class IOSMarkdownCache: @unchecked Sendable {
         if let cached = attributedCache.object(forKey: key) {
             return cached.value
         }
-        guard let parsed = try? AttributedString(
+        guard var parsed = try? AttributedString(
             markdown: markdown,
             options: .init(
                 interpretedSyntax: .full,
@@ -558,6 +558,14 @@ final class IOSMarkdownCache: @unchecked Sendable {
             )
         ) else {
             return nil
+        }
+        for run in parsed.runs {
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                let range = run.range
+                parsed[range].backgroundColor = Color(red: 0x1b / 255.0, green: 0x1d / 255.0, blue: 0x21 / 255.0)
+                parsed[range].foregroundColor = Color(red: 0xd6 / 255.0, green: 0xd8 / 255.0, blue: 0xdd / 255.0)
+                parsed[range].font = .system(.caption, design: .monospaced)
+            }
         }
         attributedCache.setObject(AttributedBox(parsed), forKey: key, cost: markdown.utf8.count)
         return parsed

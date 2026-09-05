@@ -2930,6 +2930,32 @@ public final class IOSApplicationModel: ObservableObject {
                           self.currentSessionID == sessionID else { return }
                     self.historyRequestTokenBySessionID.removeValue(forKey: sessionID)
                     self.historyLoadingBySessionID.remove(sessionID)
+                    if let boundary = self.agentHistoryBoundary(from: error) {
+                        Task { [weak self] in
+                            guard let self else { return }
+                            do {
+                                let state = try await self.installAgentHistoryBoundary(boundary, namespace: namespace, streamID: streamID)
+                                await MainActor.run {
+                                    guard self.sessionSelectionGeneration == selectionGeneration,
+                                          self.clientGeneration == currentClientGeneration,
+                                          self.currentSessionID == sessionID else { return }
+                                    self.historyRequestTokenBySessionID.removeValue(forKey: sessionID)
+                                    self.applyCanonicalCheckpoint(
+                                        WarrenRemoteAgentProjectionCheckpoint(sequence: state.checkpointSequence, state: boundary.state),
+                                        sessionID: sessionID
+                                    )
+                                    self.historyHasMoreBySessionID[sessionID] = false
+                                    self.historyLoadedBySessionID.insert(sessionID)
+                                    self.historyErrorBySessionID.removeValue(forKey: sessionID)
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    self.historyErrorBySessionID[sessionID] = error.localizedDescription
+                                }
+                            }
+                        }
+                        return
+                    }
                     let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
                     self.historyErrorBySessionID[sessionID] = detail.isEmpty
                         ? "Unable to load Agent history. Try again."
@@ -3000,10 +3026,39 @@ public final class IOSApplicationModel: ObservableObject {
                     nextAfter = pageMax
                     pageBefore = before
                 } catch {
-                    await MainActor.run { [weak self] in
-                        guard let self,
-                              self.clientGeneration == currentClientGeneration else { return }
-                        self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                    if let boundary = await MainActor.run(body: { [weak self] in self?.agentHistoryBoundary(from: error) }) {
+                        do {
+                            let namespace: WarrenAgentEventStore.Namespace? = await MainActor.run { [weak self] in
+                                guard let self,
+                                      self.clientGeneration == currentClientGeneration,
+                                      self.agentExecutionID(for: sessionID) == streamID else { return nil }
+                                return self.agentReplicaNamespace
+                            }
+                            if let namespace {
+                                let state = try await self?.installAgentHistoryBoundary(boundary, namespace: namespace, streamID: streamID)
+                                await MainActor.run { [weak self] in
+                                    guard let self,
+                                          self.clientGeneration == currentClientGeneration,
+                                          let state else { return }
+                                    self.applyCanonicalCheckpoint(
+                                        WarrenRemoteAgentProjectionCheckpoint(sequence: state.checkpointSequence, state: boundary.state),
+                                        sessionID: sessionID
+                                    )
+                                    self.historyHasMoreBySessionID[sessionID] = false
+                                }
+                            }
+                        } catch {
+                            await MainActor.run { [weak self] in
+                                guard let self, self.clientGeneration == currentClientGeneration else { return }
+                                self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                            }
+                        }
+                    } else {
+                        await MainActor.run { [weak self] in
+                            guard let self,
+                                  self.clientGeneration == currentClientGeneration else { return }
+                            self.quarantineAgentStream(sessionID: sessionID, streamID: streamID, error: error)
+                        }
                     }
                     break
                 }
@@ -3034,6 +3089,48 @@ public final class IOSApplicationModel: ObservableObject {
         agentSubscribedSessionIDs.remove(sessionID)
         // Keep the last verified projection visible, but stop accepting rows
         // from a stream whose immutable sequence or event identity conflicted.
+    }
+
+    private func agentHistoryBoundary(from error: Error) -> (
+        retainedFrom: UInt64,
+        head: UInt64,
+        checkpoint: UInt64,
+        state: [String: WarrenRemoteJSONValue]
+    )? {
+        guard case let WarrenRemoteClientError.requestFailedWithCode(code, _, details) = error,
+              code == "history_boundary",
+              let details else { return nil }
+        func number(_ value: WarrenRemoteJSONValue?) -> UInt64 {
+            switch value {
+            case .number(let value) where value >= 0: return UInt64(value)
+            case .string(let value): return UInt64(value) ?? 0
+            default: return 0
+            }
+        }
+        let state: [String: WarrenRemoteJSONValue] = {
+            guard case let .object(value) = details["checkpoint"] else { return [:] }
+            return value
+        }()
+        let retained = number(details["retainedFromSequence"])
+        let head = number(details["headSequence"])
+        let checkpoint = number(details["checkpointSequence"])
+        guard retained > 0 || head > 0 || checkpoint > 0 else { return nil }
+        return (retained, head, checkpoint, state)
+    }
+
+    private func installAgentHistoryBoundary(
+        _ boundary: (retainedFrom: UInt64, head: UInt64, checkpoint: UInt64, state: [String: WarrenRemoteJSONValue]),
+        namespace: WarrenAgentEventStore.Namespace,
+        streamID: String
+    ) async throws -> WarrenAgentEventStore.SyncState {
+        try await WarrenAgentEventStore.shared.installHistoryBoundary(
+            namespace: namespace,
+            streamID: streamID,
+            retainedFromSequence: boundary.retainedFrom,
+            headSequence: boundary.head,
+            checkpointSequence: boundary.checkpoint,
+            checkpoint: boundary.state
+        )
     }
 
     private func applyCanonicalCheckpoint(
@@ -3141,11 +3238,33 @@ public final class IOSApplicationModel: ObservableObject {
             }
 
             do {
-                let subResult = try await client.subscribeAgentEvents(
-                    streamID: streamID,
-                    afterSequence: target,
-                    limit: 200
-                )
+                let subResult: WarrenRemoteAgentEventsSubscriptionResult
+                do {
+                    subResult = try await client.subscribeAgentEvents(
+                        streamID: streamID,
+                        afterSequence: target,
+                        limit: 200
+                    )
+                } catch {
+                    guard let boundary = await MainActor.run(body: { [weak self] in self?.agentHistoryBoundary(from: error) }) else {
+                        throw error
+                    }
+                    let replacement = try await installAgentHistoryBoundary(boundary, namespace: namespace, streamID: streamID)
+                    await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration,
+                              self.sessionByID[sessionID]?.isAgentBacked == true else { return }
+                        self.applyCanonicalCheckpoint(
+                            WarrenRemoteAgentProjectionCheckpoint(sequence: replacement.checkpointSequence, state: boundary.state),
+                            sessionID: sessionID
+                        )
+                    }
+                    subResult = try await client.subscribeAgentEvents(
+                        streamID: streamID,
+                        afterSequence: replacement.contiguousThrough,
+                        limit: 200
+                    )
+                }
                 // Persist the checkpoint and catch-up batch before exposing
                 // them to SwiftUI. A live batch can arrive during this RPC;
                 // the SQLite uniqueness constraints make the overlap a no-op.
