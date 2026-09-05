@@ -2023,16 +2023,21 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
     var structuredByID: [String: WarrenRemoteAgentEvent] = [:]
     var renderEvents: [WarrenRemoteAgentEvent] = []
     renderEvents.reserveCapacity(events.count)
+    // Unfolded normalized types, computed once. The predicates below each
+    // redo trim + lowercase per check, which dominated rebuild cost on long
+    // transcripts. Dash-folding stays local to the structured-kind lookup so
+    // tool_call/toolcall matching keeps its exact previous semantics.
     var renderNorms: [String] = []
     renderNorms.reserveCapacity(events.count)
     for event in events where !event.isHiddenFromMobile {
-        let type = event.normalizedType.replacingOccurrences(of: "-", with: "_")
+        let unfolded = event.normalizedType
+        let type = unfolded.replacingOccurrences(of: "-", with: "_")
         if IOSAgentStructuredEventKind(rawValue: type) != nil {
             let identity = event.id.isEmpty ? "seq-\(event.sequence)" : event.id
             structuredByID["\(type):\(identity)"] = event
         } else {
             renderEvents.append(event)
-            renderNorms.append(type)
+            renderNorms.append(unfolded)
         }
     }
     // Structured snapshots carry their own sequence; restore timeline order.
@@ -2056,10 +2061,9 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
     } else {
         var combined = renderEvents
         var combinedNorms = renderNorms
-        combined.append(contentsOf: structuredByID.values)
-        combinedNorms.append(contentsOf: structuredByID.values.map {
-            $0.normalizedType.replacingOccurrences(of: "-", with: "_")
-        })
+        let structured = Array(structuredByID.values)
+        combined.append(contentsOf: structured)
+        combinedNorms.append(contentsOf: structured.map(\.normalizedType))
         let order = combined.indices.sorted { combined[$0].sequence < combined[$1].sequence }
         renderEvents = order.map { combined[$0] }
         renderNorms = order.map { combinedNorms[$0] }
@@ -2081,12 +2085,23 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
         activityEntries.removeAll(keepingCapacity: true)
     }
 
-    for event in renderEvents {
-        if event.isUserEvent {
+    for (eventIndex, event) in renderEvents.enumerated() {
+        // Same classification as the event predicates, but against the
+        // precomputed normalized type instead of re-deriving it per check.
+        let norm = renderNorms[eventIndex]
+        let role = event.role?.lowercased()
+        let isUser = norm == "user" || role == "user"
+        let isToolCall = norm == "tool_call" || norm == "toolcall"
+        let isToolOutput = norm == "tool_output" || norm == "tooloutput"
+        let isReasoning = norm == "reasoning"
+            || norm.contains("thinking")
+            || norm.contains("reason")
+        let isAssistant = norm == "assistant" || role == "assistant"
+        if isUser {
             guard event.hasRenderableConversationContent else { continue }
             flushActivity()
             result.append(.event(event))
-        } else if event.isToolCallEvent {
+        } else if isToolCall {
             let tool = AgentToolBlock(call: event, outputs: [])
             activityEntries.append(.tool(tool))
             if let key = toolKey(for: event) {
