@@ -591,11 +591,14 @@ export default function App() {
       }
     };
     const references = [];
+    const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+    if (!executionID) throw new Error("Agent execution is not available");
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       const validation = validateAgentAttachment(file);
       if (!validation.ok) throw new Error(validation.error);
       let uploadID = "";
+      const commandID = `attachment-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${index}`}`;
       try {
         const data = await file.arrayBuffer();
         ensureCurrentSession();
@@ -607,7 +610,8 @@ export default function App() {
           ? [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("")
           : "";
         const prepared = await requestAgent("agent.attachment.prepare", {
-          session: sessionID,
+          executionId: executionID,
+          commandId: commandID,
           name: file.name,
           mime: file.type,
           size: file.size,
@@ -629,9 +633,10 @@ export default function App() {
             ? [...new Uint8Array(chunkDigest)].map(value => value.toString(16).padStart(2, "0")).join("")
             : "";
           const chunkResult = await requestAgent("agent.attachment.chunk", {
-            session: sessionID,
+            executionId: executionID,
+            commandId: `${uploadID}-chunk-${sequence}`,
             uploadId: uploadID,
-            sequence,
+            chunk: sequence,
             length: chunk.byteLength,
             ...(chunkSHA ? { sha256: chunkSHA } : {}),
             data: encodeAgentAttachmentChunk(chunk),
@@ -645,7 +650,8 @@ export default function App() {
           if (data.byteLength === 0) break;
         }
         const completed = await requestAgent("agent.attachment.complete", {
-          session: sessionID,
+          executionId: executionID,
+          commandId: `${uploadID}-complete`,
           uploadId: uploadID,
           length: data.byteLength,
           ...(sha256 ? { sha256 } : {}),
@@ -660,7 +666,13 @@ export default function App() {
         onProgress(index, 1, "", reference);
       } catch (error) {
         if (uploadID) {
-          try { await requestAgent("agent.attachment.abort", { session: sessionID, uploadId: uploadID }); } catch { /* best effort */ }
+          try {
+            await requestAgent("agent.attachment.abort", {
+              executionId: executionID,
+              commandId: `${uploadID}-abort`,
+              uploadId: uploadID,
+            });
+          } catch { /* best effort */ }
         }
         onProgress(index, 0, String(error?.message || error || "Upload failed"));
         throw error;

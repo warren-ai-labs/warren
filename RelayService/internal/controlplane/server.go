@@ -1235,7 +1235,10 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 			if client.WriteMessage(messageType, frame.Payload) != nil {
 				return
 			}
-			if frame.Kind == frameText || frame.Kind == frameBinary {
+			// Return credit only when this route/frame combination consumed
+			// body-window capacity. Control text/binary frames use the reserved
+			// lane; public streams and control DATA remain flow-controlled.
+			if routeFrameNeedsCredit(route, frame.Kind) {
 				if tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: connectionID, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}) != nil {
 					return
 				}

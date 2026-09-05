@@ -433,10 +433,10 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["control", "http", "upgrade"]
+            "enum": ["control", "http", "upgrade", "p2p-signal"]
           },
           "uniqueItems": true,
-          "description": "Stream class discriminator on the OPEN metadata. 'control' is the duplex host↔relay control channel; 'http' carries proxied HTTP/1.1; 'upgrade' carries the relayed WebSocket upgrade (which is where the inner Host WS lives)."
+          "description": "Stream class discriminator on the OPEN metadata. 'control' is the duplex host↔relay control channel; 'http' carries proxied HTTP/1.1; 'upgrade' carries the relayed WebSocket upgrade (which is where the inner Host WS lives); 'p2p-signal' is the canonical authenticated signaling class. Relay handshakes advertise and authorize this canonical capability; no unversioned signal alias is accepted."
         },
         "limits": {
           "type": "object",

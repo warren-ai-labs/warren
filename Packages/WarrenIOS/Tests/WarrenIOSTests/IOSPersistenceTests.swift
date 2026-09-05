@@ -1180,7 +1180,7 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(binaryPayloads(from: sentWhileWorking).count, 0)
 
         await task.enqueue(.text(
-            "{\"t\":\"agent.events\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"events\":[{\"eventId\":\"evt-blocked\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"sequence\":1,\"type\":\"status.changed\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"provider\",\"confidence\":\"observed\"},\"payload\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\",\"requestId\":\"interaction-1\"}}}] }"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"events\":[{\"eventId\":\"evt-interaction\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"sequence\":1,\"type\":\"interaction.requested\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"provider\",\"confidence\":\"observed\"},\"payload\":{\"kind\":\"question\",\"requestId\":\"interaction-1\",\"version\":7,\"state\":\"pending\"}},{\"eventId\":\"evt-blocked\",\"streamId\":\"exec-queue\",\"executionId\":\"exec-queue\",\"sequence\":2,\"type\":\"status.changed\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"provider\",\"confidence\":\"observed\"},\"payload\":{\"activity\":\"blocked\",\"attention\":{\"kind\":\"input\",\"reason\":\"question\",\"requestId\":\"interaction-1\"}}}] }"
         ))
         var sent = await task.sentMessages
         for _ in 0..<400 {
@@ -1204,6 +1204,7 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.agentQueuedMessageCountBySessionID[sessionID], nil)
         XCTAssertEqual(params["executionId"], "exec-queue")
         XCTAssertEqual(params["interactionId"], "interaction-1")
+        XCTAssertEqual(params["version"], "7")
         model.stop()
     }
 

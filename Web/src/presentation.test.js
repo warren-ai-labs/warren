@@ -118,6 +118,14 @@ test("async UI requests expire and reject stale workspace/session callbacks", ()
   assert.match(read("connection.js"), /clearTimeout\(handler\.timer\)/);
 });
 
+test("web attachment mutations use canonical command identities", () => {
+  const app = read("App.jsx");
+  assert.match(app, /agent\.attachment\.prepare[\s\S]*?executionId:\s*executionID[\s\S]*?commandId:\s*commandID/);
+  assert.match(app, /agent\.attachment\.chunk[\s\S]*?executionId:\s*executionID[\s\S]*?commandId:\s*`\$\{uploadID\}-chunk-\$\{sequence\}`[\s\S]*?chunk:\s*sequence/);
+  assert.match(app, /agent\.attachment\.complete[\s\S]*?executionId:\s*executionID[\s\S]*?commandId:\s*`\$\{uploadID\}-complete`/);
+  assert.match(app, /agent\.attachment\.abort[\s\S]*?executionId:\s*executionID[\s\S]*?commandId:\s*`\$\{uploadID\}-abort`/);
+});
+
 test("context-menu Escape handling does not depend on sheet-only state", () => {
   const components = read("components.jsx");
   const contextMenu = components.slice(components.indexOf("export function ContextMenu"), components.indexOf("export function PresetBar"));

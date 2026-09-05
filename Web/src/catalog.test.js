@@ -84,6 +84,7 @@ test("catalog keeps agent binding fields on sessions", () => {
         command: "codex",
         lifecycle: "running",
         agentSessionId: "thread-1",
+        agentExecutionId: "execution-1",
         transcriptPath: "/work/rollout.jsonl",
         agentStatus: { activity: "working", attention: null },
         agentTurn: { id: 2, status: "started" },
@@ -93,6 +94,7 @@ test("catalog keeps agent binding fields on sessions", () => {
   const session = catalog.sessions.get("session");
   assert.equal(session.kind, "codex");
   assert.equal(session.agentSessionId, "thread-1");
+  assert.equal(session.agentExecutionId, "execution-1");
   assert.equal(session.transcriptPath, "/work/rollout.jsonl");
   assert.deepEqual(session.agentStatus, { activity: "working", attention: null });
   assert.deepEqual(session.agentTurn, { id: 2, status: "started" });
