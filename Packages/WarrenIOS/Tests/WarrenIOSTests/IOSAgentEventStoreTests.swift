@@ -63,6 +63,60 @@ final class IOSAgentEventStoreTests: XCTestCase {
         XCTAssertEqual(range.map(\.sequence), [3, 4, 5, 6])
     }
 
+    func testLoadRecentEventsCanBeScopedToEpoch() async throws {
+        let sessionID = "test-session-epochs"
+        let firstEpoch: UInt64 = 500
+        let secondEpoch: UInt64 = 501
+
+        try await store.saveEvents(
+            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "old")],
+            sessionID: sessionID,
+            epoch: firstEpoch
+        )
+        try await store.saveEvents(
+            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "new")],
+            sessionID: sessionID,
+            epoch: secondEpoch
+        )
+
+        let loaded = await store.loadRecentEvents(sessionID: sessionID, epoch: secondEpoch, limit: 10)
+        XCTAssertEqual(loaded.map(\.content), ["new"])
+    }
+
+    func testSyncStateResetsMaxSequenceWhenEpochChanges() async throws {
+        let sessionID = "test-session-sync-epoch"
+        try await store.saveEvents(
+            [WarrenRemoteAgentEvent(sequence: 42, type: "assistant", content: "old")],
+            sessionID: sessionID,
+            epoch: 600
+        )
+        try await store.saveEvents(
+            [WarrenRemoteAgentEvent(sequence: 3, type: "assistant", content: "new")],
+            sessionID: sessionID,
+            epoch: 601
+        )
+
+        let state = await store.syncState(sessionID: sessionID)
+        XCTAssertEqual(state?.epoch, 601)
+        XCTAssertEqual(state?.maxSequence, 3)
+    }
+
+    func testPurgeOrphanSessionsWithEmptyRoster() async throws {
+        let sessionID = "test-session-orphan"
+        try await store.saveEvents(
+            [WarrenRemoteAgentEvent(sequence: 1, type: "assistant", content: "orphan")],
+            sessionID: sessionID,
+            epoch: 700
+        )
+
+        await store.purgeOrphanSessions(activeSessionIDs: [])
+
+        let state = await store.syncState(sessionID: sessionID)
+        let events = await store.loadRecentEvents(sessionID: sessionID, limit: 10)
+        XCTAssertNil(state)
+        XCTAssertTrue(events.isEmpty)
+    }
+
     func testClearSession() async throws {
         let sessionID = "test-session-clear"
         let epoch: UInt64 = 300

@@ -340,6 +340,163 @@ final class IOSPersistenceTests: XCTestCase {
         model.stop()
     }
 
+    @MainActor
+    func testAgentSubscriptionDoesNotMarkCachedHistoryAsLoaded() async throws {
+        let task = IOSScriptedWebSocketTask()
+        let sessionID = "66666666-6666-6666-6666-666666666666"
+        let cachedEvent = WarrenRemoteAgentEvent(
+            sequence: 99,
+            type: "assistant",
+            role: "assistant",
+            content: "Cached tail"
+        )
+        try await IOSAgentEventStore.shared.saveEvents([cachedEvent], sessionID: sessionID, epoch: 1)
+
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-agent-cache-\(UUID())")!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-agent-cache")
+            )
+        )
+        defer {
+            model.stop()
+            Task { await IOSAgentEventStore.shared.clearSession(sessionID: sessionID) }
+        }
+
+        model.start()
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.selectSession(sessionID)
+        model.ensureAgentSubscribed(for: sessionID)
+        let messages = await waitForSentMessages(task, count: 3)
+        let sessionSubscribe = try XCTUnwrap(messages.first(where: { requestMethod($0) == "session.subscribe" }))
+        let agentSubscribe = try XCTUnwrap(messages.first(where: { requestMethod($0) == "agent.subscribe" }))
+        let sessionSubscribeID = try requestID(from: sessionSubscribe)
+        let agentSubscribeID = try requestID(from: agentSubscribe)
+        XCTAssertEqual(requestParams(agentSubscribe)?["epoch"], "1")
+        XCTAssertEqual(requestParams(agentSubscribe)?["lastSequence"], "99")
+
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + sessionSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"session\":{\"id\":\"" + sessionID + "\",\"kind\":\"codex\",\"lifecycle\":\"running\"},\"snapshot\":{\"epoch\":1,\"turn\":{\"id\":0,\"status\":\"idle\"},\"sequence\":99}}}"
+        ))
+        for _ in 0..<400 {
+            if model.agentEventsBySessionID[sessionID]?.contains(where: { $0.sequence == cachedEvent.sequence }) == true {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.map(\.sequence), [99])
+        XCTAssertFalse(model.agentHistoryLoaded(for: sessionID))
+    }
+
+    @MainActor
+    func testAgentSequenceGapIsFilledAcrossMultiplePages() async throws {
+        let task = IOSScriptedWebSocketTask()
+        let sessionID = "77777777-7777-7777-7777-777777777777"
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"2.0\"}"))
+        await task.enqueue(.text(
+            "{\"t\":\"roster\",\"state\":{\"schema\":1,\"revision\":1,\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[{\"id\":\"" + sessionID + "\",\"title\":\"Codex\",\"kind\":\"codex\",\"agentSessionId\":\"agent-1\",\"lifecycle\":\"running\",\"agentStatus\":{\"activity\":\"ready\"}}]}}"
+        ))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let defaults = UserDefaults(suiteName: "warren-ios-agent-gap-\(UUID())")!
+        let model = IOSApplicationModel(
+            client: client,
+            localStore: IOSLocalStore(
+                defaults: defaults,
+                keychain: IOSKeychainStore(service: "warren-ios-agent-gap")
+            )
+        )
+        defer { model.stop() }
+
+        model.start()
+        for _ in 0..<400 {
+            if model.connectionState == .connected, model.roster != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.selectSession(sessionID)
+        model.ensureAgentSubscribed(for: sessionID)
+        let initial = await waitForSentMessages(task, count: 3)
+        let sessionSubscribe = try XCTUnwrap(initial.first(where: { requestMethod($0) == "session.subscribe" }))
+        let agentSubscribe = try XCTUnwrap(initial.first(where: { requestMethod($0) == "agent.subscribe" }))
+        let sessionSubscribeID = try requestID(from: sessionSubscribe)
+        let agentSubscribeID = try requestID(from: agentSubscribe)
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + sessionSubscribeID + "\",\"ok\":true,\"result\":{\"subscribed\":true}}"
+        ))
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"" + agentSubscribeID + "\",\"ok\":true,\"result\":{\"session\":{\"id\":\"" + sessionID + "\",\"kind\":\"codex\",\"lifecycle\":\"running\"},\"snapshot\":{\"epoch\":1,\"turn\":{\"id\":1,\"status\":\"started\"},\"sequence\":250}}}"
+        ))
+
+        func historyResponse(
+            requestID: String,
+            range: ClosedRange<Int>,
+            hasMore: Bool
+        ) throws -> String {
+            let events: [[String: Any]] = range.map { sequence in
+                [
+                    "seq": sequence,
+                    "type": "assistant",
+                    "role": "assistant",
+                    "content": "event \(sequence)",
+                ]
+            }
+            let result: [String: Any] = [
+                "epoch": 1,
+                "events": events,
+                "hasMore": hasMore,
+            ]
+            let envelope: [String: Any] = [
+                "t": "response",
+                "id": requestID,
+                "ok": true,
+                "result": result,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: envelope)
+            return String(decoding: data, as: UTF8.self)
+        }
+
+        var messages = await waitForSentMessages(task, count: 4)
+        var history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
+        XCTAssertEqual(requestParams(history)?["since"], "1")
+        XCTAssertEqual(requestParams(history)?["before"], "251")
+        await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 1...100, hasMore: true)))
+
+        messages = await waitForSentMessages(task, count: 5)
+        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
+        XCTAssertEqual(requestParams(history)?["since"], "101")
+        await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 101...200, hasMore: true)))
+
+        messages = await waitForSentMessages(task, count: 6)
+        history = try XCTUnwrap(messages.last(where: { requestMethod($0) == "agent.history" }))
+        XCTAssertEqual(requestParams(history)?["since"], "201")
+        await task.enqueue(try .text(historyResponse(requestID: requestID(from: history), range: 201...250, hasMore: false)))
+
+        for _ in 0..<400 {
+            if model.agentEventsBySessionID[sessionID]?.count == 250 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.map(\.sequence), Array(1...250).map(UInt64.init))
+    }
+
     func testEndpointURLUsesWebSocketAndFixedProtocolPath() {
         let endpoint = WarrenRemoteEndpointConfiguration(name: "Host", url: "https://example.test/base")
         XCTAssertEqual(endpoint.webSocketURL?.absoluteString, "wss://example.test/v1/ws")
