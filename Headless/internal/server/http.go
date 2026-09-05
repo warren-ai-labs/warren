@@ -3232,6 +3232,13 @@ func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command 
 			details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
 		})
 	}
+	if err := validateCanonicalInteractionResolution(interaction, request.Resolution); err != nil {
+		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
+			code:    "invalid_interaction_resolution",
+			message: err.Error(),
+			details: map[string]any{"interactionId": request.InteractionID, "kind": interaction.kind, "version": interaction.version},
+		})
+	}
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {

@@ -4,7 +4,7 @@ import WarrenTransport
 /// The structured event kinds understood by the Agent View. Unknown kinds are
 /// retained by the reducer for sequence accounting but are not rendered.
 public enum IOSAgentStructuredEventKind: String, CaseIterable, Sendable {
-    case question, permission, plan, todo, activity, plugin, subagent, attachment
+    case question, permission, confirmation, plan, todo, activity, plugin, subagent, attachment
 }
 
 /// A sequence-stable projection row. `stableID` is the provider object ID when

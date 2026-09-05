@@ -352,7 +352,7 @@ func canonicalAgentEventType(value string, delta bool) string {
 		return "tool.started"
 	case "tool_output", "tool_result":
 		return "tool.completed"
-	case "question", "permission":
+	case "question", "permission", "confirmation":
 		return "interaction.requested"
 	case "plan", "todo", "activity", "plugin", "subagent", "attachment":
 		return value + ".updated"

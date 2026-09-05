@@ -141,7 +141,7 @@ export function AgentView({
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i];
       const type = String(e?.type || "").trim().toLowerCase().replaceAll("-", "_");
-      if (type === "question" || type === "permission" || type === "interaction_requested") {
+      if (type === "question" || type === "permission" || type === "confirmation" || type === "interaction_requested") {
         const payload = e?.payload && typeof e.payload === "object" ? e.payload : {};
         const state = String(payload.state || e?.state || "pending").toLowerCase();
         if (state === "pending" || state === "submitting") {
@@ -1319,7 +1319,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   const [expanded, setExpanded] = useState(false);
   const requestID = String(payload.requestId || "").trim();
   const pending = canInteract && (state === "pending" || state === "submitting") && requestID;
-  const isInteraction = type === "question" || type === "permission";
+  const isInteraction = type === "question" || type === "permission" || type === "confirmation";
   const questions = type === "question"
     ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => ({
       ...question,
@@ -1331,12 +1331,12 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
       options: Array.isArray(question?.options) ? question.options : [],
     }))
     : [];
-  const permissionOptions = type === "permission" && Array.isArray(payload.options) ? payload.options : [];
+  const permissionOptions = (type === "permission" || type === "confirmation") && Array.isArray(payload.options) ? payload.options : [];
   const optionID = option => String(option?.id || option?.value || "");
 
   // Render resolved interaction as a simple collapsible card in the message flow
   if (isInteraction && !pending && !isDocked) {
-    const categoryLabel = type === "permission" ? "Permission" : "Ask";
+    const categoryLabel = type === "permission" ? "Permission" : type === "confirmation" ? "Confirmation" : "Ask";
     const promptPreview = questions[0]?.prompt || payload.description || payload.title || title;
 
     let resolutionLabel = "Answered";
@@ -1344,7 +1344,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     if (payload.response?.cancelled || state === "cancelled") {
       resolutionLabel = "Cancelled";
       statusClass = "cancelled";
-    } else if (type === "permission") {
+    } else if (type === "permission" || type === "confirmation") {
       const decision = String(payload.response?.decision || payload.decision || "").toLowerCase();
       if (decision === "allow" || decision === "yes" || decision === "approve" || decision === "y") {
         resolutionLabel = "Approved";
@@ -1408,7 +1408,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
                 </div>
               );
             })}
-            {type === "permission" && (
+            {(type === "permission" || type === "confirmation") && (
               <div className="agent-interaction-card-decision">
                 <span>Decision:</span> <strong>{resolutionLabel}</strong>
               </div>
@@ -1462,6 +1462,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   });
   const cancelInteraction = () => submitResponse({ cancelled: true });
   const selectPermission = option => submitResponse({ decision: option.id || option.value });
+  const confirmInteraction = () => submitResponse({ decision: "confirm" });
 
   useEffect(() => {
     if (state !== "pending") setSubmitting(false);
@@ -1518,7 +1519,8 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   const responseControls = interactionPending && canInteract && (
     <div className="agent-structured-actions">
       {type === "question" && <button type="button" onClick={submitQuestionAnswers} disabled={submitting || !questionsValid}>Submit</button>}
-      {(type === "question" || type === "permission") && <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>}
+      {type === "confirmation" && permissionOptions.length === 0 && <button type="button" onClick={confirmInteraction} disabled={submitting}>Confirm</button>}
+      {(type === "question" || type === "permission" || type === "confirmation") && <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>}
     </div>
   );
 
@@ -1526,16 +1528,16 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     <section className={`agent-structured ${type}${isDocked ? " docked" : ""}`} aria-label={title}>
       <div className="nodehead">
         <i className="nodehead-dot" aria-hidden="true" />
-        <strong>{isInteraction ? (type === "permission" ? "Permission" : "Ask") : title}</strong>
+        <strong>{isInteraction ? (type === "permission" ? "Permission" : type === "confirmation" ? "Confirmation" : "Ask") : title}</strong>
         <em>{structuredStateLabel(state)}</em>
       </div>
       {payload.description && <p className="agent-structured-description">{payload.description}</p>}
       {pending && type === "question" && questionContent}
-      {pending && type === "permission" && permissionContent.length > 0 && (
+      {pending && (type === "permission" || type === "confirmation") && permissionContent.length > 0 && (
         <div className="agent-structured-options" role="group" aria-label={`${title} options`}>{permissionContent}</div>
       )}
       {responseControls}
-      {!canInteract && (type === "question" || type === "permission") && (state === "pending" || state === "submitting") && (
+      {!canInteract && (type === "question" || type === "permission" || type === "confirmation") && (state === "pending" || state === "submitting") && (
         <p className="agent-structured-readonly" role="status">This Host does not support responding here.</p>
       )}
       {(type === "plan" || type === "todo") && Array.isArray(payload.items) && (
@@ -1551,7 +1553,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
           })}
         </div>
       )}
-      {type !== "question" && type !== "permission" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
+      {type !== "question" && type !== "permission" && type !== "confirmation" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
         <p className="agent-structured-summary">{payload.summary || payload.detail || payload.name}</p>
       )}
     </section>
@@ -1562,6 +1564,7 @@ function structuredIcon(type) {
   return {
     question: "?",
     permission: "✓",
+    confirmation: "!",
     plan: "☷",
     todo: "☑",
     activity: "•",

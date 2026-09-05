@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"sync"
 	"testing"
 
@@ -485,50 +485,24 @@ func TestACPAgentProviderRegistrationAndHandle(t *testing.T) {
 	service := &Service{}
 	registry := NewDefaultAgentProviderRegistry(service)
 
-	// Test handler resolution for codex with acp handler
+	// The ACP registration is intentionally present for future transport
+	// negotiation, but it must remain not-ready until the wire adapter exists.
 	ctx := context.Background()
-	handle, err := registry.Ensure(ctx, AgentSessionContext{
+	_, err := registry.Ensure(ctx, AgentSessionContext{
 		SessionID: "sess-acp-1",
 		Kind:      "codex",
 		Handler:   AgentHandlerACP,
 	})
-	if err != nil {
-		t.Fatalf("failed to ensure ACP agent handle: %v", err)
-	}
-
-	acpHandle, ok := handle.(*acpAgentHandle)
-	if !ok {
-		t.Fatalf("handle is %T, want *acpAgentHandle", handle)
-	}
-
-	caps := acpHandle.Capabilities()
-	for _, expectedCap := range []Capability{CapabilityTimeline, CapabilityInteractions, CapabilityInterrupt, CapabilityAttachments} {
-		if !caps.Has(expectedCap) {
-			t.Errorf("expected capability %v in ACP handle capabilities", expectedCap)
-		}
-	}
-
-	if err := acpHandle.SendMessage(ctx, api.AgentMessageSendRequest{Text: "hello"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
-		t.Errorf("SendMessage err = %v, want 'not implemented yet'", err)
-	}
-
-	if err := acpHandle.Interrupt(ctx, api.AgentTurnInterruptRequest{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
-		t.Errorf("Interrupt err = %v, want 'not implemented yet'", err)
-	}
-
-	if err := acpHandle.RespondInteraction(ctx, api.AgentInteractionResponse{Session: "sess-acp-1"}); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
-		t.Errorf("RespondInteraction err = %v, want 'not implemented yet'", err)
+	if !errors.Is(err, ErrAgentNotReady) {
+		t.Fatalf("ACP ensure error = %v, want ErrAgentNotReady", err)
 	}
 
 	// Also verify embedded handler syntax "codex-acp"
-	handleEmbedded, err := registry.Ensure(ctx, AgentSessionContext{
+	_, err = registry.Ensure(ctx, AgentSessionContext{
 		SessionID: "sess-acp-2",
 		Kind:      "codex-acp",
 	})
-	if err != nil {
-		t.Fatalf("failed to ensure embedded ACP agent handle: %v", err)
-	}
-	if _, ok := handleEmbedded.(*acpAgentHandle); !ok {
-		t.Fatalf("embedded handle is %T, want *acpAgentHandle", handleEmbedded)
+	if !errors.Is(err, ErrAgentNotReady) {
+		t.Fatalf("embedded ACP ensure error = %v, want ErrAgentNotReady", err)
 	}
 }

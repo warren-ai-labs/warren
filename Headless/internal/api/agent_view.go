@@ -96,8 +96,8 @@ func SupportsCapability(capabilities []string, wanted string) bool {
 	return false
 }
 
-// AgentInteractionResponse is the common response for question and
-// permission cards. Response is intentionally JSON-shaped so a Host can add
+// AgentInteractionResponse is the common response for question, permission,
+// and confirmation cards. Response is intentionally JSON-shaped so a Host can add
 // bounded option values without changing the wire envelope.
 type AgentInteractionResponse struct {
 	CommandID string         `json:"commandId,omitempty"`
@@ -127,7 +127,7 @@ type AgentAttachmentRef struct {
 // Replacement is present the Host must accept it only as part of the same
 // interrupt transaction.
 type AgentTurnInterruptRequest struct {
-	CommandID  string                   `json:"commandId,omitempty"`
+	CommandID   string                   `json:"commandId,omitempty"`
 	Session     string                   `json:"session"`
 	Turn        uint64                   `json:"turn"`
 	Reason      string                   `json:"reason"`

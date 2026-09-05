@@ -79,6 +79,12 @@ func (s *Service) AgentViewCapabilities() []string {
 			api.CapabilityAgentInteractions,
 			api.CapabilityAgentInterrupt,
 		)
+	} else if s.hasRuntimeAdapter() {
+		// Ctrl-C is a protocol-defined PTY signal and is safe to execute
+		// without guessing provider UI state. Interaction answers are not: a
+		// TUI prompt may have changed between projection and input, so only a
+		// provider-native controller may advertise that capability.
+		capabilities = append(capabilities, api.CapabilityAgentInterrupt)
 	}
 	// Attachments can use a provider-native controller when one is installed,
 	// or the built-in PTY bridge below, which materializes each upload as a
@@ -1074,7 +1080,7 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 	}
 
 	switch request.Kind {
-	case "permission":
+	case "permission", "confirmation":
 		decision := strings.TrimSpace(agentStringValue(request.Response["decision"]))
 		if decision == "" {
 			decision = strings.TrimSpace(agentStringValue(request.Response["value"]))
@@ -1177,7 +1183,7 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 	request.Session = strings.TrimSpace(request.Session)
 	request.RequestID = strings.TrimSpace(request.RequestID)
 	request.Kind = strings.ToLower(strings.TrimSpace(request.Kind))
-	if request.Session == "" || request.RequestID == "" || (request.Kind != "question" && request.Kind != "permission") {
+	if request.Session == "" || request.RequestID == "" || (request.Kind != "question" && request.Kind != "permission" && request.Kind != "confirmation") {
 		return api.AgentInteractionResult{}, errors.New("session, requestId and a valid interaction kind are required")
 	}
 	if _, ok := s.Session(request.Session); !ok {
@@ -1241,20 +1247,6 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentInteractionResult{}, err
 		}
-	} else if session, ok := s.Session(request.Session); ok && session.Runtime != "" {
-		runtime := s.runtimeForKind(s.runtimeKindFor(session))
-		if runtime == nil {
-			err := errors.New("agent interaction transport is unavailable")
-			s.finishAgentAction(actionKey, call, nil, err)
-			return api.AgentInteractionResult{}, err
-		}
-		unlock := s.lockAgentSessionAction(session.ID)
-		err := sendAgentInteractionInput(ctx, runtime, session.Runtime, request)
-		unlock()
-		if err != nil {
-			s.finishAgentAction(actionKey, call, nil, err)
-			return api.AgentInteractionResult{}, err
-		}
 	} else {
 		err := errors.New("agent interaction transport is unavailable")
 		s.finishAgentAction(actionKey, call, nil, err)
@@ -1272,6 +1264,12 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 
 func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionResponse) {
 	s.lazyInit()
+	// A provider-native bridge can emit interaction.resolved after the Host
+	// accepted this response. If the durable projection already contains that
+	// terminal state, the client must see one resolution row, not two cards.
+	if projection, found := s.canonicalInteraction(request.Session, request.RequestID); found && projection.state == "resolved" {
+		return
+	}
 	s.agentsMu.Lock()
 	entry, ok := s.agents[request.Session]
 	if !ok || entry == nil {
@@ -1279,6 +1277,17 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		return
 	}
 	entry.mu.Lock()
+	for _, existing := range entry.canonicalEvents {
+		if existing.Type != "interaction.resolved" {
+			continue
+		}
+		candidateID, _ := existing.Payload["interactionId"].(string)
+		if strings.TrimSpace(candidateID) == request.RequestID {
+			entry.mu.Unlock()
+			s.agentsMu.Unlock()
+			return
+		}
+	}
 	streamID := strings.TrimSpace(entry.executionID)
 	if streamID == "" {
 		if s.Store != nil {
