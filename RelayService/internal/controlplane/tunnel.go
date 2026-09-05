@@ -8,13 +8,138 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	tunnelControlQueueCapacity = 256
+	tunnelDataQueueCapacity    = 32
+	tunnelControlFairness      = 32
+)
+
 type hostTunnel struct {
 	connection *websocket.Conn
-	writes     sync.Mutex
+	writer     *tunnelWriter
 	clientsMu  sync.RWMutex
 	clients    map[connectionID]*clientRoute
 	closed     chan struct{}
 	closeOnce  sync.Once
+}
+
+type tunnelQueuedWrite struct {
+	data []byte
+	done chan error
+}
+
+// tunnelWriter is the sole owner of hostTunnel's WebSocket data writes. Relay
+// routes can enqueue independently; control frames have a reserved lane so a
+// saturated public body cannot block OPEN/CLOSE/WINDOW progress.
+type tunnelWriter struct {
+	connection *websocket.Conn
+	control    chan tunnelQueuedWrite
+	data       chan tunnelQueuedWrite
+	stop       chan struct{}
+	stopped    chan struct{}
+	stopOnce   sync.Once
+	errMu      sync.Mutex
+	err        error
+}
+
+func newTunnelWriter(connection *websocket.Conn) *tunnelWriter {
+	writer := &tunnelWriter{
+		connection: connection,
+		control:    make(chan tunnelQueuedWrite, tunnelControlQueueCapacity),
+		data:       make(chan tunnelQueuedWrite, tunnelDataQueueCapacity),
+		stop:       make(chan struct{}),
+		stopped:    make(chan struct{}),
+	}
+	go writer.run()
+	return writer
+}
+
+func (writer *tunnelWriter) stopWith(err error) {
+	if err == nil {
+		err = errors.New("host tunnel closed")
+	}
+	writer.stopOnce.Do(func() {
+		writer.errMu.Lock()
+		writer.err = err
+		writer.errMu.Unlock()
+		close(writer.stop)
+	})
+}
+
+func (writer *tunnelWriter) error() error {
+	writer.errMu.Lock()
+	defer writer.errMu.Unlock()
+	if writer.err == nil {
+		return errors.New("host tunnel closed")
+	}
+	return writer.err
+}
+
+func (writer *tunnelWriter) enqueue(value tunnelQueuedWrite, control bool) error {
+	queue := writer.data
+	if control {
+		queue = writer.control
+	}
+	select {
+	case <-writer.stop:
+		return writer.error()
+	case <-writer.stopped:
+		return writer.error()
+	default:
+	}
+	select {
+	case queue <- value:
+		return nil
+	default:
+		if control {
+			return errors.New("host tunnel control writer queue full")
+		}
+		return errors.New("host tunnel data writer queue full")
+	}
+}
+
+func (writer *tunnelWriter) run() {
+	defer close(writer.stopped)
+	controlBudget := 0
+	for {
+		var value tunnelQueuedWrite
+		select {
+		case <-writer.stop:
+			return
+		default:
+		}
+		if controlBudget < tunnelControlFairness {
+			select {
+			case value = <-writer.control:
+				controlBudget++
+			default:
+				select {
+				case <-writer.stop:
+					return
+				case value = <-writer.control:
+					controlBudget++
+				case value = <-writer.data:
+					controlBudget = 0
+				}
+			}
+		} else {
+			select {
+			case <-writer.stop:
+				return
+			case value = <-writer.data:
+				controlBudget = 0
+			case value = <-writer.control:
+				controlBudget = 1
+			}
+		}
+		_ = writer.connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		err := writer.connection.WriteMessage(websocket.BinaryMessage, value.data)
+		value.done <- err
+		if err != nil {
+			writer.stopWith(err)
+			return
+		}
+	}
 }
 
 type clientRoute struct {
@@ -42,8 +167,13 @@ func newHostTunnel(connection *websocket.Conn) *hostTunnel {
 	if connection != nil {
 		connection.SetReadLimit(maxRelayMessageBytes + headerSize)
 	}
+	var writer *tunnelWriter
+	if connection != nil {
+		writer = newTunnelWriter(connection)
+	}
 	return &hostTunnel{
 		connection: connection,
+		writer:     writer,
 		clients:    make(map[connectionID]*clientRoute),
 		closed:     make(chan struct{}),
 	}
@@ -103,7 +233,7 @@ func (tunnel *hostTunnel) openStream(metadata *streamOpen) (connectionID, *clien
 }
 
 func (tunnel *hostTunnel) send(frame relayFrame) error {
-	if tunnel.connection == nil {
+	if tunnel.connection == nil || tunnel.writer == nil {
 		return errors.New("host tunnel connection unavailable")
 	}
 	select {
@@ -111,14 +241,34 @@ func (tunnel *hostTunnel) send(frame relayFrame) error {
 		return errors.New("host tunnel closed")
 	default:
 	}
-	tunnel.writes.Lock()
-	defer tunnel.writes.Unlock()
-	_ = tunnel.connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	encoded := encodeRelayFrame(frame)
 	if encoded == nil {
 		return errors.New("relay frame exceeds limit")
 	}
-	return tunnel.connection.WriteMessage(websocket.BinaryMessage, encoded)
+	control := frame.Kind != frameData && frame.Kind != frameText && frame.Kind != frameBinary
+	done := make(chan error, 1)
+	if err := tunnel.writer.enqueue(tunnelQueuedWrite{data: encoded, done: done}, control); err != nil {
+		return err
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			tunnel.close()
+		}
+		return err
+	case <-tunnel.writer.stopped:
+		select {
+		case err := <-done:
+			if err != nil {
+				tunnel.close()
+			}
+			return err
+		default:
+			err := tunnel.writer.error()
+			tunnel.close()
+			return err
+		}
+	}
 }
 
 // sendStream applies the per-stream credit window before writing body or
@@ -252,18 +402,12 @@ func (tunnel *hostTunnel) heartbeat() {
 		case <-tunnel.closed:
 			return
 		case <-ticker.C:
-			tunnel.writes.Lock()
 			var err error
 			if tunnel.connection != nil {
-				err = tunnel.connection.WriteControl(
-					websocket.PingMessage,
-					nil,
-					time.Now().Add(10*time.Second),
-				)
+				err = tunnel.connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
 			} else {
 				err = errors.New("host tunnel connection unavailable")
 			}
-			tunnel.writes.Unlock()
 			if err != nil {
 				tunnel.close()
 				return
@@ -285,6 +429,9 @@ func (tunnel *hostTunnel) removeClient(id connectionID) {
 func (tunnel *hostTunnel) close() {
 	tunnel.closeOnce.Do(func() {
 		close(tunnel.closed)
+		if tunnel.writer != nil {
+			tunnel.writer.stopWith(errors.New("host tunnel closed"))
+		}
 		if tunnel.connection != nil {
 			_ = tunnel.connection.Close()
 		}
