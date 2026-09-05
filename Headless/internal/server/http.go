@@ -3053,7 +3053,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	}
 }
 
-func (p *wsPeer) canonicalCommandSession(command api.AgentCommand) (api.Session, api.AgentExecution, error) {
+func (p *wsPeer) canonicalCommandSession(ctx context.Context, command api.AgentCommand) (api.Session, api.AgentExecution, error) {
 	if strings.TrimSpace(command.CommandID) == "" || strings.TrimSpace(command.ExecutionID) == "" {
 		return api.Session{}, api.AgentExecution{}, errors.New("commandId and executionId are required")
 	}
@@ -3065,11 +3065,15 @@ func (p *wsPeer) canonicalCommandSession(command api.AgentCommand) (api.Session,
 	if !ok || execution.ID != command.ExecutionID {
 		return api.Session{}, api.AgentExecution{}, fmt.Errorf("agent execution not found: %s", command.ExecutionID)
 	}
-	if command.ExpectedVersion > 0 && command.ExpectedVersion != execution.HeadSequence {
-		return api.Session{}, api.AgentExecution{}, fmt.Errorf("stale expectedVersion: got %d, current %d", command.ExpectedVersion, execution.HeadSequence)
-	}
 	if err := p.requireAgentControl(session.ID); err != nil {
 		return api.Session{}, api.AgentExecution{}, err
+	}
+	admitted, err := p.server.Service.canonicalCommandAdmitted(ctx, command.ExecutionID, command.CommandID)
+	if err != nil {
+		return api.Session{}, api.AgentExecution{}, fmt.Errorf("load canonical command admission: %w", err)
+	}
+	if !admitted && command.ExpectedVersion > 0 && command.ExpectedVersion != execution.HeadSequence {
+		return api.Session{}, api.AgentExecution{}, fmt.Errorf("stale expectedVersion: got %d, current %d", command.ExpectedVersion, execution.HeadSequence)
 	}
 	return session, execution, nil
 }
@@ -3079,7 +3083,7 @@ func (p *wsPeer) handleCanonicalExecutionResume(ctx context.Context, command api
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, _, err := p.canonicalCommandSession(base)
+	session, _, err := p.canonicalCommandSession(ctx, base)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3104,7 +3108,7 @@ func (p *wsPeer) handleCanonicalTurnStart(ctx context.Context, command api.Envel
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3132,7 +3136,7 @@ func (p *wsPeer) handleCanonicalTurnSteer(ctx context.Context, command api.Envel
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3170,7 +3174,7 @@ func (p *wsPeer) handleCanonicalTurnCancel(ctx context.Context, command api.Enve
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3201,7 +3205,7 @@ func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command 
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, _, err := p.canonicalCommandSession(request.AgentCommand)
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3245,8 +3249,8 @@ func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command 
 	return p.writeResult(command.ID, result)
 }
 
-func (p *wsPeer) canonicalAttachmentSession(command api.AgentCommand) (api.Session, error) {
-	session, _, err := p.canonicalCommandSession(command)
+func (p *wsPeer) canonicalAttachmentSession(ctx context.Context, command api.AgentCommand) (api.Session, error) {
+	session, _, err := p.canonicalCommandSession(ctx, command)
 	if err != nil {
 		return api.Session{}, err
 	}
@@ -3261,7 +3265,7 @@ func (p *wsPeer) handleCanonicalAttachmentPrepare(ctx context.Context, command a
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	session, err := p.canonicalAttachmentSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3284,7 +3288,7 @@ func (p *wsPeer) handleCanonicalAttachmentChunk(ctx context.Context, command api
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	session, err := p.canonicalAttachmentSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3308,7 +3312,7 @@ func (p *wsPeer) handleCanonicalAttachmentComplete(ctx context.Context, command 
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	session, err := p.canonicalAttachmentSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
@@ -3331,7 +3335,7 @@ func (p *wsPeer) handleCanonicalAttachmentAbort(ctx context.Context, command api
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	session, err := p.canonicalAttachmentSession(request.AgentCommand)
+	session, err := p.canonicalAttachmentSession(ctx, request.AgentCommand)
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}

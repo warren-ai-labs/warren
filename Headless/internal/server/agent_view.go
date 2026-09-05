@@ -296,6 +296,41 @@ func (s *Service) runCanonicalCommand(
 	return result, callErr
 }
 
+// canonicalCommandAdmitted reports whether a command identity has already
+// entered the Host admission path. Retries must be recognized before the
+// optimistic version check: a reconnect can observe a newer head after the
+// original command was accepted, but the same command ID must still return
+// its durable result (or its durable pending state) instead of being turned
+// into a misleading stale_version error.
+func (s *Service) canonicalCommandAdmitted(
+	ctx context.Context,
+	executionID, commandID string,
+) (bool, error) {
+	executionID = strings.TrimSpace(executionID)
+	commandID = strings.TrimSpace(commandID)
+	if executionID == "" || commandID == "" {
+		return false, nil
+	}
+	key := "canonical:" + executionID + ":" + commandID
+	s.ensureAgentViewState()
+	s.agentViewMu.Lock()
+	_, remembered := s.canonicalCommandResults[key]
+	_, active := s.agentActionCalls[key]
+	_, fingerprinted := s.agentActionFingerprints[key]
+	s.agentViewMu.Unlock()
+	if remembered || active || fingerprinted {
+		return true, nil
+	}
+	if s.AgentStore == nil {
+		return false, nil
+	}
+	_, found, err := s.AgentStore.GetCanonicalCommand(ctx, executionID, commandID)
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 func canonicalCommandRecordResult(record store.CanonicalCommandRecord) (any, error) {
 	if record.Status == store.CanonicalCommandFailed {
 		if strings.TrimSpace(record.Error) == "" {
