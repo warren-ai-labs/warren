@@ -22,6 +22,10 @@ private func agentSHA256(_ data: Data) -> String {
 import UIKit
 #endif
 
+#if canImport(Network)
+import Network
+#endif
+
 /// High-frequency terminal state published by the active Terminal surface.
 /// The dashboard never observes this object, so PTY frames cannot invalidate
 /// the Sessions list while it is still in the navigation stack.
@@ -184,6 +188,11 @@ public final class IOSApplicationModel: ObservableObject {
         let endpointIdentity: String
     }
 
+#if canImport(Network)
+    private var pathMonitor: NWPathMonitor?
+    private let pathMonitorQueue = DispatchQueue(label: "app.warren.network-monitor")
+#endif
+
     public init(
         client: WarrenRemoteClient,
         localStore: IOSLocalStore = IOSLocalStore(),
@@ -227,6 +236,16 @@ public final class IOSApplicationModel: ObservableObject {
         self.liveActivityCoordinator.activityEndedHandler = { [weak self] sessionID in
             self?.unregisterLiveActivityPushToken(for: sessionID)
         }
+#if canImport(Network)
+        let monitor = NWPathMonitor()
+        self.pathMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.handleNetworkPathUpdate(path)
+            }
+        }
+        monitor.start(queue: pathMonitorQueue)
+#endif
     }
 
     public convenience init(
@@ -417,7 +436,263 @@ public final class IOSApplicationModel: ObservableObject {
         Task { await client.reconnectNow() }
     }
 
-    /// Saves an endpoint and persistently stores both access_token and refresh_token.
+    // MARK: - Route Management & Probing
+
+    public static func probeDirectReachable(
+        url: String,
+        expectedHostID: String? = nil,
+        timeout: TimeInterval = 0.8
+    ) async -> (reachable: Bool, hostID: String?) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed) else {
+            return (false, nil)
+        }
+        let currentScheme = components.scheme?.lowercased() ?? "http"
+        components.scheme = (currentScheme == "wss" || currentScheme == "https") ? "https" : "http"
+        components.path = "/healthz"
+        components.query = nil
+        components.fragment = nil
+        guard let probeURL = components.url else { return (false, nil) }
+
+        var request = URLRequest(url: probeURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
+        let probeSession = URLSession(configuration: config)
+
+        do {
+            let (data, response) = try await probeSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return (false, nil)
+            }
+            struct HealthzPayload: Decodable {
+                let ok: Bool?
+                let ready: Bool?
+                let host_id: String?
+                let host_name: String?
+            }
+            if let decoded = try? JSONDecoder().decode(HealthzPayload.self, from: data),
+               decoded.ok == true {
+                if let expected = expectedHostID, !expected.isEmpty, let hostID = decoded.host_id, !hostID.isEmpty {
+                    if hostID != expected {
+                        return (false, hostID)
+                    }
+                }
+                return (true, decoded.host_id)
+            }
+            return (true, nil)
+        } catch {
+            return (false, nil)
+        }
+    }
+
+    public func resolveActiveRoute(
+        for config: WarrenRemoteEndpointConfiguration
+    ) async -> (url: String, type: String, token: String) {
+        let preference = config.routePreference ?? "auto"
+        let directURL = config.effectiveDirectURL
+        let relayURL = config.effectiveRelayURL
+        let directToken = localStore.keychain.read(account: "\(config.name).direct")
+            ?? (!config.isRelay ? config.token : "")
+        let relayToken = localStore.keychain.read(account: "\(config.name).relay")
+            ?? (config.isRelay ? config.token : "")
+
+        if preference == "direct" {
+            if let directURL, !directURL.isEmpty {
+                return (directURL, "daemon", directToken)
+            }
+        } else if preference == "relay" {
+            if let relayURL, !relayURL.isEmpty {
+                return (relayURL, "relay", relayToken)
+            }
+        } else {
+            // Auto mode: if both exist, probe direct LAN
+            if let directURL, !directURL.isEmpty, let relayURL, !relayURL.isEmpty {
+                let probe = await Self.probeDirectReachable(url: directURL, expectedHostID: config.hostID)
+                if probe.reachable {
+                    return (directURL, "daemon", directToken)
+                } else {
+                    return (relayURL, "relay", relayToken)
+                }
+            } else if let directURL, !directURL.isEmpty {
+                return (directURL, "daemon", directToken)
+            } else if let relayURL, !relayURL.isEmpty {
+                return (relayURL, "relay", relayToken)
+            }
+        }
+        return (config.url, config.type, config.token)
+    }
+
+    public func switchActiveRoute(to routeType: String, for hostName: String) {
+        guard let current = localStore.endpoint(named: hostName) else { return }
+        let isRelayTarget = routeType.lowercased() == "relay"
+        let targetURL = isRelayTarget
+            ? current.effectiveRelayURL
+            : current.effectiveDirectURL
+        guard let targetURL, !targetURL.isEmpty else { return }
+        let targetToken = isRelayTarget
+            ? (localStore.keychain.read(account: "\(hostName).relay") ?? (current.isRelay ? current.token : ""))
+            : (localStore.keychain.read(account: "\(hostName).direct") ?? (!current.isRelay ? current.token : ""))
+        let newType = isRelayTarget ? "relay" : "daemon"
+
+        let updated = current.withActiveRoute(url: targetURL, type: newType, token: targetToken)
+        localStore.saveEndpoint(updated, activate: hostName == endpointMetadata.name)
+        if hostName == endpointMetadata.name {
+            activateEndpoint(updated, shouldRestart: true, isSameHost: true)
+        } else {
+            endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
+        }
+    }
+
+    public func updateRoutePreference(for hostName: String, preference: String) {
+        guard let current = localStore.endpoint(named: hostName) else { return }
+        let updated = current.withRouteDetails(routePreference: preference)
+        localStore.saveEndpoint(updated, activate: hostName == endpointMetadata.name)
+        if hostName == endpointMetadata.name {
+            endpointMetadata = IOSEndpointMetadata(configuration: updated)
+            endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
+            Task {
+                await evaluateAutoRoute()
+            }
+        } else {
+            endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
+        }
+    }
+
+    public func evaluateAutoRoute() async {
+        guard let current = localStore.endpoint(named: endpointMetadata.name),
+              (current.routePreference ?? "auto") == "auto",
+              let directURL = current.effectiveDirectURL, !directURL.isEmpty else { return }
+
+        let probe = await Self.probeDirectReachable(url: directURL, expectedHostID: current.hostID)
+        if probe.reachable && current.isRelay {
+            // Direct LAN is reachable! Promote from Relay
+            switchActiveRoute(to: "direct", for: current.name)
+        } else if !probe.reachable && !current.isRelay, let relayURL = current.effectiveRelayURL, !relayURL.isEmpty {
+            // LAN lost, fallback to Relay
+            switchActiveRoute(to: "relay", for: current.name)
+        }
+    }
+
+    private func checkAutoFallbackToRelay() {
+        guard let current = localStore.endpoint(named: endpointMetadata.name),
+              (current.routePreference ?? "auto") == "auto",
+              !current.isRelay,
+              let relayURL = current.effectiveRelayURL, !relayURL.isEmpty else {
+            return
+        }
+        switchActiveRoute(to: "relay", for: current.name)
+    }
+
+#if canImport(Network)
+    private func handleNetworkPathUpdate(_ path: NWPath) {
+        guard path.status == .satisfied else { return }
+        let config = localStore.endpoint(named: endpointMetadata.name)
+        guard let config,
+              (config.routePreference ?? "auto") == "auto",
+              config.hasBothRoutes,
+              config.isRelay else { return }
+        Task {
+            await self.evaluateAutoRoute()
+        }
+    }
+#endif
+
+    // MARK: - Host Management & Persistence
+
+    /// Saves an endpoint and persistently stores tokens across routes.
+    @discardableResult
+    public func saveEndpoint(
+        name: String,
+        url: String,
+        token: String? = nil,
+        refreshToken: String? = nil,
+        type: String? = nil,
+        hostID: String? = nil,
+        routeID: String? = nil,
+        directURL: String? = nil,
+        relayURL: String? = nil,
+        routePreference: String? = nil,
+        replacingEndpointName: String? = nil,
+        isSameHost: Bool = false
+    ) -> Bool {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else {
+            endpointError = "Host name is required."
+            return false
+        }
+        if let duplicate = localStore.endpoint(named: normalizedName),
+           duplicate.name != replacingEndpointName {
+            endpointError = "A Host with this name already exists."
+            return false
+        }
+        let existing = replacingEndpointName.flatMap { localStore.endpoint(named: $0) }
+        let retainedToken = replacingEndpointName == nil
+            ? ""
+            : (existing?.token ?? endpointToken)
+        let resolvedToken = token ?? retainedToken
+        let normalizedExistingURL = existing?.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keepsRelayRoute = existing?.isRelay == true && normalizedExistingURL == normalizedURL
+        let resolvedType = type ?? (keepsRelayRoute ? "relay" : "daemon")
+        let isRelay = resolvedType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+        let retainsRelayRoute = isRelay || keepsRelayRoute || (relayURL != nil && !relayURL!.isEmpty)
+        let resolvedHostID = retainsRelayRoute ? (hostID ?? existing?.hostID) : hostID
+        let resolvedRouteID = isRelay ? (routeID ?? existing?.routeID) : nil
+
+        let resolvedDirectURL = directURL ?? existing?.effectiveDirectURL ?? (!isRelay ? normalizedURL : nil)
+        let resolvedRelayURL = relayURL ?? (retainsRelayRoute ? existing?.effectiveRelayURL : nil)
+        let resolvedPreference = routePreference ?? existing?.routePreference ?? "auto"
+
+        let configuration = WarrenRemoteEndpointConfiguration(
+            name: normalizedName,
+            url: normalizedURL,
+            token: resolvedToken,
+            ssh: existing?.ssh,
+            type: resolvedType,
+            hostID: resolvedHostID,
+            routeID: resolvedRouteID,
+            refreshToken: refreshToken ?? existing?.refreshToken,
+            directURL: resolvedDirectURL,
+            relayURL: resolvedRelayURL,
+            routePreference: resolvedPreference
+        )
+        guard configuration.webSocketURL != nil else {
+            endpointError = "Enter a valid http(s) or ws(s) Host URL."
+            return false
+        }
+
+        localStore.saveEndpoint(
+            configuration,
+            replacingName: replacingEndpointName,
+            activate: true
+        )
+        if !resolvedToken.isEmpty {
+            if isRelay {
+                _ = localStore.keychain.write(resolvedToken, account: "\(normalizedName).relay")
+            } else {
+                _ = localStore.keychain.write(resolvedToken, account: "\(normalizedName).direct")
+            }
+        }
+        if let refreshToken, !refreshToken.isEmpty {
+            _ = localStore.keychain.write(refreshToken, account: "\(normalizedName).refresh")
+        }
+        if let replacingEndpointName, replacingEndpointName != normalizedName {
+            _ = localStore.keychain.remove(account: "\(replacingEndpointName).refresh")
+            _ = localStore.keychain.remove(account: "\(replacingEndpointName).direct")
+            _ = localStore.keychain.remove(account: "\(replacingEndpointName).relay")
+        }
+        let sameHost = isSameHost || (existing != nil && (existing?.name == normalizedName || (existing?.hostID != nil && existing?.hostID == resolvedHostID)))
+        activateEndpoint(configuration, shouldRestart: eventTask != nil, isSameHost: sameHost)
+        return true
+    }
+
+    /// Convenience overload for saveEndpoint.
     @discardableResult
     public func saveEndpoint(
         name: String,
@@ -450,7 +725,10 @@ public final class IOSApplicationModel: ObservableObject {
         refreshToken: String? = nil,
         type: String? = nil,
         hostID: String? = nil,
-        routeID: String? = nil
+        routeID: String? = nil,
+        directURL: String? = nil,
+        relayURL: String? = nil,
+        routePreference: String? = nil
     ) -> Bool {
         saveEndpoint(
             name: name,
@@ -460,96 +738,30 @@ public final class IOSApplicationModel: ObservableObject {
             type: type,
             hostID: hostID,
             routeID: routeID,
-            replacingEndpointName: nil
+            directURL: directURL,
+            relayURL: relayURL,
+            routePreference: routePreference,
+            replacingEndpointName: nil,
+            isSameHost: false
         )
-    }
-    
-    /// Persists with separate refresh token storage.
-    @discardableResult
-    public func saveEndpoint(
-        name: String,
-        url: String,
-        token: String? = nil,
-        refreshToken: String? = nil,
-        type: String? = nil,
-        hostID: String? = nil,
-        routeID: String? = nil,
-        replacingEndpointName: String?
-    ) -> Bool {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedName.isEmpty else {
-            endpointError = "Host name is required."
-            return false
-        }
-        if let duplicate = localStore.endpoint(named: normalizedName),
-           duplicate.name != replacingEndpointName {
-            endpointError = "A Host with this name already exists."
-            return false
-        }
-        let existing = replacingEndpointName.flatMap { localStore.endpoint(named: $0) }
-        let retainedToken = replacingEndpointName == nil
-            ? ""
-            : (existing?.token ?? endpointToken)
-        let resolvedToken = token ?? retainedToken
-        // A manually edited URL is an explicit switch back to a direct Host.
-        // Preserve Relay routing only when the user is saving the same Relay
-        // base (or when pairing supplies the type explicitly); otherwise a
-        // stale host ID would make an ordinary LAN URL point at /h/<old-id>.
-        let normalizedExistingURL = existing?.url.trimmingCharacters(in: .whitespacesAndNewlines)
-        let keepsRelayRoute = existing?.isRelay == true && normalizedExistingURL == normalizedURL
-        let resolvedType = type ?? (keepsRelayRoute ? "relay" : "daemon")
-        let isRelay = resolvedType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
-        let resolvedHostID = isRelay
-            ? (hostID ?? existing?.hostID)
-            : nil
-        let resolvedRouteID = isRelay
-            ? (routeID ?? existing?.routeID)
-            : nil
-        let configuration = WarrenRemoteEndpointConfiguration(
-            name: normalizedName,
-            url: normalizedURL,
-            token: resolvedToken,
-            ssh: existing?.ssh,
-            type: resolvedType,
-            hostID: resolvedHostID,
-            routeID: resolvedRouteID,
-            refreshToken: refreshToken ?? existing?.refreshToken
-        )
-        guard configuration.webSocketURL != nil else {
-            endpointError = "Enter a valid http(s) or ws(s) Host URL."
-            return false
-        }
-
-        localStore.saveEndpoint(
-            configuration,
-            replacingName: replacingEndpointName,
-            activate: true
-        )
-        if let refreshToken, !refreshToken.isEmpty {
-            _ = localStore.keychain.write(refreshToken, account: "\(normalizedName).refresh")
-        }
-        if let replacingEndpointName, replacingEndpointName != normalizedName {
-            _ = localStore.keychain.remove(account: "\(replacingEndpointName).refresh")
-        }
-        activateEndpoint(configuration, shouldRestart: eventTask != nil)
-        return true
     }
 
     /// Switches the active transport to a saved Host from the list.
     public func selectEndpoint(named name: String) {
         guard let configuration = localStore.endpoint(named: name) else { return }
-        guard configuration.name != endpointMetadata.name else {
-            _ = localStore.activateEndpoint(named: name)
-            return
-        }
+        let isSame = configuration.name == endpointMetadata.name
         guard localStore.activateEndpoint(named: name) else { return }
-        // Always restart connection when switching hosts
-        activateEndpoint(configuration, shouldRestart: true)
+        Task {
+            let resolved = await resolveActiveRoute(for: configuration)
+            let activeConfig = configuration.withActiveRoute(url: resolved.url, type: resolved.type, token: resolved.token)
+            localStore.saveEndpoint(activeConfig, activate: true)
+            await MainActor.run {
+                activateEndpoint(activeConfig, shouldRestart: true, isSameHost: isSame)
+            }
+        }
     }
 
-    /// Removes a saved Host. The active transport moves to the next available
-    /// item so a connected model never loses its client configuration.
+    /// Removes a saved Host.
     @discardableResult
     public func removeEndpoint(named name: String) -> Bool {
         let values = localStore.endpoints
@@ -566,7 +778,8 @@ public final class IOSApplicationModel: ObservableObject {
 
     private func activateEndpoint(
         _ configuration: WarrenRemoteEndpointConfiguration,
-        shouldRestart: Bool
+        shouldRestart: Bool,
+        isSameHost: Bool = false
     ) {
         connectionRequested = shouldRestart
         didEnterBackground = false
@@ -578,7 +791,6 @@ public final class IOSApplicationModel: ObservableObject {
         eventTask = nil
         sessionTask?.cancel()
         sessionTask = nil
-        sessionSelectionGeneration &+= 1
         mutationGeneration &+= 1
         clientGeneration &+= 1
         hasReceivedAuthoritativeRoster = false
@@ -606,6 +818,11 @@ public final class IOSApplicationModel: ObservableObject {
             },
             tokenUpdateHandler: { [localStore] accessToken, refreshToken in
                 _ = localStore.keychain.write(accessToken, account: configuration.name)
+                if configuration.isRelay {
+                    _ = localStore.keychain.write(accessToken, account: "\(configuration.name).relay")
+                } else {
+                    _ = localStore.keychain.write(accessToken, account: "\(configuration.name).direct")
+                }
                 if let refreshToken, !refreshToken.isEmpty {
                     _ = localStore.keychain.write(refreshToken, account: "\(configuration.name).refresh")
                 }
@@ -617,40 +834,50 @@ public final class IOSApplicationModel: ObservableObject {
         endpointError = nil
         mutationError = nil
         connectionError = nil
-        // Keep the persisted navigation as a restore hint, but do not expose
-        // resources from the previous Host while the new roster is loading.
-        roster = localStore.cachedRoster(endpointName: configuration.name, endpointURL: configuration.url)
-        currentSessionID = nil
-        sessionDeletionDestination = nil
-        pendingSessionDeletion = nil
-        hasControlLease = false
-        terminalState.reset()
-        agentState.reset()
-        agentStatusBySessionID = [:]
-        agentTurnBySessionID = [:]
-        agentCapabilities = []
-        agentActionError = nil
-        displayModeBySessionID = [:]
-        agentQueuedMessageCountBySessionID = [:]
-        agentQueueBySessionID = [:]
-        pendingAgentMessagesBySessionID = [:]
-        agentMessageSubmissionsInFlight = []
-        agentMessageSubmissionTokenBySessionID = [:]
-        agentInterruptInFlightBySessionID = [:]
-        invalidatedAgentDraftKeys = []
-        agentEpochBySessionID = [:]
-        agentEventKeysBySessionID = [:]
-        agentSubscribedSessionIDs = []
-        agentHighestSequenceBySessionID = [:]
-        historyCursorBySessionID = [:]
-        historyHasMoreBySessionID = [:]
-        draftSaveTasksBySessionID.values.forEach { $0.cancel() }
-        draftSaveTasksBySessionID = [:]
+
+        // Clear in-flight subscription registrations so new connection re-subscribes cleanly
+        agentSubscribedSessionIDs.removeAll()
+        terminalSubscriptionRequests.removeAll()
         historyLoadingBySessionID = []
-        historyLoadedBySessionID = []
-        terminalSubscriptionRequests = []
-        pendingTerminalFocusBySessionID = []
-        terminalRecoveryRequests = []
+
+        if !isSameHost {
+            sessionSelectionGeneration &+= 1
+            roster = localStore.cachedRoster(endpointName: configuration.name, endpointURL: configuration.url)
+            currentSessionID = nil
+            sessionDeletionDestination = nil
+            pendingSessionDeletion = nil
+            hasControlLease = false
+            terminalState.reset()
+            agentState.reset()
+            agentStatusBySessionID = [:]
+            agentTurnBySessionID = [:]
+            agentCapabilities = []
+            agentActionError = nil
+            displayModeBySessionID = [:]
+            agentQueuedMessageCountBySessionID = [:]
+            agentQueueBySessionID = [:]
+            pendingAgentMessagesBySessionID = [:]
+            agentMessageSubmissionsInFlight = []
+            agentMessageSubmissionTokenBySessionID = [:]
+            agentInterruptInFlightBySessionID = [:]
+            invalidatedAgentDraftKeys = []
+            agentEpochBySessionID = [:]
+            agentEventKeysBySessionID = [:]
+            agentHighestSequenceBySessionID = [:]
+            historyCursorBySessionID = [:]
+            historyHasMoreBySessionID = [:]
+            draftSaveTasksBySessionID.values.forEach { $0.cancel() }
+            draftSaveTasksBySessionID = [:]
+            historyLoadedBySessionID = []
+            pendingTerminalFocusBySessionID = []
+            terminalRecoveryRequests = []
+        } else {
+            // Same host! Preserve currentSessionID, transcript, drafts, queue, terminal screen!
+            if let currentSessionID {
+                terminalSubscriptionRequests.insert(currentSessionID)
+                terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
+            }
+        }
         maintenanceMessage = nil
         connectionState = shouldRestart ? .connecting : .stopped
         if shouldRestart {
@@ -659,11 +886,7 @@ public final class IOSApplicationModel: ObservableObject {
     }
 
     /// Exchanges a shareable Relay URL (normally obtained from a QR code) and
-    /// adds the resulting host-scoped Relay configuration. The URLSession is
-    /// shared with WarrenRemoteClient so the Relay refresh cookie survives the
-    /// subsequent WebSocket connection. Re-pairing the same Relay Host updates
-    /// its saved credential; a different Host receives a local, non-sensitive
-    /// display name.
+    /// adds the resulting host-scoped Relay configuration.
     public func pairRelay(from url: URL, replacingEndpointName: String? = nil) {
         guard !isPairingRelay else { return }
         isPairingRelay = true
@@ -688,18 +911,49 @@ public final class IOSApplicationModel: ObservableObject {
                     if let refreshToken = exchange.refreshToken {
                         _ = self.localStore.keychain.write(refreshToken, account: "\(target.name).refresh")
                     }
-                    let saved = self.saveEndpoint(
-                        name: target.name,
-                        url: pairing.relayURL,
-                        token: exchange.accessToken,
-                        type: "relay",
-                        hostID: exchange.hostID,
-                        replacingEndpointName: target.replacingName
-                    )
-                    if !saved {
-                        self.endpointError = "Relay pairing returned an invalid Host endpoint."
+                    _ = self.localStore.keychain.write(exchange.accessToken, account: "\(target.name).relay")
+
+                    let existing = target.replacingName.flatMap { self.localStore.endpoint(named: $0) }
+                    let directURL = existing?.effectiveDirectURL
+                    let directToken = self.localStore.keychain.read(account: "\(target.name).direct")
+                        ?? (existing?.isRelay == false ? existing?.token : "")
+
+                    let preference = existing?.routePreference ?? "auto"
+                    Task {
+                        var activeURL = pairing.relayURL
+                        var activeType = "relay"
+                        var activeToken = exchange.accessToken
+
+                        if preference == "auto", let directURL, !directURL.isEmpty {
+                            let probe = await Self.probeDirectReachable(url: directURL, expectedHostID: exchange.hostID)
+                            if probe.reachable {
+                                activeURL = directURL
+                                activeType = "daemon"
+                                activeToken = directToken ?? ""
+                            }
+                        }
+
+                        let isSame = existing?.name == self.endpointMetadata.name
+                        await MainActor.run {
+                            let saved = self.saveEndpoint(
+                                name: target.name,
+                                url: activeURL,
+                                token: activeToken,
+                                refreshToken: exchange.refreshToken,
+                                type: activeType,
+                                hostID: exchange.hostID,
+                                directURL: directURL,
+                                relayURL: pairing.relayURL,
+                                routePreference: preference,
+                                replacingEndpointName: target.replacingName,
+                                isSameHost: isSame
+                            )
+                            if !saved {
+                                self.endpointError = "Relay pairing returned an invalid Host endpoint."
+                            }
+                            self.isPairingRelay = false
+                        }
                     }
-                    self.isPairingRelay = false
                 }
             } catch {
                 await MainActor.run {
@@ -712,9 +966,7 @@ public final class IOSApplicationModel: ObservableObject {
     }
 
     /// Resolves a stable local label for a scanned Relay Host without copying
-    /// the Relay address or Host ID into the UI. Existing matching entries are
-    /// replaced so rescanning rotates their access capability instead of
-    /// creating a duplicate row.
+    /// the Relay address or Host ID into the UI.
     private func relayPairingTarget(
         hostID: String,
         relayURL: String,
@@ -726,14 +978,18 @@ public final class IOSApplicationModel: ObservableObject {
         }
 
         if let existing = localStore.endpoints.first(where: { endpoint in
-            endpoint.isRelay
-                && endpoint.hostID == hostID
-                && normalizedRelayURL(endpoint.url) == normalizedRelayURL(relayURL)
+            endpoint.hostID == hostID
         }) {
             return (existing.name, existing.name)
         }
 
-        let baseName = "Relay Host"
+        if localStore.endpoints.count == 1,
+           let onlyEndpoint = localStore.endpoints.first,
+           onlyEndpoint.relayURL == nil {
+            return (onlyEndpoint.name, onlyEndpoint.name)
+        }
+
+        let baseName = "Warren Host"
         let existingNames = Set(localStore.endpoints.map(\.name))
         if !existingNames.contains(baseName) {
             return (baseName, nil)
@@ -2726,12 +2982,20 @@ public final class IOSApplicationModel: ObservableObject {
             if state == .connected {
                 connectionError = nil
                 retryLiveActivityPushTokenRegistrations()
+                if let currentSessionID {
+                    terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
+                    ensureTerminalSubscription(for: currentSessionID)
+                    if roster?.sessions.first(where: { $0.id == currentSessionID })?.isAgentBacked == true {
+                        ensureAgentSubscribed(for: currentSessionID)
+                    }
+                }
             }
             if state != .connected {
                 hasReceivedAuthoritativeRoster = false
                 hasControlLease = false
                 terminalFocusGeneration &+= 1
                 terminalFocusRequestsBySessionID.removeAll()
+                agentSubscribedSessionIDs.removeAll()
                 if let currentSessionID {
                     invalidateAgentMessageSubmission(for: currentSessionID)
                     agentInterruptInFlightBySessionID.removeValue(forKey: currentSessionID)
@@ -2743,6 +3007,9 @@ public final class IOSApplicationModel: ObservableObject {
                     terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
                     terminalSubscriptionRequests.insert(currentSessionID)
                     terminalRecoveryRequests.remove(currentSessionID)
+                }
+                if state == .disconnected {
+                    checkAutoFallbackToRelay()
                 }
             }
             syncLiveActivity()
@@ -3067,6 +3334,13 @@ public final class IOSApplicationModel: ObservableObject {
                 endpointIdentity: "\(endpointMetadata.name)|\(endpointMetadata.url)"
             )
         }
+        if let currentEndpoint = localStore.endpoint(named: endpointMetadata.name),
+           currentEndpoint.hostID != next.host.id {
+            let updated = currentEndpoint.withRouteDetails(hostID: next.host.id)
+            localStore.saveEndpoint(updated, activate: true)
+            endpointMetadata = IOSEndpointMetadata(configuration: updated)
+            endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
+        }
         roster = next
         localStore.cacheRoster(next, endpointName: endpointMetadata.name, endpointURL: endpointMetadata.url)
         maintenanceMessage = nil
@@ -3078,6 +3352,13 @@ public final class IOSApplicationModel: ObservableObject {
             if let turn = session.agentTurn { agentTurnBySessionID[session.id] = turn }
             if let capabilities = session.agentCapabilities {
                 agentCapabilitiesBySessionID[session.id] = Set(capabilities)
+            }
+        }
+        if let currentSessionID {
+            if next.sessions.first(where: { $0.id == currentSessionID })?.isAgentBacked == true {
+                ensureAgentSubscribed(for: currentSessionID)
+            } else {
+                ensureTerminalSubscription(for: currentSessionID)
             }
         }
         selectPendingSessionIfPresent()

@@ -37,12 +37,35 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let hostID: String?
     public let routeID: String?
     public let refreshToken: String?  // OAuth2 refresh token for Relay
+    public let directURL: String?
+    public let relayURL: String?
+    public let routePreference: String? // "auto", "direct", "relay"
 
     /// Returns a copy with a rotated Relay capability. Native clients use
     /// this when restoring a persisted endpoint after an app reinstall.
     public func withTokens(token: String, refreshToken: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken)
+             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken,
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+    }
+
+    public func withActiveRoute(url: String, type: String, token: String) -> Self {
+        Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
+             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken,
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+    }
+
+    public func withRouteDetails(
+        directURL: String? = nil,
+        relayURL: String? = nil,
+        routePreference: String? = nil,
+        hostID: String? = nil
+    ) -> Self {
+        Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
+             type: type, hostID: hostID ?? self.hostID, routeID: routeID, refreshToken: refreshToken,
+             directURL: directURL ?? self.directURL,
+             relayURL: relayURL ?? self.relayURL,
+             routePreference: routePreference ?? self.routePreference)
     }
     
     public init(
@@ -54,7 +77,10 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         type: String = "daemon",
         hostID: String? = nil,
         routeID: String? = nil,
-        refreshToken: String? = nil
+        refreshToken: String? = nil,
+        directURL: String? = nil,
+        relayURL: String? = nil,
+        routePreference: String? = nil
     ) {
         self.name = name
         self.url = url
@@ -65,12 +91,27 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         self.hostID = hostID
         self.routeID = routeID
         self.refreshToken = refreshToken
+        self.directURL = directURL
+        self.relayURL = relayURL
+        self.routePreference = routePreference
     }
 
     public var id: String { name }
 
     public var isRelay: Bool {
         type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+    }
+
+    public var effectiveDirectURL: String? {
+        directURL ?? (!isRelay ? url : nil)
+    }
+
+    public var effectiveRelayURL: String? {
+        relayURL ?? (isRelay ? url : nil)
+    }
+
+    public var hasBothRoutes: Bool {
+        effectiveDirectURL != nil && effectiveRelayURL != nil
     }
 
     /// Converts the configured endpoint to the WebSocket URL exposed by
@@ -146,6 +187,9 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         case hostID = "host_id"
         case routeID = "route_id"
         case refreshToken = "refresh_token"
+        case directURL = "direct_url"
+        case relayURL = "relay_url"
+        case routePreference = "route_preference"
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,7 +203,10 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
             type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
             hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
             routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
-            refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken)
+            refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken),
+            directURL: try values.decodeIfPresent(String.self, forKey: .directURL),
+            relayURL: try values.decodeIfPresent(String.self, forKey: .relayURL),
+            routePreference: try values.decodeIfPresent(String.self, forKey: .routePreference)
         )
     }
 }

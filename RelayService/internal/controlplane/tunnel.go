@@ -286,7 +286,10 @@ func (tunnel *hostTunnel) sendStreamContext(ctxDone <-chan struct{}, id connecti
 	if route == nil {
 		return errors.New("stream not found")
 	}
-	if frame.Kind == frameData || frame.Kind == frameText || frame.Kind == frameBinary {
+	// Control streams have a bounded route queue and use the control writer
+	// lane. Do not make their RPC/input responses wait for the public HTTP body
+	// window: a paused browser must not hold Host control traffic for 60s.
+	if route.public || frame.Kind == frameData {
 		credit := uint64(len(frame.Payload))
 		if credit > initialStreamWindow {
 			route.close()

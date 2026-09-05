@@ -43,13 +43,18 @@ public enum IOSSessionScopeDestination: Equatable, Sendable {
 /// Non-secret endpoint information exposed to the settings UI. The token is
 /// intentionally represented only by a presence flag; its value remains in
 /// the Keychain and is never published through SwiftUI state.
-public struct IOSEndpointMetadata: Equatable, Sendable {
+public struct IOSEndpointMetadata: Equatable, Sendable, Identifiable {
     public let name: String
     public let url: String
     public let hasToken: Bool
     public let type: String
     public let hostID: String?
     public let routeID: String?
+    public let directURL: String?
+    public let relayURL: String?
+    public let routePreference: String
+
+    public var id: String { name }
 
     public init(
         name: String,
@@ -57,7 +62,10 @@ public struct IOSEndpointMetadata: Equatable, Sendable {
         hasToken: Bool = false,
         type: String = "daemon",
         hostID: String? = nil,
-        routeID: String? = nil
+        routeID: String? = nil,
+        directURL: String? = nil,
+        relayURL: String? = nil,
+        routePreference: String = "auto"
     ) {
         self.name = name
         self.url = url
@@ -65,6 +73,9 @@ public struct IOSEndpointMetadata: Equatable, Sendable {
         self.type = type
         self.hostID = hostID
         self.routeID = routeID
+        self.directURL = directURL
+        self.relayURL = relayURL
+        self.routePreference = routePreference
     }
 
     public init(configuration: WarrenRemoteEndpointConfiguration) {
@@ -74,12 +85,31 @@ public struct IOSEndpointMetadata: Equatable, Sendable {
             hasToken: !configuration.token.isEmpty,
             type: configuration.type,
             hostID: configuration.hostID,
-            routeID: configuration.routeID
+            routeID: configuration.routeID,
+            directURL: configuration.directURL ?? (!configuration.isRelay ? configuration.url : nil),
+            relayURL: configuration.relayURL ?? (configuration.isRelay ? configuration.url : nil),
+            routePreference: configuration.routePreference ?? "auto"
         )
     }
 
     public var isRelay: Bool {
         type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+    }
+
+    public var effectiveDirectURL: String? {
+        directURL ?? (!isRelay ? url : nil)
+    }
+
+    public var effectiveRelayURL: String? {
+        relayURL ?? (isRelay ? url : nil)
+    }
+
+    public var hasBothRoutes: Bool {
+        effectiveDirectURL != nil && effectiveRelayURL != nil
+    }
+
+    public var activeRouteLabel: String {
+        isRelay ? "Relay" : "Direct LAN"
     }
 }
 
@@ -313,13 +343,25 @@ public final class IOSLocalStore: @unchecked Sendable {
         if let replacingName, replacingName != value.name {
             _ = keychain.remove(account: replacingName)
             _ = keychain.remove(account: "\(replacingName).refresh")
+            _ = keychain.remove(account: "\(replacingName).direct")
+            _ = keychain.remove(account: "\(replacingName).relay")
         }
         if !value.token.isEmpty {
             _ = keychain.write(value.token, account: value.name)
+            if value.isRelay {
+                _ = keychain.write(value.token, account: "\(value.name).relay")
+            } else {
+                _ = keychain.write(value.token, account: "\(value.name).direct")
+            }
         } else {
             // Saving an endpoint without credentials is an explicit logout
             // for that account; do not leave an older token behind.
             _ = keychain.remove(account: value.name)
+            if value.isRelay {
+                _ = keychain.remove(account: "\(value.name).relay")
+            } else {
+                _ = keychain.remove(account: "\(value.name).direct")
+            }
         }
         if activate {
             setActiveEndpointName(value.name)
@@ -344,6 +386,8 @@ public final class IOSLocalStore: @unchecked Sendable {
         writeEndpoints(values)
         _ = keychain.remove(account: name)
         _ = keychain.remove(account: "\(name).refresh")
+        _ = keychain.remove(account: "\(name).direct")
+        _ = keychain.remove(account: "\(name).relay")
         if activeEndpointName() == name {
             if let replacement = values.first?.name {
                 setActiveEndpointName(replacement)
@@ -388,6 +432,32 @@ public final class IOSLocalStore: @unchecked Sendable {
 
     public func clearToken(for endpointName: String) {
         _ = keychain.remove(account: endpointName)
+        _ = keychain.remove(account: "\(endpointName).direct")
+        _ = keychain.remove(account: "\(endpointName).relay")
+    }
+
+    public func directToken(for endpointName: String) -> String? {
+        keychain.read(account: "\(endpointName).direct")
+    }
+
+    public func relayToken(for endpointName: String) -> String? {
+        keychain.read(account: "\(endpointName).relay")
+    }
+
+    public func saveDirectToken(_ token: String, for endpointName: String) {
+        if !token.isEmpty {
+            _ = keychain.write(token, account: "\(endpointName).direct")
+        } else {
+            _ = keychain.remove(account: "\(endpointName).direct")
+        }
+    }
+
+    public func saveRelayToken(_ token: String, for endpointName: String) {
+        if !token.isEmpty {
+            _ = keychain.write(token, account: "\(endpointName).relay")
+        } else {
+            _ = keychain.remove(account: "\(endpointName).relay")
+        }
     }
 
     // Kept internal so feature-specific stores can share the same
@@ -421,6 +491,9 @@ public final class IOSLocalStore: @unchecked Sendable {
         let type: String
         let hostID: String?
         let routeID: String?
+        let directURL: String?
+        let relayURL: String?
+        let routePreference: String?
         // Note: refreshToken is stored separately in Keychain, not here
         // Keep the field for backwards compatibility but always ignored
         let _refreshToken: String?  // internal use only
@@ -432,6 +505,9 @@ public final class IOSLocalStore: @unchecked Sendable {
             type: String = "daemon",
             hostID: String? = nil,
             routeID: String? = nil,
+            directURL: String? = nil,
+            relayURL: String? = nil,
+            routePreference: String? = nil,
             _refreshToken: String? = nil
         ) {
             self.name = name
@@ -440,11 +516,14 @@ public final class IOSLocalStore: @unchecked Sendable {
             self.type = type
             self.hostID = hostID
             self.routeID = routeID
+            self.directURL = directURL
+            self.relayURL = relayURL
+            self.routePreference = routePreference
             self._refreshToken = _refreshToken
         }
 
         private enum CodingKeys: String, CodingKey {
-            case name, url, ssh, type, hostID, routeID, _refreshToken = "refreshToken"
+            case name, url, ssh, type, hostID, routeID, directURL, relayURL, routePreference, _refreshToken = "refreshToken"
         }
 
         init(from decoder: Decoder) throws {
@@ -456,6 +535,9 @@ public final class IOSLocalStore: @unchecked Sendable {
                 type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
                 hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
                 routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
+                directURL: try values.decodeIfPresent(String.self, forKey: .directURL),
+                relayURL: try values.decodeIfPresent(String.self, forKey: .relayURL),
+                routePreference: try values.decodeIfPresent(String.self, forKey: .routePreference),
                 _refreshToken: try values.decodeIfPresent(String.self, forKey: ._refreshToken)
             )
         }
@@ -495,15 +577,22 @@ public final class IOSLocalStore: @unchecked Sendable {
     }
 
     private func configuration(from value: StoredEndpoint) -> WarrenRemoteEndpointConfiguration {
-        WarrenRemoteEndpointConfiguration(
+        let isRelay = value.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
+        let activeToken = keychain.read(account: value.name)
+            ?? (isRelay ? keychain.read(account: "\(value.name).relay") : keychain.read(account: "\(value.name).direct"))
+            ?? ""
+        return WarrenRemoteEndpointConfiguration(
             name: value.name,
             url: value.url,
-            token: keychain.read(account: value.name) ?? "",
+            token: activeToken,
             ssh: value.ssh,
             type: value.type,
             hostID: value.hostID,
             routeID: value.routeID,
-            refreshToken: keychain.read(account: "\(value.name).refresh")
+            refreshToken: keychain.read(account: "\(value.name).refresh"),
+            directURL: value.directURL,
+            relayURL: value.relayURL,
+            routePreference: value.routePreference
         )
     }
     
@@ -515,7 +604,10 @@ public final class IOSLocalStore: @unchecked Sendable {
                 ssh: $0.ssh,
                 type: $0.type,
                 hostID: $0.hostID,
-                routeID: $0.routeID
+                routeID: $0.routeID,
+                directURL: $0.directURL,
+                relayURL: $0.relayURL,
+                routePreference: $0.routePreference
                 // Note: refreshToken is NOT stored in JSON, it's kept in Keychain only
             )
         }

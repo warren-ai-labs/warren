@@ -1066,16 +1066,28 @@ private struct IOSEndpointPickerSheet: View {
                                         .foregroundStyle(IOSTheme.text)
                                         .lineLimit(1)
                                     HStack(spacing: 6) {
-                                        Text(host.isRelay ? "Relay" : "Direct")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(host.isRelay ? IOSTheme.amber : IOSTheme.secondaryText)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 1)
-                                            .background(
-                                                (host.isRelay ? IOSTheme.amber : IOSTheme.muted).opacity(0.18),
-                                                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                            )
-                                        Text(host.url)
+                                        if host.hasBothRoutes {
+                                            Text(host.routePreference == "auto" ? "Auto" : (host.isRelay ? "Relay" : "LAN"))
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundStyle(IOSTheme.accent)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(
+                                                    IOSTheme.accent.opacity(0.18),
+                                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                )
+                                        } else {
+                                            Text(host.isRelay ? "Relay" : "Direct")
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundStyle(host.isRelay ? IOSTheme.amber : IOSTheme.secondaryText)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(
+                                                    (host.isRelay ? IOSTheme.amber : IOSTheme.muted).opacity(0.18),
+                                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                )
+                                        }
+                                        Text(host.hasBothRoutes ? "\(host.activeRouteLabel) · \(host.url)" : host.url)
                                             .font(IOSTypography.metadata)
                                             .foregroundStyle(IOSTheme.tertiaryText)
                                             .lineLimit(1)
@@ -2856,6 +2868,22 @@ public struct IOSEndpointConfigurationView: View {
                             .background(IOSTheme.green.opacity(0.12), in: Capsule())
                     }
 
+                    if host.hasBothRoutes {
+                        Text(host.routePreference == "auto" ? "Auto" : (host.isRelay ? "Relay" : "Direct"))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(IOSTheme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(IOSTheme.accent.opacity(0.12), in: Capsule())
+                    } else if host.isRelay {
+                        Text("Relay")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(IOSTheme.amber)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(IOSTheme.amber.opacity(0.12), in: Capsule())
+                    }
+
                     if host.hasToken {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 10, weight: .medium))
@@ -2872,14 +2900,14 @@ public struct IOSEndpointConfigurationView: View {
                         Text("·")
                             .font(IOSTypography.metadata)
                             .foregroundStyle(IOSTheme.tertiaryText)
-                        Text(host.isRelay ? "Relay" : host.url)
+                        Text(host.hasBothRoutes ? "\(host.activeRouteLabel) (\(host.url))" : (host.isRelay ? "Relay" : host.url))
                             .font(IOSTypography.metadata)
                             .foregroundStyle(IOSTheme.secondaryText)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
                 } else {
-                    Text(host.isRelay ? "Relay" : host.url)
+                    Text(host.hasBothRoutes ? "LAN & Relay · \(host.url)" : (host.isRelay ? "Relay" : host.url))
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText)
                         .lineLimit(1)
@@ -2920,14 +2948,19 @@ private struct IOSEndpointDetailView: View {
     let endpoint: IOSEndpointMetadata
     @Environment(\.dismiss) private var dismiss
 
+    private var currentMetadata: IOSEndpointMetadata {
+        model.endpointMetadataList.first(where: { $0.name == endpoint.name })
+            ?? (model.endpointMetadata.name == endpoint.name ? model.endpointMetadata : endpoint)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             IOSBackHeader(
-                title: endpoint.name,
+                title: currentMetadata.name,
                 subtitle: "Host details",
                 actions: AnyView(
                     NavigationLink {
-                        IOSEndpointEditorView(model: model, endpoint: endpoint)
+                        IOSEndpointEditorView(model: model, endpoint: currentMetadata)
                     } label: {
                         Image(systemName: "pencil")
                             .font(.system(size: 15, weight: .medium))
@@ -2936,7 +2969,7 @@ private struct IOSEndpointDetailView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Edit \(endpoint.name)")
+                    .accessibilityLabel("Edit \(currentMetadata.name)")
                 )
             ) {
                 dismiss()
@@ -2944,31 +2977,82 @@ private struct IOSEndpointDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    IOSSectionLabel("Connection")
+                    IOSSectionLabel("Routes")
                         .padding(.top, 25)
                         .padding(.bottom, 9)
                     VStack(spacing: 0) {
-                        endpointDetailRow("Address", value: endpoint.url, machineText: true)
-                        Rectangle()
-                            .fill(IOSTheme.separator.opacity(0.35))
-                            .frame(height: 0.5)
-                            .padding(.leading, 14)
-                        endpointDetailRow("Connection", value: endpoint.isRelay ? "Relay" : "Direct Host")
+                        if let directURL = currentMetadata.effectiveDirectURL {
+                            endpointDetailRow("Direct LAN", value: directURL, machineText: true)
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
+                        }
+                        if let relayURL = currentMetadata.effectiveRelayURL {
+                            endpointDetailRow("Relay", value: relayURL, machineText: true)
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
+                        }
+                        endpointDetailRow("Active Route", value: currentMetadata.activeRouteLabel)
                         Rectangle()
                             .fill(IOSTheme.separator.opacity(0.35))
                             .frame(height: 0.5)
                             .padding(.leading, 14)
                         endpointDetailRow(
                             "Access",
-                            value: endpoint.isRelay
-                                ? (endpoint.hasToken ? "Saved in Keychain" : "Needs pairing")
-                                : (endpoint.hasToken ? "Saved in Keychain" : "Not saved")
+                            value: currentMetadata.hasToken ? "Saved in Keychain" : "Not saved"
                         )
                     }
                     .iosCardSurface()
 
+                    if currentMetadata.hasBothRoutes {
+                        IOSSectionLabel("Route Mode")
+                            .padding(.top, 20)
+                            .padding(.bottom, 9)
+
+                        Picker("Route Mode", selection: Binding(
+                            get: { currentMetadata.routePreference },
+                            set: { newPref in
+                                model.updateRoutePreference(for: currentMetadata.name, preference: newPref)
+                            }
+                        )) {
+                            Text("Auto (LAN first)").tag("auto")
+                            Text("Direct only").tag("direct")
+                            Text("Relay only").tag("relay")
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.bottom, 12)
+
+                        Button {
+                            IOSHaptics.selection()
+                            model.switchActiveRoute(
+                                to: currentMetadata.isRelay ? "direct" : "relay",
+                                for: currentMetadata.name
+                            )
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text(currentMetadata.isRelay ? "Switch to Direct LAN" : "Switch to Relay")
+                            }
+                            .font(IOSTypography.button)
+                            .foregroundStyle(IOSTheme.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(
+                                IOSTheme.cardBackground,
+                                in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                                    .stroke(IOSTheme.separator.opacity(0.4), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     Button {
-                        model.selectEndpoint(named: endpoint.name)
+                        model.selectEndpoint(named: currentMetadata.name)
                     } label: {
                         Text(isActive ? "Current Host" : "Use this Host")
                             .font(IOSTypography.button)
@@ -2993,9 +3077,11 @@ private struct IOSEndpointDetailView: View {
                         .padding(.top, 16)
                     }
 
-                    Text(endpoint.isRelay
-                        ? "Relay routes this Host through the configured control-plane connection."
-                        : "Warren connects to /v1/ws. Use HTTPS/WSS outside your local network.")
+                    Text(currentMetadata.hasBothRoutes
+                        ? "In Auto mode, Warren automatically detects local network reachability and promotes to Direct LAN, falling back to Relay seamlessly outside LAN."
+                        : (currentMetadata.isRelay
+                            ? "Relay routes this Host through the configured control-plane connection."
+                            : "Warren connects to /v1/ws. Use HTTPS/WSS outside your local network."))
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.84))
                         .fixedSize(horizontal: false, vertical: true)
@@ -3013,7 +3099,7 @@ private struct IOSEndpointDetailView: View {
     }
 
     private var isActive: Bool {
-        endpoint.name == model.endpointMetadata.name
+        currentMetadata.name == model.endpointMetadata.name
     }
 
     private func endpointDetailRow(
@@ -3025,7 +3111,7 @@ private struct IOSEndpointDetailView: View {
             Text(label)
                 .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 72, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
             Text(value)
                 .font(machineText ? IOSTypography.metadata : IOSTypography.body)
                 .foregroundStyle(IOSTheme.text)
@@ -3049,12 +3135,14 @@ private struct IOSEndpointEditorView: View {
     let endpoint: IOSEndpointMetadata?
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var url = ""
+    @State private var directURL = ""
+    @State private var relayURL = ""
     @State private var token = ""
+    @State private var routePreference = "auto"
     @State private var didLoad = false
     @FocusState private var focusedField: Field?
 
-    private enum Field { case name, url, token }
+    private enum Field { case name, directURL, relayURL, token }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3066,7 +3154,7 @@ private struct IOSEndpointEditorView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Connection")
+                    Text("Host Configuration")
                         .font(IOSTypography.sectionTitle)
                         .foregroundStyle(IOSTheme.secondaryText)
                         .padding(.top, 25)
@@ -3077,14 +3165,34 @@ private struct IOSEndpointEditorView: View {
                             .fill(IOSTheme.separator.opacity(0.35))
                             .frame(height: 0.5)
                             .padding(.leading, 14)
-                        endpointField("URL", placeholder: IOSDevelopmentEndpoint.url, text: $url, field: .url)
+                        endpointField("LAN URL", placeholder: IOSDevelopmentEndpoint.url, text: $directURL, field: .directURL)
                         Rectangle()
                             .fill(IOSTheme.separator.opacity(0.35))
                             .frame(height: 0.5)
                             .padding(.leading, 14)
-                        endpointSecureField("Token", placeholder: "Host token", text: $token, field: .token)
+                        endpointSecureField("LAN Token", placeholder: "Host token", text: $token, field: .token)
+                        if !relayURL.isEmpty {
+                            Rectangle()
+                                .fill(IOSTheme.separator.opacity(0.35))
+                                .frame(height: 0.5)
+                                .padding(.leading, 14)
+                            endpointField("Relay URL", placeholder: "Relay endpoint", text: $relayURL, field: .relayURL)
+                        }
                     }
                     .iosCardSurface()
+
+                    if !directURL.isEmpty && !relayURL.isEmpty {
+                        IOSSectionLabel("Route Preference")
+                            .padding(.top, 20)
+                            .padding(.bottom, 9)
+
+                        Picker("Route Preference", selection: $routePreference) {
+                            Text("Auto (LAN first)").tag("auto")
+                            Text("Direct only").tag("direct")
+                            Text("Relay only").tag("relay")
+                        }
+                        .pickerStyle(.segmented)
+                    }
 
                     Text(hasToken
                         ? "Token saved in Keychain. Leave it blank to keep it."
@@ -3105,19 +3213,31 @@ private struct IOSEndpointEditorView: View {
 
                     Button {
                         let replacementToken = token.isEmpty ? nil : token
+                        let activeURL = (routePreference == "relay" && !relayURL.isEmpty)
+                            ? relayURL
+                            : (!directURL.isEmpty ? directURL : relayURL)
+                        let activeType = (activeURL == relayURL) ? "relay" : "daemon"
                         let saved: Bool
                         if let endpoint {
                             saved = model.saveEndpoint(
                                 name: name,
-                                url: url,
+                                url: activeURL,
                                 token: replacementToken,
+                                type: activeType,
+                                directURL: directURL.isEmpty ? nil : directURL,
+                                relayURL: relayURL.isEmpty ? nil : relayURL,
+                                routePreference: routePreference,
                                 replacingEndpointName: endpoint.name
                             )
                         } else {
                             saved = model.saveNewEndpoint(
                                 name: name,
-                                url: url,
-                                token: replacementToken
+                                url: activeURL,
+                                token: replacementToken,
+                                type: activeType,
+                                directURL: directURL.isEmpty ? nil : directURL,
+                                relayURL: relayURL.isEmpty ? nil : relayURL,
+                                routePreference: routePreference
                             )
                         }
                         if saved {
@@ -3133,9 +3253,9 @@ private struct IOSEndpointEditorView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        || (directURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                     .opacity(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+                        || (directURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ? 0.45 : 1)
                     .padding(.top, 22)
 
                     if hasToken {
@@ -3151,9 +3271,7 @@ private struct IOSEndpointEditorView: View {
                         .buttonStyle(.plain)
                     }
 
-                    Text(isRelay
-                        ? "Relay routes this Host through the configured control-plane connection."
-                        : "Warren connects to /v1/ws. Use HTTPS/WSS outside your local network.")
+                    Text("Warren connects to /v1/ws. When both LAN and Relay routes are present, Auto mode detects when you are on the same local network.")
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.secondaryText.opacity(0.84))
                         .fixedSize(horizontal: false, vertical: true)
@@ -3171,13 +3289,16 @@ private struct IOSEndpointEditorView: View {
         .onAppear {
             guard !didLoad else { return }
             name = endpoint?.name ?? ""
-            url = endpoint?.url ?? ""
+            directURL = endpoint?.effectiveDirectURL ?? (endpoint?.isRelay == false ? endpoint?.url ?? "" : "")
+            relayURL = endpoint?.effectiveRelayURL ?? (endpoint?.isRelay == true ? endpoint?.url ?? "" : "")
+            routePreference = endpoint?.routePreference ?? "auto"
             didLoad = true
         }
         .onChange(of: model.endpointMetadata) { _, metadata in
             guard model.isPairingRelay || metadata.isRelay else { return }
             name = metadata.name
-            url = metadata.url
+            relayURL = metadata.effectiveRelayURL ?? ""
+            directURL = metadata.effectiveDirectURL ?? directURL
         }
     }
 
@@ -3207,9 +3328,6 @@ private struct IOSEndpointEditorView: View {
             Text(label)
                 .font(IOSTypography.label)
                 .foregroundStyle(IOSTheme.secondaryText)
-                // The label width is content-driven rather than calibrated
-                // to the English strings. Localized labels may grow without
-                // stealing a fixed character-sized slot from the field.
                 .lineLimit(2)
                 .iosNaturalWrap()
                 .layoutPriority(1)
@@ -3221,7 +3339,7 @@ private struct IOSEndpointEditorView: View {
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .keyboardType(field == .url ? .URL : .default)
+                .keyboardType(field == .directURL || field == .relayURL ? .URL : .default)
                 #endif
         }
         .padding(.horizontal, 13)
