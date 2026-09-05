@@ -86,7 +86,7 @@ def read_text_frame():
 send_text(json.dumps({
     "t": "auth",
     "token": token,
-    "version": "2.0",
+    "version": "3.0",
     "capabilities": ["roster-delta"],
     "terminalStateFormats": ["ghostline-vt-replay-v1"],
 }))

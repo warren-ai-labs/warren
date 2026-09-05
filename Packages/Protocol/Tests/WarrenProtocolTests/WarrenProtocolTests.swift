@@ -127,9 +127,9 @@ final class WarrenProtocolTests: XCTestCase {
         XCTAssertFalse(ProtocolVersion(major: 2, minor: 0).canDecode(local))
     }
 
-    func testCurrentProtocolVersionIsProtocolTwo() {
-        XCTAssertEqual(ProtocolVersion.current, ProtocolVersion(major: 2, minor: 0))
-        XCTAssertTrue(ProtocolVersion.current.canDecode(ProtocolVersion(major: 2, minor: 0)))
+    func testCurrentProtocolVersionIsProtocolThree() {
+        XCTAssertEqual(ProtocolVersion.current, ProtocolVersion(major: 3, minor: 0))
+        XCTAssertTrue(ProtocolVersion.current.canDecode(ProtocolVersion(major: 3, minor: 0)))
         XCTAssertFalse(ProtocolVersion.current.canDecode(ProtocolVersion(major: 1, minor: 0)))
     }
 }
