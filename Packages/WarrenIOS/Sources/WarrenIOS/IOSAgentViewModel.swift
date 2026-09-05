@@ -139,12 +139,14 @@ public struct IOSAgentLocalAttachment: Identifiable, Sendable, Equatable {
 }
 
 public struct IOSAgentQueueItem: Codable, Equatable, Identifiable, Sendable {
-    public let id: String
+    public var id: String
     public var text: String
     public var attachments: [WarrenRemoteAgentAttachmentRef]
     public let createdAt: Date
     public var status: IOSAgentQueueStatus
     public var failureReason: String?
+    public var failureCode: String
+    public var indeterminate: Bool
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -152,7 +154,9 @@ public struct IOSAgentQueueItem: Codable, Equatable, Identifiable, Sendable {
         attachments: [WarrenRemoteAgentAttachmentRef] = [],
         createdAt: Date = Date(),
         status: IOSAgentQueueStatus = .queued,
-        failureReason: String? = nil
+        failureReason: String? = nil,
+        failureCode: String = "",
+        indeterminate: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -160,6 +164,8 @@ public struct IOSAgentQueueItem: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.status = status
         self.failureReason = failureReason
+        self.failureCode = failureCode
+        self.indeterminate = indeterminate
     }
 }
 
@@ -185,6 +191,8 @@ public struct IOSAgentMessageQueue: Sendable, Equatable {
         items[index].text = text
         if let attachments { items[index].attachments = attachments }
         items[index].failureReason = nil
+        items[index].failureCode = ""
+        items[index].indeterminate = false
         items[index].status = .queued
         return true
     }
@@ -226,6 +234,8 @@ public struct IOSAgentMessageQueue: Sendable, Equatable {
         guard let index = items.firstIndex(where: { $0.id == id }), items[index].status == .queued else { return false }
         items[index].status = .sending
         items[index].failureReason = nil
+        items[index].failureCode = ""
+        items[index].indeterminate = false
         return true
     }
 
@@ -237,22 +247,36 @@ public struct IOSAgentMessageQueue: Sendable, Equatable {
         guard let index = items.firstIndex(where: { $0.id == id }), items[index].status == .sending else { return false }
         items[index].status = .queued
         items[index].failureReason = nil
+        items[index].failureCode = ""
+        items[index].indeterminate = false
         return true
     }
 
     @discardableResult
-    public mutating func markFailed(id: String, reason: String) -> Bool {
+    public mutating func markFailed(
+        id: String,
+        reason: String,
+        code: String = "",
+        indeterminate: Bool = false
+    ) -> Bool {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return false }
         items[index].status = .failed
         items[index].failureReason = reason
+        items[index].failureCode = code
+        items[index].indeterminate = indeterminate
         return true
     }
 
     @discardableResult
     public mutating func retry(id: String) -> Bool {
         guard let index = items.firstIndex(where: { $0.id == id }), items[index].status == .failed else { return false }
+        if items[index].indeterminate {
+            items[index].id = UUID().uuidString.lowercased()
+        }
         items[index].status = .queued
         items[index].failureReason = nil
+        items[index].failureCode = ""
+        items[index].indeterminate = false
         return true
     }
 }

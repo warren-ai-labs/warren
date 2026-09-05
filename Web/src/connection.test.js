@@ -142,13 +142,16 @@ test("send treats a throwing socket as a closed transport", () => {
 test("rejectPendingRequests clears and fails every in-flight request", () => {
   const errors = [];
   const pending = new Map([
-    ["a", { onError: detail => errors.push(`a:${detail}`) }],
-    ["b", { onError: detail => errors.push(`b:${detail}`) }],
+    ["a", { onError: (detail, metadata) => errors.push([`a:${detail}`, metadata]) }],
+    ["b", { onError: (detail, metadata) => errors.push([`b:${detail}`, metadata]) }],
     ["c", {}],
   ]);
   rejectPendingRequests(pending, "offline");
   assert.equal(pending.size, 0);
-  assert.deepEqual(errors, ["a:offline", "b:offline"]);
+  assert.deepEqual(errors, [
+    ["a:offline", { code: "connection_lost", indeterminate: true, requeue: true }],
+    ["b:offline", { code: "connection_lost", indeterminate: true, requeue: true }],
+  ]);
 });
 
 test("connection errors prefer the envelope error field", () => {

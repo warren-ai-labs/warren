@@ -1821,6 +1821,13 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
+    private func agentCommandFailureMetadata(_ error: Error) -> (code: String, indeterminate: Bool) {
+        guard case let WarrenRemoteClientError.requestFailedWithCode(code, _, _) = error else {
+            return ("", false)
+        }
+        return (code, code == "command_indeterminate")
+    }
+
     private func requeueAgentMessage(_ item: IOSAgentQueueItem, for sessionID: String) {
         guard pendingSessionDeletion?.sessionID != sessionID else { return }
         var queue = agentQueueBySessionID[sessionID] ?? IOSAgentMessageQueue()
@@ -1870,7 +1877,7 @@ public final class IOSApplicationModel: ObservableObject {
             do {
                 _ = try await client.cancelAgentTurn(
                     executionID: executionID,
-                    commandID: "cancel-(UUID().uuidString.lowercased())",
+                    commandID: "cancel-\(UUID().uuidString.lowercased())",
                     turnID: String(turn),
                     reason: "cancel"
                 )
@@ -1993,7 +2000,13 @@ public final class IOSApplicationModel: ObservableObject {
                     if var localQueue = self.agentQueueBySessionID[sessionID],
                        localQueue.items.contains(where: { $0.id == item.id }) {
                         if canRetryInPlace {
-                            _ = localQueue.markFailed(id: item.id, reason: error.localizedDescription)
+                            let failure = self.agentCommandFailureMetadata(error)
+                            _ = localQueue.markFailed(
+                                id: item.id,
+                                reason: error.localizedDescription,
+                                code: failure.code,
+                                indeterminate: failure.indeterminate
+                            )
                             self.agentQueueBySessionID[sessionID] = localQueue
                             self.updateAgentQueuedMessageCount(for: sessionID)
                         } else {
@@ -2027,7 +2040,7 @@ public final class IOSApplicationModel: ObservableObject {
             do {
                 _ = try await client.resolveAgentInteraction(
                     executionID: executionID,
-                    commandID: "resolve-(requestID)-(UUID().uuidString.lowercased())",
+                    commandID: "resolve-\(requestID)-\(UUID().uuidString.lowercased())",
                     interactionID: requestID,
                     version: 1,
                     resolution: response
@@ -2081,7 +2094,7 @@ public final class IOSApplicationModel: ObservableObject {
         guard let executionID = agentExecutionID(for: sessionID) else {
             throw WarrenRemoteClientError.requestFailed("Agent execution is unavailable.")
         }
-        let uploadCommandID = "attachment-(UUID().uuidString.lowercased())"
+        let uploadCommandID = "attachment-\(UUID().uuidString.lowercased())"
         let prepared = try await client.prepareAgentAttachment(
             executionID: executionID,
             commandID: uploadCommandID,
@@ -2117,7 +2130,7 @@ public final class IOSApplicationModel: ObservableObject {
                 }.value
                 let result = try await client.uploadAgentAttachmentChunk(
                     executionID: executionID,
-                    commandID: "(uploadID)-chunk-(sequence)",
+                    commandID: "\(uploadID)-chunk-\(sequence)",
                     uploadID: uploadID,
                     chunk: sequence,
                     length: chunkPayload.0.count,
@@ -2135,7 +2148,7 @@ public final class IOSApplicationModel: ObservableObject {
             try ensureCurrentSession()
             let completed = try await client.completeAgentAttachment(
                 executionID: executionID,
-                commandID: "(uploadID)-complete",
+                commandID: "\(uploadID)-complete",
                 uploadID: uploadID,
                 length: Int64(data.count),
                 sha256: digest
@@ -2155,7 +2168,7 @@ public final class IOSApplicationModel: ObservableObject {
         } catch {
             _ = try? await client.abortAgentAttachment(
                 executionID: executionID,
-                commandID: "(uploadID)-abort",
+                commandID: "\(uploadID)-abort",
                 uploadID: uploadID
             )
             throw error
@@ -2276,7 +2289,13 @@ public final class IOSApplicationModel: ObservableObject {
                     if canRetryInPlace {
                         if var localQueue = self.agentQueueBySessionID[sessionID],
                            localQueue.items.contains(where: { $0.id == item.id }) {
-                            _ = localQueue.markFailed(id: item.id, reason: error.localizedDescription)
+                            let failure = self.agentCommandFailureMetadata(error)
+                            _ = localQueue.markFailed(
+                                id: item.id,
+                                reason: error.localizedDescription,
+                                code: failure.code,
+                                indeterminate: failure.indeterminate
+                            )
                             self.agentQueueBySessionID[sessionID] = localQueue
                             self.updateAgentQueuedMessageCount(for: sessionID)
                         } else {

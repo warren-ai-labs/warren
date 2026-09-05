@@ -527,6 +527,8 @@ export class AgentMessageQueue {
       createdAt: item.createdAt || new Date().toISOString(),
       status: item.status || "queued",
       failureReason: item.failureReason || null,
+      failureCode: item.failureCode || "",
+      indeterminate: Boolean(item.indeterminate),
     }));
   }
 
@@ -544,6 +546,8 @@ export class AgentMessageQueue {
     if (attachments) item.attachments = [...attachments];
     item.status = "queued";
     item.failureReason = null;
+    item.failureCode = "";
+    item.indeterminate = false;
     return true;
   }
 
@@ -584,14 +588,18 @@ export class AgentMessageQueue {
     if (!item || item.status !== "queued") return false;
     item.status = "sending";
     item.failureReason = null;
+    item.failureCode = "";
+    item.indeterminate = false;
     return true;
   }
 
-  markFailed(id, reason) {
+  markFailed(id, reason, { code = "", indeterminate = false } = {}) {
     const item = this.items.find(value => value.id === id);
     if (!item) return false;
     item.status = "failed";
     item.failureReason = String(reason || "Send failed");
+    item.failureCode = String(code || "");
+    item.indeterminate = Boolean(indeterminate);
     return true;
   }
 
@@ -603,14 +611,22 @@ export class AgentMessageQueue {
     if (!item || item.status !== "sending") return false;
     item.status = "queued";
     item.failureReason = null;
+    item.failureCode = "";
+    item.indeterminate = false;
     return true;
   }
 
   retry(id) {
     const item = this.items.find(value => value.id === id);
     if (!item || item.status !== "failed") return false;
+    // Reusing a commandId after an explicit indeterminate outcome can run a
+    // command twice. A user-directed retry therefore starts a new identity;
+    // ordinary validation/provider failures remain safely idempotent.
+    if (item.indeterminate) item.id = queueItemID();
     item.status = "queued";
     item.failureReason = null;
+    item.failureCode = "";
+    item.indeterminate = false;
     return true;
   }
 }
@@ -1223,4 +1239,3 @@ export function extractActiveSubagents(events = []) {
   }
   return Array.from(byId.values());
 }
-

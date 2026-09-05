@@ -104,7 +104,7 @@ test("feedback states gate repeated actions and preserve actionable failures", (
 test("async UI requests expire and reject stale workspace/session callbacks", () => {
   const app = read("App.jsx");
   assert.match(app, /REQUEST_TIMEOUT_MS\s*=\s*30_000/);
-  assert.match(app, /pending\.onError\?\.\(`\$\{method\} timed out; retry\.`\)/);
+  assert.match(app, /pending\.onError\?\.\(`\$\{method\} timed out; retry\.`,\s*\{/);
   assert.match(app, /gitLoadGenerationRef\.current !== generation/);
   assert.match(app, /focusRequestGenerationRef\.current !== generation/);
   assert.match(app, /agentHistoryRequestRef\.current\.get\(sessionID\) !== token/);
