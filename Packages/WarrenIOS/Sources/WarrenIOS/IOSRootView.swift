@@ -186,27 +186,15 @@ private struct HostDashboardView: View {
     @State private var creationTarget: SessionCreationTarget?
 
     private var projects: [WarrenRemoteRoster.Project] {
-        (model.roster?.projects ?? []).sorted { lhs, rhs in
-            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
-            if lhs.order != rhs.order { return lhs.order < rhs.order }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+        model.cachedProjects
     }
 
     private var workspaces: [WarrenRemoteRoster.Workspace] {
-        (model.roster?.workspaces ?? []).sorted { lhs, rhs in
-            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
-            if lhs.order != rhs.order { return lhs.order < rhs.order }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+        model.cachedWorkspaces
     }
 
     private var sessionsByWorkspace: [String: [WarrenRemoteRoster.Session]] {
-        (model.roster?.sessions ?? []).reduce(into: [:]) { result, session in
-            guard session.isRunning else { return }
-            guard let workspaceID = session.workspaceID else { return }
-            result[workspaceID, default: []].append(session)
-        }
+        model.cachedSessionsByWorkspace
     }
 
     private var allCardIDs: Set<String> {
@@ -354,8 +342,8 @@ private struct HostDashboardView: View {
             !filter(sessions: sessionsByWorkspace[ws.id] ?? []).isEmpty
         }
         if hasWs { return true }
-        let hasTg = (model.roster?.terminalGroups ?? []).contains { grp in
-            !filter(sessions: model.sessions(inTerminalGroup: grp.id)).isEmpty
+        let hasTg = model.cachedTerminalGroups.contains { grp in
+            !filter(sessions: model.cachedSessionsByTerminalGroup[grp.id] ?? []).isEmpty
         }
         return hasTg
     }
@@ -484,14 +472,10 @@ private struct HostDashboardView: View {
 
     @ViewBuilder
     private var terminalGroupSection: some View {
-        let groups = (model.roster?.terminalGroups ?? []).sorted { lhs, rhs in
-            lhs.order == rhs.order
-                ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                : lhs.order < rhs.order
-        }
+        let groups = model.cachedTerminalGroups
         let matchingGroups = groups.filter { group in
             if selectedFilter == .all { return true }
-            let sess = filter(sessions: model.sessions(inTerminalGroup: group.id))
+            let sess = filter(sessions: model.cachedSessionsByTerminalGroup[group.id] ?? [])
             return !sess.isEmpty
         }
         if !matchingGroups.isEmpty {
@@ -504,7 +488,7 @@ private struct HostDashboardView: View {
 
                 ForEach(matchingGroups) { group in
                     let cardID = sessionScopeID(kind: "group", id: group.id)
-                    let sess = filter(sessions: model.sessions(inTerminalGroup: group.id))
+                    let sess = filter(sessions: model.cachedSessionsByTerminalGroup[group.id] ?? [])
                     TerminalGroupCard(
                         model: model,
                         group: group,

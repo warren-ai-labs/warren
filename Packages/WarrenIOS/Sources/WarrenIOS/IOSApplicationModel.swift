@@ -109,6 +109,76 @@ public final class IOSApplicationModel: ObservableObject {
     @Published public private(set) var isPairingRelay = false
     @Published public private(set) var mutationError: String?
     @Published public private(set) var isMutating = false
+    /// Dashboard projections computed once per roster assignment. The home
+    /// screen re-evaluates its body on every model publication (including
+    /// per-delta transcript revisions while it sits in the navigation stack),
+    /// so sorting/grouping here instead of in View bodies avoids repeated
+    /// O(n log n) localized comparisons per frame.
+    public private(set) var cachedActiveSessions: [WarrenRemoteRoster.Session] = []
+    public private(set) var cachedProjects: [WarrenRemoteRoster.Project] = []
+    public private(set) var cachedWorkspaces: [WarrenRemoteRoster.Workspace] = []
+    public private(set) var cachedTerminalGroups: [WarrenRemoteRoster.TerminalGroup] = []
+    public private(set) var cachedSessionsByWorkspace: [String: [WarrenRemoteRoster.Session]] = [:]
+    public private(set) var cachedSessionsByTerminalGroup: [String: [WarrenRemoteRoster.Session]] = [:]
+    /// Point lookup for hot paths (currentSession, selectSession, agentStatus
+    /// fallback). Rebuilt with the dashboard cache; values cover ended records
+    /// exactly like the previous linear roster scans.
+    private var sessionByID: [String: WarrenRemoteRoster.Session] = [:]
+    /// Guards the Live Activity bridge: roster/status/turn events arrive far
+    /// more often than the presented counts change.
+    private var lastLiveActivitySignature: String?
+
+    /// Rebuilds the dashboard projections and session index from the current
+    /// roster. Must be called after every roster assignment or clear while on
+    /// the main actor; readers then pay O(1) instead of filtering per body.
+    private func rebuildDashboardCache() {
+        guard let roster else {
+            cachedActiveSessions = []
+            cachedProjects = []
+            cachedWorkspaces = []
+            cachedTerminalGroups = []
+            cachedSessionsByWorkspace = [:]
+            cachedSessionsByTerminalGroup = [:]
+            sessionByID = [:]
+            return
+        }
+        var byID: [String: WarrenRemoteRoster.Session] = [:]
+        byID.reserveCapacity(roster.sessions.count)
+        var active: [WarrenRemoteRoster.Session] = []
+        active.reserveCapacity(roster.sessions.count)
+        var byWorkspace: [String: [WarrenRemoteRoster.Session]] = [:]
+        var byGroup: [String: [WarrenRemoteRoster.Session]] = [:]
+        for session in roster.sessions {
+            byID[session.id] = session
+            guard session.isRunning else { continue }
+            active.append(session)
+            if let workspaceID = session.workspaceID {
+                byWorkspace[workspaceID, default: []].append(session)
+            }
+            if let groupID = session.terminalGroupID {
+                byGroup[groupID, default: []].append(session)
+            }
+        }
+        sessionByID = byID
+        cachedActiveSessions = active
+        cachedSessionsByWorkspace = byWorkspace
+        cachedSessionsByTerminalGroup = byGroup
+        cachedProjects = roster.projects.sorted { lhs, rhs in
+            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
+            if lhs.order != rhs.order { return lhs.order < rhs.order }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        cachedWorkspaces = roster.workspaces.sorted { lhs, rhs in
+            if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
+            if lhs.order != rhs.order { return lhs.order < rhs.order }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        cachedTerminalGroups = roster.terminalGroups.sorted { lhs, rhs in
+            lhs.order == rhs.order
+                ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                : lhs.order < rhs.order
+        }
+    }
 
     public private(set) var client: WarrenRemoteClient
     public let localStore: IOSLocalStore
@@ -223,6 +293,7 @@ public final class IOSApplicationModel: ObservableObject {
         self.endpointMetadata = restoredEndpoint
         self.endpointMetadataList = restoredEndpoints
         self.roster = localStore.cachedRoster(endpointName: restoredEndpoint.name, endpointURL: restoredEndpoint.url)
+        self.rebuildDashboardCache()
         self.endpointError = nil
         self.mutationError = nil
         self.connectionError = nil
@@ -311,7 +382,7 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = false
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        liveActivityCoordinator.end()
+        endLiveActivity()
         eventTask?.cancel()
         eventTask = nil
         sessionTask?.cancel()
@@ -397,12 +468,19 @@ public final class IOSApplicationModel: ObservableObject {
         reconnect()
     }
 
+    /// Ends the Live Activity bridge and clears its dedup signature so the
+    /// next sync restarts presentation even when counts are unchanged.
+    private func endLiveActivity() {
+        liveActivityCoordinator.end()
+        lastLiveActivitySignature = nil
+    }
+
     /// Projects the selected Session into the optional Live Activity. Relay
     /// routing decides whether a background task is requested, while this
     /// activity remains a presentation of the current session state.
     private func syncLiveActivity() {
         guard connectionRequested, let currentSession else {
-            liveActivityCoordinator.end()
+            endLiveActivity()
             return
         }
 
@@ -416,6 +494,11 @@ public final class IOSApplicationModel: ObservableObject {
                 attentionCount += 1
             }
         }
+        // Roster/status/turn events arrive far more often than the presented
+        // counts change; skip the ActivityKit bridge when nothing changed.
+        let signature = "\(currentSession.id)\u{1F}\(currentSession.displayTitle)\u{1F}\(endpointMetadata.name)\u{1F}\(connectionState)\u{1F}\(sessions.count)\u{1F}\(workingCount)\u{1F}\(attentionCount)"
+        guard signature != lastLiveActivitySignature else { return }
+        lastLiveActivitySignature = signature
         liveActivityCoordinator.sync(
             sessionID: currentSession.id,
             sessionTitle: currentSession.displayTitle,
@@ -812,7 +895,7 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = false
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        liveActivityCoordinator.end()
+        endLiveActivity()
         liveActivityPushTokensBySessionID.removeAll()
         eventTask?.cancel()
         eventTask = nil
@@ -843,6 +926,7 @@ public final class IOSApplicationModel: ObservableObject {
         endpointToken = ""
         connectionState = .stopped
         roster = nil
+        rebuildDashboardCache()
         currentSessionID = nil
         sessionDeletionDestination = nil
         pendingSessionDeletion = nil
@@ -879,7 +963,7 @@ public final class IOSApplicationModel: ObservableObject {
         connectionRequested = shouldRestart
         didEnterBackground = false
         relayBackgroundKeepAlive.end()
-        liveActivityCoordinator.end()
+        endLiveActivity()
         liveActivityPushTokensBySessionID.removeAll()
         let oldClient = client
         eventTask?.cancel()
@@ -938,6 +1022,7 @@ public final class IOSApplicationModel: ObservableObject {
         if !isSameHost {
             sessionSelectionGeneration &+= 1
             roster = localStore.cachedRoster(endpointName: configuration.name, endpointURL: configuration.url)
+            rebuildDashboardCache()
             currentSessionID = nil
             sessionDeletionDestination = nil
             pendingSessionDeletion = nil
@@ -1259,7 +1344,7 @@ public final class IOSApplicationModel: ObservableObject {
     /// Changes the visible Session without ending it. The old subscription is
     /// acknowledged before its replacement to prevent stale recovery markers.
     public func selectSession(_ sessionID: String) {
-        guard let selectedSession = roster?.sessions.first(where: { $0.id == sessionID && $0.isRunning }) else {
+        guard let selectedSession = sessionByID[sessionID], selectedSession.isRunning else {
             navigation.sessionID = sessionID
             return
         }
@@ -1271,7 +1356,7 @@ public final class IOSApplicationModel: ObservableObject {
         let previousTask = sessionTask
         let oldSessionID = currentSessionID
         let previousSession = oldSessionID.flatMap { id in
-            roster?.sessions.first(where: { $0.id == id && $0.isRunning })
+            sessionByID[id].flatMap { $0.isRunning ? $0 : nil }
         }
         invalidateAgentHistoryRequest(for: sessionID)
         if let oldSessionID {
@@ -2312,13 +2397,15 @@ public final class IOSApplicationModel: ObservableObject {
     }
 
     public var currentSession: WarrenRemoteRoster.Session? {
-        guard let currentSessionID else { return nil }
-        return roster?.sessions.first(where: { $0.id == currentSessionID && $0.isRunning })
+        guard let currentSessionID,
+              let session = sessionByID[currentSessionID],
+              session.isRunning else { return nil }
+        return session
     }
 
     public func agentStatus(for sessionID: String) -> WarrenRemoteAgentStatus? {
         agentStatusBySessionID[sessionID]
-            ?? roster?.sessions.first(where: { $0.id == sessionID })?.agentStatus
+            ?? sessionByID[sessionID]?.agentStatus
     }
 
     /// Returns the newest model identifier reported by the Host transcript.
@@ -2336,18 +2423,18 @@ public final class IOSApplicationModel: ObservableObject {
     }
 
     public func sessions(inWorkspace workspaceID: String) -> [WarrenRemoteRoster.Session] {
-        activeSessions.filter { $0.workspaceID == workspaceID }
+        cachedSessionsByWorkspace[workspaceID] ?? []
     }
 
     public func sessions(inTerminalGroup groupID: String) -> [WarrenRemoteRoster.Session] {
-        activeSessions.filter { $0.terminalGroupID == groupID }
+        cachedSessionsByTerminalGroup[groupID] ?? []
     }
 
     /// Host rosters intentionally retain ended records for desktop history and
     /// delta correctness. Mobile navigation is a live-session surface, so it
     /// never exposes those records as selectable UI resources.
     public var activeSessions: [WarrenRemoteRoster.Session] {
-        roster?.sessions.filter(\.isRunning) ?? []
+        cachedActiveSessions
     }
 
     /// Creates a Session without manufacturing a local placeholder. The Host
@@ -2586,7 +2673,7 @@ public final class IOSApplicationModel: ObservableObject {
 
     private func restoreSessionAfterDeleteFailure(_ sessionID: String) {
         guard currentSessionID == sessionID else { return }
-        guard roster?.sessions.contains(where: { $0.id == sessionID && $0.isRunning }) == true else { return }
+        guard sessionByID[sessionID]?.isRunning == true else { return }
         terminalSubscriptionRequests.insert(sessionID)
         ensureTerminalSubscription(for: sessionID)
         if !historyLoadedBySessionID.contains(sessionID) {
@@ -2807,7 +2894,7 @@ public final class IOSApplicationModel: ObservableObject {
     /// only merges sequence-unique events into the local transcript.
     public func loadOlderAgentHistory() {
         guard let sessionID = currentSessionID,
-              roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+              sessionByID[sessionID]?.isAgentBacked == true,
               historyLoadingBySessionID.insert(sessionID).inserted else { return }
         let before = historyCursorBySessionID[sessionID]
             ?? agentState.agentEventsBySessionID[sessionID]?.first?.sequence
@@ -2907,7 +2994,7 @@ public final class IOSApplicationModel: ObservableObject {
                     let applied = await MainActor.run { [weak self] in
                         guard let self,
                               self.clientGeneration == currentClientGeneration,
-                              self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                              self.sessionByID[sessionID]?.isAgentBacked == true,
                               expectedEpoch == 0 || self.agentEpochBySessionID[sessionID] == expectedEpoch,
                               pageEpoch == 0 || expectedEpoch == 0 || pageEpoch == expectedEpoch else {
                             return false
@@ -2968,7 +3055,7 @@ public final class IOSApplicationModel: ObservableObject {
 
             let target: (epoch: UInt64, sequence: UInt64)? = await MainActor.run {
                 guard self.clientGeneration == currentClientGeneration,
-                      self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                      self.sessionByID[sessionID]?.isAgentBacked == true,
                       self.agentSubscribedSessionIDs.contains(sessionID) else {
                     return nil
                 }
@@ -3022,7 +3109,7 @@ public final class IOSApplicationModel: ObservableObject {
                 )
                 _ = await MainActor.run {
                     guard self.clientGeneration == currentClientGeneration,
-                          self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                          self.sessionByID[sessionID]?.isAgentBacked == true,
                           self.agentSubscribedSessionIDs.contains(sessionID) else { return }
                     // Route the snapshot through the same epoch transition
                     // path as live events. Assigning the new epoch first
@@ -3080,7 +3167,7 @@ public final class IOSApplicationModel: ObservableObject {
                 if let currentSessionID {
                     terminalState.terminalSubscriptionBySessionID[currentSessionID] = false
                     ensureTerminalSubscription(for: currentSessionID)
-                    if roster?.sessions.first(where: { $0.id == currentSessionID })?.isAgentBacked == true {
+                    if sessionByID[currentSessionID]?.isAgentBacked == true {
                         ensureAgentSubscribed(for: currentSessionID)
                     }
                 }
@@ -3400,6 +3487,7 @@ public final class IOSApplicationModel: ObservableObject {
                 }
                 didChange = true
                 continue
+                }
             }
             if keys.contains(key) || knownSequences.contains(event.sequence) {
                 keys.insert(key)
@@ -3473,17 +3561,29 @@ public final class IOSApplicationModel: ObservableObject {
             endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
         }
         roster = next
+        rebuildDashboardCache()
         localStore.cacheRoster(next, endpointName: endpointMetadata.name, endpointURL: endpointMetadata.url)
         maintenanceMessage = nil
-        agentStatusBySessionID = [:]
-        agentTurnBySessionID = [:]
-        agentCapabilitiesBySessionID = [:]
+        // Diff instead of clearing: wholesale resets invalidate every Session
+        // row andAgent surface even when a roster event changed one Session.
+        var nextStatus: [String: WarrenRemoteAgentStatus] = [:]
+        var nextTurn: [String: WarrenRemoteAgentTurn] = [:]
+        var nextCapabilities: [String: Set<String>] = [:]
         for session in next.sessions {
-            if let status = session.agentStatus { agentStatusBySessionID[session.id] = status }
-            if let turn = session.agentTurn { agentTurnBySessionID[session.id] = turn }
+            if let status = session.agentStatus { nextStatus[session.id] = status }
+            if let turn = session.agentTurn { nextTurn[session.id] = turn }
             if let capabilities = session.agentCapabilities {
-                agentCapabilitiesBySessionID[session.id] = Set(capabilities)
+                nextCapabilities[session.id] = Set(capabilities)
             }
+        }
+        if nextStatus != agentStatusBySessionID {
+            agentStatusBySessionID = nextStatus
+        }
+        if nextTurn != agentTurnBySessionID {
+            agentTurnBySessionID = nextTurn
+        }
+        if nextCapabilities != agentCapabilitiesBySessionID {
+            agentCapabilitiesBySessionID = nextCapabilities
         }
         if let currentSessionID {
             if next.sessions.first(where: { $0.id == currentSessionID })?.isAgentBacked == true {
@@ -3498,7 +3598,7 @@ public final class IOSApplicationModel: ObservableObject {
 
     private func selectPendingSessionIfPresent() {
         guard let pendingID = pendingSessionSelectionID,
-              roster?.sessions.contains(where: { $0.id == pendingID && $0.isRunning }) == true else { return }
+              sessionByID[pendingID]?.isRunning == true else { return }
         pendingSessionSelectionID = nil
         selectSession(pendingID)
     }
@@ -3533,7 +3633,7 @@ public final class IOSApplicationModel: ObservableObject {
     }
 
     private func restoreNavigationIfNeeded() {
-        guard let roster else { return }
+        guard roster != nil else { return }
         // A delete request may remove the target from the roster before the
         // response arrives. Keep the current route stable until the mutation
         // decides whether to select a sibling or return to its scope.
@@ -3542,14 +3642,14 @@ public final class IOSApplicationModel: ObservableObject {
             return
         }
         if let requested = navigation.sessionID,
-           roster.sessions.contains(where: { $0.id == requested && $0.isRunning }) {
+           sessionByID[requested]?.isRunning == true {
             if currentSessionID != requested { selectSession(requested) }
             return
         }
         // Do not manufacture a shell. A stale local selection simply leaves
         // the Host's empty-session state visible until the user picks one.
         if let currentSessionID,
-           !roster.sessions.contains(where: { $0.id == currentSessionID && $0.isRunning }) {
+           sessionByID[currentSessionID]?.isRunning != true {
             let client = client
             Task { _ = try? await client.unsubscribe(sessionID: currentSessionID) }
             terminalSubscriptionRequests.remove(currentSessionID)
@@ -3560,7 +3660,7 @@ public final class IOSApplicationModel: ObservableObject {
             syncLiveActivity()
         }
         if let requested = navigation.sessionID,
-           !roster.sessions.contains(where: { $0.id == requested && $0.isRunning }) {
+           sessionByID[requested]?.isRunning != true {
             navigation.sessionID = nil
             persistNavigation()
         }

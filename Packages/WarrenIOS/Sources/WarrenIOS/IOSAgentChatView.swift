@@ -144,7 +144,9 @@ private struct AgentComposerInput: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: AgentComposerTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? UIScreen.main.bounds.width
+        // Avoid UIScreen.main: it is deprecated in multi-scene contexts and
+        // the proposal always carries the row width in practice.
+        let width = proposal.width ?? 300
         return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     }
 
@@ -379,12 +381,16 @@ public struct AgentChatView: View {
                         // While the initial scroll position is settling, don't let intermediate
                         // un-scrolled layout frames erroneously mark the user as scrolled away from latest.
                         guard didEstablishInitialScroll else { return }
-                        let wasNearLatest = isNearLatest
-                        isNearLatest = distanceFromLatest <= latestVisibilityThreshold
+                        let nearLatest = distanceFromLatest <= latestVisibilityThreshold
+                        // Preference callbacks fire on every layout pass; only
+                        // publish on actual transitions to avoid re-rendering
+                        // the whole timeline for identical proximity.
+                        guard nearLatest != isNearLatest else { return }
+                        isNearLatest = nearLatest
 
                         if isNearLatest {
                             showReturnToLatest = false
-                        } else if wasNearLatest {
+                        } else {
                             // Show the escape hatch as soon as the user leaves
                             // the latest-message visibility window.
                             showReturnToLatest = true
@@ -639,10 +645,9 @@ public struct AgentChatView: View {
         guard settle else { return }
 
         Task { @MainActor in
-            // Yield once so LazyVStack can instantiate cells near the bottom edge
-            await Task.yield()
-            performScroll()
-            // Yield again so multi-line text and cards can finalize measured heights
+            // Yield once so LazyVStack can instantiate cells near the bottom
+            // edge and multi-line text can finalize measured heights, then
+            // re-pin a single time instead of scrolling three times per call.
             await Task.yield()
             performScroll()
             didEstablishInitialScroll = true
@@ -699,7 +704,8 @@ public struct AgentChatView: View {
                 if shouldShowWorking {
                     AgentWorkingFooter(
                         phrase: workingPhrase,
-                        action: latestActionText
+                        action: latestActionText,
+                        isVisible: isNearLatest
                     )
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
@@ -1576,13 +1582,17 @@ private struct AgentEmptyState: View {
 /// keeps block structure (including GFM tables and lists) separate from the
 /// conversation view, so this wrapper remains the single call site used by
 /// user, assistant, and reasoning messages.
-private struct AgentMarkdownText: View {
+private struct AgentMarkdownText: View, Equatable {
     private let value: String
     private let font: Font
 
     init(value: String, font: Font = IOSTypography.body) {
         self.value = value
         self.font = font
+    }
+
+    nonisolated static func == (lhs: AgentMarkdownText, rhs: AgentMarkdownText) -> Bool {
+        lhs.value == rhs.value
     }
 
     var body: some View {
@@ -1694,6 +1704,7 @@ private struct AgentAttentionBanner: View {
 private struct AgentWorkingFooter: View {
     let phrase: String
     var action: String? = nil
+    var isVisible: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -1701,7 +1712,7 @@ private struct AgentWorkingFooter: View {
             contentView
                 .overlay {
                     if !reduceMotion {
-                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isVisible)) { timeline in
                             let phase = shimmerPhase(at: timeline.date)
                             let start = -1.20 + phase * 2.40
                             let end = start + 2.20
@@ -2107,7 +2118,7 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
             if let key = toolKey(for: event) {
                 toolLocations[key] = .inCurrentActivity(index: activityEntries.count - 1)
             }
-        } else if event.isToolOutputEvent {
+        } else if isToolOutput {
             let key = toolKey(for: event)
             var matched = false
             if let key, let loc = toolLocations[key] {
@@ -2133,17 +2144,17 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
                 flushActivity()
                 result.append(.event(event))
             }
-        } else if event.isReasoningEvent && !event.hasRenderableActivityContent {
+        } else if isReasoning && !event.hasRenderableActivityContent {
             // Providers sometimes emit an empty reasoning boundary before
             // the actual text. It is protocol metadata, not a useful mobile
             // row, so do not create a disclosure with no body.
             continue
-        } else if event.isAssistantEvent && !event.hasRenderableConversationContent {
+        } else if isAssistant && !event.hasRenderableConversationContent {
             // A role-only boundary carries model/usage metadata but no
             // conversation. Keeping it would create an empty message block
             // between the real user and assistant messages.
             continue
-        } else if event.isReasoningEvent {
+        } else if isReasoning {
             activityEntries.append(.reasoning(event))
         } else {
             // Assistant replies, system markers, and other visible events

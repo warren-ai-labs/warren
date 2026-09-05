@@ -508,14 +508,80 @@ enum IOSMarkdownParser {
     }
 }
 
+/// Bounded memoization for parsed Markdown blocks and rendered inline
+/// attributed strings, keyed by exact source text.
+final class IOSMarkdownCache: @unchecked Sendable {
+    static let shared = IOSMarkdownCache()
+
+    private final class BlockBox {
+        let blocks: [IOSMarkdownBlock]
+        init(_ blocks: [IOSMarkdownBlock]) { self.blocks = blocks }
+    }
+
+    private final class AttributedBox {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private let blocksCache = NSCache<NSString, BlockBox>()
+    private let attributedCache = NSCache<NSString, AttributedBox>()
+
+    private init() {
+        blocksCache.countLimit = 300
+        blocksCache.totalCostLimit = 4 * 1024 * 1024
+        attributedCache.countLimit = 500
+        attributedCache.totalCostLimit = 4 * 1024 * 1024
+    }
+
+    func blocks(for value: String) -> [IOSMarkdownBlock] {
+        let key = value as NSString
+        if let cached = blocksCache.object(forKey: key) {
+            return cached.blocks
+        }
+        let parsed = IOSMarkdownParser.parse(value)
+        blocksCache.setObject(BlockBox(parsed), forKey: key, cost: value.utf8.count)
+        return parsed
+    }
+
+    /// Returns nil when Foundation cannot parse the fragment, mirroring the
+    /// previous inline fallback to plain text. Failures are not cached.
+    func attributed(for markdown: String) -> AttributedString? {
+        let key = markdown as NSString
+        if let cached = attributedCache.object(forKey: key) {
+            return cached.value
+        }
+        guard let parsed = try? AttributedString(
+            markdown: markdown,
+            options: .init(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) else {
+            return nil
+        }
+        attributedCache.setObject(AttributedBox(parsed), forKey: key, cost: markdown.utf8.count)
+        return parsed
+    }
+}
+
 /// SwiftUI presentation for the parsed mobile Markdown document.
-struct IOSMarkdownView: View {
+/// Block parsing and inline AttributedString rendering are memoized per exact
+/// message text: transcript rebuilds recreate every row, but unchanged
+/// messages reuse their cached layout instead of re-parsing on the main
+/// thread.
+struct IOSMarkdownView: View, Equatable {
+    private let value: String
     private let blocks: [IOSMarkdownBlock]
     private let font: Font
 
     init(value: String, font: Font = IOSTypography.body) {
-        blocks = IOSMarkdownParser.parse(value)
+        self.value = value
+        self.blocks = IOSMarkdownCache.shared.blocks(for: value)
         self.font = font
+    }
+
+    nonisolated static func == (lhs: IOSMarkdownView, rhs: IOSMarkdownView) -> Bool {
+        lhs.value == rhs.value
     }
 
     var body: some View {
@@ -589,19 +655,17 @@ struct IOSMarkdownView: View {
     }
 }
 
-private struct IOSMarkdownInlineText: View {
+private struct IOSMarkdownInlineText: View, Equatable {
     let value: String
     let font: Font
 
+    nonisolated static func == (lhs: IOSMarkdownInlineText, rhs: IOSMarkdownInlineText) -> Bool {
+        lhs.value == rhs.value
+    }
+
     var body: some View {
         let markdown = preservingLineBreaks(value)
-        if let attributed = try? AttributedString(
-            markdown: markdown,
-            options: .init(
-                interpretedSyntax: .full,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        ) {
+        if let attributed = IOSMarkdownCache.shared.attributed(for: markdown) {
             Text(attributed)
                 .font(font)
                 .lineSpacing(4)

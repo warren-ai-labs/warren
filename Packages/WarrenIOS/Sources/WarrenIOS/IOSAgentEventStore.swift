@@ -306,7 +306,7 @@ public actor IOSAgentEventStore {
         var bindEpoch: UInt64?
         var bindSince: UInt64?
         var bindBefore: UInt64?
-        var bindLimit = limit
+        let bindLimit = limit
         if epoch != nil { sql += " AND epoch = ?" ; bindEpoch = epoch }
         if since != nil { sql += " AND sequence >= ?"; bindSince = since }
         if before != nil { sql += " AND sequence < ?"; bindBefore = before }
