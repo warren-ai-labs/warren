@@ -1199,16 +1199,20 @@ export default function App() {
     const state = appStateRef.current;
     if (!data || !state.activeSession) return false;
     if (state.attachedSession !== state.activeSession) {
-      inputQueueRef.current.enqueue(state.activeSession, data);
+      if (!inputQueueRef.current.enqueue(state.activeSession, data)) {
+        announceFeedback("Input buffer is full; reconnect before typing more.", "error");
+      }
       return false;
     }
     if (!connectionRef.current?.sendBinary(data)) {
-      inputQueueRef.current.enqueue(state.activeSession, data);
+      if (!inputQueueRef.current.enqueue(state.activeSession, data)) {
+        announceFeedback("Input buffer is full; reconnect before typing more.", "error");
+      }
       connectionRef.current?.reconnectNow();
       return false;
     }
     return true;
-  }, []);
+  }, [announceFeedback]);
 
   const sendAgentInput = useCallback(async text => {
     // The agent process is a TUI: the only input channel is the PTY. Codex
