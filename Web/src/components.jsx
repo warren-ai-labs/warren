@@ -3,6 +3,11 @@ import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
 import { shouldDismissOnBackdrop } from "./presentation.js";
+import {
+  AGENT_REASONING_OPTIONS,
+  formatAgentModel,
+  getAvailableAgentModels,
+} from "./agent.js";
 
 const activityLabels = {
   working: "Working",
@@ -985,7 +990,7 @@ export function ContextMenu({ menu, onClose }) {
   );
 }
 
-export function PresetBar({ presets, onCreateSession, creatingKind = null }) {
+export function PresetBar({ presets, onCreateSession, onConfigureSession, creatingKind = null }) {
   return (
     <nav className="presetbar" aria-label="Session presets">
       {presets.map(preset => (
@@ -995,7 +1000,10 @@ export function PresetBar({ presets, onCreateSession, creatingKind = null }) {
           key={preset.kind}
           disabled={Boolean(creatingKind)}
           aria-busy={creatingKind === preset.kind || undefined}
-          onClick={() => onCreateSession(preset.kind)}
+          onClick={() => {
+            if (preset.isAgent && onConfigureSession) onConfigureSession(preset.kind);
+            else onCreateSession(preset.kind);
+          }}
         >
           <SessionPresetIcon kind={preset.kind} />
           <span>{creatingKind === preset.kind ? "Starting…" : preset.label}</span>
@@ -1173,7 +1181,7 @@ export function MobileKeys({ onInput }) {
   );
 }
 
-export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null }) {
+export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null, initialKind = "" }) {
   const firstItemRef = useRef(null);
   const cancelRef = useRef(null);
   const sheetRef = useRef(null);
@@ -1182,9 +1190,21 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
   onCloseRef.current = onClose;
   const pendingKindRef = useRef(pendingKind);
   pendingKindRef.current = pendingKind;
+  const [selectedKind, setSelectedKind] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedReasoning, setSelectedReasoning] = useState("default");
+  const [customModel, setCustomModel] = useState("");
   useFocusRestore(open);
   useFocusTrap(open, sheetRef);
   useBodyScrollLock(open);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setSelectedKind(presets.some(preset => preset.kind === initialKind) ? initialKind : "");
+    setSelectedModel("");
+    setSelectedReasoning("default");
+    setCustomModel("");
+  }, [initialKind, open, presets]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1193,16 +1213,29 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        if (!pendingKindRef.current) onCloseRef.current();
+        if (pendingKindRef.current) return;
+        if (selectedKind) setSelectedKind("");
+        else onCloseRef.current();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [open, selectedKind]);
 
   if (!open) return null;
+  const selectedPreset = presets.find(preset => preset.kind === selectedKind) || null;
+  const isAgentPreset = Boolean(selectedPreset && !["shell", "trae"].includes(selectedPreset.kind));
+  const availableModels = selectedPreset ? getAvailableAgentModels(selectedPreset.kind) : [];
+  const hasCustomModel = selectedModel && !availableModels.some(model => model.id === selectedModel);
+  const submitSelection = () => {
+    if (!selectedKind || pendingKind) return;
+    onChoose(selectedKind, {
+      model: selectedModel,
+      reasoning: selectedReasoning,
+    });
+  };
   return (
     <div
       className="session-sheet-overlay"
@@ -1246,29 +1279,117 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
             }
           }}
         />
-        <div className="session-sheet-title">New session</div>
-        {presets.map((preset, index) => (
-          <button
-            type="button"
-            className="session-sheet-item"
-            key={preset.kind}
-            ref={index === 0 ? firstItemRef : undefined}
-            disabled={Boolean(pendingKind)}
-            aria-busy={pendingKind === preset.kind || undefined}
-            onClick={() => onChoose(preset.kind)}
-          >
-            <SessionPresetIcon kind={preset.kind} />
-            <span>{pendingKind === preset.kind ? "Starting…" : preset.label}</span>
-          </button>
-        ))}
+        {selectedPreset ? (
+          <>
+            <div className="session-sheet-title session-sheet-title-with-back">
+              <button
+                type="button"
+                className="session-sheet-back"
+                disabled={Boolean(pendingKind)}
+                onClick={() => setSelectedKind("")}
+                aria-label="Choose another session type"
+              >
+                ‹
+              </button>
+              <SessionPresetIcon kind={selectedPreset.kind} />
+              <span>{selectedPreset.label}</span>
+            </div>
+            {isAgentPreset && (
+              <div className="session-sheet-options" aria-label="Optional agent settings">
+                <label className="session-sheet-field">
+                  <span>Model <small>optional</small></span>
+                  <select value={selectedModel} onChange={event => setSelectedModel(event.target.value)} disabled={Boolean(pendingKind)}>
+                    <option value="">Default session model</option>
+                    {hasCustomModel && <option value={selectedModel}>{formatAgentModel(selectedModel) || selectedModel}</option>}
+                    {availableModels.map(model => <option value={model.id} key={model.id}>{model.label}</option>)}
+                  </select>
+                </label>
+                <label className="session-sheet-field">
+                  <span>Reasoning <small>optional</small></span>
+                  <select value={selectedReasoning} onChange={event => setSelectedReasoning(event.target.value)} disabled={Boolean(pendingKind)}>
+                    {AGENT_REASONING_OPTIONS.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label className="session-sheet-field">
+                  <span>Custom model ID <small>optional</small></span>
+                  <div className="session-sheet-custom-model">
+                    <input
+                      type="text"
+                      value={customModel}
+                      onChange={event => setCustomModel(event.target.value)}
+                      placeholder="provider/model"
+                      autoComplete="off"
+                      spellCheck="false"
+                      disabled={Boolean(pendingKind)}
+                    />
+                    <button
+                      type="button"
+                      disabled={!customModel.trim() || Boolean(pendingKind)}
+                      onClick={() => {
+                        const value = customModel.replace(/[\r\n\u2028\u2029]/g, " ").trim();
+                        if (value) {
+                          setSelectedModel(value);
+                          setCustomModel("");
+                        }
+                      }}
+                    >
+                      Set
+                    </button>
+                  </div>
+                </label>
+              </div>
+            )}
+            <button
+              ref={firstItemRef}
+              type="button"
+              className="session-sheet-create"
+              disabled={Boolean(pendingKind)}
+              aria-busy={pendingKind === selectedKind || undefined}
+              onClick={submitSelection}
+            >
+              {pendingKind === selectedKind ? "Starting…" : "Create session"}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="session-sheet-title">New session</div>
+            {presets.map((preset, index) => (
+              <button
+                type="button"
+                className="session-sheet-item"
+                key={preset.kind}
+                ref={index === 0 ? firstItemRef : undefined}
+                disabled={Boolean(pendingKind)}
+                aria-busy={(!preset.isAgent && pendingKind === preset.kind) || undefined}
+                onClick={() => {
+                  if (preset.isAgent) {
+                    setSelectedKind(preset.kind);
+                    setSelectedModel("");
+                    setSelectedReasoning("default");
+                    setCustomModel("");
+                  } else {
+                    onChoose(preset.kind);
+                  }
+                }}
+              >
+                <SessionPresetIcon kind={preset.kind} />
+                <span>{!preset.isAgent && pendingKind === preset.kind ? "Starting…" : preset.label}</span>
+              </button>
+            ))}
+          </>
+        )}
         <button
           ref={cancelRef}
           type="button"
           className="session-sheet-cancel"
           disabled={Boolean(pendingKind)}
-          onClick={() => { if (!pendingKind) onCloseRef.current(); }}
+          onClick={() => {
+            if (pendingKind) return;
+            if (selectedKind) setSelectedKind("");
+            else onCloseRef.current();
+          }}
         >
-          Cancel
+          {selectedKind ? "Back" : "Cancel"}
         </button>
       </div>
     </div>

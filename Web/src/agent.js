@@ -62,6 +62,155 @@ export function formatAgentModel(raw) {
   }).join(" ");
 }
 
+export const AGENT_MODELS_BY_PROVIDER = {
+  codex: [
+    { id: "gpt-5", label: "GPT-5" },
+    { id: "gpt-5-mini", label: "GPT-5 mini" },
+    { id: "o3", label: "o3" },
+    { id: "o3-mini", label: "o3-mini" },
+    { id: "o1", label: "o1" },
+    { id: "gpt-4.1", label: "GPT-4.1" },
+  ],
+  claude: [
+    { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+    { id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
+    { id: "claude-3-5-haiku", label: "Claude 3.5 Haiku" },
+    { id: "claude-3-opus", label: "Claude 3 Opus" },
+  ],
+  antigravity: [
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+    { id: "auto", label: "Auto" },
+  ],
+  opencode: [
+    { id: "anthropic/claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+    { id: "openai/gpt-5", label: "GPT-5" },
+    { id: "openai/o3-mini", label: "o3-mini" },
+    { id: "deepseek/deepseek-r1", label: "DeepSeek R1" },
+    { id: "deepseek/deepseek-chat", label: "DeepSeek V3" },
+  ],
+  pi: [
+    { id: "anthropic/claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+    { id: "openai/gpt-5", label: "GPT-5" },
+    { id: "deepseek/deepseek-r1", label: "DeepSeek R1" },
+  ],
+  qoder: [
+    { id: "efficient", label: "Efficient" },
+    { id: "performance", label: "Performance" },
+    { id: "gpt-5", label: "GPT-5" },
+    { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+  ],
+};
+
+export const DEFAULT_COMMON_MODELS = [
+  { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet" },
+  { id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
+  { id: "gpt-5", label: "GPT-5" },
+  { id: "o3-mini", label: "o3-mini" },
+  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  { id: "deepseek-r1", label: "DeepSeek R1" },
+];
+
+export const AGENT_REASONING_OPTIONS = [
+  { id: "default", label: "Default", description: "Standard reasoning effort" },
+  { id: "off", label: "Off", description: "Disable extended thinking" },
+  { id: "low", label: "Low", description: "Fast, minimal reasoning" },
+  { id: "medium", label: "Medium", description: "Balanced reasoning effort" },
+  { id: "high", label: "High", description: "Deep, thorough reasoning" },
+];
+
+const AGENT_REASONING_IDS = new Set(AGENT_REASONING_OPTIONS.map(option => option.id));
+
+export function getAvailableAgentModels(provider) {
+  const normalized = normalizeAgentProvider(provider);
+  return AGENT_MODELS_BY_PROVIDER[normalized] || DEFAULT_COMMON_MODELS;
+}
+
+export function formatAgentReasoning(effort) {
+  const normalized = String(effort || "default").trim().toLowerCase();
+  const found = AGENT_REASONING_OPTIONS.find(opt => opt.id === normalized);
+  return found ? found.label : "Default";
+}
+
+function normalizeAgentModelID(modelId) {
+  // Model IDs are sent through a provider's command parser. Keep them on one
+  // line so a pasted control character cannot turn one setting into several
+  // commands.
+  return String(modelId || "").replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").trim();
+}
+
+function normalizeAgentProvider(provider) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "claude-code") return "claude";
+  if (normalized === "agy") return "antigravity";
+  if (normalized === "open-code") return "opencode";
+  return normalized;
+}
+
+export function defaultAgentLaunchCommand(provider) {
+  switch (normalizeAgentProvider(provider)) {
+    case "claude": return "claude";
+    case "codex": return "codex --dangerously-bypass-hook-trust";
+    case "antigravity": return "agy";
+    case "opencode": return "opencode";
+    case "pi": return "pi";
+    case "qoder": return "qoder";
+    case "trae": return "trae-cli interactive";
+    default: return "";
+  }
+}
+
+export function agentModelSwitchCommand(modelId) {
+  const model = normalizeAgentModelID(modelId);
+  if (!model) return "";
+  return `/model ${model}`;
+}
+
+export function agentReasoningSwitchCommand(effort, provider) {
+  const normalized = String(effort || "default").trim().toLowerCase();
+  if (!AGENT_REASONING_IDS.has(normalized) || normalized === "default") return "";
+  const prov = normalizeAgentProvider(provider);
+  if (prov === "pi") {
+    return `/thinking ${normalized}`;
+  }
+  return `/effort ${normalized}`;
+}
+
+export function agentReasoningResetCommand(provider) {
+  return normalizeAgentProvider(provider) === "pi"
+    ? "/thinking default"
+    : "/effort default";
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Adds optional launch-time settings without changing the configured command
+ * when the user leaves both controls at their defaults.
+ */
+export function agentLaunchCommand(command, provider, { model = "", reasoning = "default" } = {}) {
+  const kind = normalizeAgentProvider(provider);
+  const configuredBase = String(command || "").trim();
+  const base = configuredBase || defaultAgentLaunchCommand(kind);
+  const args = [];
+  const modelID = normalizeAgentModelID(model);
+  const effort = String(reasoning || "default").trim().toLowerCase();
+
+  if (modelID && ["claude", "codex", "antigravity", "opencode", "pi", "qoder"].includes(kind)) {
+    args.push("--model", shellQuote(modelID));
+  }
+  if (effort !== "default" && AGENT_REASONING_IDS.has(effort)) {
+    if (kind === "codex" && effort !== "off") args.push("-c", `model_reasoning_effort=${effort}`);
+    else if (["claude", "antigravity"].includes(kind) && effort !== "off") args.push("--effort", effort);
+    else if (kind === "pi") args.push("--thinking", effort);
+    else if (kind === "qoder" && effort !== "off") args.push("--reasoning-effort", effort);
+  }
+  return [base, ...args].filter(Boolean).join(" ");
+}
+
 /**
  * Computes the textarea height without touching the DOM. The composer starts
  * at two lines, grows to six, and then lets the textarea scroll internally.
@@ -409,6 +558,28 @@ export function saveAgentDraft(storage, endpointIdentity, sessionID, text, maxBy
 
 export function removeAgentDraft(storage, endpointIdentity, sessionID) {
   try { storage?.removeItem(agentDraftKey(endpointIdentity, sessionID)); } catch { /* best effort */ }
+}
+
+export function agentSettingsKey(endpointIdentity, sessionID) {
+  return `warren.agent-settings.${encodeAgentDraftKeyPart(endpointIdentity)}.${encodeAgentDraftKeyPart(sessionID)}`;
+}
+
+export function loadAgentSettings(storage, endpointIdentity, sessionID) {
+  try {
+    const raw = storage?.getItem(agentSettingsKey(endpointIdentity, sessionID));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveAgentSettings(storage, endpointIdentity, sessionID, settings) {
+  try {
+    storage?.setItem(agentSettingsKey(endpointIdentity, sessionID), JSON.stringify(settings));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

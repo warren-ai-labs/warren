@@ -3,20 +3,28 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  AGENT_REASONING_OPTIONS,
   agentDraftMaximumBytes,
+  agentModelSwitchCommand,
+  agentReasoningResetCommand,
+  agentReasoningSwitchCommand,
   displayToolName,
   extractExecCommands,
   formatAgentModel,
+  formatAgentReasoning,
+  getAvailableAgentModels,
   basename,
   formatFileList,
   groupAgentEvents,
   isCommandTool,
   latestAgentAction,
   loadAgentDraft,
+  loadAgentSettings,
   normalizeAgentEventType,
   projectAgentEvents,
   removeAgentDraft,
   saveAgentDraft,
+  saveAgentSettings,
   toolSummary,
   truncatePreview,
   validateAgentAttachment,
@@ -111,7 +119,121 @@ export function AgentView({
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
   const rawModel = agentModel(session, events);
-  const modelLabel = formatAgentModel(rawModel) || (session?.kind && session.kind !== "shell" ? displayTitle : "");
+  const [selectedModel, setSelectedModel] = useState(() => {
+    const saved = loadAgentSettings(localStorage, endpointIdentity, session?.id);
+    return typeof saved?.model === "string" ? saved.model.trim() : "";
+  });
+  const [selectedReasoning, setSelectedReasoning] = useState(() => {
+    const saved = loadAgentSettings(localStorage, endpointIdentity, session?.id);
+    return AGENT_REASONING_OPTIONS.some(option => option.id === saved?.reasoning)
+      ? saved.reasoning
+      : "default";
+  });
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [isReasoningPickerOpen, setIsReasoningPickerOpen] = useState(false);
+  const [customModelInput, setCustomModelInput] = useState("");
+
+  const modelPickerRef = useRef(null);
+  const reasoningPickerRef = useRef(null);
+  const appliedModelRef = useRef(rawModel);
+  const appliedReasoningRef = useRef("default");
+
+  useEffect(() => {
+    const saved = loadAgentSettings(localStorage, endpointIdentity, session?.id);
+    setSelectedModel(typeof saved?.model === "string" ? saved.model.trim() : "");
+    setSelectedReasoning(
+      AGENT_REASONING_OPTIONS.some(option => option.id === saved?.reasoning)
+        ? saved.reasoning
+        : "default",
+    );
+    setIsModelPickerOpen(false);
+    setIsReasoningPickerOpen(false);
+    // A local preference is only the desired value. It may have been saved
+    // before the Host accepted the command (or after a reload), so compare it
+    // with the model reported by the current transcript on the next send.
+    appliedModelRef.current = rawModel;
+    appliedReasoningRef.current = "default";
+  }, [endpointIdentity, session?.id]);
+
+  useEffect(() => {
+    const handleClickOutside = event => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target)) {
+        setIsModelPickerOpen(false);
+      }
+      if (reasoningPickerRef.current && !reasoningPickerRef.current.contains(event.target)) {
+        setIsReasoningPickerOpen(false);
+      }
+    };
+    const handleKeyDown = event => {
+      if (event.key === "Escape") {
+        setIsModelPickerOpen(false);
+        setIsReasoningPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const activeModel = selectedModel || rawModel;
+  const modelLabel = formatAgentModel(activeModel) || (session?.kind && session.kind !== "shell" ? displayTitle : "");
+  const availableModels = useMemo(() => {
+    const models = getAvailableAgentModels(session?.kind);
+    if (!activeModel || models.some(item => item.id === activeModel)) return models;
+    return [{ id: activeModel, label: formatAgentModel(activeModel) || activeModel }, ...models];
+  }, [activeModel, session?.kind]);
+
+  const updateModel = nextModel => {
+    setSelectedModel(nextModel);
+    saveAgentSettings(localStorage, endpointIdentity, session?.id, {
+      model: nextModel,
+      reasoning: selectedReasoning,
+    });
+  };
+
+  const updateReasoning = nextReasoning => {
+    setSelectedReasoning(nextReasoning);
+    saveAgentSettings(localStorage, endpointIdentity, session?.id, {
+      model: selectedModel,
+      reasoning: nextReasoning,
+    });
+  };
+
+  const switchModelNow = async modelId => {
+    if (!modelId || !canCompose) return;
+    const cmd = agentModelSwitchCommand(modelId);
+    if (cmd) {
+      try {
+        const sent = await onSend(cmd);
+        if (sent === false) return;
+        appliedModelRef.current = modelId;
+        setIsModelPickerOpen(false);
+      } catch {
+        // Keep the setting pending so the next message can retry it.
+      }
+    }
+  };
+
+  const switchReasoningNow = async effort => {
+    if (!effort || !canCompose) return;
+    const cmd = effort === "default"
+      ? agentReasoningResetCommand(session?.kind)
+      : agentReasoningSwitchCommand(effort, session?.kind);
+    if (cmd) {
+      try {
+        const sent = await onSend(cmd);
+        if (sent === false) return;
+        appliedReasoningRef.current = effort;
+        setIsReasoningPickerOpen(false);
+      } catch {
+        // Keep the setting pending so the next message can retry it.
+      }
+    }
+  };
+
   const canCompose = ready && hasControl && canSendForStatus(agentStatus);
   const disabledReason = agentInputDisabledReason({ ready, hasControl, status: agentStatus });
   const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
@@ -388,9 +510,34 @@ export function AgentView({
       setSubmitStatus("error");
       return;
     }
+    const applyComposerSettings = async () => {
+      const modelToApply = selectedModel || (
+        rawModel && appliedModelRef.current && appliedModelRef.current !== rawModel
+          ? rawModel
+          : ""
+      );
+      if (modelToApply && modelToApply !== appliedModelRef.current) {
+        const cmd = agentModelSwitchCommand(modelToApply);
+        if (cmd) {
+          await onSend(cmd);
+          appliedModelRef.current = modelToApply;
+        }
+      }
+      if (selectedReasoning !== appliedReasoningRef.current) {
+        const cmd = selectedReasoning === "default"
+          ? agentReasoningResetCommand(session?.kind)
+          : agentReasoningSwitchCommand(selectedReasoning, session?.kind);
+        if (cmd) {
+          await onSend(cmd);
+          appliedReasoningRef.current = selectedReasoning;
+        }
+      }
+    };
     try {
+      if (!sendNow) await applyComposerSettings();
       const result = sendNow ? await onSendNow(value, refs) : await onSend(value, refs);
       if (result === false) throw new Error("Send unavailable");
+      if (sendNow) await applyComposerSettings();
     } catch (error) {
       if (!isCurrentUpload()) {
         submissionInFlightRef.current = false;
@@ -652,7 +799,145 @@ export function AgentView({
                   disabled={!canUpload || uploadingAttachments || submitStatus === "sending"}
                 />
               </label>
-              {modelLabel && <code className="agent-model-chip">{modelLabel}</code>}
+              <div className="agent-picker-container" ref={modelPickerRef}>
+                <button
+                  type="button"
+                  className={`agent-picker-trigger${isModelPickerOpen ? " open" : ""}`}
+                  onClick={() => {
+                    setIsModelPickerOpen(prev => !prev);
+                    setIsReasoningPickerOpen(false);
+                  }}
+                  title="Switch Model"
+                  aria-label="Switch Model"
+                  aria-expanded={isModelPickerOpen}
+                >
+                  <span className="agent-picker-icon" aria-hidden="true">⚡</span>
+                  <span className="agent-picker-label">{modelLabel || "Model"}</span>
+                  <span className="agent-picker-caret" aria-hidden="true">▾</span>
+                </button>
+                {isModelPickerOpen && (
+                  <div className="agent-picker-dropdown" role="menu" aria-label="Available Models">
+                    <div className="agent-picker-header">Switch Model</div>
+                    <div className="agent-picker-list">
+                      <button
+                        type="button"
+                        className={`agent-picker-item${!selectedModel ? " selected" : ""}`}
+                        onClick={() => {
+                          updateModel("");
+                          setIsModelPickerOpen(false);
+                        }}
+                      >
+                        <span className="agent-picker-item-label">Default session model</span>
+                        {!selectedModel && <span className="agent-picker-check" aria-hidden="true">✓</span>}
+                      </button>
+                      {availableModels.map(item => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`agent-picker-item${selectedModel === item.id ? " selected" : ""}`}
+                          onClick={() => {
+                            updateModel(item.id);
+                            setIsModelPickerOpen(false);
+                          }}
+                        >
+                          <span className="agent-picker-item-label">{item.label}</span>
+                          {selectedModel === item.id && <span className="agent-picker-check" aria-hidden="true">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                    <form
+                      className="agent-picker-custom"
+                      onSubmit={e => {
+                        e.preventDefault();
+                        const val = customModelInput.trim();
+                        if (val) {
+                          updateModel(val);
+                          setCustomModelInput("");
+                          setIsModelPickerOpen(false);
+                        }
+                      }}
+                    >
+                      <input
+                        type="text"
+                        className="agent-picker-custom-input"
+                        placeholder="Custom model ID…"
+                        value={customModelInput}
+                        onChange={e => setCustomModelInput(e.target.value)}
+                        aria-label="Custom model identifier"
+                      />
+                      <button type="submit" className="agent-picker-custom-btn" disabled={!customModelInput.trim()}>
+                        Set
+                      </button>
+                    </form>
+                    {canCompose && selectedModel && (
+                      <div className="agent-picker-footer">
+                        <button
+                          type="button"
+                          className="agent-picker-apply-btn"
+                          onClick={() => switchModelNow(activeModel)}
+                        >
+                          Apply /model to session
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="agent-picker-container" ref={reasoningPickerRef}>
+                <button
+                  type="button"
+                  className={`agent-picker-trigger${isReasoningPickerOpen ? " open" : ""}`}
+                  onClick={() => {
+                    setIsReasoningPickerOpen(prev => !prev);
+                    setIsModelPickerOpen(false);
+                  }}
+                  title="Reasoning Effort"
+                  aria-label="Reasoning Effort"
+                  aria-expanded={isReasoningPickerOpen}
+                >
+                  <span className="agent-picker-icon" aria-hidden="true">🧠</span>
+                  <span className="agent-picker-label">
+                    {selectedReasoning === "default" ? "Reasoning" : `Reasoning: ${formatAgentReasoning(selectedReasoning)}`}
+                  </span>
+                  <span className="agent-picker-caret" aria-hidden="true">▾</span>
+                </button>
+                {isReasoningPickerOpen && (
+                  <div className="agent-picker-dropdown" role="menu" aria-label="Reasoning Effort Options">
+                    <div className="agent-picker-header">Reasoning Effort</div>
+                    <div className="agent-picker-list">
+                      {AGENT_REASONING_OPTIONS.map(opt => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`agent-picker-item${selectedReasoning === opt.id ? " selected" : ""}`}
+                          onClick={() => {
+                            updateReasoning(opt.id);
+                            setIsReasoningPickerOpen(false);
+                          }}
+                        >
+                          <div className="agent-picker-item-content">
+                            <span className="agent-picker-item-label">{opt.label}</span>
+                            <span className="agent-picker-item-desc">{opt.description}</span>
+                          </div>
+                          {selectedReasoning === opt.id && <span className="agent-picker-check" aria-hidden="true">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                    {canCompose && selectedReasoning !== appliedReasoningRef.current && (
+                      <div className="agent-picker-footer">
+                        <button
+                          type="button"
+                          className="agent-picker-apply-btn"
+                          onClick={() => switchReasoningNow(selectedReasoning)}
+                        >
+                          Apply to session
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button type="submit" className="agent-send" disabled={(!draft.trim() && attachments.length === 0) || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
                 <SendIcon />
               </button>
