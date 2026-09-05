@@ -76,6 +76,9 @@ public actor IOSAgentEventStore {
         CREATE INDEX IF NOT EXISTS idx_ios_agent_seq 
         ON ios_agent_events(session_id, epoch, sequence ASC);
 
+        CREATE INDEX IF NOT EXISTS idx_ios_agent_recent
+        ON ios_agent_events(session_id, epoch, sequence DESC);
+
         CREATE TABLE IF NOT EXISTS ios_agent_sync_state (
             session_id      TEXT NOT NULL,
             epoch           INTEGER NOT NULL,
