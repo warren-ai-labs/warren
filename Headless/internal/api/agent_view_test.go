@@ -24,6 +24,12 @@ func TestNegotiateCapabilitiesKeepsHostOrderAndDropsUnknownValues(t *testing.T) 
 	}
 }
 
+func TestHostCapabilitiesIncludeBrowserHeartbeat(t *testing.T) {
+	if !SupportsCapability(HostCapabilities(), CapabilityAppHeartbeat) {
+		t.Fatal("Host capabilities omitted browser heartbeat")
+	}
+}
+
 func TestAgentAttachmentChunkDigestValidatesLengthAndChecksum(t *testing.T) {
 	data := []byte("chunk")
 	digest := sha256.Sum256(data)

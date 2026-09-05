@@ -47,6 +47,7 @@ const (
 
 // Negotiated capability identifiers. Order is the canonical order returned by the Host.
 var Capabilities = []string{
+	"app-heartbeat-v1",
 	"roster-delta",
 	"agent-timeline-v1",
 	"agent-interactions-v1",

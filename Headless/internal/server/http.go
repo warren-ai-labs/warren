@@ -1191,6 +1191,14 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			_ = peer.writeError("", fmt.Errorf("invalid request: %w", err))
 			continue
 		}
+		if command.Type == "ping" {
+			if peer.supportsCapability(api.CapabilityAppHeartbeat) {
+				if err := peer.writeJSON(map[string]any{"t": "pong", "id": command.ID}); err != nil {
+					return
+				}
+			}
+			continue
+		}
 		if isSlowMutation(command.Method) {
 			// Worktree and process cleanup can take several seconds. Do not hold
 			// the WebSocket read loop while a destructive mutation runs: clients
@@ -1334,6 +1342,12 @@ func (s *HTTPServer) HandleRelayControl(
 	var command api.Envelope
 	if err := json.Unmarshal(value.Payload, &command); err != nil {
 		return peer.writeError("", fmt.Errorf("invalid request: %w", err))
+	}
+	if command.Type == "ping" {
+		if peer.supportsCapability(api.CapabilityAppHeartbeat) {
+			return peer.writeJSON(map[string]any{"t": "pong", "id": command.ID})
+		}
+		return nil
 	}
 	if command.Type != "request" {
 		return peer.writeError(command.ID, errors.New("unsupported message type"))

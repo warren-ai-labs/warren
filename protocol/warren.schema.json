@@ -136,10 +136,10 @@
       "properties": {
         "envelope": {
           "type": "object",
-          "description": "Client-to-server envelope. Carries the request id used to match the response.",
-          "required": ["t", "method"],
+          "description": "Client-to-server envelope. Requests carry a method and id; a negotiated app-heartbeat-v1 probe carries t=ping and id without a method.",
+          "required": ["t"],
           "properties": {
-            "t": { "type": "string", "const": "request" },
+            "t": { "type": "string", "enum": ["request", "ping"] },
             "id": { "type": "string" },
             "token": { "type": "string", "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself." },
             "version": { "type": "string", "const": "2.0" },
@@ -151,7 +151,17 @@
             },
             "method": { "type": "string" },
             "params": { "type": "object", "additionalProperties": true }
-          }
+          },
+          "oneOf": [
+            {
+              "required": ["method"],
+              "properties": { "t": { "const": "request" } }
+            },
+            {
+              "required": ["id"],
+              "properties": { "t": { "const": "ping" } }
+            }
+          ]
         },
         "response": {
           "type": "object",
@@ -173,6 +183,7 @@
       "items": {
         "type": "string",
         "enum": [
+          "app-heartbeat-v1",
           "roster-delta",
           "agent-timeline-v1",
           "agent-interactions-v1",
@@ -292,7 +303,8 @@
           "exited",
           "agent",
           "agent.status",
-          "agent.turn"
+          "agent.turn",
+          "pong"
         ]
       },
       "uniqueItems": true,
@@ -344,6 +356,10 @@
         "agent.turn": {
           "fields": { "t": "agent.turn", "session": "string", "turn": "api.AgentTurn" },
           "notes": "Whole-turn completion marker. Carries usage and final state."
+        },
+        "pong": {
+          "fields": { "t": "pong", "id": "string" },
+          "notes": "Reply to a client ping when capability 'app-heartbeat-v1' is negotiated."
         }
       }
     },

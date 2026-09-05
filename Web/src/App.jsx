@@ -17,6 +17,7 @@ import {
 } from "./catalog.js";
 import {
   WarrenConnection,
+  appHeartbeatCapability,
   agentCapabilities,
   connectionErrorDetail,
   rejectPendingRequests,
@@ -3030,7 +3031,7 @@ export default function App() {
         token: runtime.token,
         clientID: runtime.clientID,
         getToken: () => runtime.token,
-        capabilities: ["roster-delta", ...agentCapabilities],
+        capabilities: ["roster-delta", appHeartbeatCapability, ...agentCapabilities],
         onMessage: event => messageHandlerRef.current(event),
         onState: state => connectionStateHandlerRef.current(state),
       });

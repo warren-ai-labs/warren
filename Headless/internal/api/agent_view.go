@@ -13,6 +13,10 @@ import (
 // Keep these strings stable: clients persist no capability state and may
 // safely ignore names introduced by a newer Host.
 const (
+	// CapabilityAppHeartbeat enables a lightweight browser-compatible liveness
+	// exchange. Native clients use WebSocket ping frames, while browsers cannot
+	// originate protocol-level ping frames from JavaScript.
+	CapabilityAppHeartbeat      = "app-heartbeat-v1"
 	CapabilityRosterDelta       = "roster-delta"
 	CapabilityAgentTimeline     = "agent-timeline-v1"
 	CapabilityAgentInteractions = "agent-interactions-v1"
@@ -44,7 +48,8 @@ var AgentViewCapabilities = []string{
 // negotiation list so a welcome message is a true intersection rather than a
 // second, agent-only capability channel.
 func HostCapabilities() []string {
-	result := make([]string, 0, len(AgentViewCapabilities)+1)
+	result := make([]string, 0, len(AgentViewCapabilities)+2)
+	result = append(result, CapabilityAppHeartbeat)
 	result = append(result, CapabilityRosterDelta)
 	result = append(result, AgentViewCapabilities...)
 	return result
