@@ -69,6 +69,8 @@ const (
 	connectorControlQueueCapacity = 256
 	connectorDataQueueCapacity    = 32
 	connectorControlFairness      = 32
+	relayHeartbeatInterval        = 30 * time.Second
+	relayHeartbeatTimeout         = 75 * time.Second
 )
 
 var magic = [4]byte{'B', 'R', 'L', 'Y'}
@@ -601,7 +603,33 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 	connector.writer = writer
 	connector.mu.Unlock()
 	go writer.run()
-	_ = connection.SetReadDeadline(time.Time{})
+	// Keep a read deadline on the authenticated socket even when no virtual
+	// stream is active. Relay also sends pings, but the Host must be able to
+	// detect a half-open outbound connection on its own so reconnect does not
+	// wait for the kernel TCP timeout.
+	_ = connection.SetReadDeadline(time.Now().Add(relayHeartbeatTimeout))
+	connection.SetPongHandler(func(string) error {
+		return connection.SetReadDeadline(time.Now().Add(relayHeartbeatTimeout))
+	})
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	go func() {
+		ticker := time.NewTicker(relayHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatDone:
+				return
+			case <-ticker.C:
+				if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					// Closing the socket wakes the ReadMessage loop, which owns
+					// reconnect/backoff and will fence this connection epoch.
+					_ = connection.Close()
+					return
+				}
+			}
+		}
+	}()
 	connector.state("open")
 	for {
 		messageType, payload, err := connection.ReadMessage()
@@ -905,15 +933,13 @@ func (connector *Connector) dispatch(value frame) error {
 			return errors.New("invalid window update payload")
 		}
 		credit := binary.BigEndian.Uint64(value.Payload)
-		streamValue.windowMu.Lock()
-		if ^uint64(0)-streamValue.window < credit || streamValue.window+credit > initialWindow {
-			streamValue.window = initialWindow
-		} else {
-			streamValue.window += credit
+		if !streamValue.grantCredit(credit) {
+			// Keep a malformed update local to this virtual stream. A bad
+			// credit must not tear down every other client/HTTP stream on the
+			// authenticated Host socket.
+			_ = connector.send(frame{Kind: frameError, ID: value.ID, Payload: mustJSON(map[string]string{"code": "invalid_window_update"})})
+			connector.removeStream(value.ID)
 		}
-		close(streamValue.windowChange)
-		streamValue.windowChange = make(chan struct{})
-		streamValue.windowMu.Unlock()
 	}
 	return nil
 }
@@ -943,6 +969,28 @@ func encodeCredit(credit uint64) []byte {
 	value := make([]byte, 8)
 	binary.BigEndian.PutUint64(value, credit)
 	return value
+}
+
+func (value *stream) grantCredit(credit uint64) bool {
+	value.windowMu.Lock()
+	defer value.windowMu.Unlock()
+	if value.windowChange == nil {
+		value.windowChange = make(chan struct{})
+	}
+	// WINDOW_UPDATE returns bytes already consumed by the peer. Clamping an
+	// over-credit to a full window would manufacture send capacity and let a
+	// malformed peer bypass the bounded stream queue. Empty control messages
+	// may legitimately return zero credit as a no-op.
+	if value.window > initialWindow || credit > initialWindow-value.window {
+		return false
+	}
+	if credit == 0 {
+		return true
+	}
+	value.window += credit
+	close(value.windowChange)
+	value.windowChange = make(chan struct{})
+	return true
 }
 
 func writePipeWithContext(ctx context.Context, writer *io.PipeWriter, data []byte) error {

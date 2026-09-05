@@ -336,19 +336,26 @@ func (route *clientRoute) tryConsume(bytes uint64) (bool, <-chan struct{}) {
 	return true, nil
 }
 
-func (route *clientRoute) grant(bytes uint64) {
+func (route *clientRoute) grant(bytes uint64) bool {
 	route.windowMu.Lock()
 	defer route.windowMu.Unlock()
 	if route.windowChange == nil {
 		route.windowChange = make(chan struct{})
 	}
-	if ^uint64(0)-route.window < bytes || route.window+bytes > initialStreamWindow {
-		route.window = initialStreamWindow
-	} else {
-		route.window += bytes
+	// A WINDOW_UPDATE can only return bytes that were previously consumed.
+	// Silently clamping an over-credit to a full window turns a malformed or
+	// replayed update into extra send capacity and eventually unbounded relay
+	// memory. Zero is a valid no-op for an empty control message.
+	if route.window > initialStreamWindow || bytes > initialStreamWindow-route.window {
+		return false
 	}
+	if bytes == 0 {
+		return true
+	}
+	route.window += bytes
 	close(route.windowChange)
 	route.windowChange = make(chan struct{})
+	return true
 }
 
 func (tunnel *hostTunnel) readLoop(touch func()) error {
@@ -386,9 +393,14 @@ func (tunnel *hostTunnel) readLoop(touch func()) error {
 			if err != nil {
 				tunnel.removeClient(frame.ConnectionID)
 				_ = tunnel.send(relayFrame{Kind: frameError, ConnectionID: frame.ConnectionID, Payload: []byte(`{"code":"invalid_window_update"}`)})
+				_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
 				continue
 			}
-			route.grant(credit)
+			if !route.grant(credit) {
+				tunnel.removeClient(frame.ConnectionID)
+				_ = tunnel.send(relayFrame{Kind: frameError, ConnectionID: frame.ConnectionID, Payload: []byte(`{"code":"invalid_window_update"}`)})
+				_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
+			}
 			continue
 		}
 		select {
