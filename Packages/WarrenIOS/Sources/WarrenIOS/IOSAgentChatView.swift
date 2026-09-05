@@ -1184,6 +1184,7 @@ public struct AgentChatView: View {
         let loadGeneration = attachmentUploadGeneration
         let loadSessionID = sessionID
         Task { @MainActor in
+            var staged: [IOSAgentLocalAttachment] = []
             var added = 0
             var failed = 0
             for item in items {
@@ -1201,11 +1202,12 @@ public struct AgentChatView: View {
                 guard attachmentUploadGeneration == loadGeneration,
                       model.currentSessionID == loadSessionID else { return }
                 let type = item.supportedContentTypes.first?.preferredMIMEType ?? "image/*"
-                localAttachments.append(IOSAgentLocalAttachment(name: "Photo", mime: type, data: data))
+                staged.append(IOSAgentLocalAttachment(name: "Photo", mime: type, data: data))
                 added += 1
             }
             guard attachmentUploadGeneration == loadGeneration,
                   model.currentSessionID == loadSessionID else { return }
+            localAttachments.append(contentsOf: staged)
             if failed > 0 {
                 showTransientFeedback(
                     added > 0 ? "Some photos could not be attached." : "Unable to attach photo. Try again."
@@ -1223,26 +1225,49 @@ public struct AgentChatView: View {
             showTransientFeedback("Unable to read attachment. Try again.")
             return
         }
-        var added = 0
-        var failed = 0
-        for url in urls {
-            let secured = url.startAccessingSecurityScopedResource()
-            defer { if secured { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
-                failed += 1
-                continue
+        // The Host rejects attachments above 64MB; check sizes before paying
+        // for full Data reads, and read off the main thread.
+        let loadGeneration = attachmentUploadGeneration
+        let loadSessionID = sessionID
+        Task { @MainActor in
+            var staged: [IOSAgentLocalAttachment] = []
+            var added = 0
+            var failed = 0
+            for url in urls {
+                let secured = url.startAccessingSecurityScopedResource()
+                let tooLarge = ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) > 64 * 1024 * 1024
+                if tooLarge {
+                    if secured { url.stopAccessingSecurityScopedResource() }
+                    failed += 1
+                    continue
+                }
+                let read: (data: Data, mime: String, name: String)? = await Task.detached(priority: .userInitiated) { () -> (Data, String, String)? in
+                    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+                    guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+                    let mime = (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
+                        ?? "application/octet-stream"
+                    return (data, mime, url.lastPathComponent)
+                }.value
+                guard attachmentUploadGeneration == loadGeneration,
+                      model.currentSessionID == loadSessionID else { return }
+                guard let read else {
+                    failed += 1
+                    continue
+                }
+                staged.append(IOSAgentLocalAttachment(name: read.name, mime: read.mime, data: read.data))
+                added += 1
             }
-            let mime = (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
-                ?? "application/octet-stream"
-            localAttachments.append(IOSAgentLocalAttachment(name: url.lastPathComponent, mime: mime, data: data))
-            added += 1
-        }
-        if failed > 0 {
-            showTransientFeedback(
-                added > 0 ? "Some attachments could not be read." : "Unable to read attachment. Try again."
-            )
-        } else if added > 0 {
-            showTransientFeedback(added == 1 ? "Attachment added" : "Attachments added")
+            guard attachmentUploadGeneration == loadGeneration,
+                  model.currentSessionID == loadSessionID else { return }
+            // Single publication instead of one body evaluation per file.
+            localAttachments.append(contentsOf: staged)
+            if failed > 0 {
+                showTransientFeedback(
+                    added > 0 ? "Some attachments could not be read." : "Unable to read attachment. Try again."
+                )
+            } else if added > 0 {
+                showTransientFeedback(added == 1 ? "Attachment added" : "Attachments added")
+            }
         }
     }
 

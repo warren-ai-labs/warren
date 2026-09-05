@@ -183,6 +183,11 @@ public struct IOSKeychainStore: Sendable {
 public final class IOSLocalStore: @unchecked Sendable {
     private let defaults: UserDefaults
     public let keychain: IOSKeychainStore
+    /// Guards the in-memory caches below; every mutation path funnels through
+    /// writeEndpoints/saveEndpoint/removeEndpoint or the property setters.
+    private let cacheLock = NSLock()
+    private var cachedEndpoints: [WarrenRemoteEndpointConfiguration]?
+    private var cachedDeviceID: String?
 
     public init(
         defaults: UserDefaults = .standard,
@@ -192,20 +197,36 @@ public final class IOSLocalStore: @unchecked Sendable {
         self.keychain = keychain
     }
 
+    private func invalidateEndpointsCache() {
+        cacheLock.lock()
+        cachedEndpoints = nil
+        cacheLock.unlock()
+    }
+
     /// Stable client identity used by Relay to name this installation's
     /// association. It lives in Keychain so an app reinstall keeps the same
     /// device entry until the user or Host owner revokes it.
     public var deviceID: String {
-        if let value = keychain.read(account: Keys.deviceID), !value.isEmpty {
-            return value
+        cacheLock.lock()
+        if let cachedDeviceID {
+            cacheLock.unlock()
+            return cachedDeviceID
         }
-        if let value = defaults.string(forKey: Keys.deviceID), !value.isEmpty {
+        cacheLock.unlock()
+        let value: String
+        if let stored = keychain.read(account: Keys.deviceID), !stored.isEmpty {
+            value = stored
+        } else if let stored = defaults.string(forKey: Keys.deviceID), !stored.isEmpty {
+            _ = keychain.write(stored, account: Keys.deviceID)
+            value = stored
+        } else {
+            value = UUID().uuidString.lowercased()
             _ = keychain.write(value, account: Keys.deviceID)
-            return value
+            defaults.set(value, forKey: Keys.deviceID)
         }
-        let value = UUID().uuidString.lowercased()
-        _ = keychain.write(value, account: Keys.deviceID)
-        defaults.set(value, forKey: Keys.deviceID)
+        cacheLock.lock()
+        cachedDeviceID = value
+        cacheLock.unlock()
         return value
     }
 
@@ -215,17 +236,33 @@ public final class IOSLocalStore: @unchecked Sendable {
     /// next write upgrades them to the multi-Host format.
     public var endpoints: [WarrenRemoteEndpointConfiguration] {
         get {
-            if let values = storedEndpoints() {
-                return values.map(configuration(from:))
+            cacheLock.lock()
+            if let cachedEndpoints {
+                cacheLock.unlock()
+                return cachedEndpoints
             }
-            // UserDefaults is removed with the application. Keep a second
-            // copy of the non-secret endpoint catalog in Keychain so an app
-            // reinstall can restore the Relay route and find its token.
-            if let values = keychainStoredEndpoints() {
-                return values.map(configuration(from:))
+            cacheLock.unlock()
+            let values: [WarrenRemoteEndpointConfiguration]
+            if let stored = storedEndpoints() {
+                values = stored.map(configuration(from:))
+            } else if let stored = keychainStoredEndpoints() {
+                // UserDefaults is removed with the application. Keep a second
+                // copy of the non-secret endpoint catalog in Keychain so an app
+                // reinstall can restore the Relay route and find its token.
+                values = stored.map(configuration(from:))
+            } else if let legacy = legacyEndpoint() {
+                values = [configuration(from: legacy)]
+            } else {
+                values = []
             }
-            guard let legacy = legacyEndpoint() else { return [] }
-            return [configuration(from: legacy)]
+            cacheLock.lock()
+            // A concurrent write wins over this read; never clobber it.
+            if cachedEndpoints == nil {
+                cachedEndpoints = values
+            }
+            let result = cachedEndpoints ?? values
+            cacheLock.unlock()
+            return result
         }
         set {
             let previousNames = Set(endpoints.map(\.name))
@@ -270,6 +307,7 @@ public final class IOSLocalStore: @unchecked Sendable {
                 defaults.removeObject(forKey: Keys.endpoint)
                 removeActiveEndpointName()
                 _ = keychain.remove(account: Keys.endpointMetadata)
+                invalidateEndpointsCache()
                 return
             }
             let previousName = endpoint?.name
@@ -625,6 +663,7 @@ public final class IOSLocalStore: @unchecked Sendable {
     }
     
     private func writeEndpoints(_ values: [WarrenRemoteEndpointConfiguration]) {
+        invalidateEndpointsCache()
         let metadata = values.map {
             StoredEndpoint(
                 name: $0.name,

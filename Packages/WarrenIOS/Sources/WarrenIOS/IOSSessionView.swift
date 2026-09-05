@@ -462,12 +462,18 @@ func sessionProviderID(
     events: [WarrenRemoteAgentEvent]? = nil
 ) -> String {
     let kind = session.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let provider = (kind == "shell" || kind == "custom")
-        ? events?.reversed().compactMap { event -> String? in
-            let value = event.provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return value.isEmpty ? nil : value
-        }.first ?? kind
-        : kind
+    // Early exit: the newest event usually carries the provider; the previous
+    // reversed().compactMap().first mapped the whole transcript per rail row.
+    let provider: String = {
+        guard kind == "shell" || kind == "custom" else { return kind }
+        if let events {
+            for event in events.reversed() {
+                let value = event.provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !value.isEmpty { return value }
+            }
+        }
+        return kind
+    }()
     switch provider {
     case "claude", "claude-code": return "claude"
     case "codex": return "codex"
@@ -828,9 +834,14 @@ private struct TerminalShortcutBar: View {
     }
 }
 
+/// Compiled once: the Copy action previously built this pattern per tap.
+private let ansiStripRegex: NSRegularExpression? = try? NSRegularExpression(
+    pattern: #"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[ -/]*[@-~])"#,
+    options: []
+)
+
 private func stripANSISequences(_ text: String) -> String {
-    let pattern = #"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[ -/]*[@-~])"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+    guard let regex = ansiStripRegex else {
         return text
     }
     let range = NSRange(text.startIndex..., in: text)

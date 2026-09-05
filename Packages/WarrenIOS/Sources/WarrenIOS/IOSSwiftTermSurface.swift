@@ -124,9 +124,18 @@ private struct PlatformTerminalView: UIViewRepresentable {
             context.coordinator.lastOutputRevision = pending.revision
         }
 
-        let installedSnapshot = snapshot != context.coordinator.lastSnapshot
         let checkpointChanged = outputRevision != context.coordinator.lastOutputRevision
-        if installedSnapshot || checkpointChanged {
+        // The model only replaces the snapshot together with a revision bump
+        // (atomic checkpoint install/clear). Gating the O(n) Data compare on
+        // that signal keeps every PTY frame at O(1) in the steady state and
+        // for hidden LRU surfaces; the count check is belt-and-braces.
+        let snapshotChanged: Bool = {
+            guard checkpointChanged || snapshot.count != context.coordinator.lastSnapshot.count else {
+                return false
+            }
+            return snapshot != context.coordinator.lastSnapshot
+        }()
+        if snapshotChanged || checkpointChanged {
             if !isReady && context.coordinator.hasRenderedContent {
                 // Keep the previous grid on screen until the Host's `synced`
                 // marker opens the presentation gate. Live bytes are held by
