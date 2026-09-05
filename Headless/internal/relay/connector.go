@@ -95,6 +95,7 @@ type frame = Frame
 
 // StreamOpen describes a Relay-created virtual stream.
 type StreamOpen struct {
+	// p2p-signal is the canonical authenticated signaling class.
 	Class      string `json:"class"`
 	Version    string `json:"version,omitempty"`
 	RequestID  string `json:"request_id,omitempty"`
@@ -775,9 +776,8 @@ func (connector *Connector) dispatch(value frame) error {
 		if metadata.HostID != "" && metadata.HostID != connector.config.HostID {
 			return errors.New("stream host mismatch")
 		}
-		switch metadata.Class {
-		case "control", "http", "upgrade", "signal", "p2p-signal":
-		default:
+		scope, supported := streamCapabilityScope(metadata.Class)
+		if !supported {
 			return errors.New("unsupported stream class")
 		}
 		connector.mu.Lock()
@@ -791,12 +791,6 @@ func (connector *Connector) dispatch(value frame) error {
 			return errors.New("duplicate stream open")
 		}
 		if metadata.Token != "" {
-			scope := "control"
-			if metadata.Class == "http" || metadata.Class == "upgrade" {
-				scope = "tunnel"
-			} else if metadata.Class == "signal" || metadata.Class == "p2p-signal" {
-				scope = "p2p-signal"
-			}
 			connector.mu.Lock()
 			generation := connector.generation
 			connector.mu.Unlock()
@@ -817,7 +811,7 @@ func (connector *Connector) dispatch(value frame) error {
 				}
 			}
 		}
-		if metadata.Class == "control" || metadata.Class == "signal" || metadata.Class == "p2p-signal" {
+		if metadata.Class == "control" || metadata.Class == "p2p-signal" {
 			ctx, cancel := streamContext(metadata)
 			streamValue := newStream(metadata, epoch, ctx, cancel)
 			if connector.config.OnControl != nil {
@@ -825,7 +819,7 @@ func (connector *Connector) dispatch(value frame) error {
 				connector.streams[value.ID] = streamValue
 				connector.mu.Unlock()
 				if err := connector.config.OnControl(ctx, metadata, value); err != nil {
-					connector.removeStream(value.ID)
+					connector.removeStreamForEpoch(value.ID, streamValue.epoch)
 					return err
 				}
 				streamValue.control = make(chan frame, 64)
@@ -851,8 +845,8 @@ func (connector *Connector) dispatch(value frame) error {
 				// the Host socket. Report the failure on this stream and let the
 				// worker/context cleanup release its resources.
 				if errors.Is(err, errControlQueueOverflow) {
-					_ = connector.send(frame{Kind: frameError, ID: value.ID, Payload: mustJSON(map[string]string{"code": "backpressure", "message": "control stream queue overflow"})})
-					connector.removeStream(value.ID)
+					_ = connector.sendForStream(streamValue, frame{Kind: frameError, ID: value.ID, Payload: mustJSON(map[string]string{"code": "backpressure", "message": "control stream queue overflow"})})
+					connector.removeStreamForEpoch(value.ID, streamValue.epoch)
 					return nil
 				}
 				return err
@@ -874,7 +868,7 @@ func (connector *Connector) dispatch(value frame) error {
 			if err := hijacked.feed(value.Payload); err != nil {
 				return err
 			}
-			return connector.send(frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
+			return connector.sendForStream(streamValue, frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
 		}
 		if streamValue.body != nil {
 			if err := writePipeWithContext(streamValue.ctx, streamValue.body, value.Payload); err != nil {
@@ -882,7 +876,7 @@ func (connector *Connector) dispatch(value frame) error {
 			}
 			// DATA credit is returned only after the in-process handler accepted
 			// the bytes. This couples Relay's queue to actual Host capacity.
-			return connector.send(frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
+			return connector.sendForStream(streamValue, frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
 		}
 		return errors.New("HTTP DATA received before headers")
 	case frameEnd:
@@ -910,7 +904,7 @@ func (connector *Connector) dispatch(value frame) error {
 		}
 		if streamValue.body == nil && hijacked == nil {
 			streamValue.close()
-			connector.removeStream(value.ID)
+			connector.removeStreamForEpoch(value.ID, streamValue.epoch)
 			return errors.New("HTTP END received before headers")
 		}
 		return nil
@@ -927,7 +921,7 @@ func (connector *Connector) dispatch(value frame) error {
 		if streamValue.close != nil {
 			streamValue.close()
 		}
-		connector.removeStream(value.ID)
+		connector.removeStreamForEpoch(value.ID, streamValue.epoch)
 	case frameWindow:
 		if len(value.Payload) != 8 {
 			return errors.New("invalid window update payload")
@@ -937,15 +931,32 @@ func (connector *Connector) dispatch(value frame) error {
 			// Keep a malformed update local to this virtual stream. A bad
 			// credit must not tear down every other client/HTTP stream on the
 			// authenticated Host socket.
-			_ = connector.send(frame{Kind: frameError, ID: value.ID, Payload: mustJSON(map[string]string{"code": "invalid_window_update"})})
-			connector.removeStream(value.ID)
+			_ = connector.sendForStream(streamValue, frame{Kind: frameError, ID: value.ID, Payload: mustJSON(map[string]string{"code": "invalid_window_update"})})
+			connector.removeStreamForEpoch(value.ID, streamValue.epoch)
 		}
 	}
 	return nil
 }
 
 func isControlClass(class string) bool {
-	return class == "control" || class == "signal" || class == "p2p-signal"
+	scope, supported := streamCapabilityScope(class)
+	return supported && (scope == "control" || scope == "p2p-signal")
+}
+
+// streamCapabilityScope keeps the wire-class and capability namespaces
+// explicit. p2p-signal is the canonical Relay capability and the only
+// signaling class accepted on the current protocol.
+func streamCapabilityScope(class string) (string, bool) {
+	switch class {
+	case "control":
+		return "control", true
+	case "http", "upgrade":
+		return "tunnel", true
+	case "p2p-signal":
+		return "p2p-signal", true
+	default:
+		return "", false
+	}
 }
 
 func (connector *Connector) enqueueControl(value *stream, message frame) error {
@@ -1027,7 +1038,7 @@ func (connector *Connector) openStream(id connectionID, metadata streamOpen) err
 func (connector *Connector) startControlWorker(id connectionID, value *stream) {
 	go func() {
 		defer func() {
-			connector.removeStream(id)
+			connector.removeStreamForEpoch(id, value.epoch)
 			if value.controlDone != nil {
 				close(value.controlDone)
 			}
@@ -1044,18 +1055,23 @@ func (connector *Connector) startControlWorker(id connectionID, value *stream) {
 					continue
 				}
 				if err := connector.config.OnControl(value.ctx, value.open, message); err != nil {
-					_ = connector.send(frame{Kind: frameError, ID: id, Payload: mustJSON(map[string]string{"code": "control", "message": err.Error()})})
-					connector.removeStream(id)
+					_ = connector.sendForStream(value, frame{Kind: frameError, ID: id, Payload: mustJSON(map[string]string{"code": "control", "message": err.Error()})})
+					connector.removeStreamForEpoch(id, value.epoch)
 					return
 				}
-				if message.Kind == frameText || message.Kind == frameBinary || message.Kind == frameData {
-					if err := connector.send(frame{Kind: frameWindow, ID: id, Payload: encodeCredit(uint64(len(message.Payload)))}); err != nil {
-						connector.removeStream(id)
+				// Control text/binary messages use the reserved control lane and do
+				// not consume the body window. Returning credit for them would
+				// manufacture WINDOW_UPDATE capacity on Relay and make a strict
+				// Relay close this stream as over-credited. DATA is the only control
+				// frame that is charged to the body window.
+				if message.Kind == frameData {
+					if err := connector.sendForStream(value, frame{Kind: frameWindow, ID: id, Payload: encodeCredit(uint64(len(message.Payload)))}); err != nil {
+						connector.removeStreamForEpoch(id, value.epoch)
 						return
 					}
 				}
 				if message.Kind == frameEnd || message.Kind == frameClose || message.Kind == frameError {
-					connector.removeStream(id)
+					connector.removeStreamForEpoch(id, value.epoch)
 					return
 				}
 			}
@@ -1155,9 +1171,9 @@ func (connector *Connector) handleHeaders(id connectionID, value *stream, data [
 					response.WriteHeader(http.StatusOK)
 				}
 				trailers := trailerPairs(response.header)
-				_ = connector.send(frame{Kind: frameEnd, ID: id, Payload: mustJSON(map[string]any{"trailers": trailers})})
+				_ = connector.sendForStream(value, frame{Kind: frameEnd, ID: id, Payload: mustJSON(map[string]any{"trailers": trailers})})
 			}
-			connector.removeStream(id)
+			connector.removeStreamForEpoch(id, value.epoch)
 		}()
 	})
 	return nil
@@ -1173,6 +1189,34 @@ func (connector *Connector) send(value frame) error {
 	usedEpoch, used := connector.usedIDs[value.ID]
 	writer := connector.writer
 	connector.mu.Unlock()
+	return connector.sendEncoded(epoch, usedEpoch, used, writer, data, value)
+}
+
+// sendForStream is used by handlers that outlive the read loop. The stream
+// pointer and epoch together fence delayed writes from a disconnected socket
+// so they cannot be delivered to a replacement stream that happens to reuse
+// the same connection ID.
+func (connector *Connector) sendForStream(streamValue *stream, value frame) error {
+	if streamValue == nil {
+		return errors.New("stream closed")
+	}
+	data := encode(value)
+	if len(data) > headerSize+maxFrameBytes {
+		return errors.New("frame exceeds limit")
+	}
+	connector.mu.Lock()
+	current := connector.streams[value.ID]
+	epoch := connector.connectionEpoch
+	usedEpoch, used := connector.usedIDs[value.ID]
+	writer := connector.writer
+	connector.mu.Unlock()
+	if current != streamValue || streamValue.epoch != epoch {
+		return errors.New("relay stream epoch is stale")
+	}
+	return connector.sendEncoded(epoch, usedEpoch, used, writer, data, value)
+}
+
+func (connector *Connector) sendEncoded(epoch, usedEpoch uint64, used bool, writer *connectionWriter, data []byte, value frame) error {
 	if writer == nil {
 		return errors.New("relay connection closed")
 	}
@@ -1254,9 +1298,13 @@ func (connector *Connector) closeStreams(epoch uint64) {
 	}
 }
 
-func (connector *Connector) removeStream(id connectionID) {
+func (connector *Connector) removeStreamForEpoch(id connectionID, expectedEpoch uint64) {
 	connector.mu.Lock()
 	value := connector.streams[id]
+	if value == nil || value.epoch != expectedEpoch {
+		connector.mu.Unlock()
+		return
+	}
 	delete(connector.streams, id)
 	connector.mu.Unlock()
 	if value != nil && value.close != nil {
@@ -1288,7 +1336,7 @@ func (writer *responseWriter) WriteHeader(status int) {
 	}
 	writer.status = status
 	writer.wrote = true
-	writer.sendErr = writer.connector.send(frame{Kind: frameHTTPHeads, ID: writer.id, Payload: mustJSON(map[string]any{"status": status, "headers": headerPairs(writer.header)})})
+	writer.sendErr = writer.connector.sendForStream(writer.stream, frame{Kind: frameHTTPHeads, ID: writer.id, Payload: mustJSON(map[string]any{"status": status, "headers": headerPairs(writer.header)})})
 }
 func (writer *responseWriter) Write(data []byte) (int, error) {
 	writer.stateMu.Lock()
@@ -1316,7 +1364,7 @@ func (writer *responseWriter) Write(data []byte) (int, error) {
 		if len(chunk) > maxFrameBytes {
 			chunk = chunk[:maxFrameBytes]
 		}
-		if err := writer.connector.sendData(writer.id, chunk); err != nil {
+		if err := writer.connector.sendDataForStream(writer.id, writer.stream, chunk); err != nil {
 			return 0, err
 		}
 		data = data[len(chunk):]
@@ -1510,19 +1558,19 @@ func (connection *relayConn) Write(data []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if err := connection.connector.send(frame{Kind: frameHTTPHeads, ID: connection.id, Payload: mustJSON(headers)}); err != nil {
+		if err := connection.connector.sendForStream(connection.stream, frame{Kind: frameHTTPHeads, ID: connection.id, Payload: mustJSON(headers)}); err != nil {
 			return 0, err
 		}
 		connection.upgraded = true
 		connection.handshake.Reset()
 		if len(remainder) > 0 {
-			if err := connection.connector.sendData(connection.id, remainder); err != nil {
+			if err := connection.connector.sendDataForStream(connection.id, connection.stream, remainder); err != nil {
 				return 0, err
 			}
 		}
 		return len(data), nil
 	}
-	if err := connection.connector.sendData(connection.id, data); err != nil {
+	if err := connection.connector.sendDataForStream(connection.id, connection.stream, data); err != nil {
 		return 0, err
 	}
 	return len(data), nil
@@ -1537,7 +1585,7 @@ func (connection *relayConn) Close() error {
 		// its input receives END from Relay and can return after EOF; emitting
 		// CLOSE here ensures an explicitly closed upgraded handler also tears
 		// down the public socket.
-		_ = connection.connector.send(frame{Kind: frameClose, ID: connection.id})
+		_ = connection.connector.sendForStream(connection.stream, frame{Kind: frameClose, ID: connection.id})
 	})
 	return nil
 }
@@ -1606,28 +1654,47 @@ func parseUpgradeResponse(data []byte) (httpHeaders, []byte, error) {
 func (connector *Connector) sendData(id connectionID, data []byte) error {
 	connector.mu.Lock()
 	streamValue := connector.streams[id]
-	epoch := connector.connectionEpoch
 	connector.mu.Unlock()
-	if streamValue == nil || streamValue.epoch != epoch {
+	if streamValue == nil {
 		return errors.New("stream closed")
 	}
-	return connector.sendStream(id, frame{Kind: frameData, ID: id, Payload: append([]byte(nil), data...)})
+	return connector.sendDataForStream(id, streamValue, data)
 }
 
 func (connector *Connector) sendStream(id connectionID, value frame) error {
 	connector.mu.Lock()
 	streamValue := connector.streams[id]
+	connector.mu.Unlock()
+	if streamValue == nil {
+		return errors.New("stream closed")
+	}
+	return connector.sendStreamFor(streamValue, value)
+}
+
+func (connector *Connector) sendDataForStream(id connectionID, streamValue *stream, data []byte) error {
+	if streamValue == nil {
+		return errors.New("stream closed")
+	}
+	return connector.sendStreamFor(streamValue, frame{Kind: frameData, ID: id, Payload: append([]byte(nil), data...)})
+}
+
+func (connector *Connector) sendStreamFor(streamValue *stream, value frame) error {
+	if streamValue == nil {
+		return errors.New("stream closed")
+	}
+	connector.mu.Lock()
+	current := connector.streams[value.ID]
 	epoch := connector.connectionEpoch
 	connector.mu.Unlock()
-	if streamValue == nil || streamValue.epoch != epoch {
-		return errors.New("stream closed")
+	if current != streamValue || streamValue.epoch != epoch {
+		return errors.New("relay stream epoch is stale")
 	}
 	// Control streams use their own bounded queues and priority writer lane.
 	// Charging their JSON/binary messages to the HTTP body window lets a paused
 	// browser block RPC responses and input for the full flow-control timeout.
 	// Body and upgrade streams remain credit-controlled below.
 	if !streamFrameNeedsCredit(streamValue, value.Kind) {
-		return connector.send(value)
+		return connector.sendForStream(streamValue, value)
 	}
 	credit := uint64(len(value.Payload))
 	if credit > initialWindow {
@@ -1641,7 +1708,7 @@ func (connector *Connector) sendStream(id connectionID, value frame) error {
 		if credit <= streamValue.window {
 			streamValue.window -= credit
 			streamValue.windowMu.Unlock()
-			return connector.send(value)
+			return connector.sendForStream(streamValue, value)
 		}
 		changed := streamValue.windowChange
 		streamValue.windowMu.Unlock()

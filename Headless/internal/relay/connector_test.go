@@ -2,10 +2,15 @@ package relay
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestHostEndpointAcceptsIPPortsAndPreservesRelayBasePath(t *testing.T) {
@@ -150,8 +155,118 @@ func TestSendDataRejectsStreamFromPreviousEpoch(t *testing.T) {
 		connectionEpoch: 2,
 		streams:         map[connectionID]*stream{id: newStream(streamOpen{Class: "http"}, 1, ctx, cancel)},
 	}
-	if err := connector.sendData(id, []byte("stale")); err == nil || !strings.Contains(err.Error(), "stream closed") {
+	if err := connector.sendData(id, []byte("stale")); err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("sendData accepted stale stream: %v", err)
+	}
+}
+
+func TestRemoveStreamForEpochDoesNotDeleteReplacement(t *testing.T) {
+	oldContext, oldCancel := context.WithCancel(context.Background())
+	defer oldCancel()
+	currentContext, currentCancel := context.WithCancel(context.Background())
+	defer currentCancel()
+	id := connectionID{4}
+	old := newStream(streamOpen{Class: "http"}, 1, oldContext, oldCancel)
+	current := newStream(streamOpen{Class: "http"}, 2, currentContext, currentCancel)
+	connector := &Connector{
+		streams:         map[connectionID]*stream{id: current},
+		usedIDs:         map[connectionID]uint64{id: 2},
+		connectionEpoch: 2,
+	}
+
+	connector.removeStreamForEpoch(id, old.epoch)
+
+	connector.mu.Lock()
+	got := connector.streams[id]
+	connector.mu.Unlock()
+	if got != current {
+		t.Fatal("old epoch cleanup removed the replacement stream")
+	}
+	select {
+	case <-current.ctx.Done():
+		t.Fatal("old epoch cleanup canceled the replacement stream")
+	default:
+	}
+}
+
+func TestStaleHandlerCannotWriteToReplacementStream(t *testing.T) {
+	oldContext, oldCancel := context.WithCancel(context.Background())
+	defer oldCancel()
+	currentContext, currentCancel := context.WithCancel(context.Background())
+	defer currentCancel()
+	id := connectionID{5}
+	old := newStream(streamOpen{Class: "http"}, 1, oldContext, oldCancel)
+	current := newStream(streamOpen{Class: "http"}, 2, currentContext, currentCancel)
+	connector := &Connector{
+		streams:         map[connectionID]*stream{id: current},
+		usedIDs:         map[connectionID]uint64{id: 2},
+		connectionEpoch: 2,
+	}
+
+	if err := connector.sendForStream(old, frame{Kind: frameClose, ID: id}); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale handler write was accepted: %v", err)
+	}
+}
+
+func TestStreamFlowControlWakesAfterCreditReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	id := connectionID{6}
+	streamValue := newStream(streamOpen{Class: "http"}, 1, ctx, cancel)
+	streamValue.windowMu.Lock()
+	streamValue.window = 0
+	streamValue.windowMu.Unlock()
+	connector := &Connector{
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{id: streamValue},
+		usedIDs:         map[connectionID]uint64{id: 1},
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- connector.sendStreamFor(streamValue, frame{Kind: frameData, ID: id, Payload: []byte("x")})
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("flow-controlled send returned before credit: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !streamValue.grantCredit(1) {
+		t.Fatal("window credit was rejected")
+	}
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "connection closed") {
+			t.Fatalf("send after credit returned %v, want the missing-connection error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("flow-controlled send did not wake after credit")
+	}
+}
+
+func TestStreamFlowControlStopsWhenStreamIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	id := connectionID{7}
+	streamValue := newStream(streamOpen{Class: "http"}, 1, ctx, cancel)
+	streamValue.windowMu.Lock()
+	streamValue.window = 0
+	streamValue.windowMu.Unlock()
+	connector := &Connector{
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{id: streamValue},
+		usedIDs:         map[connectionID]uint64{id: 1},
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- connector.sendStreamFor(streamValue, frame{Kind: frameData, ID: id, Payload: []byte("x")})
+	}()
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("canceled flow-controlled send returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("flow-controlled send did not stop after stream cancellation")
 	}
 }
 
@@ -185,6 +300,106 @@ func TestControlStreamFramesDoNotWaitForBodyCredit(t *testing.T) {
 	if !streamFrameNeedsCredit(httpStream, frameText) {
 		t.Fatal("HTTP frame bypassed flow control")
 	}
+}
+
+func TestSignalWireClassesShareTheCanonicalCapabilityScope(t *testing.T) {
+	scope, ok := streamCapabilityScope("p2p-signal")
+	if !ok || scope != "p2p-signal" {
+		t.Fatalf("streamCapabilityScope(%q) = %q, %v; want p2p-signal, true", "p2p-signal", scope, ok)
+	}
+	if !isControlClass("p2p-signal") {
+		t.Fatal("p2p-signal was not treated as a control stream")
+	}
+	for _, class := range []string{"signal", "unknown"} {
+		if _, ok := streamCapabilityScope(class); ok {
+			t.Fatalf("unversioned/unknown stream class %q unexpectedly received a capability scope", class)
+		}
+	}
+	connector := &Connector{}
+	err := connector.dispatch(frame{Kind: frameOpen, ID: connectionID{9}, Payload: mustJSON(streamOpen{
+		Class: "signal", Version: version, Token: "capability",
+	})})
+	if err == nil || !strings.Contains(err.Error(), "unsupported stream class") {
+		t.Fatalf("legacy signal OPEN returned %v, want unsupported stream class", err)
+	}
+}
+
+func TestControlWorkerReturnsCreditOnlyForData(t *testing.T) {
+	serverConn := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(response, request, nil)
+		if err != nil {
+			return
+		}
+		serverConn <- connection
+	}))
+	defer server.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	defer client.Close()
+	var relay *websocket.Conn
+	select {
+	case relay = <-serverConn:
+	case <-time.After(time.Second):
+		t.Fatal("test websocket server did not accept the connection")
+	}
+	defer relay.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	id := connectionID{8}
+	streamValue := newStream(streamOpen{Class: "control"}, 1, ctx, cancel)
+	streamValue.control = make(chan frame, 8)
+	streamValue.controlDone = make(chan struct{})
+	connector := &Connector{
+		config:          Config{OnControl: func(context.Context, StreamOpen, Frame) error { return nil }},
+		conn:            client,
+		writer:          newConnectionWriter(client, 1),
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{id: streamValue},
+		usedIDs:         map[connectionID]uint64{id: 1},
+	}
+	go connector.writer.run()
+	connector.startControlWorker(id, streamValue)
+
+	data := []byte("body")
+	// Queue both uncharged control messages before the charged DATA message.
+	// The worker preserves order, so the first frame observed on the peer must
+	// be DATA's credit; the old implementation would incorrectly emit credit
+	// for the preceding text message.
+	streamValue.control <- frame{Kind: frameText, ID: id, Payload: []byte("text")}
+	streamValue.control <- frame{Kind: frameBinary, ID: id, Payload: []byte{1, 2, 3}}
+	streamValue.control <- frame{Kind: frameData, ID: id, Payload: data}
+	_ = relay.SetReadDeadline(time.Now().Add(time.Second))
+	messageType, payload, err := relay.ReadMessage()
+	if err != nil {
+		t.Fatalf("read DATA WINDOW_UPDATE: %v", err)
+	}
+	if messageType != websocket.BinaryMessage {
+		t.Fatalf("WINDOW_UPDATE message type = %d, want binary", messageType)
+	}
+	decoded, err := decode(payload)
+	if err != nil {
+		t.Fatalf("decode DATA WINDOW_UPDATE: %v", err)
+	}
+	if decoded.Kind != frameWindow || decoded.ID != id {
+		t.Fatalf("unexpected DATA response: kind=%d id=%v", decoded.Kind, decoded.ID)
+	}
+	if len(decoded.Payload) != 8 || binary.BigEndian.Uint64(decoded.Payload) != uint64(len(data)) {
+		t.Fatalf("DATA credit = %v, want %d", decoded.Payload, len(data))
+	}
+
+	cancel()
+	select {
+	case <-streamValue.controlDone:
+	case <-time.After(time.Second):
+		t.Fatal("control worker did not stop after cancellation")
+	}
+	connector.writer.stopWith(nil)
 }
 
 func TestStreamRejectsWindowOverCredit(t *testing.T) {

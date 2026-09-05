@@ -3699,7 +3699,14 @@ func (s *Service) readPeerCursorOutput(
 			sequence += uint64(count)
 		}
 		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) && readerContext.Err() == nil {
+			// Runtime teardown can close a reader before Service.stopOutput gets
+			// to detach the peer (session.delete and workspace cleanup both kill
+			// the runtime first). io.ErrClosedPipe is therefore a normal reader
+			// lifecycle result, just like EOF; treating it as a transport failure
+			// closes the WebSocket before the mutation response can be delivered.
+			// Other errors still close the peer so a genuinely broken output
+			// stream cannot leave the client connected to a silent subscription.
+			if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrClosedPipe) && readerContext.Err() == nil {
 				s.logWarn("read peer ghostline output", "session", sessionID, "error", readErr)
 				peer.close()
 			}

@@ -76,6 +76,56 @@ func newAgentViewTestService(t *testing.T, controller AgentViewController) *Serv
 	return service
 }
 
+func TestRunCanonicalCommandReplaysDurableResultAfterReconnect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	journal, err := store.OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{AgentStore: journal}
+	payload := api.AgentCommand{CommandID: "command-1", ExecutionID: "execution-1"}
+	calls := 0
+	first, err := service.runCanonicalCommand(
+		context.Background(), payload.ExecutionID, payload.CommandID, payload,
+		func() (any, error) {
+			calls++
+			return map[string]any{"accepted": true}, nil
+		},
+	)
+	if err != nil {
+		_ = journal.Close()
+		t.Fatal(err)
+	}
+	if first.(map[string]any)["accepted"] != true || calls != 1 {
+		_ = journal.Close()
+		t.Fatalf("first canonical result = %#v, calls=%d", first, calls)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err = store.OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	restarted := &Service{AgentStore: journal}
+	second, err := restarted.runCanonicalCommand(
+		context.Background(), payload.ExecutionID, payload.CommandID, payload,
+		func() (any, error) {
+			calls++
+			return nil, errors.New("durable command was invoked twice")
+		},
+	)
+	if err != nil {
+		t.Fatalf("durable replay failed: %v", err)
+	}
+	result, ok := second.(map[string]any)
+	if !ok || result["accepted"] != true || calls != 1 {
+		t.Fatalf("durable replay result = %#v, calls=%d", second, calls)
+	}
+}
+
 func TestInterruptAgentTurnInputSendsInterruptAndReplacement(t *testing.T) {
 	runtime := newMemoryRuntime(t)
 	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {

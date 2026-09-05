@@ -238,6 +238,7 @@ function sessionToTab(session = {}) {
     process: session.process || session.command || "",
     directory: session.directory || "",
     agentSessionId: session.agentSessionId || "",
+    agentExecutionId: session.agentExecutionId || "",
     transcriptPath: session.transcriptPath || "",
     agentModel: session.agentModel || "",
     agentStatus: session.agentStatus || null,

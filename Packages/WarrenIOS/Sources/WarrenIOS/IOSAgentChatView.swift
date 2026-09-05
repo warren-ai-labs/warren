@@ -357,12 +357,13 @@ public struct AgentChatView: View {
                                             displayBlockView(
                                                 block,
                                                 canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
-                                            ) { requestID, kind, response in
+                                            ) { requestID, kind, version, response in
                                                 model.respondToAgentInteraction(
                                                     sessionID: sessionID,
                                                     requestID: requestID,
                                                     kind: kind,
-                                                    response: response
+                                                    response: response,
+                                                    version: version
                                                 )
                                             }
                                             .id(block.id)
@@ -798,12 +799,13 @@ public struct AgentChatView: View {
                         event: pending,
                         canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
                         isDocked: true,
-                        onInteraction: { requestID, kind, response in
+                        onInteraction: { requestID, kind, version, response in
                             model.respondToAgentInteraction(
                                 sessionID: sessionID,
                                 requestID: requestID,
                                 kind: kind,
-                                response: response
+                                response: response,
+                                version: version
                             )
                         }
                     )
@@ -2634,7 +2636,7 @@ private extension WarrenRemoteAgentEvent {
 private func displayBlockView(
     _ block: AgentDisplayBlock,
     canInteract: Bool,
-    onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+    onInteraction: @escaping (String, String, UInt64, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 ) -> some View {
     switch block {
     case .event(let event):
@@ -2651,12 +2653,12 @@ private func displayBlockView(
 private struct AgentEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
-    let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+    let onInteraction: (String, String, UInt64, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
 
     init(
         event: WarrenRemoteAgentEvent,
         canInteract: Bool = false,
-        onInteraction: @escaping (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never> = { _, _, _ in Task { true } }
+        onInteraction: @escaping (String, String, UInt64, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never> = { _, _, _, _ in Task { true } }
     ) {
         self.event = event
         self.canInteract = canInteract
@@ -2801,7 +2803,7 @@ private struct AgentStructuredEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
     var isDocked: Bool = false
-    let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
+    let onInteraction: (String, String, UInt64, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var selectedOption: String?
@@ -2815,6 +2817,15 @@ private struct AgentStructuredEventBlock: View {
     }
 
     private var payload: [String: WarrenRemoteJSONValue] { event.payload ?? [:] }
+
+    private var interactionVersion: UInt64? {
+        // Older projections omitted the version and are equivalent to the
+        // initial interaction revision. Once a version field is present,
+        // malformed values must make the action unavailable rather than
+        // silently falling back to revision one.
+        guard payload["version"] != nil else { return 1 }
+        return payload.uint64("version")
+    }
 
     private var state: String {
         payload.string("state")?.lowercased() ?? ""
@@ -3243,10 +3254,11 @@ private struct AgentStructuredEventBlock: View {
                 VStack(spacing: 8) {
                     ForEach(effectiveOptions) { option in
                         Button {
-                            guard !submitting, state == "pending", let reqID = requestID else { return }
+                            guard !submitting, state == "pending", let reqID = requestID,
+                                  let version = interactionVersion else { return }
                             submitting = true
                             selectedOption = option.id
-                            let task = onInteraction(reqID, kind, ["decision": .string(option.id)])
+                            let task = onInteraction(reqID, kind, version, ["decision": .string(option.id)])
                             Task { @MainActor in
                                 if await !task.value { submitting = false }
                             }
@@ -3399,10 +3411,10 @@ private struct AgentStructuredEventBlock: View {
                 ForEach(options) { option in
                     if canInteract {
                         Button {
-                            guard !submitting, state == "pending" else { return }
+                            guard !submitting, state == "pending", let version = interactionVersion else { return }
                             submitting = true
                             selectedOption = option.id
-                            let task = onInteraction(requestID, kind, ["decision": .string(option.id)])
+                            let task = onInteraction(requestID, kind, version, ["decision": .string(option.id)])
                             Task { @MainActor in
                                 if await !task.value { submitting = false }
                             }
@@ -3449,10 +3461,10 @@ private struct AgentStructuredEventBlock: View {
                 ForEach(effectiveOptions) { option in
                     if canInteract {
                         Button {
-                            guard !submitting, state == "pending" else { return }
+                            guard !submitting, state == "pending", let version = interactionVersion else { return }
                             submitting = true
                             selectedOption = option.id
-                            let task = onInteraction(requestID, kind, ["decision": .string(option.id)])
+                            let task = onInteraction(requestID, kind, version, ["decision": .string(option.id)])
                             Task { @MainActor in
                                 if await !task.value { submitting = false }
                             }
@@ -3687,7 +3699,8 @@ private struct AgentStructuredEventBlock: View {
     }
 
     private func submitQuestion(requestID: String) {
-        guard !submitting, state == "pending", questionsAreValid else { return }
+        guard !submitting, state == "pending", questionsAreValid,
+              let version = interactionVersion else { return }
         var answers: [String: WarrenRemoteJSONValue] = [:]
         var custom: [String: WarrenRemoteJSONValue] = [:]
         for question in questionSpecs {
@@ -3701,16 +3714,16 @@ private struct AgentStructuredEventBlock: View {
         var response: [String: WarrenRemoteJSONValue] = ["answers": .object(answers)]
         if !custom.isEmpty { response["customAnswers"] = .object(custom) }
         submitting = true
-        let task = onInteraction(requestID, kind, response)
+        let task = onInteraction(requestID, kind, version, response)
         Task { @MainActor in
             if await !task.value { submitting = false }
         }
     }
 
     private func cancelInteraction(requestID: String, kind: String) {
-        guard !submitting, state == "pending" else { return }
+        guard !submitting, state == "pending", let version = interactionVersion else { return }
         submitting = true
-        let task = onInteraction(requestID, kind, ["cancelled": .boolean(true)])
+        let task = onInteraction(requestID, kind, version, ["cancelled": .boolean(true)])
         Task { @MainActor in
             if await !task.value { submitting = false }
         }
@@ -3762,6 +3775,22 @@ private extension Dictionary where Key == String, Value == WarrenRemoteJSONValue
     func bool(_ key: String) -> Bool? {
         guard case .boolean(let value) = self[key] else { return nil }
         return value
+    }
+
+    func uint64(_ key: String) -> UInt64? {
+        switch self[key] {
+        case .number(let value):
+            guard value.isFinite, value >= 0 else { return nil }
+            // The exact initializer rejects fractional values and the
+            // 2^64 rounding boundary that cannot be represented by UInt64;
+            // comparing against Double(UInt64.max) is not sufficient because
+            // that Double rounds up to 2^64.
+            return UInt64(exactly: value)
+        case .string(let value):
+            return UInt64(value)
+        default:
+            return nil
+        }
     }
 
     func object(_ key: String) -> [String: WarrenRemoteJSONValue]? {

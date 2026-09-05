@@ -1,6 +1,10 @@
 package controlplane
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestTunnelWriterReservesControlLane(t *testing.T) {
 	writer := &tunnelWriter{
@@ -59,5 +63,86 @@ func TestClientRouteRejectsWindowOverCredit(t *testing.T) {
 	}
 	if !route.grant(0) {
 		t.Fatal("zero window credit should be a no-op")
+	}
+}
+
+func TestTunnelFlowControlWakesAfterCreditReturns(t *testing.T) {
+	id := connectionID{1}
+	route := newClientRoute()
+	route.windowMu.Lock()
+	route.window = 0
+	route.windowMu.Unlock()
+	tunnel := &hostTunnel{
+		clients: make(map[connectionID]*clientRoute),
+		closed:  make(chan struct{}),
+	}
+	tunnel.clients[id] = route
+	result := make(chan error, 1)
+	go func() {
+		result <- tunnel.sendStreamContext(nil, id, relayFrame{Kind: frameData, ConnectionID: id, Payload: []byte("x")})
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("flow-controlled send returned before credit: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !route.grant(1) {
+		t.Fatal("window credit was rejected")
+	}
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "connection unavailable") {
+			t.Fatalf("send after credit returned %v, want the missing-connection error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("flow-controlled send did not wake after credit")
+	}
+}
+
+func TestTunnelFlowControlStopsWhenRouteOrTunnelCloses(t *testing.T) {
+	id := connectionID{2}
+	route := newClientRoute()
+	route.windowMu.Lock()
+	route.window = 0
+	route.windowMu.Unlock()
+	tunnel := &hostTunnel{
+		clients: map[connectionID]*clientRoute{id: route},
+		closed:  make(chan struct{}),
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- tunnel.sendStreamContext(nil, id, relayFrame{Kind: frameData, ConnectionID: id, Payload: []byte("x")})
+	}()
+	route.close()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "stream closed") {
+			t.Fatalf("closed route send returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("flow-controlled send did not stop after route closure")
+	}
+
+	// A route may remain registered while a Host socket is being torn down;
+	// tunnel closure must wake the same wait without relying on a window update.
+	route = newClientRoute()
+	route.windowMu.Lock()
+	route.window = 0
+	route.windowMu.Unlock()
+	tunnel.clientsMu.Lock()
+	tunnel.clients[id] = route
+	tunnel.clientsMu.Unlock()
+	result = make(chan error, 1)
+	go func() {
+		result <- tunnel.sendStreamContext(nil, id, relayFrame{Kind: frameData, ConnectionID: id, Payload: []byte("x")})
+	}()
+	tunnel.close()
+	select {
+	case err := <-result:
+		if err == nil || (!strings.Contains(err.Error(), "host tunnel closed") && !strings.Contains(err.Error(), "stream not found")) {
+			t.Fatalf("closed tunnel send returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("flow-controlled send did not stop after tunnel closure")
 	}
 }

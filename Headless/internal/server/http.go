@@ -3211,37 +3211,40 @@ func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command 
 	if err != nil {
 		return p.writeCanonicalError(command.ID, err)
 	}
-	if strings.TrimSpace(request.InteractionID) == "" || request.Version == 0 {
-		return p.writeCanonicalError(command.ID, errors.New("interactionId and version are required"))
-	}
-	interaction, found := p.server.Service.canonicalInteraction(session.ID, request.InteractionID)
-	if !found {
-		return p.writeCanonicalError(command.ID, fmt.Errorf("interaction not found: %s", request.InteractionID))
-	}
-	if request.Version != interaction.version {
-		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
-			code:    "stale_interaction",
-			message: fmt.Sprintf("interaction %s is version %d, not %d", request.InteractionID, interaction.version, request.Version),
-			details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
-		})
-	}
-	if interaction.state != "" && interaction.state != "pending" && interaction.state != "submitting" {
-		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
-			code:    "stale_interaction",
-			message: fmt.Sprintf("interaction %s is %s", request.InteractionID, interaction.state),
-			details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
-		})
-	}
-	if err := validateCanonicalInteractionResolution(interaction, request.Resolution); err != nil {
-		return p.writeCanonicalError(command.ID, &canonicalProtocolError{
-			code:    "invalid_interaction_resolution",
-			message: err.Error(),
-			details: map[string]any{"interactionId": request.InteractionID, "kind": interaction.kind, "version": interaction.version},
-		})
-	}
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
+			// Keep all mutable interaction checks inside the canonical command
+			// callback. A retry with the same command ID must replay the durable
+			// result before the interaction's state/version can become stale.
+			if strings.TrimSpace(request.InteractionID) == "" || request.Version == 0 {
+				return nil, errors.New("interactionId and version are required")
+			}
+			interaction, found := p.server.Service.canonicalInteraction(session.ID, request.InteractionID)
+			if !found {
+				return nil, fmt.Errorf("interaction not found: %s", request.InteractionID)
+			}
+			if request.Version != interaction.version {
+				return nil, &canonicalProtocolError{
+					code:    "stale_interaction",
+					message: fmt.Sprintf("interaction %s is version %d, not %d", request.InteractionID, interaction.version, request.Version),
+					details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
+				}
+			}
+			if interaction.state != "" && interaction.state != "pending" && interaction.state != "submitting" {
+				return nil, &canonicalProtocolError{
+					code:    "stale_interaction",
+					message: fmt.Sprintf("interaction %s is %s", request.InteractionID, interaction.state),
+					details: map[string]any{"interactionId": request.InteractionID, "currentVersion": interaction.version, "state": interaction.state},
+				}
+			}
+			if err := validateCanonicalInteractionResolution(interaction, request.Resolution); err != nil {
+				return nil, &canonicalProtocolError{
+					code:    "invalid_interaction_resolution",
+					message: err.Error(),
+					details: map[string]any{"interactionId": request.InteractionID, "kind": interaction.kind, "version": interaction.version},
+				}
+			}
 			_, err := p.server.Service.respondAgentInteraction(ctx, api.AgentInteractionResponse{
 				CommandID: request.CommandID, Session: session.ID, RequestID: request.InteractionID,
 				Kind: interaction.kind, Response: request.Resolution,
@@ -3263,10 +3266,14 @@ func (p *wsPeer) canonicalAttachmentSession(ctx context.Context, command api.Age
 	if err != nil {
 		return api.Session{}, err
 	}
-	if !p.server.Service.sessionSupportsCapability(session.ID, CapabilityAttachments) {
-		return api.Session{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, session.ID)
-	}
 	return session, nil
+}
+
+func (p *wsPeer) requireCanonicalAttachmentCapability(session api.Session) error {
+	if !p.server.Service.sessionSupportsCapability(session.ID, CapabilityAttachments) {
+		return fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentAttachments, session.ID)
+	}
+	return nil
 }
 
 func (p *wsPeer) handleCanonicalAttachmentPrepare(ctx context.Context, command api.Envelope) error {
@@ -3281,6 +3288,9 @@ func (p *wsPeer) handleCanonicalAttachmentPrepare(ctx context.Context, command a
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
+			if err := p.requireCanonicalAttachmentCapability(session); err != nil {
+				return nil, err
+			}
 			return p.server.Service.prepareAgentAttachment(ctx, session.ID, api.AgentAttachmentPrepareRequest{
 				Session: session.ID, Name: request.Name, MIME: request.MIME, Size: request.Size, SHA256: request.SHA256,
 			})
@@ -3304,6 +3314,9 @@ func (p *wsPeer) handleCanonicalAttachmentChunk(ctx context.Context, command api
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
+			if err := p.requireCanonicalAttachmentCapability(session); err != nil {
+				return nil, err
+			}
 			return p.server.Service.putAgentAttachmentChunk(ctx, api.AgentAttachmentChunkRequest{
 				Session: session.ID, UploadID: request.UploadID, Sequence: request.Chunk,
 				Length: request.Length, SHA256: request.SHA256, Data: request.Data,
@@ -3328,6 +3341,9 @@ func (p *wsPeer) handleCanonicalAttachmentComplete(ctx context.Context, command 
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
+			if err := p.requireCanonicalAttachmentCapability(session); err != nil {
+				return nil, err
+			}
 			return p.server.Service.completeAgentAttachment(ctx, api.AgentAttachmentCompleteRequest{
 				Session: session.ID, UploadID: request.UploadID, Length: request.Length, SHA256: request.SHA256,
 			})
@@ -3351,6 +3367,9 @@ func (p *wsPeer) handleCanonicalAttachmentAbort(ctx context.Context, command api
 	result, runErr := p.server.Service.runCanonicalCommand(
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
+			if err := p.requireCanonicalAttachmentCapability(session); err != nil {
+				return nil, err
+			}
 			return p.server.Service.abortAgentAttachment(ctx, api.AgentAttachmentAbortRequest{Session: session.ID, UploadID: request.UploadID})
 		},
 	)

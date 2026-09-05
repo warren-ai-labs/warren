@@ -1859,6 +1859,50 @@ public final class IOSApplicationModel: ObservableObject {
         updateAgentQueuedMessageCount(for: sessionID)
     }
 
+    /// Resolves the revision attached to the canonical interaction event that
+    /// opened this blocked state. The live status projection intentionally
+    /// contains only bounded attention metadata, so queued submissions must
+    /// correlate back to the immutable event rather than guess a revision.
+    /// Missing versions retain the protocol's legacy revision-one default;
+    /// explicitly malformed versions fail closed.
+    private func canonicalInteractionVersion(for sessionID: String, requestID: String) -> UInt64? {
+        let requestID = requestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestID.isEmpty else { return nil }
+        let events = agentState.agentEventsBySessionID[sessionID] ?? []
+        for event in events.reversed() {
+            let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .replacingOccurrences(of: "-", with: "_")
+            guard type == "interaction.requested"
+                    || type == "interaction.resolved"
+                    || type == "interaction.expired"
+                    // The presentation projection intentionally maps
+                    // interaction.requested to its provider-neutral kind.
+                    || type == "question"
+                    || type == "permission"
+                    || type == "confirmation" else { continue }
+            let payload = event.payload ?? [:]
+            let candidates = ["interactionId", "requestId"].compactMap { key -> String? in
+                guard case .string(let value) = payload[key], !value.isEmpty else { return nil }
+                return value.trimmingCharacters(in: .whitespacesAndNewlines)
+            } + (event.id.isEmpty ? [] : [event.id.trimmingCharacters(in: .whitespacesAndNewlines)])
+            guard candidates.contains(requestID) else { continue }
+            guard let rawVersion = payload["version"] else { return 1 }
+            let version: UInt64?
+            switch rawVersion {
+            case .number(let value):
+                version = UInt64(exactly: value)
+            case .string(let value):
+                version = UInt64(value)
+            default:
+                version = nil
+            }
+            guard let version, version > 0 else { return nil }
+            return version
+        }
+        return 1
+    }
+
     @discardableResult
     public func cancelAgentTurn() -> Bool {
         guard supportsAgentCapability(WarrenRemoteAgentCapability.interrupt),
@@ -1877,7 +1921,11 @@ public final class IOSApplicationModel: ObservableObject {
             do {
                 _ = try await client.cancelAgentTurn(
                     executionID: executionID,
-                    commandID: "cancel-\(UUID().uuidString.lowercased())",
+                    // Cancellation is one user intent for one execution/turn.
+                    // Reusing this identity lets a retry after a lost
+                    // response replay the durable result instead of issuing a
+                    // second interrupt.
+                    commandID: "cancel-\(executionID)-\(turn)",
                     turnID: String(turn),
                     reason: "cancel"
                 )
@@ -2028,7 +2076,8 @@ public final class IOSApplicationModel: ObservableObject {
         sessionID: String,
         requestID: String,
         kind: String,
-        response: [String: WarrenRemoteJSONValue]
+        response: [String: WarrenRemoteJSONValue],
+        version: UInt64 = 1
     ) -> Task<Bool, Never> {
         guard supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
               let executionID = agentExecutionID(for: sessionID) else {
@@ -2040,9 +2089,13 @@ public final class IOSApplicationModel: ObservableObject {
             do {
                 _ = try await client.resolveAgentInteraction(
                     executionID: executionID,
-                    commandID: "resolve-\(requestID)-\(UUID().uuidString.lowercased())",
+                    // The interaction request and version identify one
+                    // answer intent. A reconnect retry must use the same
+                    // canonical command ID so the Host can replay its
+                    // admission/result without resolving twice.
+                    commandID: "resolve-\(executionID)-\(requestID)-\(version)",
                     interactionID: requestID,
-                    version: 1,
+                    version: version,
                     resolution: response
                 )
                 return true
@@ -2226,11 +2279,17 @@ public final class IOSApplicationModel: ObservableObject {
                           item.attachments.isEmpty else {
                         throw WarrenRemoteClientError.requestFailed("Agent interaction is unavailable.")
                     }
+                    let interactionVersion = await MainActor.run {
+                        self?.canonicalInteractionVersion(for: sessionID, requestID: interactionID)
+                    }
+                    guard let interactionVersion else {
+                        throw WarrenRemoteClientError.requestFailed("Agent interaction is unavailable.")
+                    }
                     let result = try await client.resolveAgentInteraction(
                         executionID: executionID,
                         commandID: item.id,
                         interactionID: interactionID,
-                        version: 1,
+                        version: interactionVersion,
                         resolution: ["text": .string(item.text)]
                     )
                     guard result.accepted else {

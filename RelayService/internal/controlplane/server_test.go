@@ -186,6 +186,14 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 	if err != nil || clientType != websocket.BinaryMessage || !bytes.Equal(clientPayload, binaryPayload) {
 		t.Fatalf("bad host-to-client relay: type=%d payload=%v err=%v", clientType, clientPayload, err)
 	}
+	// Control binary frames use the reserved lane and do not consume the
+	// stream body window. Relay must not manufacture WINDOW_UPDATE credit for
+	// them, or a strict Host would close the control stream as over-credited.
+	_ = host.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	if _, _, err := host.ReadMessage(); err == nil {
+		t.Fatal("Relay returned WINDOW_UPDATE for an uncharged control frame")
+	}
+	_ = host.SetReadDeadline(time.Time{})
 }
 
 func TestEnrollmentKeyBatchReturnsSettingsLinksWithoutHostSecrets(t *testing.T) {
