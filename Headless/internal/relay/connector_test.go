@@ -170,3 +170,19 @@ func TestConnectionWriterReservesControlQueue(t *testing.T) {
 	}
 	writer.stopWith(nil)
 }
+
+func TestControlStreamFramesDoNotWaitForBodyCredit(t *testing.T) {
+	streamValue := newStream(streamOpen{Class: "control"}, 1, context.Background(), func() {})
+	for _, kind := range []byte{frameText, frameBinary} {
+		if streamFrameNeedsCredit(streamValue, kind) {
+			t.Errorf("control frame kind %d was classified as body traffic", kind)
+		}
+	}
+	if !streamFrameNeedsCredit(streamValue, frameData) {
+		t.Fatal("control DATA frame lost flow control")
+	}
+	httpStream := newStream(streamOpen{Class: "http"}, 1, context.Background(), func() {})
+	if !streamFrameNeedsCredit(httpStream, frameText) {
+		t.Fatal("HTTP frame bypassed flow control")
+	}
+}

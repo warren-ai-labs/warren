@@ -22,3 +22,20 @@ func TestTunnelWriterReservesControlLane(t *testing.T) {
 	}
 	writer.stopWith(nil)
 }
+
+func TestControlRouteFramesDoNotWaitForBodyCredit(t *testing.T) {
+	control := &clientRoute{}
+	if routeFrameNeedsCredit(control, frameText) {
+		t.Fatal("control text frame was classified as body traffic")
+	}
+	if routeFrameNeedsCredit(control, frameBinary) {
+		t.Fatal("control binary frame was classified as body traffic")
+	}
+	if !routeFrameNeedsCredit(control, frameData) {
+		t.Fatal("control DATA frame lost flow control")
+	}
+	public := &clientRoute{public: true}
+	if !routeFrameNeedsCredit(public, frameText) {
+		t.Fatal("public stream bypassed flow control")
+	}
+}

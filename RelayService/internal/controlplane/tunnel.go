@@ -289,7 +289,7 @@ func (tunnel *hostTunnel) sendStreamContext(ctxDone <-chan struct{}, id connecti
 	// Control streams have a bounded route queue and use the control writer
 	// lane. Do not make their RPC/input responses wait for the public HTTP body
 	// window: a paused browser must not hold Host control traffic for 60s.
-	if route.public || frame.Kind == frameData {
+	if routeFrameNeedsCredit(route, frame.Kind) {
 		credit := uint64(len(frame.Payload))
 		if credit > initialStreamWindow {
 			route.close()
@@ -317,6 +317,10 @@ func (tunnel *hostTunnel) sendStreamContext(ctxDone <-chan struct{}, id connecti
 		}
 	}
 	return tunnel.send(frame)
+}
+
+func routeFrameNeedsCredit(route *clientRoute, kind byte) bool {
+	return route == nil || route.public || kind == frameData
 }
 
 func (route *clientRoute) tryConsume(bytes uint64) (bool, <-chan struct{}) {
