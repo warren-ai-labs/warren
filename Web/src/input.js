@@ -1,25 +1,32 @@
 // Queues terminal input while a session is attaching or the transport is
 // down, then replays it in order once the attachment is ready. Input typed
-// during a reconnect must not be lost, but it must also never cross sessions:
-// flushing one session keeps every other session's queued bytes intact.
+// during a reconnect must not cross sessions: flushing one session keeps every
+// other session's queued bytes intact. The queue is bounded and rejects new
+// input at capacity so bytes are never silently evicted.
 export class InputQueue {
   constructor({
     limit = 64 * 1024,
     send,
     onSendFailure = () => {},
+    onOverflow = () => {},
   } = {}) {
     this.limit = limit;
     this.send = send;
     this.onSendFailure = onSendFailure;
+    this.onOverflow = onOverflow;
     this.pending = [];
+    this.pendingBytes = 0;
   }
 
   enqueue(sessionID, data) {
-    this.pending.push({ sessionID, data });
-    let size = this.pending.reduce((total, item) => total + item.data.length, 0);
-    while (size > this.limit && this.pending.length) {
-      size -= this.pending.shift().data.length;
+    const bytes = data?.length || 0;
+    if (bytes > this.limit || this.pendingBytes + bytes > this.limit) {
+      this.onOverflow({ sessionID, bytes, limit: this.limit });
+      return false;
     }
+    this.pending.push({ sessionID, data });
+    this.pendingBytes += bytes;
+    return true;
   }
 
   // Sends every queued byte for the given session in order. Bytes for other
@@ -28,10 +35,12 @@ export class InputQueue {
   // once; the caller is notified through onSendFailure.
   flush(sessionID) {
     const remaining = [];
+    let remainingBytes = 0;
     for (let index = 0; index < this.pending.length; index += 1) {
       const item = this.pending[index];
       if (item.sessionID !== sessionID) {
         remaining.push(item);
+        remainingBytes += item.data.length;
         continue;
       }
       let delivered = false;
@@ -41,18 +50,23 @@ export class InputQueue {
         delivered = false;
       }
       if (!delivered) {
-        remaining.push(item, ...this.pending.slice(index + 1));
+        const tail = this.pending.slice(index + 1);
+        remaining.push(item, ...tail);
         this.pending = remaining;
+        this.pendingBytes = remainingBytes + item.data.length
+          + tail.reduce((total, queued) => total + queued.data.length, 0);
         this.onSendFailure();
         return false;
       }
     }
     this.pending = remaining;
+    this.pendingBytes = remainingBytes;
     return true;
   }
 
   clear() {
     this.pending = [];
+    this.pendingBytes = 0;
   }
 
   get size() {

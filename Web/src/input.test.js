@@ -88,11 +88,19 @@ test("clear drops queued input on an explicit session switch", () => {
   assert.equal(queue.size, 0);
 });
 
-test("overflow evicts the oldest queued bytes", () => {
-  const queue = new InputQueue({ limit: 10, send: () => true });
+test("overflow rejects new bytes instead of silently evicting input", () => {
+  let overflows = 0;
+  const queue = new InputQueue({
+    limit: 10,
+    send: () => true,
+    onOverflow: () => {
+      overflows += 1;
+    },
+  });
   queue.enqueue("session-a", encoded("12345"));
   queue.enqueue("session-a", encoded("67890"));
-  queue.enqueue("session-a", encoded("abc"));
+  assert.equal(queue.enqueue("session-a", encoded("abc")), false);
+  assert.equal(overflows, 1);
   assert.equal(queue.size, 2);
   assert.equal(queue.flush("session-a"), true);
   assert.equal(queue.size, 0);
