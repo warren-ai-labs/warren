@@ -137,6 +137,21 @@ export function AgentView({
   const [customModelInput, setCustomModelInput] = useState("");
   const activePlan = useMemo(() => extractActivePlan(events), [events]);
   const activeSubagents = useMemo(() => extractActiveSubagents(events), [events]);
+  const activePendingInteraction = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
+      const type = String(e?.type || "").trim().toLowerCase().replaceAll("-", "_");
+      if (type === "question" || type === "permission" || type === "interaction_requested") {
+        const payload = e?.payload && typeof e.payload === "object" ? e.payload : {};
+        const state = String(payload.state || e?.state || "pending").toLowerCase();
+        if (state === "pending" || state === "submitting") {
+          return e;
+        }
+      }
+    }
+    return null;
+  }, [events]);
+  const activePendingInteractionID = String(activePendingInteraction?.id || activePendingInteraction?.payload?.requestId || "");
   const [isPlanOpen, setIsPlanOpen] = useState(false);
   const [selectedSubagentID, setSelectedSubagentID] = useState(null);
 
@@ -674,12 +689,14 @@ export function AgentView({
           </div>
         ) : (
           <>
-            {blocks.map((block, index) => (
-              // Usage remains in the protocol for future analytics, but it is
-              // intentionally not a conversation row on mobile or Web.
-              block.kind === "usage"
-                ? null
-                : <AgentBlock
+            {blocks.map((block, index) => {
+              if (block.kind === "usage") return null;
+              if (activePendingInteractionID && block.event) {
+                const eventID = String(block.event.id || block.event.payload?.requestId || "");
+                if (eventID === activePendingInteractionID) return null;
+              }
+              return (
+                <AgentBlock
                   key={blockKindKey(block, index)}
                   block={block}
                   onInteraction={onInteraction}
@@ -687,7 +704,8 @@ export function AgentView({
                   onEditResend={editAndResend}
                   isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.sequence || ""}` === lastUserEventKey)}
                 />
-            ))}
+              );
+            })}
             {queueItems.map(item => (
               <div key={item.id} className="agent-message user queued">
                 <div className="agent-bubble">
@@ -752,6 +770,16 @@ export function AgentView({
           onReorder={onQueueReorder}
           onRetry={onQueueRetry}
         />
+      )}
+      {activePendingInteraction && (
+        <div className="agent-docked-interaction" role="region" aria-label="Action required">
+          <StructuredAgentBlock
+            event={activePendingInteraction}
+            onInteraction={onInteraction}
+            canInteract={canInteract}
+            isDocked={true}
+          />
+        </div>
       )}
       {ready ? (
         <form
@@ -1280,7 +1308,7 @@ function AgentBlock({ block, onInteraction = () => {}, onEditResend = () => {}, 
   }
 }
 
-function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false }) {
+function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false, isDocked = false }) {
   const type = String(event?.type || "").trim().toLowerCase().replaceAll("-", "_");
   const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
   const state = String(payload.state || "").toLowerCase();
@@ -1288,8 +1316,10 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState({});
   const [customAnswers, setCustomAnswers] = useState({});
+  const [expanded, setExpanded] = useState(false);
   const requestID = String(payload.requestId || "").trim();
   const pending = canInteract && (state === "pending" || state === "submitting") && requestID;
+  const isInteraction = type === "question" || type === "permission";
   const questions = type === "question"
     ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => ({
       ...question,
@@ -1302,6 +1332,93 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     }))
     : [];
   const permissionOptions = type === "permission" && Array.isArray(payload.options) ? payload.options : [];
+  const optionID = option => String(option?.id || option?.value || "");
+
+  // Render resolved interaction as a simple collapsible card in the message flow
+  if (isInteraction && !pending && !isDocked) {
+    const categoryLabel = type === "permission" ? "Permission" : "Ask";
+    const promptPreview = questions[0]?.prompt || payload.description || payload.title || title;
+
+    let resolutionLabel = "Answered";
+    let statusClass = "resolved";
+    if (payload.response?.cancelled || state === "cancelled") {
+      resolutionLabel = "Cancelled";
+      statusClass = "cancelled";
+    } else if (type === "permission") {
+      const decision = String(payload.response?.decision || payload.decision || "").toLowerCase();
+      if (decision === "allow" || decision === "yes" || decision === "approve" || decision === "y") {
+        resolutionLabel = "Approved";
+        statusClass = "approved";
+      } else if (decision === "deny" || decision === "no" || decision === "reject" || decision === "n") {
+        resolutionLabel = "Denied";
+        statusClass = "denied";
+      } else if (decision) {
+        resolutionLabel = decision;
+        statusClass = "resolved";
+      } else {
+        resolutionLabel = state === "resolved" || state === "completed" ? "Resolved" : structuredStateLabel(state);
+      }
+    } else if (type === "question") {
+      resolutionLabel = state === "resolved" || state === "completed" ? "Answered" : structuredStateLabel(state);
+    }
+
+    return (
+      <section className={`agent-interaction-card ${type}${expanded ? " open" : ""}`} aria-label={`${categoryLabel}: ${promptPreview}`}>
+        <button
+          type="button"
+          className="agent-interaction-card-header"
+          onClick={() => setExpanded(prev => !prev)}
+          aria-expanded={expanded}
+        >
+          <span className="agent-interaction-card-badge">{categoryLabel}</span>
+          <span className="agent-interaction-card-summary">{promptPreview}</span>
+          <span className={`agent-interaction-card-status ${statusClass}`}>{resolutionLabel}</span>
+          <span className="agent-interaction-card-caret" aria-hidden="true">{expanded ? "▴" : "▾"}</span>
+        </button>
+        {expanded && (
+          <div className="agent-interaction-card-body">
+            {payload.description && payload.description !== promptPreview && (
+              <p className="agent-interaction-card-desc">{payload.description}</p>
+            )}
+            {type === "question" && questions.map(q => {
+              const answeredList = payload.response?.answers?.[q.id] || [];
+              const customAns = payload.response?.customAnswers?.[q.id];
+              return (
+                <div key={q.id} className="agent-interaction-card-q">
+                  {questions.length > 1 && <div className="agent-interaction-card-q-prompt">{q.prompt}</div>}
+                  {q.options.length > 0 && (
+                    <div className="agent-interaction-card-options">
+                      {q.options.map(opt => {
+                        const optId = optionID(opt);
+                        const isChosen = answeredList.includes(optId);
+                        return (
+                          <div key={optId} className={`agent-interaction-card-opt${isChosen ? " chosen" : ""}`}>
+                            <span className="agent-interaction-opt-marker">{isChosen ? "✓" : "○"}</span>
+                            <span>{opt.label || opt.id || optId}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {customAns && (
+                    <div className="agent-interaction-card-custom-ans">
+                      <em>Custom answer:</em> {customAns}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {type === "permission" && (
+              <div className="agent-interaction-card-decision">
+                <span>Decision:</span> <strong>{resolutionLabel}</strong>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+    );
+  }
+
   const submitResponse = response => {
     if (!pending || submitting || state !== "pending") return;
     setSubmitting(true);
@@ -1345,7 +1462,6 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   });
   const cancelInteraction = () => submitResponse({ cancelled: true });
   const selectPermission = option => submitResponse({ decision: option.id || option.value });
-  const optionID = option => String(option?.id || option?.value || "");
 
   useEffect(() => {
     if (state !== "pending") setSubmitting(false);
@@ -1407,10 +1523,10 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   );
 
   return (
-    <section className={`agent-structured ${type}`} aria-label={title}>
+    <section className={`agent-structured ${type}${isDocked ? " docked" : ""}`} aria-label={title}>
       <div className="nodehead">
         <i className="nodehead-dot" aria-hidden="true" />
-        <strong>{title}</strong>
+        <strong>{isInteraction ? (type === "permission" ? "Permission" : "Ask") : title}</strong>
         <em>{structuredStateLabel(state)}</em>
       </div>
       {payload.description && <p className="agent-structured-description">{payload.description}</p>}

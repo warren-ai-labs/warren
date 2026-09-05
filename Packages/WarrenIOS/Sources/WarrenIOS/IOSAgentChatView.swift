@@ -270,6 +270,26 @@ public struct AgentChatView: View {
         extractActiveSubagents(from: currentEvents)
     }
 
+    private var activePendingInteraction: WarrenRemoteAgentEvent? {
+        for event in currentEvents.reversed() {
+            let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                .replacingOccurrences(of: "-", with: "_")
+            if type == "question" || type == "permission" || type == "interaction_requested" {
+                let state = (event.payload?.string("state") ?? "pending").lowercased()
+                if state == "pending" || state == "submitting" {
+                    return event
+                }
+            }
+        }
+        return nil
+    }
+
+    private var activePendingInteractionID: String? {
+        guard let event = activePendingInteraction else { return nil }
+        if !event.id.isEmpty { return event.id }
+        return event.payload?.string("requestId")
+    }
+
     public init(model: IOSApplicationModel, sessionID: String) {
         self.model = model
         self._agentState = ObservedObject(wrappedValue: model.agentState)
@@ -329,18 +349,24 @@ public struct AgentChatView: View {
                                         .frame(maxWidth: .infinity, minHeight: 240)
                                 } else {
                                     ForEach(blocks) { block in
-                                        displayBlockView(
-                                            block,
-                                            canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
-                                        ) { requestID, kind, response in
-                                            model.respondToAgentInteraction(
-                                                sessionID: sessionID,
-                                                requestID: requestID,
-                                                kind: kind,
-                                                response: response
-                                            )
-                                        }
+                                        if let pendingID = activePendingInteractionID,
+                                           let event = block.event,
+                                           (event.id == pendingID || event.payload?.string("requestId") == pendingID) {
+                                            EmptyView()
+                                        } else {
+                                            displayBlockView(
+                                                block,
+                                                canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions)
+                                            ) { requestID, kind, response in
+                                                model.respondToAgentInteraction(
+                                                    sessionID: sessionID,
+                                                    requestID: requestID,
+                                                    kind: kind,
+                                                    response: response
+                                                )
+                                            }
                                             .id(block.id)
+                                        }
                                     }
                                     ForEach(queuedItems) { item in
                                         AgentQueuedMessageBlock(item: item) {
@@ -767,9 +793,28 @@ public struct AgentChatView: View {
                         .padding(.bottom, 4)
                         .accessibilityLabel("Agent action failed: \(actionError)")
                 }
+                if let pending = activePendingInteraction {
+                    AgentStructuredEventBlock(
+                        event: pending,
+                        canInteract: model.supportsAgentCapability(WarrenRemoteAgentCapability.interactions),
+                        isDocked: true,
+                        onInteraction: { requestID, kind, response in
+                            model.respondToAgentInteraction(
+                                sessionID: sessionID,
+                                requestID: requestID,
+                                kind: kind,
+                                response: response
+                            )
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
                 composer
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: activePendingInteractionID)
         }
     }
 
@@ -2185,6 +2230,11 @@ enum AgentDisplayBlock: Identifiable {
         case .activity(let group): return group.id
         }
     }
+
+    var event: WarrenRemoteAgentEvent? {
+        if case .event(let event) = self { return event }
+        return nil
+    }
 }
 
 struct AgentActivityGroup {
@@ -2750,6 +2800,7 @@ private struct AgentStatusRail: View {
 private struct AgentStructuredEventBlock: View {
     let event: WarrenRemoteAgentEvent
     let canInteract: Bool
+    var isDocked: Bool = false
     let onInteraction: (String, String, [String: WarrenRemoteJSONValue]) -> Task<Bool, Never>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -2773,7 +2824,31 @@ private struct AgentStructuredEventBlock: View {
         payload.string("requestId")?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var isInteraction: Bool {
+        kind == "question" || kind == "permission"
+    }
+
     var body: some View {
+        Group {
+            if isInteraction && !isDocked && state != "pending" && state != "submitting" {
+                resolvedInteractionCard
+            } else if isDocked {
+                dockedInteractionCard
+            } else {
+                legacyStructuredCard
+            }
+        }
+        .onChange(of: state) { _, nextState in
+            // A Host event is the source of truth for the final interaction
+            // state. Once it leaves pending/submitting, allow a fresh card
+            // update to render without retaining a local spinner forever.
+            if nextState != "pending" && nextState != "submitting" {
+                submitting = false
+            }
+        }
+    }
+
+    private var legacyStructuredCard: some View {
         VStack(alignment: .leading, spacing: 7) {
             Button {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
@@ -2800,7 +2875,7 @@ private struct AgentStructuredEventBlock: View {
             .accessibilityLabel(title)
             .accessibilityValue(stateLabel)
 
-            if expanded || kind == "question" || kind == "permission" {
+            if expanded || isInteraction {
                 detail
                     .padding(.leading, 12)
                     .padding(.bottom, 4)
@@ -2811,7 +2886,7 @@ private struct AgentStructuredEventBlock: View {
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            IOSTheme.muted.opacity(kind == "question" || kind == "permission" ? 0.24 : 0.06),
+            IOSTheme.muted.opacity(isInteraction ? 0.24 : 0.06),
             in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
         )
         .overlay(alignment: .leading) {
@@ -2820,14 +2895,414 @@ private struct AgentStructuredEventBlock: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .onChange(of: state) { _, nextState in
-            // A Host event is the source of truth for the final interaction
-            // state. Once it leaves pending/submitting, allow a fresh card
-            // update to render without retaining a local spinner forever.
-            if nextState != "pending" && nextState != "submitting" {
-                submitting = false
+    }
+
+    private var categoryLabel: String {
+        if kind == "question" { return "Ask" }
+        if kind == "permission" { return "Permission" }
+        return title
+    }
+
+    private var promptPreview: String {
+        if kind == "question" {
+            if let firstQ = questionSpecs.first?.prompt, !firstQ.isEmpty {
+                return firstQ
+            }
+            if let title = payload.string("title"), !title.isEmpty {
+                return title
+            }
+            if let desc = payload.string("description"), !desc.isEmpty {
+                return desc
+            }
+            return "Question"
+        } else if kind == "permission" {
+            if let desc = payload.string("description"), !desc.isEmpty {
+                return desc
+            }
+            if let title = payload.string("title"), !title.isEmpty {
+                return title
+            }
+            return "Permission requested"
+        }
+        return title
+    }
+
+    private var responsePayload: [String: WarrenRemoteJSONValue]? {
+        payload.object("response")
+    }
+
+    private var resolvedDecision: String? {
+        if let resp = responsePayload {
+            if let decision = resp.string("decision") { return decision }
+            if resp.bool("cancelled") == true { return "cancelled" }
+        }
+        if let decision = payload.string("decision") { return decision }
+        if payload.bool("cancelled") == true { return "cancelled" }
+        return nil
+    }
+
+    private var resolvedAnswers: [String: Set<String>] {
+        guard let resp = responsePayload, let answersObj = resp.object("answers") else {
+            return [:]
+        }
+        var result: [String: Set<String>] = [:]
+        for (qID, val) in answersObj {
+            if case .array(let arr) = val {
+                let ids = arr.compactMap { item -> String? in
+                    guard case .string(let s) = item else { return nil }
+                    return s
+                }
+                result[qID] = Set(ids)
+            } else if case .string(let s) = val {
+                result[qID] = [s]
             }
         }
+        return result
+    }
+
+    private var resolvedCustomAnswers: [String: String] {
+        guard let resp = responsePayload, let customObj = resp.object("customAnswers") else {
+            return [:]
+        }
+        var result: [String: String] = [:]
+        for (qID, val) in customObj {
+            if case .string(let s) = val {
+                result[qID] = s
+            }
+        }
+        return result
+    }
+
+    private var resolutionLabel: String {
+        if kind == "permission" {
+            let decision = (resolvedDecision ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["allow", "yes", "approve", "confirm", "proceed", "y"].contains(decision) {
+                return "Approved"
+            } else if ["deny", "no", "reject", "n"].contains(decision) {
+                return "Denied"
+            } else if decision == "cancel" || decision == "cancelled" || state == "cancelled" || state == "canceled" {
+                return "Cancelled"
+            } else if !decision.isEmpty {
+                return decision.capitalized
+            } else if state == "resolved" || state == "completed" {
+                return "Approved"
+            }
+            return stateLabel
+        } else if kind == "question" {
+            if state == "cancelled" || state == "canceled" || resolvedDecision == "cancelled" {
+                return "Cancelled"
+            }
+            if state == "resolved" || state == "completed" {
+                return "Answered"
+            }
+            return stateLabel
+        }
+        return stateLabel
+    }
+
+    private var statusColor: Color {
+        let label = resolutionLabel.lowercased()
+        if label == "approved" || label == "answered" || label == "completed" {
+            return IOSTheme.green
+        } else if label == "denied" || label == "failed" || label == "error" {
+            return IOSTheme.red
+        } else if label == "cancelled" {
+            return IOSTheme.secondaryText
+        } else if state == "pending" || state == "submitting" {
+            return IOSTheme.amber
+        }
+        return IOSTheme.secondaryText
+    }
+
+    private var resolvedInteractionCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(categoryLabel)
+                        .font(IOSTypography.eyebrow)
+                        .foregroundStyle(kind == "question" ? IOSTheme.accent : IOSTheme.blue)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            (kind == "question" ? IOSTheme.accent : IOSTheme.blue).opacity(0.12),
+                            in: Capsule()
+                        )
+                    Text(promptPreview)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(resolutionLabel)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12), in: Capsule())
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                }
+                .frame(minHeight: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(categoryLabel): \(promptPreview)")
+            .accessibilityValue(resolutionLabel)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let description = payload.string("description"),
+                       !description.isEmpty,
+                       description != promptPreview {
+                        Text(description)
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                    }
+                    if kind == "question" {
+                        ForEach(questionSpecs) { question in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if questionSpecs.count > 1 {
+                                    Text(question.prompt)
+                                        .font(IOSTypography.label)
+                                        .foregroundStyle(IOSTheme.text)
+                                }
+                                if !question.options.isEmpty {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        ForEach(question.options) { option in
+                                            let isChosen = resolvedAnswers[question.id]?.contains(option.id) == true
+                                            HStack(spacing: 6) {
+                                                Image(systemName: isChosen ? "checkmark.circle.fill" : "circle")
+                                                    .font(IOSTypography.metadata)
+                                                    .foregroundStyle(isChosen ? IOSTheme.green : IOSTheme.tertiaryText)
+                                                Text(option.label)
+                                                    .font(IOSTypography.status)
+                                                    .foregroundStyle(isChosen ? IOSTheme.text : IOSTheme.secondaryText)
+                                            }
+                                        }
+                                    }
+                                }
+                                if let custom = resolvedCustomAnswers[question.id], !custom.isEmpty {
+                                    Text("Custom answer: \(custom)")
+                                        .font(IOSTypography.status)
+                                        .foregroundStyle(IOSTheme.accent)
+                                }
+                            }
+                        }
+                    } else if kind == "permission" {
+                        HStack(spacing: 6) {
+                            Text("Decision:")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.secondaryText)
+                            Text(resolutionLabel)
+                                .font(IOSTypography.status)
+                                .fontWeight(.medium)
+                                .foregroundStyle(statusColor)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+                .padding(.bottom, 4)
+                .padding(.leading, 4)
+            }
+        }
+        .padding(.horizontal, WarrenSpacing.compact)
+        .padding(.vertical, WarrenSpacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            IOSTheme.muted.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                .strokeBorder(IOSTheme.cardBorder, lineWidth: 0.5)
+        )
+    }
+
+    private var dockedInteractionCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(categoryLabel)
+                    .font(IOSTypography.eyebrow)
+                    .foregroundStyle(kind == "question" ? IOSTheme.accent : IOSTheme.blue)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(
+                        (kind == "question" ? IOSTheme.accent : IOSTheme.blue).opacity(0.15),
+                        in: Capsule()
+                    )
+                Text(promptPreview)
+                    .font(IOSTypography.label)
+                    .fontWeight(.medium)
+                    .foregroundStyle(IOSTheme.text)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                if submitting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text(stateLabel)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.amber)
+                }
+            }
+
+            if let description = payload.string("description"), !description.isEmpty, description != promptPreview {
+                Text(description)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+            }
+
+            if kind == "question" {
+                ForEach(questionSpecs) { question in
+                    VStack(alignment: .leading, spacing: 6) {
+                        if questionSpecs.count > 1 {
+                            Text(question.prompt)
+                                .font(IOSTypography.label)
+                                .foregroundStyle(IOSTheme.text)
+                        }
+                        ForEach(question.options) { option in
+                            Button {
+                                toggleQuestionOption(question, optionID: option.id)
+                            } label: {
+                                interactionOptionRow(
+                                    option,
+                                    selected: isQuestionOptionSelected(question.id, optionID: option.id)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(IOSTheme.text)
+                            .disabled(submitting || state != "pending")
+                        }
+                        if question.allowCustom {
+                            TextField(
+                                "Custom answer",
+                                text: Binding(
+                                    get: { customAnswers[question.id] ?? "" },
+                                    set: { customAnswers[question.id] = $0 }
+                                ),
+                                axis: .vertical
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .font(IOSTypography.status)
+                            .frame(minHeight: 38)
+                            .disabled(!canInteract || submitting || state != "pending")
+                            .accessibilityLabel("Custom answer for \(question.prompt)")
+                        }
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        if let reqID = requestID {
+                            submitQuestion(requestID: reqID)
+                        }
+                    } label: {
+                        Text("Submit")
+                            .font(IOSTypography.label)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(
+                                questionsAreValid && !submitting ? IOSTheme.accent : IOSTheme.muted,
+                                in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                            )
+                            .foregroundStyle(questionsAreValid && !submitting ? Color.white : IOSTheme.tertiaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(submitting || state != "pending" || !questionsAreValid)
+
+                    Button {
+                        if let reqID = requestID {
+                            cancelInteraction(requestID: reqID, kind: kind)
+                        }
+                    } label: {
+                        Text("Cancel")
+                            .font(IOSTypography.label)
+                            .frame(width: 80, height: 38)
+                            .background(
+                                IOSTheme.muted.opacity(0.5),
+                                in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                            )
+                            .foregroundStyle(IOSTheme.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(submitting || state != "pending")
+                }
+            } else if kind == "permission" {
+                let effectiveOptions: [AgentInteractionOption] = !options.isEmpty ? options : [
+                    AgentInteractionOption(id: "allow", questionID: "decision", label: "Allow", description: nil),
+                    AgentInteractionOption(id: "deny", questionID: "decision", label: "Deny", description: nil)
+                ]
+
+                VStack(spacing: 8) {
+                    ForEach(effectiveOptions) { option in
+                        Button {
+                            guard !submitting, state == "pending", let reqID = requestID else { return }
+                            submitting = true
+                            selectedOption = option.id
+                            let task = onInteraction(reqID, kind, ["decision": .string(option.id)])
+                            Task { @MainActor in
+                                if await !task.value { submitting = false }
+                            }
+                        } label: {
+                            HStack {
+                                Text(option.label)
+                                    .font(IOSTypography.label)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                if let desc = option.description, !desc.isEmpty {
+                                    Text(desc)
+                                        .font(IOSTypography.metadata)
+                                        .foregroundStyle(IOSTheme.secondaryText)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .background(
+                                option.id.lowercased().contains("allow") || option.id.lowercased().contains("yes")
+                                    ? IOSTheme.accent.opacity(0.12)
+                                    : IOSTheme.muted.opacity(0.5),
+                                in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                            )
+                            .foregroundStyle(
+                                option.id.lowercased().contains("allow") || option.id.lowercased().contains("yes")
+                                    ? IOSTheme.accent
+                                    : IOSTheme.text
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(submitting || state != "pending")
+                    }
+
+                    Button {
+                        if let reqID = requestID {
+                            cancelInteraction(requestID: reqID, kind: kind)
+                        }
+                    } label: {
+                        Text("Cancel")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.tertiaryText)
+                            .frame(height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(submitting || state != "pending")
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            IOSTheme.raised,
+            in: RoundedRectangle(cornerRadius: WarrenRadius.base, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.base, style: .continuous)
+                .strokeBorder(IOSTheme.accent.opacity(0.4), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
     }
 
     @ViewBuilder
@@ -3236,6 +3711,11 @@ private extension Dictionary where Key == String, Value == WarrenRemoteJSONValue
 
     func bool(_ key: String) -> Bool? {
         guard case .boolean(let value) = self[key] else { return nil }
+        return value
+    }
+
+    func object(_ key: String) -> [String: WarrenRemoteJSONValue]? {
+        guard case .object(let value) = self[key] else { return nil }
         return value
     }
 }

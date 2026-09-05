@@ -1691,10 +1691,22 @@ func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request api.AgentTu
 }
 
 func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response api.AgentInteractionResponse) error {
-	if handle == nil || handle.service == nil || !nonNilInterface(handle.service.AgentController) {
+	if handle == nil || handle.service == nil {
 		return errors.New("agent interaction transport is unavailable")
 	}
-	return handle.service.AgentController.RespondInteraction(ctx, response)
+	if controller := handle.service.AgentController; nonNilInterface(controller) {
+		return controller.RespondInteraction(ctx, response)
+	}
+	runtime := handle.service.runtimeForKind(handle.runtimeKind)
+	if runtime == nil {
+		runtime = handle.service.runtimeForKind(handle.service.runtimeKindFor(api.Session{Runtime: handle.runtimeName}))
+	}
+	if runtime == nil {
+		return errors.New("agent interaction transport is unavailable")
+	}
+	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	defer unlock()
+	return sendAgentInteractionInput(ctx, runtime, handle.runtimeName, response)
 }
 
 func (handle *tuiAgentHandle) BindingKey() string {

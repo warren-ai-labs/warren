@@ -466,3 +466,163 @@ func TestSendAgentMessageStatusMutexGuards(t *testing.T) {
 		t.Fatalf("runtime captured %q, want answer text", captured)
 	}
 }
+
+func TestSendAgentInteractionInputPTYSemantics(t *testing.T) {
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// 1. Permission: allow sends y\r
+	err := sendAgentInteractionInput(ctx, runtime, "sess", api.AgentInteractionResponse{
+		Kind:     "permission",
+		Response: map[string]any{"decision": "allow"},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ := runtime.Capture(ctx, "sess")
+	if !bytes.Contains(captured, []byte("y\r")) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), "y\r")
+	}
+
+	// 2. Permission: deny sends n\r
+	_ = runtime.Create(ctx, "sess-deny", "", "", nil)
+	err = sendAgentInteractionInput(ctx, runtime, "sess-deny", api.AgentInteractionResponse{
+		Kind:     "permission",
+		Response: map[string]any{"decision": "deny"},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ = runtime.Capture(ctx, "sess-deny")
+	if !bytes.Contains(captured, []byte("n\r")) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), "n\r")
+	}
+
+	// 3. Cancel sends \x03 (Ctrl+C)
+	_ = runtime.Create(ctx, "sess-cancel", "", "", nil)
+	err = sendAgentInteractionInput(ctx, runtime, "sess-cancel", api.AgentInteractionResponse{
+		Kind:     "permission",
+		Response: map[string]any{"cancelled": true},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ = runtime.Capture(ctx, "sess-cancel")
+	if !bytes.Contains(captured, []byte{0x03}) {
+		t.Fatalf("captured = %q, want containing Ctrl+C", captured)
+	}
+
+	// 4. Question: custom single-line answer sends text\r
+	_ = runtime.Create(ctx, "sess-q1", "", "", nil)
+	err = sendAgentInteractionInput(ctx, runtime, "sess-q1", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"customAnswers": map[string]any{"q0": "my-answer"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ = runtime.Capture(ctx, "sess-q1")
+	if !bytes.Contains(captured, []byte("my-answer\r")) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), "my-answer\r")
+	}
+
+	// 5. Question: multi-line answer sends bracketed paste
+	_ = runtime.Create(ctx, "sess-q2", "", "", nil)
+	err = sendAgentInteractionInput(ctx, runtime, "sess-q2", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"customAnswers": map[string]any{"q0": "line1\nline2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ = runtime.Capture(ctx, "sess-q2")
+	wantBracketed := "\x1b[200~line1\rline2\x1b[201~\r"
+	if !bytes.Contains(captured, []byte(wantBracketed)) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), wantBracketed)
+	}
+
+	// 6. Question: selected option sends choice\r
+	_ = runtime.Create(ctx, "sess-q3", "", "", nil)
+	err = sendAgentInteractionInput(ctx, runtime, "sess-q3", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"answers": map[string]any{"q0": []any{"option-1"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	captured, _ = runtime.Capture(ctx, "sess-q3")
+	if !bytes.Contains(captured, []byte("option-1\r")) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), "option-1\r")
+	}
+}
+
+func TestAgentViewRespondInteractionPTYFallback(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "pty-fallback-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "agent-fallback-session"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: sessionID, Kind: "claude", Runtime: "runtime", Lifecycle: "running",
+			Title: "Claude", CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	// Record pending permission
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Type: "permission",
+		ID:   "perm-1",
+		Payload: map[string]any{
+			"requestId": "req-perm-1",
+			"state":     "pending",
+		},
+	}}, api.AgentStatus{Activity: api.AgentActivityBlocked})
+
+	// Respond with allow
+	request := api.AgentInteractionResponse{
+		Session: sessionID, RequestID: "req-perm-1", Kind: "permission",
+		Response: map[string]any{"decision": "allow"},
+	}
+	res, err := service.respondAgentInteraction(context.Background(), request)
+	if err != nil {
+		t.Fatalf("respondAgentInteraction failed: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("result not accepted: %#v", res)
+	}
+
+	// Verify runtime received y\r
+	captured, err := runtime.Capture(context.Background(), "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(captured, []byte("y\r")) {
+		t.Fatalf("captured = %q, want containing %q", string(captured), "y\r")
+	}
+
+	// Verify state is now resolved
+	stateStr, found := service.agentInteractionState(sessionID, "req-perm-1", "permission")
+	if !found || stateStr != "resolved" {
+		t.Fatalf("agentInteractionState = (%q, %v), want (\"resolved\", true)", stateStr, found)
+	}
+}
