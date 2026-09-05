@@ -14,6 +14,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestRelayStreamDeadlineDoesNotExpireUpgrades(t *testing.T) {
+	if got := relayStreamDeadline(false); got != int64((60*time.Second)/time.Millisecond) {
+		t.Fatalf("HTTP stream deadline = %dms, want 60000ms", got)
+	}
+	if got := relayStreamDeadline(true); got != 0 {
+		t.Fatalf("upgrade stream deadline = %dms, want no deadline", got)
+	}
+}
+
 func TestPairingWindowDefaultsToSevenDays(t *testing.T) {
 	server, err := NewServer(Config{
 		PublicURL:     "https://relay.example.test",

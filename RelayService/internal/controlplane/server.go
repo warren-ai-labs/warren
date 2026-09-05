@@ -1751,7 +1751,7 @@ func (server *Server) openHTTPStream(request *http.Request, route routeRecord, u
 		Class:       "http",
 		Version:     "2.0",
 		RequestID:   requestID,
-		DeadlineMS:  60_000,
+		DeadlineMS:  relayStreamDeadline(upgrade),
 		RouteID:     route.ID,
 		HostID:      route.HostID,
 		PublicRoute: route.AuthMode == "public" && upgrade && request.URL.Path == "/v1/ws",
@@ -1788,6 +1788,16 @@ func (server *Server) openHTTPStream(request *http.Request, route routeRecord, u
 		return connectionID{}, nil, nil, err
 	}
 	return id, stream, tunnel, nil
+}
+
+func relayStreamDeadline(upgrade bool) int64 {
+	if upgrade {
+		// Upgrade streams carry a long-lived WebSocket after the 101
+		// handshake. The deadline is for HTTP request admission only and must
+		// not cancel a healthy terminal connection one minute later.
+		return 0
+	}
+	return int64((60 * time.Second) / time.Millisecond)
 }
 
 func effectiveRequestScheme(request *http.Request) string {
