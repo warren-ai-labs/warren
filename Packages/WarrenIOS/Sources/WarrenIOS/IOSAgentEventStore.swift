@@ -181,7 +181,16 @@ public actor IOSAgentEventStore {
         VALUES (?, ?, ?, 1, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             epoch = excluded.epoch,
-            max_sequence = MAX(ios_agent_sync_state.max_sequence, excluded.max_sequence),
+            max_sequence = CASE
+                WHEN ios_agent_sync_state.epoch = excluded.epoch
+                THEN MAX(ios_agent_sync_state.max_sequence, excluded.max_sequence)
+                ELSE excluded.max_sequence
+            END,
+            has_more_before = CASE
+                WHEN ios_agent_sync_state.epoch = excluded.epoch
+                THEN ios_agent_sync_state.has_more_before
+                ELSE 1
+            END,
             updated_at = excluded.updated_at;
         """
         var syncStmt: OpaquePointer?
@@ -218,13 +227,22 @@ public actor IOSAgentEventStore {
 
     // MARK: - Query
 
-    public func loadRecentEvents(sessionID: String, limit: Int = 100) -> [WarrenRemoteAgentEvent] {
+    public func loadRecentEvents(
+        sessionID: String,
+        epoch: UInt64? = nil,
+        limit: Int = 100
+    ) -> [WarrenRemoteAgentEvent] {
         guard let db else { return [] }
 
-        let querySQL = """
+        var querySQL = """
         SELECT raw_json FROM (
             SELECT sequence, raw_json FROM ios_agent_events
             WHERE session_id = ?
+        """
+        if epoch != nil {
+            querySQL += " AND epoch = ?"
+        }
+        querySQL += """
             ORDER BY sequence DESC
             LIMIT ?
         )
@@ -236,8 +254,14 @@ public actor IOSAgentEventStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, (sessionID as NSString).utf8String, -1, nil)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var bindIndex: Int32 = 1
+        sqlite3_bind_text(stmt, bindIndex, (sessionID as NSString).utf8String, -1, nil)
+        bindIndex += 1
+        if let epoch {
+            sqlite3_bind_int64(stmt, bindIndex, Int64(epoch))
+            bindIndex += 1
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(limit))
 
         var results: [WarrenRemoteAgentEvent] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -352,7 +376,7 @@ public actor IOSAgentEventStore {
     /// Purges all events and sync states for sessions that no longer exist on the Host.
     /// Runs silently on the actor's background executor without blocking the main actor.
     public func purgeOrphanSessions(activeSessionIDs: Set<String>) {
-        guard let db, !activeSessionIDs.isEmpty else { return }
+        guard let db else { return }
 
         let querySQL = "SELECT DISTINCT session_id FROM ios_agent_sync_state UNION SELECT DISTINCT session_id FROM ios_agent_events;"
         var stmt: OpaquePointer?

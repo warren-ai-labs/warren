@@ -269,6 +269,7 @@ public final class IOSApplicationModel: ObservableObject {
         syncLiveActivity()
         guard eventTask == nil else { return }
         let client = client
+        let generation = clientGeneration
         let previousLifecycle = clientLifecycleTask
         let startup = Task {
             await previousLifecycle?.value
@@ -281,7 +282,8 @@ public final class IOSApplicationModel: ObservableObject {
             guard !Task.isCancelled else { return }
             for await event in client.events() {
                 guard !Task.isCancelled else { return }
-                self?.consume(event)
+                guard let self, self.clientGeneration == generation else { return }
+                self.consume(event)
             }
         }
     }
@@ -2523,26 +2525,63 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
-    private func fillAgentSequenceGap(sessionID: String, since: UInt64, before: UInt64) {
+    private func fillAgentSequenceGap(
+        sessionID: String,
+        since: UInt64,
+        before: UInt64,
+        epoch: UInt64? = nil
+    ) {
         guard since < before else { return }
         let client = client
+        let currentClientGeneration = clientGeneration
+        let initialEpoch = epoch ?? agentEpochBySessionID[sessionID] ?? 0
         Task { [weak self] in
-            guard let self else { return }
-            do {
-                let page = try await client.agentHistory(
-                    sessionID: sessionID,
-                    since: since,
-                    before: before,
-                    limit: 100,
-                    conversationOnly: false
-                )
-                if !page.events.isEmpty {
-                    await MainActor.run {
-                        self.mergeAgentEvents(page.events, sessionID: sessionID, epoch: page.epoch ?? 0, prepend: false)
+            var nextSince = since
+            var expectedEpoch = initialEpoch
+            while nextSince < before && !Task.isCancelled {
+                do {
+                    let page = try await client.agentHistory(
+                        sessionID: sessionID,
+                        since: nextSince,
+                        before: before,
+                        limit: 100,
+                        conversationOnly: false
+                    )
+                    guard let pageMax = page.events.map(\.sequence).max(),
+                          pageMax >= nextSince else {
+                        break
                     }
+
+                    let pageEpoch = page.epoch ?? 0
+                    let applied = await MainActor.run { [weak self] in
+                        guard let self,
+                              self.clientGeneration == currentClientGeneration,
+                              self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                              expectedEpoch == 0 || self.agentEpochBySessionID[sessionID] == expectedEpoch,
+                              pageEpoch == 0 || expectedEpoch == 0 || pageEpoch == expectedEpoch else {
+                            return false
+                        }
+                        self.mergeAgentEvents(
+                            page.events,
+                            sessionID: sessionID,
+                            epoch: pageEpoch == 0 ? expectedEpoch : pageEpoch,
+                            prepend: false
+                        )
+                        return true
+                    }
+                    guard applied else { break }
+
+                    if expectedEpoch == 0, pageEpoch != 0 {
+                        expectedEpoch = pageEpoch
+                    }
+                    guard page.hasMore else { break }
+                    let next = pageMax.addingReportingOverflow(1)
+                    guard !next.overflow, next.partialValue > nextSince else { break }
+                    nextSince = next.partialValue
+                } catch {
+                    // Gap recovery will retry on subsequent message boundaries.
+                    break
                 }
-            } catch {
-                // Gap recovery will retry on subsequent message boundaries
             }
         }
     }
@@ -2565,13 +2604,23 @@ public final class IOSApplicationModel: ObservableObject {
     public func ensureAgentSubscribed(for sessionID: String) {
         guard !agentSubscribedSessionIDs.contains(sessionID) else { return }
         agentSubscribedSessionIDs.insert(sessionID)
+        let currentClientGeneration = clientGeneration
         let client = client
         Task { [weak self] in
             guard let self else { return }
             let syncState = await IOSAgentEventStore.shared.syncState(sessionID: sessionID)
-            let cached = await IOSAgentEventStore.shared.loadRecentEvents(sessionID: sessionID, limit: 100)
+            let cached = await IOSAgentEventStore.shared.loadRecentEvents(
+                sessionID: sessionID,
+                epoch: syncState?.epoch,
+                limit: 100
+            )
 
-            let (targetEpoch, lastSeq) = await MainActor.run { () -> (UInt64, UInt64) in
+            let target: (epoch: UInt64, sequence: UInt64)? = await MainActor.run {
+                guard self.clientGeneration == currentClientGeneration,
+                      self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                      self.agentSubscribedSessionIDs.contains(sessionID) else {
+                    return nil
+                }
                 if let syncState {
                     if self.agentEpochBySessionID[sessionID] == nil || self.agentEpochBySessionID[sessionID] == 0 {
                         self.agentEpochBySessionID[sessionID] = syncState.epoch
@@ -2599,42 +2648,59 @@ public final class IOSApplicationModel: ObservableObject {
                         if self.historyCursorBySessionID[sessionID] == nil, let minSeq = cached.map(\.sequence).min() {
                             self.historyCursorBySessionID[sessionID] = minSeq
                         }
-                        self.historyLoadedBySessionID.insert(sessionID)
                         self.agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
                     }
                 }
                 let currentEpoch = self.agentEpochBySessionID[sessionID] ?? syncState?.epoch ?? 0
                 let currentMaxSeq = self.agentHighestSequenceBySessionID[sessionID] ?? syncState?.maxSequence ?? 0
-                return (currentEpoch, currentMaxSeq)
+                return (epoch: currentEpoch, sequence: currentMaxSeq)
+            }
+            guard let target else {
+                await MainActor.run {
+                    guard self.clientGeneration == currentClientGeneration else { return }
+                    self.agentSubscribedSessionIDs.remove(sessionID)
+                }
+                return
             }
 
             do {
                 let subResult = try await client.subscribeAgent(
                     sessionID: sessionID,
-                    epoch: targetEpoch > 0 ? targetEpoch : nil,
-                    lastSequence: lastSeq > 0 ? lastSeq : nil
+                    epoch: target.epoch > 0 ? target.epoch : nil,
+                    lastSequence: target.sequence > 0 ? target.sequence : nil
                 )
                 _ = await MainActor.run {
-                    self.agentEpochBySessionID[sessionID] = subResult.snapshot.epoch
-                    if let gap = subResult.gapEvents, !gap.isEmpty {
-                        self.mergeAgentEvents(gap, sessionID: sessionID, epoch: subResult.snapshot.epoch, prepend: false)
-                    }
+                    guard self.clientGeneration == currentClientGeneration,
+                          self.roster?.sessions.first(where: { $0.id == sessionID })?.isAgentBacked == true,
+                          self.agentSubscribedSessionIDs.contains(sessionID) else { return }
+                    // Route the snapshot through the same epoch transition
+                    // path as live events. Assigning the new epoch first
+                    // would leave cached events from the previous Host
+                    // projection in the visible transcript.
+                    self.mergeAgentEvents(
+                        subResult.gapEvents ?? [],
+                        sessionID: sessionID,
+                        epoch: subResult.snapshot.epoch,
+                        prepend: false
+                    )
                     let knownHighest = self.agentHighestSequenceBySessionID[sessionID] ?? 0
                     if subResult.snapshot.sequence > knownHighest {
                         self.fillAgentSequenceGap(
                             sessionID: sessionID,
                             since: knownHighest + 1,
-                            before: subResult.snapshot.sequence + 1
+                            before: subResult.snapshot.sequence + 1,
+                            epoch: subResult.snapshot.epoch
                         )
                     }
                     if self.historyCursorBySessionID[sessionID] == nil,
                        let minSeq = self.agentState.agentEventsBySessionID[sessionID]?.first?.sequence {
                         self.historyCursorBySessionID[sessionID] = minSeq
                     }
-                    self.historyLoadedBySessionID.insert(sessionID)
+                    self.agentSubscribedSessionIDs.insert(sessionID)
                 }
             } catch {
                 _ = await MainActor.run {
+                    guard self.clientGeneration == currentClientGeneration else { return }
                     _ = self.agentSubscribedSessionIDs.remove(sessionID)
                 }
             }
@@ -2968,7 +3034,12 @@ public final class IOSApplicationModel: ObservableObject {
         if !prepend, let minIncoming, minIncoming > (currentHighest + 1) {
             let gapStart = currentHighest > 0 ? currentHighest + 1 : 1
             if gapStart < minIncoming {
-                fillAgentSequenceGap(sessionID: sessionID, since: gapStart, before: minIncoming)
+                fillAgentSequenceGap(
+                    sessionID: sessionID,
+                    since: gapStart,
+                    before: minIncoming,
+                    epoch: eventEpoch > 0 ? eventEpoch : nil
+                )
             }
         }
         Task {
