@@ -74,6 +74,11 @@ type Config struct {
 	Logger           *slog.Logger
 }
 
+// clientProtocolVersion is the logical Warren control protocol carried inside
+// a Relay client stream. It is independent from BRLY/2, which remains the
+// transport framing between the Relay and an enrolled Host.
+const clientProtocolVersion = "3.0"
+
 type Server struct {
 	config          Config
 	basePath        string
@@ -1133,7 +1138,7 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 		ClientID    string `json:"client_id"`
 		Version     string `json:"version"`
 	}
-	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" || auth.Version != "2.0" || strings.TrimSpace(auth.AccessToken) == "" {
+	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" || auth.Version != clientProtocolVersion || strings.TrimSpace(auth.AccessToken) == "" {
 		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
 		return
 	}

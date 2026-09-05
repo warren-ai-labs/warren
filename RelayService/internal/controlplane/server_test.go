@@ -134,7 +134,7 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if err := client.WriteJSON(map[string]string{"t": "auth", "version": "2.0", "access_token": paired.Token}); err != nil {
+	if err := client.WriteJSON(map[string]string{"t": "auth", "version": clientProtocolVersion, "access_token": paired.Token}); err != nil {
 		t.Fatal(err)
 	}
 
