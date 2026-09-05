@@ -17,11 +17,11 @@ The core architecture and the main native macOS path are implemented:
   and be promoted without replaying or clearing the visible grid;
 - cold recovery has an atomic terminal-state boundary and a presentation gate;
 - output, input, focus, and resize ownership are separated;
-- Web and CLI clients use the protocol-2 recovery path, with ANSI replay where
+- Web and CLI clients use the protocol-3 recovery path, with ANSI replay where
   a native Ghostty snapshot is unavailable.
 
 The branch is now in integration and release-closure work, not at the start of
-the feature. Protocol 2 is an intentional hard cutover with an explicit
+the feature. Protocol 3 is an intentional hard cutover with an explicit
 minimum-client error, Web subscription cleanup and payload limits are covered,
 and deterministic multi-peer recovery tests are in place. Real GUI/device
 acceptance and final branch/worktree review remain before calling it released.
@@ -103,9 +103,9 @@ subscription behind.
 
 ### Protocol and binary frames
 
-Protocol 2 is implemented as a hard terminal recovery boundary:
+Protocol 3 is implemented as a hard terminal recovery boundary:
 
-- `api.Version` is `2.0`. WebSocket auth requires the exact version and at
+- `api.Version` is `3.0`. WebSocket auth requires the exact version and at
   least one negotiated terminal-state format; missing or older clients receive
   an explicit error before roster data is exposed.
 - The DENB envelope keeps output and input framing and adds `KindAtomicState`.
@@ -125,7 +125,7 @@ Evidence: `Headless/internal/api/types.go`,
 Compatibility is intentionally not transparent: protocol 1 and clients that
 do not advertise a state format are rejected. A coordinated rollout policy or
 an explicit minimum-client requirement is the rollout policy: deployed
-Desktop/Web/mobile clients must speak protocol 2 and negotiate at least one
+Desktop/Web/mobile clients must speak protocol 3 and negotiate at least one
 terminal-state format. The server rejects older or incomplete handshakes
 before exposing roster data.
 
@@ -215,7 +215,7 @@ Evidence: `Sources/Warren/WarrenRemoteApplicationModel.swift` and
 Web remains a single-xterm compatibility client rather than a native warm
 surface client:
 
-- It authenticates as protocol 2 and advertises only
+- It authenticates as protocol 3 and advertises only
   `ghostline-vt-replay-v1`.
 - It accepts `KindAtomicState`, holds the payload opaque until `synced`, stages
   live frames at the same `(epoch, sequence)` boundary, writes the snapshot and
@@ -264,9 +264,9 @@ isolation when it reports a cleanup race.
 
 Business intrusiveness:
 
-- The runtime is now Ghostline-only and protocol 2 is a hard cutover. This is
+- The runtime is now Ghostline-only and protocol 3 is a hard cutover. This is
   an intentional product/runtime change; the documented minimum-client policy
-  requires protocol 2 plus a negotiated terminal-state format.
+  requires protocol 3 plus a negotiated terminal-state format.
 
 Interaction impact:
 

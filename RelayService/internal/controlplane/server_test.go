@@ -371,6 +371,8 @@ func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 	}
 	for _, resource := range []string{
 		"apple-touch-icon.png",
+		"favicon-16.png",
+		"favicon-32.png",
 		"icon.svg",
 		"preset-claude.svg",
 		"preset-codex-white.svg",

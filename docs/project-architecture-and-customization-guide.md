@@ -15,7 +15,7 @@ The central design decision is ownership:
 
 ```text
 macOS Desktop ---+
-Web / PWA --------+-- WebSocket protocol 2.0 (minimum) --> warren-headless
+Web / PWA --------+-- Warren control protocol 3.0 --------> warren-headless
 CLI --------------+                                |
                                                    +-- Projects / Workspaces
                                                    +-- Terminal Groups

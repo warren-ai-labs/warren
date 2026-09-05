@@ -1149,7 +1149,9 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	}()
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var envelope api.Envelope
-	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" || !s.authorized(envelope.Token) {
+	publicRelayWebSocket := relay.IsPublicRoute(request.Context()) && request.URL.Path == "/v1/ws"
+	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" ||
+		(!s.authorized(envelope.Token) && !(publicRelayWebSocket && strings.TrimSpace(envelope.Token) == "")) {
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
 		return
 	}

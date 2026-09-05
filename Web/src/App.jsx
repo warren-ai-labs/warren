@@ -2179,7 +2179,7 @@ export default function App() {
         }
         if (current) {
           if (decoded.header.epoch !== current.epoch || decoded.header.sequence !== current.sequence) {
-            // Protocol 2 recovery always starts from a fresh atomic state;
+            // Protocol 3 recovery always starts from a fresh atomic state;
             // never render an out-of-order frame into the visible surface.
             connectionRef.current?.reset();
             return;
@@ -2191,7 +2191,7 @@ export default function App() {
         }
         batcherRef.current?.enqueue(decoded.payload);
       } else if (isBinaryEnvelope(bytes)) {
-        // Every protocol-2 binary message is a DENB frame. Raw PTY bytes and
+        // Every protocol-3 binary message is a DENB frame. Raw PTY bytes and
         // malformed envelopes are rejected instead of being fed to xterm.
         connectionRef.current?.reset();
       } else {

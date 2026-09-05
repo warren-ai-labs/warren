@@ -1,7 +1,8 @@
 # Headless and Remote Connection Architecture
 
 Status: implemented baseline architecture
-Protocol version: 2.0 (minimum supported version)
+Control protocol version: 3.0 (minimum supported version)
+Relay transport: BRLY/2 (wire version 2.0)
 
 ## Decisions
 
@@ -43,7 +44,8 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - The daemon binds to loopback by default.
 - Tokens use 256 random bits; config files use `0600` permissions.
 - WebSocket auth uses constant-time comparison.
-- Protocol 2 is the minimum wire version. Clients that send another (or no)
+- Warren control protocol 3.0 is the minimum application wire version. Clients
+  that send another (or no)
   version are rejected during authentication with an explicit upgrade error,
   before the daemon sends a roster or session data.
 - HTTP state endpoints require a Bearer token.
@@ -54,7 +56,8 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 - The store can move from atomic JSON to a stronger database without changing the API.
 - Runtime is isolated behind an interface, so systemd, container, or PTY adapters can be added.
 - Endpoints can add Relay, mTLS, and organization-level discovery.
-- Protocol 2 negotiates roster deltas and an opaque terminal-state format. New
+- Control protocol 3.0 negotiates roster deltas and an opaque terminal-state
+  format. New
   request receipts, input leases, and other capabilities must be introduced as
   a later protocol version rather than inferred by older clients.
 - The Desktop remote model is the only client model; local Host state is owned by the daemon.

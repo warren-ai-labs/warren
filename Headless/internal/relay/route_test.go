@@ -58,7 +58,8 @@ func TestRoutePublicURL(t *testing.T) {
 		want  string
 	}{
 		{name: "dns", route: Route{PublicHostname: "route.tunnel.example", PathPrefix: "/"}, base: "https://relay.example", want: "https://route.tunnel.example/"},
-		{name: "ip path", route: Route{PublicHostname: "127.0.0.1", PathPrefix: "/t/route"}, base: "http://127.0.0.1:8080", want: "http://127.0.0.1:8080/t/route"},
+		{name: "ip path", route: Route{PublicHostname: "127.0.0.1", PathPrefix: "/t/route"}, base: "http://127.0.0.1:8080", want: "http://127.0.0.1:8080/t/route/"},
+		{name: "mounted relay path", route: Route{PublicHostname: "127.0.0.1", PathPrefix: "/t/route"}, base: "https://relay.example/relay/", want: "https://relay.example/relay/t/route/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := test.route.PublicURL(test.base)

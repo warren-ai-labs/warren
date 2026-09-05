@@ -101,9 +101,38 @@ type StreamOpen struct {
 	HostID     string `json:"host_id,omitempty"`
 	ClientID   string `json:"client_id,omitempty"`
 	Token      string `json:"access_token,omitempty"`
+	// PublicRoute is set only by Relay for an authenticated public route.
+	// It lets the Host distinguish that one explicitly public WebSocket path
+	// from a direct unauthenticated request without forwarding a Host Secret.
+	PublicRoute bool `json:"public_route,omitempty"`
 }
 
 type streamOpen = StreamOpen
+
+type streamContextKey uint8
+
+const publicRouteContextKey streamContextKey = iota
+
+// IsPublicRoute reports whether a request was dispatched from a Relay route
+// explicitly marked public. The marker is installed only after the BRLY/2
+// stream capability has been verified by Connector.
+func IsPublicRoute(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(publicRouteContextKey).(bool)
+	return value
+}
+
+// ContextWithPublicRoute is used by transport-focused tests and adapters that
+// invoke the Host HTTP handler in-process. Production callers should rely on
+// Connector, which installs the marker only after capability verification.
+func ContextWithPublicRoute(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, publicRouteContextKey, true)
+}
 
 type challenge struct {
 	Type         string   `json:"t"`
@@ -328,6 +357,9 @@ func newStream(open streamOpen, epoch uint64, ctx context.Context, cancel contex
 
 func streamContext(open streamOpen) (context.Context, context.CancelFunc) {
 	parent, cancel := context.WithCancel(context.Background())
+	if open.PublicRoute {
+		parent = context.WithValue(parent, publicRouteContextKey, true)
+	}
 	if open.DeadlineMS <= 0 {
 		return parent, cancel
 	}
@@ -706,6 +738,9 @@ func (connector *Connector) dispatch(value frame) error {
 		if metadata.DeadlineMS < 0 || metadata.DeadlineMS > int64((10*time.Minute)/time.Millisecond) {
 			return errors.New("invalid stream deadline")
 		}
+		if metadata.PublicRoute && metadata.Class != "upgrade" {
+			return errors.New("public route stream must be a websocket upgrade")
+		}
 		if strings.TrimSpace(metadata.Token) == "" {
 			return errors.New("stream capability is missing")
 		}
@@ -1038,6 +1073,11 @@ func (connector *Connector) handleHeaders(id connectionID, value *stream, data [
 			return
 		}
 		request.URL.Host = headers.Authority
+		// Relay terminates the public TLS connection before dispatching the
+		// request in-process. Reconstruct the trusted scheme as forwarded
+		// metadata so the Host's same-origin check sees the browser's real
+		// http/https origin instead of the synthetic in-process URL.
+		request.Header.Set("X-Forwarded-Proto", scheme)
 		value.requestMu.Lock()
 		value.request = request
 		value.requestMu.Unlock()

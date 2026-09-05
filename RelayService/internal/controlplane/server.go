@@ -141,6 +141,8 @@ type httpErrorMessage struct {
 
 var webStaticResources = map[string]string{
 	"apple-touch-icon.png":   "image/png",
+	"favicon-16.png":         "image/png",
+	"favicon-32.png":         "image/png",
 	"icon-192.png":           "image/png",
 	"icon-512.png":           "image/png",
 	"icon.svg":               "image/svg+xml",
@@ -1330,6 +1332,10 @@ func (server *Server) configureRoute(response http.ResponseWriter, request *http
 		}
 		route.PathPrefix = path.Clean(body.PathPrefix)
 	}
+	if routePathPrefixConflictsControlPlane(route.PathPrefix) {
+		http.Error(response, "invalid path_prefix: conflicts with a Relay control path", http.StatusBadRequest)
+		return
+	}
 	if body.AuthMode != "" {
 		if body.AuthMode != "public" && body.AuthMode != "owner" {
 			http.Error(response, "invalid auth_mode", http.StatusBadRequest)
@@ -1359,6 +1365,35 @@ func (server *Server) configureRoute(response http.ResponseWriter, request *http
 		return
 	}
 	writeJSON(response, http.StatusOK, route)
+}
+
+// routePathPrefixConflictsControlPlane reports prefixes that would be claimed
+// by Relay's own ServeMux before the catch-all public route. Public routes must
+// stay outside these namespaces so their page, assets, and WebSocket endpoint
+// all reach the Host consistently.
+func routePathPrefixConflictsControlPlane(raw string) bool {
+	prefix := path.Clean("/" + strings.TrimSpace(raw))
+	if prefix == "." || prefix == "/" {
+		return false
+	}
+	reservedPaths := []string{
+		"/healthz",
+		"/v1",
+		"/h",
+		"/invite",
+		"/assets",
+		"/manifest.webmanifest",
+		"/service-worker.js",
+	}
+	for resource := range webStaticResources {
+		reservedPaths = append(reservedPaths, "/"+resource)
+	}
+	for _, reserved := range reservedPaths {
+		if prefix == reserved || strings.HasPrefix(prefix, reserved+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultRouteAddress returns the route authority and path for a newly
@@ -1456,15 +1491,27 @@ func (server *Server) disableRoute(response http.ResponseWriter, request *http.R
 }
 
 func (server *Server) publicRoute(response http.ResponseWriter, request *http.Request) {
-	// Public application routes never become a backdoor into Relay or the
-	// daemon control API, even when the route policy is public.
-	if request.URL.Path == "/v1" || strings.HasPrefix(request.URL.Path, "/v1/") ||
-		request.URL.Path == "/h" || strings.HasPrefix(request.URL.Path, "/h/") {
-		http.NotFound(response, request)
-		return
-	}
 	hostname := requestHostname(request.Host)
 	route, ok := server.registry.findRoute(hostname, request.URL.Path)
+	forwardPath := request.URL.Path
+	if ok {
+		if strippedPath, stripped := stripRoutePath(route, request.URL.Path); stripped {
+			forwardPath = strippedPath
+		}
+	}
+	// Public application routes never become a backdoor into Relay or the
+	// daemon control API. The one exception is the exact WebSocket endpoint
+	// used by the credential-free public Web UI; Relay has already selected a
+	// live public route before it is allowed through.
+	if forwardPath == "/v1" || strings.HasPrefix(forwardPath, "/v1/") ||
+		forwardPath == "/h" || strings.HasPrefix(forwardPath, "/h/") {
+		publicWebSocket := ok && route.AuthMode == "public" &&
+			forwardPath == "/v1/ws" && isUpgradeRequest(request)
+		if !publicWebSocket {
+			http.NotFound(response, request)
+			return
+		}
+	}
 	if !ok {
 		http.NotFound(response, request)
 		return
@@ -1506,6 +1553,22 @@ func (server *Server) publicRoute(response http.ResponseWriter, request *http.Re
 			return
 		}
 	}
+	// Keep the route root canonical. A public page served at "/t/id" (without
+	// the trailing slash) makes the browser resolve its relative assets at
+	// "/t/assets/...", outside the route namespace. Redirect only the exact
+	// non-upgrade GET root after policy/auth checks so legacy bookmarks recover
+	// without weakening owner-route authorization.
+	if !upgrade && request.Method == http.MethodGet {
+		prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
+		if prefix != "." && prefix != "/" && request.URL.Path == prefix {
+			target := prefix + "/"
+			if request.URL.RawQuery != "" {
+				target += "?" + request.URL.RawQuery
+			}
+			http.Redirect(response, request, target, http.StatusPermanentRedirect)
+			return
+		}
+	}
 	if upgrade {
 		server.forwardUpgrade(response, forwardRequest, route)
 		return
@@ -1523,7 +1586,7 @@ func requestHostname(raw string) string {
 
 func stripRoutePath(route routeRecord, requestPath string) (string, bool) {
 	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
-	if prefix == "." || prefix == "/" || !routeUsesPathFallback(route) {
+	if prefix == "." || prefix == "/" {
 		return requestPath, false
 	}
 	if requestPath == prefix {
@@ -1537,12 +1600,6 @@ func stripRoutePath(route routeRecord, requestPath string) (string, bool) {
 		return trimmed, true
 	}
 	return requestPath, false
-}
-
-func routeUsesPathFallback(route routeRecord) bool {
-	prefix := path.Clean(strings.TrimSpace(route.PathPrefix))
-	expected := path.Clean("/t/" + strings.TrimSpace(route.ID))
-	return route.ID != "" && prefix == expected
 }
 
 func routeAllows(route routeRecord, request *http.Request) bool {
@@ -1629,11 +1686,6 @@ func validateRequestHeaders(request *http.Request, upgrade bool) error {
 		if len(keys) != 1 || !validWebSocketKey(keys[0]) {
 			return errors.New("invalid websocket key")
 		}
-		// The first release forwards raw post-101 bytes and deliberately does
-		// not negotiate per-message compression at the public edge.
-		if strings.TrimSpace(request.Header.Get("Sec-WebSocket-Extensions")) != "" {
-			return errors.New("websocket extensions are not supported")
-		}
 	}
 	return nil
 }
@@ -1673,7 +1725,7 @@ func filterHeaders(header http.Header, includeUpgrade bool) [][2]string {
 	result := make([][2]string, 0, len(header))
 	for key, values := range header {
 		lower := strings.ToLower(strings.TrimSpace(key))
-		if hop[lower] || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-warren-") || lower == "host" || lower == "content-length" {
+		if hop[lower] || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-warren-") || lower == "host" || lower == "content-length" || lower == "sec-websocket-extensions" {
 			continue
 		}
 		for _, value := range values {
@@ -1695,7 +1747,15 @@ func (server *Server) openHTTPStream(request *http.Request, route routeRecord, u
 	if requestID == "" || len(requestID) > 256 {
 		requestID, _ = randomToken(16)
 	}
-	open := &streamOpen{Class: "http", Version: "2.0", RequestID: requestID, DeadlineMS: 60_000, RouteID: route.ID, HostID: route.HostID}
+	open := &streamOpen{
+		Class:       "http",
+		Version:     "2.0",
+		RequestID:   requestID,
+		DeadlineMS:  60_000,
+		RouteID:     route.ID,
+		HostID:      route.HostID,
+		PublicRoute: route.AuthMode == "public" && upgrade && request.URL.Path == "/v1/ws",
+	}
 	if upgrade {
 		open.Class = "upgrade"
 	}

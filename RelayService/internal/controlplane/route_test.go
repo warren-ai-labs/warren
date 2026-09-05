@@ -14,11 +14,12 @@ import (
 
 func TestFilterHeadersPreservesWebSocketHopHeadersForUpgrade(t *testing.T) {
 	header := http.Header{
-		"Connection":            []string{"Upgrade"},
-		"Upgrade":               []string{"websocket"},
-		"Sec-WebSocket-Key":     []string{"dGhlIHNhbXBsZSBub25jZQ=="},
-		"Sec-WebSocket-Version": []string{"13"},
-		"X-Request-ID":          []string{"request-1"},
+		"Connection":               []string{"Upgrade"},
+		"Upgrade":                  []string{"websocket"},
+		"Sec-WebSocket-Key":        []string{"dGhlIHNhbXBsZSBub25jZQ=="},
+		"Sec-WebSocket-Version":    []string{"13"},
+		"Sec-WebSocket-Extensions": []string{"permessage-deflate; client_max_window_bits"},
+		"X-Request-ID":             []string{"request-1"},
 	}
 	regular := filterHeaders(header, false)
 	if hasHeaderPair(regular, "connection") || hasHeaderPair(regular, "upgrade") {
@@ -27,6 +28,18 @@ func TestFilterHeadersPreservesWebSocketHopHeadersForUpgrade(t *testing.T) {
 	upgrade := filterHeaders(header, true)
 	if !hasHeaderPair(upgrade, "connection") || !hasHeaderPair(upgrade, "upgrade") {
 		t.Fatalf("WebSocket forwarding dropped required hop headers: %#v", upgrade)
+	}
+	if hasHeaderPair(upgrade, "sec-websocket-extensions") {
+		t.Fatalf("WebSocket forwarding retained an unsupported extension offer: %#v", upgrade)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://relay.example/v1/ws", nil)
+	for name, values := range header {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
+	}
+	if err := validateRequestHeaders(request, true); err != nil {
+		t.Fatalf("valid browser extension offer was rejected: %v", err)
 	}
 }
 
@@ -147,7 +160,7 @@ func TestIPRelayAllowsDistinctPathRoutesAndRejectsOverlap(t *testing.T) {
 	}
 }
 
-func TestPathFallbackStripsOnlyGeneratedRoutePrefix(t *testing.T) {
+func TestPathRoutesStripConfiguredRoutePrefix(t *testing.T) {
 	route := routeRecord{ID: "route-one", PathPrefix: "/t/route-one"}
 	for input, value := range map[string]struct {
 		want string
@@ -167,6 +180,129 @@ func TestPathFallbackStripsOnlyGeneratedRoutePrefix(t *testing.T) {
 	plain.PathPrefix = "/"
 	if got, stripped := stripRoutePath(plain, "/health"); got != "/health" || stripped {
 		t.Fatalf("root route was stripped: %q, %v", got, stripped)
+	}
+	custom := routeRecord{ID: "route-custom", PathPrefix: "/workbench"}
+	if got, stripped := stripRoutePath(custom, "/workbench/v1/ws"); got != "/v1/ws" || !stripped {
+		t.Fatalf("custom route prefix was not stripped: %q, %v", got, stripped)
+	}
+}
+
+func TestRoutePathPrefixRejectsRelayControlNamespaces(t *testing.T) {
+	for _, prefix := range []string{
+		"/healthz",
+		"/v1",
+		"/v1/public",
+		"/h",
+		"/h/custom",
+		"/invite",
+		"/assets",
+		"/manifest.webmanifest",
+		"/service-worker.js",
+		"/favicon-16.png",
+		"/icon-192.png",
+		"/preset-claude.svg",
+	} {
+		if !routePathPrefixConflictsControlPlane(prefix) {
+			t.Errorf("reserved route prefix %q was accepted", prefix)
+		}
+	}
+	for _, prefix := range []string{"/", "/t/route", "/workbench", "/public/v1", "/hardened"} {
+		if routePathPrefixConflictsControlPlane(prefix) {
+			t.Errorf("safe route prefix %q was rejected", prefix)
+		}
+	}
+}
+
+func TestPublicRootRouteAdmitsOnlyWebSocketControlPath(t *testing.T) {
+	server, err := NewServer(Config{
+		PublicURL:     "http://127.0.0.1",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "http://127.0.0.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	hostID, _ := provisionHost(t, httpServer.URL)
+	if err := server.registry.setRoute(hostID, &routeRecord{
+		ID: "route-root", PublicHostname: "127.0.0.1", PathPrefix: "/",
+		AuthMode: "public", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	upgrade := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/v1/ws", nil)
+	upgrade.Host = "127.0.0.1"
+	upgrade.Header.Set("Connection", "Upgrade")
+	upgrade.Header.Set("Upgrade", "websocket")
+	upgrade.Header.Set("Sec-WebSocket-Version", "13")
+	upgrade.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	upgradeResponse := httptest.NewRecorder()
+	server.publicRoute(upgradeResponse, upgrade)
+	if upgradeResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("public root WebSocket status = %d, want host-offline %d", upgradeResponse.Code, http.StatusServiceUnavailable)
+	}
+
+	control := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/v1/settings", nil)
+	control.Host = "127.0.0.1"
+	controlResponse := httptest.NewRecorder()
+	server.publicRoute(controlResponse, control)
+	if controlResponse.Code != http.StatusNotFound {
+		t.Fatalf("public root control API status = %d, want %d", controlResponse.Code, http.StatusNotFound)
+	}
+}
+
+func TestPublicPathFallbackAdmitsOnlyWebSocketControlPath(t *testing.T) {
+	server, err := NewServer(Config{
+		PublicURL:     "http://127.0.0.1",
+		AdminToken:    "admin-bootstrap",
+		SigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin: "http://127.0.0.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	hostID, _ := provisionHost(t, httpServer.URL)
+	if err := server.registry.setRoute(hostID, &routeRecord{
+		ID: "route-path", PublicHostname: "127.0.0.1", PathPrefix: "/t/route-path",
+		AuthMode: "public", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/t/route-path?tab=terminal", nil)
+	legacy.Host = "127.0.0.1"
+	legacyResponse := httptest.NewRecorder()
+	server.publicRoute(legacyResponse, legacy)
+	if legacyResponse.Code != http.StatusPermanentRedirect {
+		t.Fatalf("public path root without slash status = %d, want %d", legacyResponse.Code, http.StatusPermanentRedirect)
+	}
+	if location := legacyResponse.Header().Get("Location"); location != "/t/route-path/?tab=terminal" {
+		t.Fatalf("public path root redirect location = %q", location)
+	}
+
+	control := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/t/route-path/v1/settings", nil)
+	control.Host = "127.0.0.1"
+	controlResponse := httptest.NewRecorder()
+	server.publicRoute(controlResponse, control)
+	if controlResponse.Code != http.StatusNotFound {
+		t.Fatalf("public path fallback control API status = %d, want %d", controlResponse.Code, http.StatusNotFound)
+	}
+
+	upgrade := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/t/route-path/v1/ws", nil)
+	upgrade.Host = "127.0.0.1"
+	upgrade.Header.Set("Connection", "Upgrade")
+	upgrade.Header.Set("Upgrade", "websocket")
+	upgrade.Header.Set("Sec-WebSocket-Version", "13")
+	upgrade.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	upgradeResponse := httptest.NewRecorder()
+	server.publicRoute(upgradeResponse, upgrade)
+	if upgradeResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("public path fallback WebSocket status = %d, want host-offline %d", upgradeResponse.Code, http.StatusServiceUnavailable)
 	}
 }
 

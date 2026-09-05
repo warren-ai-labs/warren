@@ -8,7 +8,7 @@ export function terminalSize(terminal) {
 }
 
 export function attachTerminalMessage(session, terminal, anchor = null, claimControl = true) {
-  // Protocol 2 subscriptions carry the measured viewport and claim control
+  // Protocol 3 subscriptions carry the measured viewport and claim control
   // before the Host captures its atomic terminal state. There is no legacy
   // attach/replay fallback: every new Web/mobile client starts at a snapshot
   // boundary.

@@ -96,7 +96,7 @@ For a cold desktop attach, the expected order is measured focused resize,
 `attached`, one atomic-state binary frame (`ghostty-vt-snapshot-v1` for
 Desktop or `ghostline-vt-replay-v1` for Web/mobile/CLI), matching `synced`,
 then live cursor output. A passive subscriber must not resize the Runtime.
-Protocol 2 clients negotiate the format during authentication; there is no
+Protocol 3 clients negotiate the format during authentication; there is no
 implicit protocol-1 replay path.
 
 Do not interpret a changed `epoch` as byte loss by itself. Compare the full

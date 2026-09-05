@@ -13,8 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // TestRelayE2E exercises the full Relay lifecycle: stand up a fresh
@@ -137,6 +140,7 @@ func TestRelayE2E(t *testing.T) {
 		"WARREN_SETTINGS_FILE="+filepath.Join(hostData, "settings.json"),
 		"WARREN_GHOSTLINE_SOCKET="+filepath.Join(hostData, "ghostline.sock"),
 		"WARREN_OUTPUT_DIR="+filepath.Join(hostData, "output"),
+		"WARREN_WEB_ROOT="+filepath.Join(repoRoot, "Web", "dist"),
 		"WARREN_HEADLESS_LOG=info",
 	)
 	hostLog := filepath.Join(tmp, "host.log")
@@ -240,6 +244,68 @@ func TestRelayE2E(t *testing.T) {
 	}
 	if state, _ := relayBlock["state"].(string); state != "connected" {
 		t.Fatalf("expected relay state=connected, got %+v", relayBlock)
+	}
+
+	// Public Access must carry the browser's credential-free WebSocket through
+	// Relay and the in-process Host handler. Enable the route after enrollment,
+	// then use a compression-offer dialer to match a real browser handshake.
+	publicStatus := postJSON(t, fmt.Sprintf("http://127.0.0.1:%d/v1/public-access/enable", headlessPort), map[string]any{}, hostToken)
+	t.Cleanup(func() {
+		request, requestErr := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/v1/public-access/disable", headlessPort), nil)
+		if requestErr != nil {
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+hostToken)
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr == nil && response != nil {
+			response.Body.Close()
+		}
+	})
+	publicEndpoint := stringField(t, publicStatus, "publicEndpoint")
+	publicPage, err := http.Get(publicEndpoint)
+	if err != nil {
+		t.Fatalf("fetch public access page: %v", err)
+	}
+	pageBody, readErr := io.ReadAll(publicPage.Body)
+	publicPage.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read public access page: %v", readErr)
+	}
+	if publicPage.StatusCode != http.StatusOK || !bytes.Contains(pageBody, []byte(`id="root"`)) {
+		t.Fatalf("public access page status=%d body prefix=%q", publicPage.StatusCode, pageBody[:min(len(pageBody), 160)])
+	}
+	publicAssetURL := strings.TrimRight(publicEndpoint, "/") + "/assets/app.js"
+	publicAsset, err := http.Get(publicAssetURL)
+	if err != nil {
+		t.Fatalf("fetch public access asset: %v", err)
+	}
+	assetBody, assetReadErr := io.ReadAll(publicAsset.Body)
+	publicAsset.Body.Close()
+	if assetReadErr != nil {
+		t.Fatalf("read public access asset: %v", assetReadErr)
+	}
+	if publicAsset.StatusCode != http.StatusOK || len(assetBody) == 0 {
+		t.Fatalf("public access asset status=%d bytes=%d", publicAsset.StatusCode, len(assetBody))
+	}
+	publicWebSocketURL := "ws" + strings.TrimPrefix(strings.TrimRight(publicEndpoint, "/")+"/v1/ws", "http")
+	dialer := websocket.Dialer{EnableCompression: true}
+	publicSocket, _, err := dialer.Dial(publicWebSocketURL, http.Header{"Origin": []string{relayURL}})
+	if err != nil {
+		t.Fatalf("dial public WebSocket: %v", err)
+	}
+	defer publicSocket.Close()
+	if err := publicSocket.WriteJSON(map[string]any{
+		"t": "auth", "version": "3.0",
+		"terminalStateFormats": []string{"ghostline-vt-replay-v1"},
+	}); err != nil {
+		t.Fatalf("authenticate public WebSocket: %v", err)
+	}
+	var welcome map[string]any
+	if err := publicSocket.ReadJSON(&welcome); err != nil {
+		t.Fatalf("read public WebSocket welcome: %v", err)
+	}
+	if welcome["t"] != "welcome" || welcome["version"] != "3.0" {
+		t.Fatalf("public WebSocket welcome = %#v", welcome)
 	}
 }
 

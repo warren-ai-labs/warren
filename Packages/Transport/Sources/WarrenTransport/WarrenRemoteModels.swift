@@ -36,6 +36,10 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let type: String
     public let hostID: String?
     public let routeID: String?
+    /// Stable native-client identity used when a Relay capability is bound to
+    /// a device. It is non-secret and persisted with the endpoint metadata so
+    /// reconnects do not manufacture a new Relay client on every socket.
+    public let clientID: String?
     public let refreshToken: String?  // OAuth2 refresh token for Relay
     public let directURL: String?
     public let relayURL: String?
@@ -45,13 +49,19 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     /// this when restoring a persisted endpoint after an app reinstall.
     public func withTokens(token: String, refreshToken: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken,
+             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
              directURL: directURL, relayURL: relayURL, routePreference: routePreference)
     }
 
     public func withActiveRoute(url: String, type: String, token: String) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, refreshToken: refreshToken,
+             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+    }
+
+    public func withClientID(_ clientID: String?) -> Self {
+        Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
+             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
              directURL: directURL, relayURL: relayURL, routePreference: routePreference)
     }
 
@@ -62,7 +72,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         hostID: String? = nil
     ) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID ?? self.hostID, routeID: routeID, refreshToken: refreshToken,
+             type: type, hostID: hostID ?? self.hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
              directURL: directURL ?? self.directURL,
              relayURL: relayURL ?? self.relayURL,
              routePreference: routePreference ?? self.routePreference)
@@ -77,6 +87,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         type: String = "daemon",
         hostID: String? = nil,
         routeID: String? = nil,
+        clientID: String? = nil,
         refreshToken: String? = nil,
         directURL: String? = nil,
         relayURL: String? = nil,
@@ -90,6 +101,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         self.type = type
         self.hostID = hostID
         self.routeID = routeID
+        self.clientID = clientID
         self.refreshToken = refreshToken
         self.directURL = directURL
         self.relayURL = relayURL
@@ -186,6 +198,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         case name, url, token, ssh, sshRemote, type
         case hostID = "host_id"
         case routeID = "route_id"
+        case clientID = "client_id"
         case refreshToken = "refresh_token"
         case directURL = "direct_url"
         case relayURL = "relay_url"
@@ -203,6 +216,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
             type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
             hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
             routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
+            clientID: try values.decodeIfPresent(String.self, forKey: .clientID),
             refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken),
             directURL: try values.decodeIfPresent(String.self, forKey: .directURL),
             relayURL: try values.decodeIfPresent(String.self, forKey: .relayURL),
@@ -257,7 +271,8 @@ public struct WarrenRelayPairing: Codable, Equatable, Hashable, Sendable {
     public func endpoint(
         accessToken: String,
         name: String? = nil,
-        routeID: String? = nil
+        routeID: String? = nil,
+        clientID: String? = nil
     ) -> WarrenRemoteEndpointConfiguration {
         WarrenRemoteEndpointConfiguration(
             name: name ?? (hostID.isEmpty ? "Relay Host" : "Relay \(hostID.prefix(8))"),
@@ -265,7 +280,8 @@ public struct WarrenRelayPairing: Codable, Equatable, Hashable, Sendable {
             token: accessToken,
             type: "relay",
             hostID: hostID,
-            routeID: routeID
+            routeID: routeID,
+            clientID: clientID
         )
     }
 }

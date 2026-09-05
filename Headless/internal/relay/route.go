@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -234,7 +235,9 @@ func responseError(response *http.Response) error {
 
 // PublicURL derives the canonical browser address from Relay route metadata.
 // IP/localhost deployments keep the Relay port and use the route path; DNS
-// deployments use the route hostname and its configured path prefix.
+// deployments use the route hostname and its configured path prefix. The
+// returned path always ends in a slash so relative Web/PWA assets resolve
+// inside a path-scoped route.
 func (route Route) PublicURL(relayURL string) (string, error) {
 	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(relayURL), "/"))
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
@@ -247,11 +250,14 @@ func (route Route) PublicURL(relayURL string) (string, error) {
 	if net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
 		host = base.Host
 	}
-	prefix := strings.TrimSpace(route.PathPrefix)
-	if prefix == "" || prefix == "/" {
+	prefix := path.Clean("/" + strings.TrimSpace(route.PathPrefix))
+	if prefix == "." || prefix == "/" {
 		prefix = "/"
-	} else if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
 	}
-	return base.Scheme + "://" + host + prefix, nil
+	basePath := strings.TrimRight(base.EscapedPath(), "/")
+	publicPath := basePath + prefix
+	if !strings.HasSuffix(publicPath, "/") {
+		publicPath += "/"
+	}
+	return base.Scheme + "://" + host + publicPath, nil
 }
