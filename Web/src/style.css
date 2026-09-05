@@ -1887,7 +1887,7 @@ button:disabled {
   min-width: 0;
   min-height: 36px;
   padding: 3px 4px 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
 }
@@ -1906,6 +1906,222 @@ button:disabled {
   font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-picker-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.12));
+  background: var(--fill-agent-chip, var(--color-input-surface));
+  color: var(--color-text-secondary);
+  font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--duration-fast) var(--ease-out);
+  user-select: none;
+}
+
+.agent-picker-trigger:hover {
+  background: var(--fill-hover);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.agent-picker-trigger.open {
+  background: var(--fill-selected, var(--fill-hover));
+  color: var(--color-text);
+  border-color: var(--color-input-focus);
+}
+
+.agent-picker-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.agent-picker-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-picker-caret {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-inline-start: 1px;
+}
+
+.agent-picker-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: var(--layer-menu);
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--color-panel, #ffffff);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: agentPickerFadeIn 0.15s ease-out;
+}
+
+@keyframes agentPickerFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-picker-header {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.agent-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: none;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: start;
+  font-size: var(--text-sm);
+  transition: background var(--duration-fast);
+}
+
+.agent-picker-item:hover {
+  background: var(--fill-hover, rgba(0, 0, 0, 0.05));
+}
+
+.agent-picker-item.selected {
+  background: var(--fill-selected, rgba(0, 0, 0, 0.08));
+  font-weight: 600;
+}
+
+.agent-picker-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-picker-item-label {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.agent-picker-item-desc {
+  font-size: 11px;
+  color: var(--color-text-tertiary, #888);
+  line-height: 1.2;
+}
+
+.agent-picker-check {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--color-primary, #0969da);
+  margin-inline-start: 8px;
+}
+
+.agent-picker-custom {
+  display: flex;
+  gap: 4px;
+  padding: 6px 4px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.08));
+}
+
+.agent-picker-custom-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-input-surface);
+  color: var(--color-text);
+}
+
+.agent-picker-custom-input:focus {
+  outline: none;
+  border-color: var(--color-input-focus);
+}
+
+.agent-picker-custom-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary, #0969da);
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+}
+
+.agent-picker-custom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.agent-picker-footer {
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.08));
+  margin-top: 2px;
+}
+
+.agent-picker-apply-btn {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-sm);
+  background: var(--fill-button, rgba(0, 0, 0, 0.04));
+  color: var(--color-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-picker-apply-btn:hover {
+  background: var(--fill-hover, rgba(0, 0, 0, 0.08));
 }
 
 .agent-input-controls .agent-attachment-picker {
@@ -3682,6 +3898,183 @@ button:disabled {
   }
 }
 
+/* Desktop agent presets open the same optional-settings flow as mobile. */
+@media (min-width: 768px) {
+  .session-sheet-overlay {
+    position: fixed;
+    z-index: var(--layer-modal);
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--color-scrim-overlay);
+    animation: scrim-in var(--duration-overlay) var(--ease-out);
+  }
+
+  .session-sheet {
+    width: min(440px, calc(100vw - 48px));
+    max-height: min(720px, calc(100vh - 48px));
+    overflow-y: auto;
+    padding: 18px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-raised);
+    box-shadow: var(--shadow-dialog);
+    animation: overlay-in var(--duration-overlay) var(--ease-out);
+  }
+
+  .session-sheet-handle {
+    display: none;
+  }
+
+  .session-sheet-title {
+    padding: 0 4px 14px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-2sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .session-sheet-title-with-back {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--text-2md);
+    color: var(--color-text-primary);
+  }
+
+  .session-sheet-title-with-back img,
+  .session-sheet-item img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    outline: var(--outline-image);
+    outline-offset: -1px;
+    border-radius: 3px;
+  }
+
+  .session-sheet-back {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--fill-hover);
+    color: var(--color-text-secondary);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .session-sheet-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    margin: 0 4px var(--space-md);
+    padding: var(--space-md);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-sunken);
+  }
+
+  .session-sheet-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+
+  .session-sheet-field span {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+  }
+
+  .session-sheet-field small {
+    color: var(--color-text-tertiary);
+    font-size: var(--text-xs);
+  }
+
+  .session-sheet-field select,
+  .session-sheet-custom-model input {
+    width: 100%;
+    height: 38px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-raised);
+    color: var(--color-text-primary);
+    font-size: var(--text-md);
+  }
+
+  .session-sheet-custom-model {
+    display: flex;
+    gap: var(--space-sm);
+  }
+
+  .session-sheet-custom-model button,
+  .session-sheet-create {
+    min-height: 44px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--color-accent-solid);
+    color: var(--color-text-on-accent);
+    font-size: var(--text-2md);
+    cursor: pointer;
+  }
+
+  .session-sheet-custom-model button {
+    flex: 0 0 56px;
+    min-height: 38px;
+  }
+
+  .session-sheet-custom-model button:disabled,
+  .session-sheet-create:disabled,
+  .session-sheet-back:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .session-sheet-create {
+    width: 100%;
+    margin-top: var(--space-sm);
+  }
+
+  .session-sheet-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+    width: 100%;
+    height: 48px;
+    padding-inline: 10px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: transparent;
+    color: var(--color-text-primary);
+    text-align: start;
+    font-size: var(--text-2md);
+    cursor: pointer;
+  }
+
+  .session-sheet-cancel {
+    width: 100%;
+    height: 44px;
+    margin-top: var(--space-md);
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--fill-hover);
+    color: var(--color-text-primary);
+    font-size: var(--text-2md);
+    cursor: pointer;
+  }
+}
+
 @media (max-width: 767px) {
   .main {
     grid-template-rows: auto minmax(0, 1fr) auto;
@@ -4185,6 +4578,114 @@ button:disabled {
     font-weight: var(--weight-regular);
     letter-spacing: 0.06em;
     text-transform: uppercase;
+  }
+
+  .session-sheet-title-with-back {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--text-2md);
+    color: var(--color-text-primary);
+  }
+
+  .session-sheet-title-with-back img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    outline: var(--outline-image);
+    outline-offset: -1px;
+    border-radius: 3px;
+  }
+
+  .session-sheet-back {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--fill-hover);
+    color: var(--color-text-secondary);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .session-sheet-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    margin: 0 4px var(--space-md);
+    padding: var(--space-md);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-sunken);
+  }
+
+  .session-sheet-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+
+  .session-sheet-field span {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+  }
+
+  .session-sheet-field small {
+    color: var(--color-text-tertiary);
+    font-size: var(--text-xs);
+  }
+
+  .session-sheet-field select,
+  .session-sheet-custom-model input {
+    width: 100%;
+    height: 38px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-raised);
+    color: var(--color-text-primary);
+    font-size: var(--text-md);
+  }
+
+  .session-sheet-custom-model {
+    display: flex;
+    gap: var(--space-sm);
+  }
+
+  .session-sheet-custom-model button,
+  .session-sheet-create {
+    min-height: 44px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--color-accent-solid);
+    color: var(--color-text-on-accent);
+    font-size: var(--text-2md);
+    cursor: pointer;
+  }
+
+  .session-sheet-custom-model button {
+    flex: 0 0 56px;
+    min-height: 38px;
+  }
+
+  .session-sheet-custom-model button:disabled,
+  .session-sheet-create:disabled,
+  .session-sheet-back:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .session-sheet-create {
+    width: 100%;
+    margin-top: var(--space-sm);
   }
 
   .session-sheet-item {

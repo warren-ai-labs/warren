@@ -84,6 +84,210 @@ public func formatAgentModel(_ raw: String?) -> String? {
     }.joined(separator: " ")
 }
 
+public struct IOSAgentModelOption: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let label: String
+    public let provider: String?
+
+    public init(id: String, label: String, provider: String? = nil) {
+        self.id = id
+        self.label = label
+        self.provider = provider
+    }
+}
+
+public enum IOSAgentReasoningEffort: String, CaseIterable, Identifiable, Sendable {
+    case defaultEffort = "default"
+    case off = "off"
+    case low = "low"
+    case medium = "medium"
+    case high = "high"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .defaultEffort: return "Default"
+        case .off: return "Off"
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .defaultEffort: return ""
+        case .off: return "No Reasoning"
+        case .low: return "Low"
+        case .medium: return "Med"
+        case .high: return "High"
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .defaultEffort: return "Standard model reasoning"
+        case .off: return "Disable extended thinking"
+        case .low: return "Fast, minimal reasoning"
+        case .medium: return "Balanced reasoning effort"
+        case .high: return "Thorough, deep reasoning"
+        }
+    }
+}
+
+public func availableAgentModels(for sessionKind: String?) -> [IOSAgentModelOption] {
+    let kind = (sessionKind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    switch kind {
+    case "codex":
+        return [
+            IOSAgentModelOption(id: "gpt-5", label: "GPT-5", provider: "codex"),
+            IOSAgentModelOption(id: "gpt-5-mini", label: "GPT-5 mini", provider: "codex"),
+            IOSAgentModelOption(id: "o3", label: "o3", provider: "codex"),
+            IOSAgentModelOption(id: "o3-mini", label: "o3-mini", provider: "codex"),
+            IOSAgentModelOption(id: "o1", label: "o1", provider: "codex"),
+            IOSAgentModelOption(id: "gpt-4.1", label: "GPT-4.1", provider: "codex"),
+        ]
+    case "claude", "claude-code":
+        return [
+            IOSAgentModelOption(id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet", provider: "claude"),
+            IOSAgentModelOption(id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet", provider: "claude"),
+            IOSAgentModelOption(id: "claude-3-5-haiku", label: "Claude 3.5 Haiku", provider: "claude"),
+            IOSAgentModelOption(id: "claude-3-opus", label: "Claude 3 Opus", provider: "claude"),
+        ]
+    case "antigravity", "agy":
+        return [
+            IOSAgentModelOption(id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "antigravity"),
+            IOSAgentModelOption(id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "antigravity"),
+            IOSAgentModelOption(id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet", provider: "antigravity"),
+            IOSAgentModelOption(id: "auto", label: "Auto", provider: "antigravity"),
+        ]
+    case "opencode", "open-code":
+        return [
+            IOSAgentModelOption(id: "anthropic/claude-3-7-sonnet", label: "Claude 3.7 Sonnet", provider: "opencode"),
+            IOSAgentModelOption(id: "openai/gpt-5", label: "GPT-5", provider: "opencode"),
+            IOSAgentModelOption(id: "openai/o3-mini", label: "o3-mini", provider: "opencode"),
+            IOSAgentModelOption(id: "deepseek/deepseek-r1", label: "DeepSeek R1", provider: "opencode"),
+            IOSAgentModelOption(id: "deepseek/deepseek-chat", label: "DeepSeek V3", provider: "opencode"),
+        ]
+    case "pi":
+        return [
+            IOSAgentModelOption(id: "anthropic/claude-3-7-sonnet", label: "Claude 3.7 Sonnet", provider: "pi"),
+            IOSAgentModelOption(id: "openai/gpt-5", label: "GPT-5", provider: "pi"),
+            IOSAgentModelOption(id: "deepseek/deepseek-r1", label: "DeepSeek R1", provider: "pi"),
+        ]
+    case "qoder":
+        return [
+            IOSAgentModelOption(id: "efficient", label: "Efficient", provider: "qoder"),
+            IOSAgentModelOption(id: "performance", label: "Performance", provider: "qoder"),
+            IOSAgentModelOption(id: "gpt-5", label: "GPT-5", provider: "qoder"),
+            IOSAgentModelOption(id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet", provider: "qoder"),
+        ]
+    default:
+        return [
+            IOSAgentModelOption(id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet"),
+            IOSAgentModelOption(id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet"),
+            IOSAgentModelOption(id: "gpt-5", label: "GPT-5"),
+            IOSAgentModelOption(id: "o3-mini", label: "o3-mini"),
+            IOSAgentModelOption(id: "gemini-2.5-pro", label: "Gemini 2.5 Pro"),
+            IOSAgentModelOption(id: "deepseek-r1", label: "DeepSeek R1"),
+        ]
+    }
+}
+
+public func agentModelSwitchCommand(modelId: String) -> String {
+    let model = modelId
+        .unicodeScalars
+        .map { scalar in
+            switch scalar.value {
+            case 0...31, 127, 0x2028, 0x2029: return " "
+            default: return String(scalar)
+            }
+        }
+        .joined()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !model.isEmpty else { return "" }
+    return "/model \(model)"
+}
+
+public func agentReasoningSwitchCommand(effort: IOSAgentReasoningEffort, sessionKind: String?) -> String? {
+    guard effort != .defaultEffort else { return nil }
+    let kind = (sessionKind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if kind == "pi" {
+        return "/thinking \(effort.rawValue)"
+    }
+    return "/effort \(effort.rawValue)"
+}
+
+public func agentReasoningResetCommand(sessionKind: String?) -> String {
+    let kind = (sessionKind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return kind == "pi" ? "/thinking default" : "/effort default"
+}
+
+private func shellQuoteAgentArgument(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+}
+
+private func defaultAgentLaunchCommand(for kind: String) -> String {
+    switch kind {
+    case "claude", "claude-code": return "claude"
+    case "codex": return "codex --dangerously-bypass-hook-trust"
+    case "antigravity", "agy": return "agy"
+    case "opencode", "open-code": return "opencode"
+    case "pi": return "pi"
+    case "qoder": return "qoder"
+    case "trae": return "trae-cli interactive"
+    default: return ""
+    }
+}
+
+private func normalizedAgentModelID(_ value: String) -> String {
+    value.unicodeScalars.map { scalar in
+        switch scalar.value {
+        case 0...31, 127, 0x2028, 0x2029: return " "
+        default: return String(scalar)
+        }
+    }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Adds optional model/reasoning flags to a provider launch command. Empty or
+/// default settings intentionally return the configured command unchanged.
+public func agentLaunchCommand(
+    command: String?,
+    sessionKind: String?,
+    modelID: String? = nil,
+    reasoningEffort: IOSAgentReasoningEffort = .defaultEffort
+) -> String? {
+    let kind = (sessionKind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let configuredBase = command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let base = configuredBase.isEmpty ? defaultAgentLaunchCommand(for: kind) : configuredBase
+    var arguments: [String] = []
+    if let modelID {
+        let model = normalizedAgentModelID(modelID)
+        if !model.isEmpty, ["claude", "claude-code", "codex", "antigravity", "agy", "opencode", "open-code", "pi", "qoder"].contains(kind) {
+            arguments += ["--model", shellQuoteAgentArgument(model)]
+        }
+    }
+    switch reasoningEffort {
+    case .defaultEffort:
+        break
+    case .off:
+        if kind == "pi" { arguments += ["--thinking", reasoningEffort.rawValue] }
+    case .low, .medium, .high:
+        if kind == "codex" {
+            arguments += ["-c", "model_reasoning_effort=\(reasoningEffort.rawValue)"]
+        } else if ["claude", "claude-code", "antigravity", "agy"].contains(kind) {
+            arguments += ["--effort", reasoningEffort.rawValue]
+        } else if kind == "pi" {
+            arguments += ["--thinking", reasoningEffort.rawValue]
+        } else if kind == "qoder" {
+            arguments += ["--reasoning-effort", reasoningEffort.rawValue]
+        }
+    }
+    let result = ([base] + arguments).filter { !$0.isEmpty }.joined(separator: " ")
+    return result.isEmpty ? nil : result
+}
+
 /// Local queue entries are deliberately value-only. They never represent a
 /// transcript event and therefore can be edited, reordered, retried, or
 /// deleted without mutating Host history.

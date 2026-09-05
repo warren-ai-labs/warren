@@ -65,6 +65,7 @@ import {
 import {
   AgentMessageQueue,
   agentAttachmentReference,
+  agentLaunchCommand,
   agentQueueKey,
   encodeAgentAttachmentChunk,
   mergeAgentEvents,
@@ -284,6 +285,7 @@ export default function App() {
   const agentInterruptInFlightRef = useRef(new Set());
   const [agentViewOverride, setAgentViewOverride] = useState(null);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
+  const [sessionSheetInitialKind, setSessionSheetInitialKind] = useState("");
   const [worktreeImportDialog, setWorktreeImportDialog] = useState(null);
   const [renameDialog, setRenameDialog] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState(null);
@@ -1784,7 +1786,7 @@ export default function App() {
     beginSubscription(sessionID, terminalRef.current);
   }, [announceFeedback, beginSubscription, clearTerminalSearch, recordNavigation, refreshTerminal]);
 
-  const createSession = useCallback((kind, targetWorkspaceID = null) => {
+  const createSession = useCallback((kind, targetWorkspaceID = null, settings = {}) => {
     const workspaceID = targetWorkspaceID
       || appStateRef.current.activeWorkspace
       || selectedWorkspaceID;
@@ -1813,12 +1815,13 @@ export default function App() {
     const sent = request("session.create", {
       workspace: workspaceID,
       kind: preset.kind,
-      command: presetCommands[preset.kind] || "",
+      command: agentLaunchCommand(presetCommands[preset.kind] || "", preset.kind, settings),
     }, result => {
       finish();
       const isCurrentWorkspace = appStateRef.current.activeWorkspace === workspaceID;
       if (isCurrentWorkspace) {
         setSessionSheetOpen(false);
+        setSessionSheetInitialKind("");
         announceFeedback(`${preset.title} session created`, "success");
       }
       const sessionID = result?.id;
@@ -1916,9 +1919,19 @@ export default function App() {
     }
   }, [attachSession, autoStartAI, cancelSubscription, clearPendingSession, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
 
-  const chooseSessionPreset = useCallback(kind => {
-    createSession(kind);
+  const chooseSessionPreset = useCallback((kind, settings) => {
+    createSession(kind, null, settings);
   }, [createSession]);
+
+  const openSessionSheet = useCallback((kind = "") => {
+    setSessionSheetInitialKind(kind);
+    setSessionSheetOpen(true);
+  }, []);
+
+  const closeSessionSheet = useCallback(() => {
+    setSessionSheetOpen(false);
+    setSessionSheetInitialKind("");
+  }, []);
 
   const updatePresetCommand = useCallback((kind, command) => {
     setPresetCommands(previous => {
@@ -3810,7 +3823,7 @@ export default function App() {
               onOpenSearch={() => setSearchOpen(true)}
               onToggleGit={() => setGitOpenState(open => !open)}
               gitActive={gitOpen}
-              onNewSession={() => setSessionSheetOpen(true)}
+              onNewSession={() => openSessionSheet()}
               onOpenSessionMenu={openSessionMenu}
               onSessionContextMenu={sessionContextMenu}
               pendingSessionID={pendingSessionID}
@@ -3832,7 +3845,12 @@ export default function App() {
                 pendingSessionID={pendingSessionID}
                 creatingSession={Boolean(creatingSessionKind)}
               />
-              <PresetBar presets={visiblePresets} onCreateSession={createSession} creatingKind={creatingSessionKind} />
+              <PresetBar
+                presets={visiblePresets}
+                onCreateSession={createSession}
+                onConfigureSession={openSessionSheet}
+                creatingKind={creatingSessionKind}
+              />
               <div className="pane-title">
                 <span
                   title={paneTitle}
@@ -4030,13 +4048,14 @@ export default function App() {
         onChooseWorkspace={chooseSearchWorkspace}
         onChooseProject={chooseSearchProject}
       />
-      {isMobile && (
+      {sessionSheetOpen && (
         <SessionSheet
           open={sessionSheetOpen}
           presets={visiblePresets}
           onChoose={chooseSessionPreset}
-          onClose={() => setSessionSheetOpen(false)}
+          onClose={closeSessionSheet}
           pendingKind={creatingSessionKind}
+          initialKind={sessionSheetInitialKind}
         />
       )}
       <WorktreeImportDialog

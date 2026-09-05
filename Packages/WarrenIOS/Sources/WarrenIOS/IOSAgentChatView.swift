@@ -235,6 +235,12 @@ public struct AgentChatView: View {
     @State private var attachmentFeedbackGeneration = 0
     @State private var sendStatusGeneration = 0
     @State private var cancelPending = false
+    @State private var selectedModelOverride: String? = nil
+    @State private var selectedReasoningEffort: IOSAgentReasoningEffort = .defaultEffort
+    @State private var appliedModelIdentifier: String?
+    @State private var appliedReasoningEffort: IOSAgentReasoningEffort = .defaultEffort
+    @State private var isCustomModelAlertPresented = false
+    @State private var customModelText = ""
 #if os(iOS)
     @State private var photoItems: [PhotosPickerItem] = []
 #endif
@@ -488,6 +494,10 @@ public struct AgentChatView: View {
         .onAppear {
             draftSessionID = sessionID
             draft = model.agentDraft(for: sessionID)
+            selectedModelOverride = nil
+            selectedReasoningEffort = .defaultEffort
+            appliedModelIdentifier = model.agentModel(for: sessionID)
+            appliedReasoningEffort = .defaultEffort
             refreshRenderedBlocks()
             model.ensureAgentSubscribed(for: sessionID)
             if !model.agentHistoryLoaded(for: sessionID) {
@@ -508,6 +518,10 @@ public struct AgentChatView: View {
         }
         .onChange(of: model.currentSessionID) { _, selectedSessionID in
             attachmentUploadGeneration &+= 1
+            selectedModelOverride = nil
+            selectedReasoningEffort = .defaultEffort
+            customModelText = ""
+            isCustomModelAlertPresented = false
             guard let selectedSessionID, selectedSessionID != draftSessionID else { return }
             if let previousSessionID = draftSessionID {
                 model.flushAgentDraft(draft, for: previousSessionID)
@@ -523,6 +537,8 @@ public struct AgentChatView: View {
             sendStatusGeneration &+= 1
             attachmentFeedbackGeneration &+= 1
             cancelPending = false
+            appliedModelIdentifier = model.agentModel(for: selectedSessionID)
+            appliedReasoningEffort = .defaultEffort
             refreshRenderedBlocks(for: selectedSessionID)
             didTriggerHistoryPull = false
             historyScrollAnchorID = nil
@@ -535,6 +551,22 @@ public struct AgentChatView: View {
         .sheet(isPresented: $isQueueSheetPresented) {
             IOSAgentQueueSheet(model: model, sessionID: sessionID)
                 .iosSheetPresentation(.medium, .large)
+        }
+        .alert("Custom Model", isPresented: $isCustomModelAlertPresented) {
+            TextField("e.g. gpt-5 or claude-3-7-sonnet", text: $customModelText)
+#if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+#endif
+            Button("Set") {
+                let trimmed = customModelText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    selectedModelOverride = trimmed
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter the model identifier to switch for this session.")
         }
         .onChange(of: workingTurnKey) { _, _ in
             workingPhrase = AgentWorkingPhrases.next(after: workingPhrase)
@@ -809,17 +841,7 @@ public struct AgentChatView: View {
                     HStack(alignment: .center, spacing: 4) {
                         attachmentControlsWithPlus
 
-                        if let metadata = agentComposerMetadata {
-                            Text(metadata)
-                                .font(IOSTypography.metadata)
-                                .foregroundStyle(IOSTheme.text)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(IOSTheme.muted.opacity(0.25), in: Capsule())
-                                .accessibilityLabel("Agent model: \(metadata)")
-                        }
+                        composerSettingsButton
 
                         let queuedCount = model.agentQueuedMessageCountBySessionID[sessionID] ?? 0
                         if queuedCount > 0 {
@@ -1071,7 +1093,8 @@ public struct AgentChatView: View {
 
     private func sendComposerMessage(sendNow: Bool = false) {
         let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!value.isEmpty || !localAttachments.isEmpty),
+        guard model.currentSessionID == sessionID,
+              (!value.isEmpty || !localAttachments.isEmpty),
               !isUploadingAttachments,
               sendStatus != "sending" else { return }
         let selected = localAttachments
@@ -1079,12 +1102,21 @@ public struct AgentChatView: View {
         showSendStatus("sending", duration: nil)
         guard !selected.isEmpty else {
             let isWorking = model.agentStatus(for: sessionID)?.activity == .working
+            if !sendNow {
+                ensureComposerSettingsApplied()
+            }
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value)
                 : model.sendAgentMessage(value)
             guard accepted else {
                 showSendStatus("failed")
                 return
+            }
+            if sendNow {
+                // Send-now replaces the active turn immediately. Queue the
+                // selected settings after that replacement so they cannot
+                // overtake the user's message.
+                ensureComposerSettingsApplied()
             }
             draft = ""
             model.clearAgentDraft(for: sessionID)
@@ -1148,12 +1180,20 @@ public struct AgentChatView: View {
                   model.currentSessionID == uploadSessionID else { return }
             isUploadingAttachments = false
             let isWorking = model.agentStatus(for: sessionID)?.activity == .working
+            if !sendNow {
+                ensureComposerSettingsApplied()
+            }
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value, attachments: references)
                 : model.sendAgentMessage(value, attachments: references)
             guard accepted else {
                 showSendStatus("failed")
                 return
+            }
+            if sendNow {
+                // See the text-only path above: the replacement must win the
+                // race, while settings remain queued for the next turn.
+                ensureComposerSettingsApplied()
             }
             // Uploading runs asynchronously and the text view remains useful
             // while the bytes are in flight. Only clear the draft when it is
@@ -1280,6 +1320,152 @@ public struct AgentChatView: View {
     /// The composer keeps provider metadata to one quiet line. Session name,
     /// mode, and control state belong to the surrounding navigation chrome and
     /// are intentionally not repeated beside the input.
+    private var sessionKind: String? {
+        model.roster?.sessions.first(where: { $0.id == sessionID })?.kind
+    }
+
+    private var activeModelIdentifier: String? {
+        selectedModelOverride ?? model.agentModel(for: sessionID)
+    }
+
+    private var composerModels: [IOSAgentModelOption] {
+        let models = availableAgentModels(for: sessionKind)
+        guard let activeModelIdentifier,
+              !activeModelIdentifier.isEmpty,
+              !models.contains(where: { $0.id == activeModelIdentifier }) else {
+            return models
+        }
+        return [
+            IOSAgentModelOption(
+                id: activeModelIdentifier,
+                label: formatAgentModel(activeModelIdentifier) ?? activeModelIdentifier,
+                provider: sessionKind
+            ),
+        ] + models
+    }
+
+    private var composerSettingsSummary: String {
+        let modelDisplay = formatAgentModel(activeModelIdentifier) ?? agentTypeLabel ?? "Agent"
+        if selectedReasoningEffort != .defaultEffort {
+            return "\(modelDisplay) · \(selectedReasoningEffort.shortLabel)"
+        }
+        return modelDisplay
+    }
+
+    private func applySettingsNow() {
+        guard model.currentSessionID == sessionID, model.canSendAgent else { return }
+        let targetModel = selectedModelOverride ?? model.agentModel(for: sessionID)
+        if let modelId = targetModel, !modelId.isEmpty, modelId != appliedModelIdentifier {
+            let cmd = agentModelSwitchCommand(modelId: modelId)
+            if !cmd.isEmpty, model.sendAgentMessage(cmd) {
+                appliedModelIdentifier = modelId
+            }
+        }
+        if selectedReasoningEffort != appliedReasoningEffort {
+            let cmd = selectedReasoningEffort == .defaultEffort
+                ? agentReasoningResetCommand(sessionKind: sessionKind)
+                : agentReasoningSwitchCommand(effort: selectedReasoningEffort, sessionKind: sessionKind)
+            if let cmd, model.sendAgentMessage(cmd) {
+                appliedReasoningEffort = selectedReasoningEffort
+            }
+        }
+    }
+
+    private func ensureComposerSettingsApplied() {
+        guard model.currentSessionID == sessionID else { return }
+        let targetModel = selectedModelOverride ?? model.agentModel(for: sessionID)
+        if let targetModel, !targetModel.isEmpty, targetModel != appliedModelIdentifier {
+            let cmd = agentModelSwitchCommand(modelId: targetModel)
+            if !cmd.isEmpty, model.sendAgentMessage(cmd) {
+                appliedModelIdentifier = targetModel
+            }
+        }
+        if selectedReasoningEffort != appliedReasoningEffort {
+            let cmd = selectedReasoningEffort == .defaultEffort
+                ? agentReasoningResetCommand(sessionKind: sessionKind)
+                : agentReasoningSwitchCommand(effort: selectedReasoningEffort, sessionKind: sessionKind)
+            if let cmd, model.sendAgentMessage(cmd) {
+                appliedReasoningEffort = selectedReasoningEffort
+            }
+        }
+    }
+
+    private var composerSettingsButton: some View {
+        Menu {
+            Section("Model") {
+                Button {
+                    selectedModelOverride = nil
+                } label: {
+                    if selectedModelOverride == nil {
+                        Label("Default session model", systemImage: "checkmark")
+                    } else {
+                        Text("Default session model")
+                    }
+                }
+                ForEach(composerModels) { m in
+                    Button {
+                        selectedModelOverride = m.id
+                    } label: {
+                        if selectedModelOverride == m.id {
+                            Label(m.label, systemImage: "checkmark")
+                        } else {
+                            Text(m.label)
+                        }
+                    }
+                }
+                Button {
+                    customModelText = ""
+                    isCustomModelAlertPresented = true
+                } label: {
+                    Label("Custom Model…", systemImage: "pencil")
+                }
+            }
+
+            Section("Reasoning Effort") {
+                ForEach(IOSAgentReasoningEffort.allCases) { effort in
+                    Button {
+                        selectedReasoningEffort = effort
+                    } label: {
+                        if selectedReasoningEffort == effort {
+                            Label(effort.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(effort.displayName)
+                        }
+                    }
+                }
+            }
+
+            if model.canSendAgent {
+                Section {
+                    Button {
+                        applySettingsNow()
+                    } label: {
+                        Label("Apply to Session Now", systemImage: "paperplane")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(IOSTheme.secondaryText)
+                Text(composerSettingsSummary)
+                    .font(IOSTypography.metadata)
+                    .foregroundStyle(IOSTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(IOSTheme.secondaryText.opacity(0.8))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(IOSTheme.muted.opacity(0.25), in: Capsule())
+        }
+        .menuStyle(.automatic)
+        .accessibilityLabel("Agent settings: \(composerSettingsSummary)")
+    }
+
     private var agentComposerMetadata: String? {
         if let modelName = formatAgentModel(model.agentModel(for: sessionID)), !modelName.isEmpty {
             return modelName

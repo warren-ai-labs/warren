@@ -1741,6 +1741,10 @@ struct IOSSessionCreationSheet: View {
     @State private var selectedKind: IOSSessionCreationKind
     @State private var command = ""
     @State private var sessionTitle = ""
+    @State private var selectedModel: String?
+    @State private var selectedReasoningEffort: IOSAgentReasoningEffort = .defaultEffort
+    @State private var customModelText = ""
+    @State private var isCustomModelAlertPresented = false
     @State private var didSubmit = false
 
     @State private var selectedProjectID: String
@@ -1762,6 +1766,7 @@ struct IOSSessionCreationSheet: View {
         let remembered = IOSSessionCreationKind(rawValue: model.localStore.lastSessionKind) ?? .claude
         _selectedKind = State(initialValue: remembered)
         _command = State(initialValue: remembered.defaultCommand ?? "")
+        _selectedModel = State(initialValue: nil)
 
         let rosterProjects = (model.roster?.projects ?? []).sorted { lhs, rhs in
             lhs.order < rhs.order
@@ -1899,12 +1904,31 @@ struct IOSSessionCreationSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert("Custom Model", isPresented: $isCustomModelAlertPresented) {
+            TextField("Model identifier", text: $customModelText)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                #endif
+            Button("Set") {
+                let value = customModelText
+                    .replacingOccurrences(of: "\r", with: " ")
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { selectedModel = value }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Choose an optional model for the new session.")
+        }
         .onChange(of: selectedKind) { oldKind, newKind in
             let currentCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
             let oldDefault = oldKind.defaultCommand ?? ""
             if currentCommand.isEmpty || currentCommand == oldDefault {
                 command = newKind.defaultCommand ?? ""
             }
+            selectedModel = nil
+            selectedReasoningEffort = .defaultEffort
         }
         .onChange(of: selectedProjectID) { _, newProjectID in
             let matching = workspaces.filter { $0.projectID == newProjectID }
@@ -2221,9 +2245,113 @@ struct IOSSessionCreationSheet: View {
                 }
                 .padding(.horizontal, 14)
                 .frame(minHeight: 48)
+
+                if supportsAgentSettings {
+                    Divider()
+                        .background(IOSTheme.separator.opacity(0.35))
+                        .padding(.leading, 50)
+
+                    HStack(spacing: 12) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .frame(width: 24)
+
+                        Text("Model")
+                            .font(IOSTypography.bodyEmphasis)
+                            .foregroundStyle(IOSTheme.text)
+
+                        Spacer(minLength: 8)
+
+                        Menu {
+                            Button {
+                                selectedModel = nil
+                            } label: {
+                                if selectedModel == nil {
+                                    Label("Default session model", systemImage: "checkmark")
+                                } else {
+                                    Text("Default session model")
+                                }
+                            }
+                            ForEach(creationModels) { option in
+                                Button {
+                                    selectedModel = option.id
+                                } label: {
+                                    if selectedModel == option.id {
+                                        Label(option.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(option.label)
+                                    }
+                                }
+                            }
+                            Button {
+                                customModelText = selectedModel ?? ""
+                                isCustomModelAlertPresented = true
+                            } label: {
+                                Label("Custom Model…", systemImage: "pencil")
+                            }
+                        } label: {
+                            Text(selectedModel.map { formatAgentModel($0) ?? $0 } ?? "Default")
+                                .font(IOSTypography.body)
+                                .foregroundStyle(IOSTheme.accent)
+                                .lineLimit(1)
+                        }
+                        .menuStyle(.automatic)
+                        .accessibilityLabel("Model")
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 48)
+
+                    Divider()
+                        .background(IOSTheme.separator.opacity(0.35))
+                        .padding(.leading, 50)
+
+                    HStack(spacing: 12) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(IOSTheme.secondaryText)
+                            .frame(width: 24)
+
+                        Text("Reasoning")
+                            .font(IOSTypography.bodyEmphasis)
+                            .foregroundStyle(IOSTheme.text)
+
+                        Spacer(minLength: 8)
+
+                        Menu {
+                            ForEach(IOSAgentReasoningEffort.allCases) { effort in
+                                Button {
+                                    selectedReasoningEffort = effort
+                                } label: {
+                                    if selectedReasoningEffort == effort {
+                                        Label(effort.displayName, systemImage: "checkmark")
+                                    } else {
+                                        Text(effort.displayName)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Text(selectedReasoningEffort.displayName)
+                                .font(IOSTypography.body)
+                                .foregroundStyle(IOSTheme.accent)
+                        }
+                        .menuStyle(.automatic)
+                        .accessibilityLabel("Reasoning effort")
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 48)
+                }
             }
             .iosCardSurface()
         }
+    }
+
+    private var supportsAgentSettings: Bool {
+        selectedKind != .shell && selectedKind != .trae
+    }
+
+    private var creationModels: [IOSAgentModelOption] {
+        availableAgentModels(for: selectedKind.rawValue)
     }
 
     private var submitButton: some View {
@@ -2279,6 +2407,12 @@ struct IOSSessionCreationSheet: View {
         didSubmit = true
         let trimmedCmd = command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : command
         let trimmedTitle = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : sessionTitle
+        let launchCommand = agentLaunchCommand(
+            command: trimmedCmd,
+            sessionKind: selectedKind.rawValue,
+            modelID: selectedModel,
+            reasoningEffort: selectedReasoningEffort
+        )
 
         if isDestinationSelectable {
             if workspaceMode == .new {
@@ -2288,7 +2422,7 @@ struct IOSSessionCreationSheet: View {
                     projectID: selectedProjectID,
                     branch: branch,
                     workspaceName: name,
-                    command: trimmedCmd,
+                    command: launchCommand,
                     kind: selectedKind.rawValue,
                     title: trimmedTitle
                 )
@@ -2296,7 +2430,7 @@ struct IOSSessionCreationSheet: View {
                 model.createSession(
                     workspaceID: selectedWorkspaceID,
                     terminalGroupID: nil,
-                    command: trimmedCmd,
+                    command: launchCommand,
                     kind: selectedKind.rawValue,
                     title: trimmedTitle
                 )
@@ -2305,7 +2439,7 @@ struct IOSSessionCreationSheet: View {
             model.createSession(
                 workspaceID: workspaceID,
                 terminalGroupID: terminalGroupID,
-                command: trimmedCmd,
+                command: launchCommand,
                 kind: selectedKind.rawValue,
                 title: trimmedTitle
             )

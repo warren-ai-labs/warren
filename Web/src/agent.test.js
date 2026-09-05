@@ -4,7 +4,13 @@ import assert from "node:assert/strict";
 import {
   agentDraftKey,
   agentEventLimit,
+  agentLaunchCommand,
+  defaultAgentLaunchCommand,
+  agentModelSwitchCommand,
   agentQueueKey,
+  agentReasoningResetCommand,
+  agentReasoningSwitchCommand,
+  agentSettingsKey,
   agentComposerAction,
   composerHeightForText,
   deleteAgentQueueItem,
@@ -13,13 +19,18 @@ import {
   enqueueAgentMessage,
   extractPatchFiles,
   formatAgentModel,
+  formatAgentReasoning,
+  getAvailableAgentModels,
   groupAgentEvents,
   isCommandTool,
   latestAgentAction,
+  loadAgentDraft,
+  loadAgentSettings,
   mergeAgentEvents,
   moveAgentQueueItem,
   projectAgentEvents,
   retryAgentQueueItem,
+  saveAgentSettings,
   toolSummary,
 } from "./agent.js";
 
@@ -393,3 +404,96 @@ test("isCommandTool identifies shell and command executions across providers", (
   assert.equal(isCommandTool("custom", { query: "foo" }), false);
 });
 
+test("getAvailableAgentModels returns provider-appropriate presets", () => {
+  const claudeModels = getAvailableAgentModels("claude");
+  assert.ok(claudeModels.some(m => m.id === "claude-3-7-sonnet"));
+
+  const codexModels = getAvailableAgentModels("codex");
+  assert.ok(codexModels.some(m => m.id === "gpt-5"));
+
+  const antigravityModels = getAvailableAgentModels("antigravity");
+  assert.ok(antigravityModels.some(m => m.id === "gemini-2.5-pro"));
+
+  const fallbackModels = getAvailableAgentModels("unknown-provider");
+  assert.ok(fallbackModels.length > 0);
+});
+
+test("formatAgentReasoning formats labels correctly", () => {
+  assert.equal(formatAgentReasoning("default"), "Default");
+  assert.equal(formatAgentReasoning("off"), "Off");
+  assert.equal(formatAgentReasoning("low"), "Low");
+  assert.equal(formatAgentReasoning("medium"), "Medium");
+  assert.equal(formatAgentReasoning("high"), "High");
+  assert.equal(formatAgentReasoning("unknown"), "Default");
+});
+
+test("agentModelSwitchCommand generates /model command", () => {
+  assert.equal(agentModelSwitchCommand("gpt-5"), "/model gpt-5");
+  assert.equal(agentModelSwitchCommand("claude-3-7-sonnet"), "/model claude-3-7-sonnet");
+  assert.equal(agentModelSwitchCommand(""), "");
+  assert.equal(agentModelSwitchCommand("   "), "");
+  assert.equal(agentModelSwitchCommand("model\n-id"), "/model model -id");
+});
+
+test("agentReasoningSwitchCommand formats /effort or /thinking commands", () => {
+  assert.equal(agentReasoningSwitchCommand("default", "codex"), "");
+  assert.equal(agentReasoningSwitchCommand("high", "codex"), "/effort high");
+  assert.equal(agentReasoningSwitchCommand("low", "claude"), "/effort low");
+  assert.equal(agentReasoningSwitchCommand("high", "pi"), "/thinking high");
+  assert.equal(agentReasoningSwitchCommand("high", "PI"), "/thinking high");
+  assert.equal(agentReasoningSwitchCommand("off", "pi"), "/thinking off");
+  assert.equal(agentReasoningSwitchCommand("invalid", "codex"), "");
+  assert.equal(agentReasoningResetCommand("pi"), "/thinking default");
+  assert.equal(agentReasoningResetCommand("claude-code"), "/effort default");
+  assert.equal(agentReasoningResetCommand("codex"), "/effort default");
+});
+
+test("agentLaunchCommand leaves defaults unchanged and adds provider flags", () => {
+  assert.equal(agentLaunchCommand("codex --dangerously-bypass-hook-trust", "codex"), "codex --dangerously-bypass-hook-trust");
+  assert.equal(
+    agentLaunchCommand("claude", "claude", { model: "claude-3-7-sonnet", reasoning: "high" }),
+    "claude --model 'claude-3-7-sonnet' --effort high",
+  );
+  assert.equal(
+    agentLaunchCommand("pi", "pi", { model: "provider/model", reasoning: "off" }),
+    "pi --model 'provider/model' --thinking off",
+  );
+  assert.equal(
+    agentLaunchCommand("qoder", "qoder", { model: "m", reasoning: "medium" }),
+    "qoder --model 'm' --reasoning-effort medium",
+  );
+  assert.equal(
+    agentLaunchCommand("", "codex", { model: "gpt-5" }),
+    "codex --dangerously-bypass-hook-trust --model 'gpt-5'",
+  );
+  assert.equal(
+    agentLaunchCommand("", "codex", { reasoning: "off" }),
+    "codex --dangerously-bypass-hook-trust",
+  );
+  assert.equal(
+    agentLaunchCommand("", "opencode", { model: "provider/it's-model" }),
+    "opencode --model 'provider/it'\\''s-model'",
+  );
+  assert.equal(defaultAgentLaunchCommand("claude-code"), "claude");
+});
+
+test("loadAgentSettings and saveAgentSettings round-trip settings in storage", () => {
+  const mockStorage = {
+    _data: {},
+    getItem(key) { return this._data[key] || null; },
+    setItem(key, value) { this._data[key] = value; },
+    removeItem(key) { delete this._data[key]; },
+  };
+
+  const endpoint = "ws://localhost:8080/v1/ws";
+  const sessionID = "sess-123";
+
+  assert.equal(loadAgentSettings(mockStorage, endpoint, sessionID), null);
+
+  const settings = { model: "claude-3-7-sonnet", reasoning: "high" };
+  const saved = saveAgentSettings(mockStorage, endpoint, sessionID, settings);
+  assert.equal(saved, true);
+
+  const loaded = loadAgentSettings(mockStorage, endpoint, sessionID);
+  assert.deepEqual(loaded, settings);
+});
