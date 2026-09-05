@@ -332,6 +332,13 @@ func (s *Service) canonicalCommandAdmitted(
 }
 
 func canonicalCommandRecordResult(record store.CanonicalCommandRecord) (any, error) {
+	if record.Status == store.CanonicalCommandUnknown {
+		message := strings.TrimSpace(record.Error)
+		if message == "" {
+			message = "canonical command outcome is unknown; retry with a new commandId"
+		}
+		return nil, fmt.Errorf("%w: %s", store.ErrCanonicalCommandUnknown, message)
+	}
 	if record.Status == store.CanonicalCommandFailed {
 		if strings.TrimSpace(record.Error) == "" {
 			return nil, errors.New("canonical command failed")

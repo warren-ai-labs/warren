@@ -1165,3 +1165,80 @@ func TestAgentEventProtocolAcrossProviders(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexUpdatePlanAndSpawnAgent(t *testing.T) {
+	p := newParser("codex")
+
+	planLine := []byte(`{"timestamp":"2025-09-24T06:05:37Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"call_1","arguments":"{\"plan\":[{\"step\":\"Inspect repo structure\",\"status\":\"in_progress\"},{\"step\":\"Check scripts\",\"status\":\"pending\"}]}"}}`)
+	events := p.Parse(planLine)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "plan" {
+		t.Errorf("expected type plan, got %s", events[0].Type)
+	}
+	items, ok := events[0].Payload["items"].([]map[string]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("expected 2 plan items, got %#v", events[0].Payload["items"])
+	}
+	if items[0]["title"] != "Inspect repo structure" || items[0]["state"] != "in_progress" {
+		t.Errorf("unexpected first item: %#v", items[0])
+	}
+
+	spawnLine := []byte(`{"timestamp":"2025-09-24T06:05:38Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call_spawn_1","arguments":"{\"agent_type\":\"CodeReviewer\",\"prompt\":\"Review changed files\"}"}}`)
+	events = p.Parse(spawnLine)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "subagent" {
+		t.Errorf("expected type subagent, got %s", events[0].Type)
+	}
+	if events[0].Payload["label"] != "CodeReviewer" || events[0].Payload["summary"] != "Review changed files" {
+		t.Errorf("unexpected subagent payload: %#v", events[0].Payload)
+	}
+}
+
+func TestAntigravityPlanAndSubagent(t *testing.T) {
+	p := newParser("antigravity")
+
+	planLine := []byte(`{"step_index":2,"source":"PLANNER_RESPONSE","type":"PLAN","status":"in_progress","created_at":"2025-09-02T11:41:00Z","content":"Inspect the iOS session stream","tool_calls":[]}`)
+	events := p.Parse(planLine)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "plan" {
+		t.Errorf("expected type plan, got %s", events[0].Type)
+	}
+	if events[0].Payload["summary"] != "Inspect the iOS session stream" {
+		t.Errorf("expected summary %q, got %q", "Inspect the iOS session stream", events[0].Payload["summary"])
+	}
+
+	subagentLine := []byte(`{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2025-09-02T11:42:00Z","content":"","tool_calls":[{"name":"invoke_subagent","args":{"Subagents":[{"Role":"Tester","Prompt":"Run test suite"}]}}]}`)
+	events = p.Parse(subagentLine)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "subagent" {
+		t.Errorf("expected type subagent, got %s", events[0].Type)
+	}
+	if events[0].Payload["label"] != "Tester" || events[0].Payload["summary"] != "Run test suite" {
+		t.Errorf("unexpected subagent payload: %#v", events[0].Payload)
+	}
+}
+
+func TestQoderSidechainSubagent(t *testing.T) {
+	p := newParser("qoder")
+
+	sidechainLine := []byte(`{"type":"assistant","uuid":"q-sidechain-1","isSidechain":true,"timestamp":"2025-09-02T11:41:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"Explored repo and found entrypoint."}]}}`)
+	events := p.Parse(sidechainLine)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "subagent" {
+		t.Errorf("expected type subagent, got %s", events[0].Type)
+	}
+	if events[0].Payload["summary"] != "Explored repo and found entrypoint." {
+		t.Errorf("expected summary %q, got %q", "Explored repo and found entrypoint.", events[0].Payload["summary"])
+	}
+}
+

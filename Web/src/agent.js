@@ -94,7 +94,11 @@ export function normalizeCanonicalAgentEvent(event) {
       projectedType = "plan";
       break;
     case "tasks.updated":
+    case "todo.updated":
       projectedType = "todo";
+      break;
+    case "subagent.updated":
+      projectedType = "subagent";
       break;
     case "context.updated":
       projectedType = "context";
@@ -118,6 +122,11 @@ export function normalizeCanonicalAgentEvent(event) {
   if (payload.model !== undefined) projected.model = payload.model;
   if (payload.stopReason !== undefined) projected.stopReason = payload.stopReason;
   if (payload.usage !== undefined) projected.usage = payload.usage;
+  if (payload.items !== undefined) projected.items = payload.items;
+  if (payload.title !== undefined) projected.title = payload.title;
+  if (payload.label !== undefined) projected.label = payload.label;
+  if (payload.state !== undefined) projected.state = payload.state;
+  if (payload.summary !== undefined) projected.summary = payload.summary;
   return projected;
 }
 
@@ -1077,3 +1086,141 @@ export function latestAgentAction(events = []) {
   }
   return "";
 }
+
+/**
+ * Returns the normalized category (Ran/Run/Grep/Glob/Read/Edit/Write etc.)
+ * and the truncated command or file path for collapsed tool presentation.
+ */
+export function toolCategoryAndCommand(call, status) {
+  if (!call) return { category: "Tool", command: "", isFailed: false, isRunning: false };
+  const rawName = (call.toolName || "").toLowerCase().trim();
+  const effectiveStatus = call.toolStatus || status || "running";
+  const isFailed = effectiveStatus === "error" || effectiveStatus === "failed";
+  const isRunning = effectiveStatus === "running";
+
+  let category = "Tool";
+  if (isCommandTool(rawName, call.toolInput)) {
+    category = isRunning ? "Run" : (isFailed ? "Ran (failed)" : "Ran");
+  } else if (["grep", "ripgrep", "rg", "search_content", "grep_search"].includes(rawName)) {
+    category = "Grep";
+  } else if (["glob", "find_files", "list_files", "find_by_name", "list_dir"].includes(rawName)) {
+    category = "Glob";
+  } else if (["read", "read_file", "view", "view_file"].includes(rawName)) {
+    category = "Read";
+  } else if (["edit", "edit_file", "str_replace_editor", "edit_file_v2", "replace_file_content", "apply_patch"].includes(rawName)) {
+    category = "Edit";
+  } else if (["write", "write_file", "create_file", "write_to_file"].includes(rawName)) {
+    category = "Write";
+  } else if (["webfetch", "web_fetch", "fetch_url", "read_url_content", "fetch"].includes(rawName)) {
+    category = "Fetch";
+  } else if (["websearch", "web_search", "web_search_call", "search_web"].includes(rawName)) {
+    category = "Search";
+  } else if (["askuserquestion", "ask_user_question", "ask_question", "request_user_input", "request_user_input_async"].includes(rawName)) {
+    category = "Ask";
+  } else if (["permissionrequest", "permission_request"].includes(rawName)) {
+    category = "Permission";
+  } else if (["subagent", "task", "delegate", "invoke_subagent", "spawn_agent"].includes(rawName)) {
+    category = "Subagent";
+  } else {
+    category = displayToolName(rawName);
+  }
+
+  let command = "";
+  const input = call.toolInput;
+  if (typeof input === "string" && input.trim()) {
+    const raw = input.trim();
+    const cmds = extractExecCommands(raw);
+    command = cmds.length > 0 ? cmds[0] : raw;
+  } else if (input && typeof input === "object") {
+    const cmd = input.command || input.cmd || input.CommandLine;
+    if (typeof cmd === "string" && cmd.trim()) {
+      command = cmd.trim();
+    } else if (Array.isArray(cmd)) {
+      command = cmd.filter(c => typeof c === "string").join(" ");
+    } else {
+      const filePath = input.file_path || input.path || input.TargetFile || input.AbsolutePath || input.file || input.filename || input.target;
+      if (typeof filePath === "string" && filePath.trim()) {
+        command = cleanDisplayPath(filePath);
+      } else {
+        const query = input.query || input.Query || input.pattern || input.Pattern;
+        if (typeof query === "string" && query.trim()) {
+          const scope = input.SearchPath || input.SearchDirectory || input.path;
+          if (typeof scope === "string" && scope.trim()) {
+            command = `"${truncatePreview(query.trim(), 40)}" in ${truncatePreview(basename(scope.trim()), 30)}`;
+          } else {
+            command = `"${truncatePreview(query.trim(), 50)}"`;
+          }
+        } else if (input.url || input.Url) {
+          command = truncatePreview(String(input.url || input.Url).trim(), 60);
+        } else if (typeof input.patch === "string" && input.patch.trim()) {
+          const patchFiles = extractPatchFiles(input.patch);
+          if (patchFiles.length > 0) command = formatFileList(patchFiles);
+        } else if (input.Prompt || input.prompt || input.instruction || input.Instruction) {
+          command = truncatePreview(String(input.Prompt || input.prompt || input.instruction || input.Instruction).trim(), 60);
+        }
+      }
+    }
+  }
+  if (!command && Array.isArray(call.files) && call.files.length > 0) {
+    command = formatFileList(call.files);
+  }
+
+  return {
+    category,
+    command: truncatePreview(command || "", 120),
+    isFailed,
+    isRunning,
+  };
+}
+
+/** Extracts the latest active plan or todo state from agent events. */
+export function extractActivePlan(events = []) {
+  if (!Array.isArray(events)) return null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event) continue;
+    const type = normalizeAgentEventType(event.type);
+    if (type === "plan" || type === "todo") {
+      const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
+      const items = Array.isArray(payload.items) ? payload.items : (Array.isArray(event.items) ? event.items : []);
+      const total = items.length;
+      const completed = items.filter(it => it.state === "completed" || it.status === "completed").length;
+      const title = payload.title || payload.label || (type === "plan" ? "Plan" : "Todo");
+      const summary = payload.summary || event.content || "";
+      return {
+        type,
+        id: String(event.id || payload.planId || payload.todoId || "plan"),
+        title,
+        summary,
+        items,
+        total,
+        completed,
+        state: payload.state || "in_progress",
+      };
+    }
+  }
+  return null;
+}
+
+/** Extracts unique active subagents from agent events. */
+export function extractActiveSubagents(events = []) {
+  if (!Array.isArray(events)) return [];
+  const byId = new Map();
+  for (const event of events) {
+    if (!event) continue;
+    const type = normalizeAgentEventType(event.type);
+    if (type === "subagent") {
+      const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
+      const id = String(event.id || payload.subagentId || `subagent-${event.sequence}`);
+      byId.set(id, {
+        id,
+        title: payload.title || payload.label || "Subagent",
+        summary: payload.summary || event.content || "",
+        state: payload.state || "running",
+        timestamp: event.timestamp,
+      });
+    }
+  }
+  return Array.from(byId.values());
+}
+

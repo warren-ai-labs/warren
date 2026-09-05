@@ -2024,6 +2024,8 @@ func (p *wsPeer) writeCanonicalError(id string, err error) error {
 		code = "capability_unavailable"
 	} else if protocolErr == nil && errors.Is(err, store.ErrCanonicalCommandPending) {
 		code = "command_pending"
+	} else if protocolErr == nil && errors.Is(err, store.ErrCanonicalCommandUnknown) {
+		code = "command_indeterminate"
 	} else if protocolErr == nil && (errors.Is(err, store.ErrCanonicalCommandConflict) || strings.Contains(strings.ToLower(err.Error()), "idempotency")) {
 		code = "command_conflict"
 	} else if protocolErr == nil && (strings.Contains(strings.ToLower(err.Error()), "version") || strings.Contains(strings.ToLower(err.Error()), "stale")) {

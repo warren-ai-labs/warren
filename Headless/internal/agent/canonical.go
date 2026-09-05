@@ -23,7 +23,7 @@ func canonicalToolName(provider, raw string) string {
 	}
 	switch name {
 	// shell
-	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd", "run_command", "exec", "execute":
+	case "bash", "shell", "local_shell_call", "exec_command", "bash_cmd", "run_command", "exec", "execute", "shell_command":
 		return "shell"
 	// edit
 	case "edit", "edit_file", "str_replace_editor", "edit_file_v2", "replace_file_content":
@@ -47,15 +47,19 @@ func canonicalToolName(provider, raw string) string {
 	case "webfetch", "web_fetch", "fetch_url", "read_url_content":
 		return "fetch"
 	// subagent
-	case "task", "subagent", "agent", "delegate", "invoke_subagent", "define_subagent":
+	case "task", "subagent", "agent", "delegate", "invoke_subagent", "define_subagent", "spawn_agent":
 		return "subagent"
 	// claude and antigravity structured tool calls — these project to RFC 0010 events and
 	// also surface as tool_call for clients that haven't learned the
 	// structured type yet.
-	case "askuserquestion", "ask_user_question", "ask_question":
+	case "askuserquestion", "ask_user_question", "ask_question", "request_user_input", "request_user_input_async":
 		return "ask_user_question"
 	case "permissionrequest", "permission_request":
 		return "permission_request"
+	case "update_plan":
+		return "update_plan"
+	case "todowrite":
+		return "todowrite"
 	}
 	if name == "apply_patch" {
 		return "apply_patch"

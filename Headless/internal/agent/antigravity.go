@@ -441,7 +441,21 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.CreatedAt)
-	switch record.Type {
+	switch strings.ToUpper(record.Type) {
+	case "PLAN":
+		return []api.AgentEvent{{
+			Provider:  antigravityProvider,
+			Type:      "plan",
+			ID:        "antigravity-plan",
+			Payload: map[string]any{
+				"planId":  "antigravity-plan",
+				"title":   "Plan",
+				"state":   strings.ToLower(record.Status),
+				"summary": p.clip(record.Content),
+			},
+			Timestamp: timestamp,
+		}}
+
 	case "USER_INPUT":
 		cleaned := cleanAntigravityUserContent(record.Content)
 		if cleaned == "" {
@@ -493,7 +507,37 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 			p.antigravityCallTool[callID] = toolName
 			p.antigravityPendingCalls = append(p.antigravityPendingCalls, callID)
 
-			if tc.Name == "ask_question" {
+			if tc.Name == "invoke_subagent" {
+				var subagentArgs struct {
+					Subagents []struct {
+						Role   string `json:"Role"`
+						Prompt string `json:"Prompt"`
+					} `json:"Subagents"`
+				}
+				_ = json.Unmarshal(tc.Args, &subagentArgs)
+				label := "Subagent"
+				summary := ""
+				if len(subagentArgs.Subagents) > 0 {
+					if subagentArgs.Subagents[0].Role != "" {
+						label = subagentArgs.Subagents[0].Role
+					}
+					summary = subagentArgs.Subagents[0].Prompt
+				}
+				events = append(events, api.AgentEvent{
+					Provider:  antigravityProvider,
+					ID:        callID,
+					Type:      "subagent",
+					CallID:    callID,
+					Payload: map[string]any{
+						"subagentId": callID,
+						"title":      label,
+						"label":      label,
+						"state":      "running",
+						"summary":    p.clip(summary),
+					},
+					Timestamp: timestamp,
+				})
+			} else if tc.Name == "ask_question" {
 				p.antigravityInteractions[callID] = "question"
 				payload := antigravityQuestionPayload(callID, tc.Args)
 				p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, timestamp)

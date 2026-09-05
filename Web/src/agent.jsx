@@ -9,6 +9,8 @@ import {
   agentReasoningResetCommand,
   agentReasoningSwitchCommand,
   displayToolName,
+  extractActivePlan,
+  extractActiveSubagents,
   extractExecCommands,
   formatAgentModel,
   formatAgentReasoning,
@@ -25,6 +27,7 @@ import {
   removeAgentDraft,
   saveAgentDraft,
   saveAgentSettings,
+  toolCategoryAndCommand,
   toolSummary,
   truncatePreview,
   validateAgentAttachment,
@@ -132,6 +135,10 @@ export function AgentView({
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isReasoningPickerOpen, setIsReasoningPickerOpen] = useState(false);
   const [customModelInput, setCustomModelInput] = useState("");
+  const activePlan = useMemo(() => extractActivePlan(events), [events]);
+  const activeSubagents = useMemo(() => extractActiveSubagents(events), [events]);
+  const [isPlanOpen, setIsPlanOpen] = useState(false);
+  const [selectedSubagentID, setSelectedSubagentID] = useState(null);
 
   const modelPickerRef = useRef(null);
   const reasoningPickerRef = useRef(null);
@@ -607,6 +614,37 @@ export function AgentView({
         addAttachments(event.dataTransfer?.files);
       }}
     >
+      {activeSubagents.length > 0 && (
+        <div className="agent-floating-subagents" aria-label="Active subagents">
+          {activeSubagents.map(subagent => {
+            const isSelected = selectedSubagentID === subagent.id;
+            return (
+              <div key={subagent.id} className="agent-subagent-capsule-wrapper">
+                <button
+                  type="button"
+                  className={`agent-subagent-capsule ${subagent.state}${isSelected ? " active" : ""}`}
+                  onClick={() => setSelectedSubagentID(isSelected ? null : subagent.id)}
+                  aria-expanded={isSelected}
+                  title={subagent.summary || subagent.title}
+                >
+                  <i className="agent-subagent-dot" aria-hidden="true" />
+                  <span className="agent-subagent-name">{subagent.title}</span>
+                  {subagent.state && <span className="agent-subagent-state">{subagent.state}</span>}
+                </button>
+                {isSelected && (
+                  <div className="agent-subagent-popover" role="dialog">
+                    <div className="agent-subagent-popover-head">
+                      <strong>{subagent.title}</strong>
+                      <button type="button" onClick={() => setSelectedSubagentID(null)} aria-label="Close">×</button>
+                    </div>
+                    {subagent.summary && <p className="agent-subagent-popover-body">{subagent.summary}</p>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div ref={listRef} className="agent-events" aria-label="Agent conversation">
         {(hasMore || historyError) && (
           <button
@@ -680,17 +718,17 @@ export function AgentView({
                 </div>
               </div>
             ))}
+            {showWorking && (
+              <div className="agent-tail" role="status" aria-live="polite">
+                <i className="agent-tail-pulse" aria-hidden="true" />
+                <span className="agent-tail-text">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
+                {latestAction && <span className="agent-tail-action">· {latestAction}</span>}
+              </div>
+            )}
           </>
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} onFocusComposer={() => inputRef.current?.focus()} />}
-      {showWorking && (
-        <div className="agent-working" role="status" aria-live="polite">
-          <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
-          {latestAction && <span className="agent-working-action">{latestAction}</span>}
-          <span className="agent-working-provider">{displayTitle}</span>
-        </div>
-      )}
       {(actionError || submitError) && (
         <div className="agent-action-error" role="alert">{actionError || submitError}</div>
       )}
@@ -723,6 +761,44 @@ export function AgentView({
             void submit();
           }}
         >
+          {activePlan && (
+            <div className="agent-composer-plan-bar">
+              <button
+                type="button"
+                className={`agent-plan-capsule${isPlanOpen ? " open" : ""}`}
+                onClick={() => setIsPlanOpen(prev => !prev)}
+                aria-expanded={isPlanOpen}
+                aria-label={`${activePlan.title} details`}
+              >
+                <i className="agent-plan-capsule-dot" aria-hidden="true" />
+                <span className="agent-plan-capsule-title">{activePlan.title}</span>
+                {activePlan.total > 0 && (
+                  <span className="agent-plan-capsule-progress">{activePlan.completed}/{activePlan.total}</span>
+                )}
+                <span className="agent-plan-capsule-caret" aria-hidden="true">{isPlanOpen ? "▴" : "▾"}</span>
+              </button>
+              {isPlanOpen && (
+                <div className="agent-plan-dropdown" role="dialog" aria-label="Plan details">
+                  <div className="agent-plan-dropdown-head">
+                    <strong>{activePlan.title}</strong>
+                    {activePlan.total > 0 && <span>{activePlan.completed} of {activePlan.total} completed</span>}
+                    <button type="button" onClick={() => setIsPlanOpen(false)} aria-label="Close plan">×</button>
+                  </div>
+                  {activePlan.summary && <p className="agent-plan-dropdown-summary">{activePlan.summary}</p>}
+                  {activePlan.items?.length > 0 && (
+                    <ul className="agent-plan-dropdown-items">
+                      {activePlan.items.map((item, idx) => (
+                        <li key={item.id || idx} className={`agent-plan-dropdown-item ${item.state || item.status || "pending"}`}>
+                          <span className="agent-plan-item-check">{item.state === "completed" || item.status === "completed" ? "✓" : "○"}</span>
+                          <span className="agent-plan-item-text">{item.label || item.title || item.step || item.prompt || ""}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="agent-attachment-tray" aria-label="Selected attachments">
               {attachments.map((item, index) => (
@@ -1331,11 +1407,11 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   );
 
   return (
-    <section className={`agent-structured agent-structured-${type}`} aria-label={title}>
-      <div className="agent-structured-head">
-        <span className="agent-structured-icon" aria-hidden="true">{structuredIcon(type)}</span>
+    <section className={`agent-structured ${type}`} aria-label={title}>
+      <div className="nodehead">
+        <i className="nodehead-dot" aria-hidden="true" />
         <strong>{title}</strong>
-        <span className={`agent-structured-state ${state}`}>{structuredStateLabel(state)}</span>
+        <em>{structuredStateLabel(state)}</em>
       </div>
       {payload.description && <p className="agent-structured-description">{payload.description}</p>}
       {pending && type === "question" && questionContent}
@@ -1347,14 +1423,17 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
         <p className="agent-structured-readonly" role="status">This Host does not support responding here.</p>
       )}
       {(type === "plan" || type === "todo") && Array.isArray(payload.items) && (
-        <ul className="agent-structured-items">
-          {payload.items.map((item, index) => (
-            <li key={item.id || index} className={item.state || "pending"}>
-              <span aria-hidden="true">{item.state === "completed" ? "✓" : "○"}</span>
-              {item.label || item.title || item.prompt || ""}
-            </li>
-          ))}
-        </ul>
+        <div className="steps">
+          {payload.items.map((item, index) => {
+            const isCompleted = item.state === "completed" || item.status === "completed";
+            const isInProgress = item.state === "in_progress" || item.status === "in_progress";
+            return (
+              <div key={item.id || index} className={`step${isCompleted ? " done" : isInProgress ? " active" : ""}`}>
+                {item.label || item.title || item.step || item.prompt || ""}
+              </div>
+            );
+          })}
+        </div>
       )}
       {type !== "question" && type !== "permission" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
         <p className="agent-structured-summary">{payload.summary || payload.detail || payload.name}</p>
@@ -1509,46 +1588,44 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
   );
 }
 
-function ActivityGroup({ block }) {
-  const { reasoning, tools, order } = block;
+function ThinkingCard({ reasoning = [] }) {
   const [open, setOpen] = useState(false);
-  const status = groupStatus(tools);
-  let step = 0;
-  const toolItems = order.filter(item => item.kind === "tool");
+  const text = reasoning.map(r => r.content || "").filter(Boolean).join("\n\n");
+  if (!text) return null;
+
   return (
-    <div className={`agent-activity-group ${status}`}>
-      <button type="button" className="agent-activity-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length, tools)}</span>
-        {!open && toolGroupSummary(tools) && <code className="agent-tool-summary">{toolGroupSummary(tools)}</code>}
-        <span className="agent-tool-status">{statusText(status)}</span>
+    <div className="agent-thinking-wrapper">
+      <button
+        type="button"
+        className={`agent-thinking-btn${open ? " open" : ""}`}
+        onClick={() => setOpen(prev => !prev)}
+        aria-expanded={open}
+      >
+        Thinking
       </button>
       {open && (
-        <div className="agent-activity-body">
-          {order.map((item, index) => {
-            if (item.kind === "reasoning") {
-              step += 1;
-              return (
-                <div className="agent-reasoning-item" key={item.event.sequence ?? index}>
-                  {reasoning.length > 1 && (
-                    <div className="agent-reasoning-item-label">Step {step}</div>
-                  )}
-                  <MarkdownContent value={item.event.content || ""} />
-                </div>
-              );
+        <div className="agent-thinking-body">
+          <MarkdownContent value={text} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivityGroup({ block }) {
+  const { reasoning, tools, order } = block;
+  const toolItems = order.filter(item => item.kind === "tool");
+  return (
+    <div className="agent-activity-group">
+      {reasoning.length > 0 && <ThinkingCard reasoning={reasoning} />}
+      {toolItems.length > 0 && (
+        <div className="agent-tool-group">
+          {coalesceToolBlocks(toolItems).map((group, index) => {
+            if (group.blocks.length === 1) {
+              return <ToolCard key={blockKindKey(group.blocks[0], index)} block={group.blocks[0]} />;
             }
-            return null;
+            return <CoalescedToolCard key={`coalesced-${group.toolName}-${index}`} group={group} />;
           })}
-          {toolItems.length > 0 && (
-            <div className="agent-tool-group">
-              {coalesceToolBlocks(toolItems).map((group, index) => {
-                if (group.blocks.length === 1) {
-                  return <ToolCard key={blockKindKey(group.blocks[0], index)} block={group.blocks[0]} />;
-                }
-                return <CoalescedToolCard key={`coalesced-${group.toolName}-${index}`} group={group} />;
-              })}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -1574,47 +1651,37 @@ function CoalescedToolCard({ group, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const status = groupStatus(group.blocks);
   const count = group.blocks.length;
-  const isCommand = isCommandTool(group.toolName);
-  const name = isCommand ? `$ × ${count}` : `${displayToolName(group.toolName)} × ${count}`;
-  const summaries = group.blocks
-    .map(b => toolSummary(b.call))
+  const firstCall = group.blocks[0]?.call;
+  const { category } = toolCategoryAndCommand(firstCall, status);
+  const commands = group.blocks
+    .map(b => toolCategoryAndCommand(b.call, b.call?.toolStatus).command)
     .filter(Boolean);
-  const unique = [...new Set(summaries)];
-  const preview = unique.join(", ");
+  const preview = [...new Set(commands)].join(", ");
 
   return (
     <div className={`agent-tool-card ${status}`}>
-      <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-tool-name">{name}</span>
-        {preview && <code className="agent-tool-summary">{preview}</code>}
-        <span className="agent-tool-status">{statusText(status)}</span>
+      <button type="button" className="agent-tool-head" onClick={() => setOpen(prev => !prev)} aria-expanded={open}>
+        <strong className="agent-tool-verb">{category} × {count}</strong>
+        {preview && <span className="agent-tool-cmd" title={preview}>{preview}</span>}
+        {status === "running" && <span className="agent-tool-status">Running…</span>}
       </button>
       {open && (
         <div className="agent-tool-detail">
           <div className="agent-tool-sublist">
             {group.blocks.map((block, idx) => {
-              const summary = toolSummary(block.call);
-              const bStatus = block.call.toolStatus || (block.outputs.length ? "success" : "running");
+              const bCall = block.call;
+              const bStatus = bCall.toolStatus || (block.outputs.length ? "success" : "running");
+              const info = toolCategoryAndCommand(bCall, bStatus);
               return (
                 <div key={blockKindKey(block, idx)} className="agent-tool-subitem">
                   <div className="agent-tool-subitem-head">
-                    {isCommand ? (
-                      <span className="agent-tool-prompt">$ </span>
-                    ) : (
-                      <span className="agent-tool-bullet">•</span>
-                    )}
-                    {summary && <code className="agent-tool-summary">{summary}</code>}
-                    <span className="agent-tool-status">{statusText(bStatus)}</span>
+                    <strong className="agent-tool-verb">{info.category}</strong>
+                    {info.command && <span className="agent-tool-cmd">{info.command}</span>}
                   </div>
-                  {!isCommand && (
-                    <>
-                      {block.outputs.map((out, oIdx) => (
-                        <ToolOutputBody key={out.sequence ?? oIdx} event={out} />
-                      ))}
-                      {block.call.files?.length > 0 && <FileList files={block.call.files} />}
-                    </>
-                  )}
+                  {block.outputs.map((out, oIdx) => (
+                    <ToolOutputBody key={out.sequence ?? oIdx} event={out} />
+                  ))}
+                  {bCall.files?.length > 0 && <FileList files={bCall.files} />}
                 </div>
               );
             })}
@@ -1629,40 +1696,17 @@ function ToolCard({ block, defaultOpen = false }) {
   const call = block.call;
   const status = call.toolStatus || (block.outputs.length ? "success" : "running");
   const [open, setOpen] = useState(defaultOpen);
-  const summary = toolDisplay(call, status);
-  const isWebSearch = call.toolName === "web_search";
-  const isCommand = isCommandTool(call.toolName, call.toolInput);
-  const preview = summary || "exec";
-  if (isCommand) {
-    return (
-      <div className={`agent-tool-card command ${status}`}>
-        <code className="agent-tool-command">
-          <span className="agent-tool-prompt">$ </span>
-          {preview}
-        </code>
-        {call.files?.length > 0 && (
-          <span className="agent-tool-files-preview">({formatFileList(call.files)})</span>
-        )}
-        {!isWebSearch && <span className="agent-tool-status">{statusText(status)}</span>}
-      </div>
-    );
-  }
+  const { category, command, isFailed, isRunning } = toolCategoryAndCommand(call, status);
+
   return (
-    <div className={`agent-tool-card ${status}`}>
-      <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-tool-name">{displayToolName(call.toolName)}</span>
-        {summary && <code className="agent-tool-summary">{summary}</code>}
-        {!isWebSearch && <span className="agent-tool-status">{statusText(status)}</span>}
+    <div className={`agent-tool-card ${status}${isFailed ? " error" : ""}`}>
+      <button type="button" className="agent-tool-head" onClick={() => setOpen(prev => !prev)} aria-expanded={open}>
+        <strong className="agent-tool-verb">{category}</strong>
+        {command && <span className="agent-tool-cmd" title={command}>{command}</span>}
+        {isRunning && <span className="agent-tool-status">Running…</span>}
       </button>
       {open && (
         <div className="agent-tool-detail">
-          {summary && (
-            <pre className="agent-tool-code">{summary}</pre>
-          )}
-          {status === "running" && block.outputs.length === 0 && !summary && (
-            <span className="agent-tool-waiting">Running…</span>
-          )}
           {block.outputs.map((output, idx) => (
             <ToolOutputBody key={output.sequence ?? idx} event={output} />
           ))}

@@ -22,6 +22,7 @@ var (
 	ErrCanonicalHistoryBoundary  = errors.New("canonical agent history boundary")
 	ErrCanonicalCommandConflict  = errors.New("canonical agent command identity conflict")
 	ErrCanonicalCommandPending   = errors.New("canonical agent command is pending")
+	ErrCanonicalCommandUnknown   = errors.New("canonical agent command outcome is unknown")
 )
 
 // CanonicalCommandRecord is the durable admission record for one mutation.
@@ -42,6 +43,10 @@ const (
 	CanonicalCommandPending   = "pending"
 	CanonicalCommandCompleted = "completed"
 	CanonicalCommandFailed    = "failed"
+	// CanonicalCommandUnknown means the Host stopped after durable admission
+	// but before recording a result. It must never be re-executed implicitly:
+	// the provider side effect may already have happened.
+	CanonicalCommandUnknown = "unknown"
 )
 
 // CanonicalHistoryBoundary carries the first sequence still retained by the
@@ -126,6 +131,7 @@ func (s *AgentEventStore) BeginCanonicalCommand(
 		CommandID:   commandID,
 		Fingerprint: fingerprint,
 		Status:      CanonicalCommandPending,
+		CreatedAt:   now,
 	}, true, nil
 }
 
@@ -224,6 +230,51 @@ func queryCanonicalCommand(ctx context.Context, queryer interface {
 		record.Error = errorText.String
 	}
 	return record, true, nil
+}
+
+// ReconcilePendingCanonicalCommands marks commands left pending by an older
+// Host process as indeterminate. Admission is durable before the provider is
+// called, so replaying such a row could duplicate a turn or an attachment;
+// callers must surface the state and ask the client to issue a new command ID.
+// Only rows older than maxAge are touched, so a long-running command in the
+// current process is never converted while it is still executing.
+func (s *AgentEventStore) ReconcilePendingCanonicalCommands(
+	ctx context.Context,
+	now time.Time,
+	maxAge time.Duration,
+) (int64, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	cutoff := now.Add(-maxAge).UnixMilli()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin canonical command reconciliation: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE agent_command_journal
+		SET status = ?, error_text = ?, completed_at = ?
+		WHERE status = ? AND created_at > 0 AND created_at <= ?
+	`, CanonicalCommandUnknown,
+		ErrCanonicalCommandUnknown.Error()+": retry with a new commandId",
+		now.UnixMilli(), CanonicalCommandPending, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile canonical commands: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count reconciled canonical commands: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit canonical command reconciliation: %w", err)
+	}
+	return count, nil
 }
 
 func nullableString(value []byte) any {

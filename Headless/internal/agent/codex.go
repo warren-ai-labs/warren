@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
@@ -56,6 +57,10 @@ type codexPayload struct {
 		Queries []string `json:"queries"`
 		URL     string   `json:"url"`
 	} `json:"action"`
+	Plan []struct {
+		Step   string `json:"step"`
+		Status string `json:"status"`
+	} `json:"plan"`
 	Output  json.RawMessage `json:"output"`
 	Summary json.RawMessage `json:"summary"`
 	Text    string          `json:"text"`
@@ -153,6 +158,60 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastEventType = "reasoning"
 			return []api.AgentEvent{event}
 		case "function_call", "local_shell_call":
+			if payload.Name == "update_plan" {
+				var planArgs struct {
+					Plan []struct {
+						Step   string `json:"step"`
+						Status string `json:"status"`
+					} `json:"plan"`
+				}
+				if json.Unmarshal([]byte(payload.Arguments), &planArgs) == nil && len(planArgs.Plan) > 0 {
+					items := make([]map[string]any, len(planArgs.Plan))
+					for i, item := range planArgs.Plan {
+						items[i] = map[string]any{
+							"id":    fmt.Sprintf("step-%d", i),
+							"title": item.Step,
+							"label": item.Step,
+							"state": item.Status,
+						}
+					}
+					event.ID = "codex-plan"
+					event.Type = "plan"
+					event.Payload = map[string]any{
+						"planId": "codex-plan",
+						"title":  "Plan",
+						"state":  "in_progress",
+						"items":  items,
+					}
+					return []api.AgentEvent{event}
+				}
+			}
+			if payload.Name == "spawn_agent" {
+				var spawnArgs struct {
+					AgentType string `json:"agent_type"`
+					Prompt    string `json:"prompt"`
+					Message   string `json:"message"`
+				}
+				_ = json.Unmarshal([]byte(payload.Arguments), &spawnArgs)
+				label := spawnArgs.AgentType
+				if label == "" {
+					label = "Subagent"
+				}
+				summary := spawnArgs.Prompt
+				if summary == "" {
+					summary = spawnArgs.Message
+				}
+				event.ID = firstNonEmpty(payload.CallID, payload.ID)
+				event.Type = "subagent"
+				event.Payload = map[string]any{
+					"subagentId": event.ID,
+					"title":      label,
+					"label":      label,
+					"state":      "running",
+					"summary":    p.clip(summary),
+				}
+				return []api.AgentEvent{event}
+			}
 			event.ID = payload.ID
 			event.Type = "tool_call"
 			event.ToolName = canonicalToolName("codex", payload.Name)
@@ -225,8 +284,25 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		if json.Unmarshal(record.Payload, &payload) != nil {
 			return nil
 		}
-		if structured := projectStructuredAgentEvent("codex", payload.Type, record.Payload, event.Timestamp); structured != nil {
-			return []api.AgentEvent{*structured}
+		if len(payload.Plan) > 0 {
+			items := make([]map[string]any, len(payload.Plan))
+			for i, item := range payload.Plan {
+				items[i] = map[string]any{
+					"id":    fmt.Sprintf("step-%d", i),
+					"title": item.Step,
+					"label": item.Step,
+					"state": item.Status,
+				}
+			}
+			event.ID = "codex-plan"
+			event.Type = "plan"
+			event.Payload = map[string]any{
+				"planId": "codex-plan",
+				"title":  "Plan",
+				"state":  "in_progress",
+				"items":  items,
+			}
+			return []api.AgentEvent{event}
 		}
 		switch payload.Type {
 		case "token_count":
