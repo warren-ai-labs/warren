@@ -153,6 +153,9 @@ func (r *GhostlineRuntime) Probe(ctx context.Context, name string) RuntimeProbeR
 	}
 	status, err := session.Status(ctx)
 	if err != nil {
+		if errors.Is(err, ghostline.ErrSessionNotFound) {
+			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "status_not_found", Err: err}
+		}
 		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "session_status_failed", Err: err}
 	}
 	if status.Alive {

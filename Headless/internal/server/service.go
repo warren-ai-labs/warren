@@ -62,7 +62,8 @@ const (
 	// briefly overlap two daemons, and a legacy session must survive a slow
 	// first reconcile instead of being reaped minutes after being marked
 	// ended. Five minutes of grace is a safe trade-off for orphan cleanup.
-	orphanReapGrace = 5 * time.Minute
+	orphanReapGrace             = 5 * time.Minute
+	runtimeProbeWarningInterval = time.Minute
 	// operationAuditLimit keeps the durable safety log bounded. Only entries
 	// with a compare-and-swap undo representation are retained.
 	operationAuditLimit = 256
@@ -210,6 +211,8 @@ type Service struct {
 
 	lifecycleOnce   sync.Once
 	lifecycleCancel context.CancelFunc
+	runtimeProbeMu  sync.Mutex
+	runtimeProbeLog map[string]time.Time
 }
 
 type outputSession struct {
@@ -704,7 +707,7 @@ func (s *Service) reconcile(ctx context.Context) {
 		if probe.State == RuntimeProbeUnknown {
 			// A runtime outage is a loss of knowledge, not evidence of process
 			// death. Keep the durable Session and its output ownership intact.
-			s.logWarn("runtime probe unavailable; preserving session", "session", session.ID, "runtime", session.Runtime, "evidence", probe.Evidence, "error", probe.Err)
+			s.warnRuntimeProbe(session, probe)
 			continue
 		}
 		if probe.State == RuntimeProbeDead {
@@ -715,7 +718,7 @@ func (s *Service) reconcile(ctx context.Context) {
 			if _, canConfirm := adapter.(RuntimeProber); canConfirm {
 				confirmation := s.probeRuntime(probeContext, adapter, adopted.Runtime)
 				if confirmation.State == RuntimeProbeUnknown {
-					s.logWarn("runtime death confirmation unavailable; preserving session", "session", session.ID, "runtime", session.Runtime, "evidence", confirmation.Evidence, "error", confirmation.Err)
+					s.warnRuntimeProbe(session, confirmation)
 					continue
 				}
 				if confirmation.State == RuntimeProbeAlive {
@@ -754,6 +757,23 @@ func (s *Service) stopMissingAgents(seen map[string]struct{}) {
 	for _, sessionID := range stale {
 		s.stopAgent(sessionID)
 	}
+}
+
+func (s *Service) warnRuntimeProbe(session api.Session, result RuntimeProbeResult) {
+	key := session.ID + "|" + result.Evidence
+	now := time.Now()
+	s.runtimeProbeMu.Lock()
+	if s.runtimeProbeLog == nil {
+		s.runtimeProbeLog = make(map[string]time.Time)
+	}
+	last := s.runtimeProbeLog[key]
+	if !last.IsZero() && now.Sub(last) < runtimeProbeWarningInterval {
+		s.runtimeProbeMu.Unlock()
+		return
+	}
+	s.runtimeProbeLog[key] = now
+	s.runtimeProbeMu.Unlock()
+	s.logWarn("runtime probe unavailable; preserving session", "session", session.ID, "runtime", session.Runtime, "evidence", result.Evidence, "error", result.Err)
 }
 
 // adoptRuntimeKind assigns Ghostline to legacy sessions created before
@@ -842,7 +862,10 @@ func (s *Service) reapOrphans(ctx context.Context) {
 		}
 		if session.Lifecycle == "running" {
 			managed[session.Runtime] = true
-		} else {
+		} else if session.Lifecycle == "ended" && session.EndedAt != nil {
+			// A timestamp is the minimum durable provenance for an ended
+			// Session. Legacy records without it are protected until an
+			// explicit operator migration establishes ownership evidence.
 			ended[session.Runtime] = true
 		}
 	}
