@@ -61,6 +61,16 @@ const (
 	frameError     = FrameError
 )
 
+const (
+	// Control frames (WINDOW, CLOSE, ERROR, headers, and control-stream
+	// responses) have a reserved queue so a burst of body frames cannot make
+	// liveness or lifecycle progress wait behind data. The queues are bounded;
+	// overflow is reported to the owning stream instead of growing memory.
+	connectorControlQueueCapacity = 256
+	connectorDataQueueCapacity    = 32
+	connectorControlFairness      = 32
+)
+
 var magic = [4]byte{'B', 'R', 'L', 'Y'}
 
 var errControlQueueOverflow = errors.New("control stream queue overflow")
@@ -141,9 +151,16 @@ type Connector struct {
 	loopDone   chan struct{}
 	run        bool
 	generation uint64
-	streams    map[connectionID]*stream
-	usedIDs    map[connectionID]struct{}
-	writes     sync.Mutex
+	// connectionEpoch identifies one authenticated Host WebSocket incarnation.
+	// Relay generation is an authority/capability version and must not be used
+	// to fence goroutines that outlive a broken socket.
+	connectionEpoch uint64
+	streams         map[connectionID]*stream
+	usedIDs         map[connectionID]uint64
+	// writes protects the short JSON challenge/hello handshake before the
+	// per-connection writer is installed. Data/control frames use writer.
+	writes sync.Mutex
+	writer *connectionWriter
 	// lastState is the most recent state string forwarded to OnState. It is
 	// exposed via State() for /healthz and other liveness probes.
 	lastState string
@@ -152,8 +169,131 @@ type Connector struct {
 	lastError string
 }
 
+type queuedWrite struct {
+	messageType int
+	data        []byte
+	done        chan error
+}
+
+// connectionWriter is the sole owner of Gorilla's WebSocket write side for
+// one authenticated connection. Callers enqueue a frame and wait only for
+// that frame's result; they never hold Connector locks across network I/O.
+type connectionWriter struct {
+	connection *websocket.Conn
+	epoch      uint64
+	control    chan queuedWrite
+	data       chan queuedWrite
+	stop       chan struct{}
+	stopped    chan struct{}
+	stopOnce   sync.Once
+	errMu      sync.Mutex
+	err        error
+}
+
+func newConnectionWriter(connection *websocket.Conn, epoch uint64) *connectionWriter {
+	return &connectionWriter{
+		connection: connection,
+		epoch:      epoch,
+		control:    make(chan queuedWrite, connectorControlQueueCapacity),
+		data:       make(chan queuedWrite, connectorDataQueueCapacity),
+		stop:       make(chan struct{}),
+		stopped:    make(chan struct{}),
+	}
+}
+
+func (writer *connectionWriter) stopWith(err error) {
+	if err == nil {
+		err = errors.New("relay connection closed")
+	}
+	writer.stopOnce.Do(func() {
+		writer.errMu.Lock()
+		writer.err = err
+		writer.errMu.Unlock()
+		close(writer.stop)
+	})
+}
+
+func (writer *connectionWriter) error() error {
+	writer.errMu.Lock()
+	defer writer.errMu.Unlock()
+	if writer.err == nil {
+		return errors.New("relay connection closed")
+	}
+	return writer.err
+}
+
+func (writer *connectionWriter) enqueue(value queuedWrite, control bool) error {
+	queue := writer.data
+	if control {
+		queue = writer.control
+	}
+	select {
+	case <-writer.stopped:
+		return writer.error()
+	case <-writer.stop:
+		return writer.error()
+	default:
+	}
+	select {
+	case queue <- value:
+		return nil
+	default:
+		if control {
+			return errors.New("relay control writer queue full")
+		}
+		return errors.New("relay data writer queue full")
+	}
+}
+
+func (writer *connectionWriter) run() {
+	defer close(writer.stopped)
+	controlBudget := 0
+	for {
+		var value queuedWrite
+		select {
+		case <-writer.stop:
+			return
+		default:
+		}
+		// Prefer control, but periodically yield to data so a continuous
+		// response stream cannot starve terminal/HTTP bodies forever.
+		if controlBudget < connectorControlFairness {
+			select {
+			case value = <-writer.control:
+				controlBudget++
+			default:
+				select {
+				case <-writer.stop:
+					return
+				case value = <-writer.control:
+					controlBudget++
+				case value = <-writer.data:
+					controlBudget = 0
+				}
+			}
+		} else {
+			select {
+			case <-writer.stop:
+				return
+			case value = <-writer.data:
+				controlBudget = 0
+			case value = <-writer.control:
+				controlBudget = 1
+			}
+		}
+		_ = writer.connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		err := writer.connection.WriteMessage(value.messageType, value.data)
+		value.done <- err
+		if err != nil {
+			writer.stopWith(err)
+			return
+		}
+	}
+}
+
 type stream struct {
 	open         streamOpen
+	epoch        uint64
 	ctx          context.Context
 	body         *io.PipeWriter
 	requestMu    sync.Mutex
@@ -174,9 +314,10 @@ type stream struct {
 	hijacked     *relayConn
 }
 
-func newStream(open streamOpen, ctx context.Context, cancel context.CancelFunc) *stream {
+func newStream(open streamOpen, epoch uint64, ctx context.Context, cancel context.CancelFunc) *stream {
 	return &stream{
 		open:         open,
+		epoch:        epoch,
 		ctx:          ctx,
 		close:        cancel,
 		done:         make(chan struct{}),
@@ -204,7 +345,7 @@ func New(config Config) (*Connector, error) {
 	if config.Random == nil {
 		config.Random = rand.Float64
 	}
-	return &Connector{config: config, streams: make(map[connectionID]*stream), usedIDs: make(map[connectionID]struct{})}, nil
+	return &Connector{config: config, streams: make(map[connectionID]*stream), usedIDs: make(map[connectionID]uint64)}, nil
 }
 
 func (connector *Connector) Start(parent context.Context) {
@@ -367,20 +508,30 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 	}
 	connection.SetReadLimit(maxFrameBytes + headerSize)
 	connector.mu.Lock()
+	connector.connectionEpoch++
+	epoch := connector.connectionEpoch
 	connector.conn = connection
 	// Connection IDs only need to be unique for the lifetime of one WebSocket.
 	// Reset the guard on reconnect so a long-lived daemon does not retain every
 	// random ID ever allocated or reject a valid ID reused by a new peer.
-	connector.usedIDs = make(map[connectionID]struct{})
+	connector.usedIDs = make(map[connectionID]uint64)
 	connector.mu.Unlock()
+	var writer *connectionWriter
 	defer func() {
 		connector.mu.Lock()
-		if connector.conn == connection {
+		current := connector.conn == connection && connector.connectionEpoch == epoch
+		if current {
 			connector.conn = nil
+			if connector.writer == writer {
+				connector.writer = nil
+			}
 		}
 		connector.mu.Unlock()
+		if writer != nil {
+			writer.stopWith(errors.New("relay connection closed"))
+		}
 		_ = connection.Close()
-		connector.closeStreams()
+		connector.closeStreams(epoch)
 	}()
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	messageType, payload, err := connection.ReadMessage()
@@ -409,6 +560,15 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 	connector.mu.Lock()
 	connector.generation = accepted.Generation
 	connector.mu.Unlock()
+	writer = newConnectionWriter(connection, epoch)
+	connector.mu.Lock()
+	if connector.conn != connection || connector.connectionEpoch != epoch {
+		connector.mu.Unlock()
+		return errors.New("relay connection epoch changed during handshake")
+	}
+	connector.writer = writer
+	connector.mu.Unlock()
+	go writer.run()
 	_ = connection.SetReadDeadline(time.Time{})
 	connector.state("open")
 	for {
@@ -558,9 +718,10 @@ func (connector *Connector) dispatch(value frame) error {
 			return errors.New("unsupported stream class")
 		}
 		connector.mu.Lock()
+		epoch := connector.connectionEpoch
 		_, used := connector.usedIDs[value.ID]
 		if !used {
-			connector.usedIDs[value.ID] = struct{}{}
+			connector.usedIDs[value.ID] = epoch
 		}
 		connector.mu.Unlock()
 		if streamValue != nil || used {
@@ -595,7 +756,7 @@ func (connector *Connector) dispatch(value frame) error {
 		}
 		if metadata.Class == "control" || metadata.Class == "signal" || metadata.Class == "p2p-signal" {
 			ctx, cancel := streamContext(metadata)
-			streamValue := newStream(metadata, ctx, cancel)
+			streamValue := newStream(metadata, epoch, ctx, cancel)
 			if connector.config.OnControl != nil {
 				connector.mu.Lock()
 				connector.streams[value.ID] = streamValue
@@ -772,8 +933,9 @@ func (connector *Connector) openStream(id connectionID, metadata streamOpen) err
 		return connector.send(frame{Kind: frameError, ID: id, Payload: mustJSON(map[string]string{"code": "handler_unavailable"})})
 	}
 	ctx, cancel := streamContext(metadata)
-	streamValue := newStream(metadata, ctx, cancel)
 	connector.mu.Lock()
+	epoch := connector.connectionEpoch
+	streamValue := newStream(metadata, epoch, ctx, cancel)
 	connector.streams[id] = streamValue
 	connector.mu.Unlock()
 	return nil
@@ -918,22 +1080,51 @@ func (connector *Connector) send(value frame) error {
 	if len(data) > headerSize+maxFrameBytes {
 		return errors.New("frame exceeds limit")
 	}
-	connector.writes.Lock()
-	defer connector.writes.Unlock()
 	connector.mu.Lock()
-	conn := connector.conn
+	epoch := connector.connectionEpoch
+	usedEpoch, used := connector.usedIDs[value.ID]
+	writer := connector.writer
 	connector.mu.Unlock()
-	if conn == nil {
+	if writer == nil {
 		return errors.New("relay connection closed")
 	}
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	return conn.WriteMessage(websocket.BinaryMessage, data)
+	if !used || usedEpoch != epoch || writer.epoch != epoch {
+		return errors.New("relay connection epoch is stale")
+	}
+	valueDone := make(chan error, 1)
+	control := value.Kind != frameData
+	if err := writer.enqueue(queuedWrite{
+		messageType: websocket.BinaryMessage,
+		data:        data,
+		done:        valueDone,
+	}, control); err != nil {
+		return err
+	}
+	select {
+	case err := <-valueDone:
+		return err
+	case <-writer.stopped:
+		// Prefer a completed result if the writer stopped immediately after
+		// handing this frame to Gorilla. The channel is buffered, so this
+		// non-blocking check avoids reporting a successful write as failed.
+		select {
+		case err := <-valueDone:
+			return err
+		default:
+			return writer.error()
+		}
+	}
 }
 
-func (connector *Connector) closeStreams() {
+func (connector *Connector) closeStreams(epoch uint64) {
 	connector.mu.Lock()
-	streams := connector.streams
-	connector.streams = make(map[connectionID]*stream)
+	streams := make(map[connectionID]*stream)
+	for id, value := range connector.streams {
+		if value != nil && value.epoch == epoch {
+			streams[id] = value
+			delete(connector.streams, id)
+		}
+	}
 	connector.mu.Unlock()
 	for id, value := range streams {
 		if isControlClass(value.open.Class) && connector.config.OnControl != nil {
@@ -1327,8 +1518,9 @@ func parseUpgradeResponse(data []byte) (httpHeaders, []byte, error) {
 func (connector *Connector) sendData(id connectionID, data []byte) error {
 	connector.mu.Lock()
 	streamValue := connector.streams[id]
+	epoch := connector.connectionEpoch
 	connector.mu.Unlock()
-	if streamValue == nil {
+	if streamValue == nil || streamValue.epoch != epoch {
 		return errors.New("stream closed")
 	}
 	return connector.sendStream(id, frame{Kind: frameData, ID: id, Payload: append([]byte(nil), data...)})
@@ -1337,8 +1529,9 @@ func (connector *Connector) sendData(id connectionID, data []byte) error {
 func (connector *Connector) sendStream(id connectionID, value frame) error {
 	connector.mu.Lock()
 	streamValue := connector.streams[id]
+	epoch := connector.connectionEpoch
 	connector.mu.Unlock()
-	if streamValue == nil {
+	if streamValue == nil || streamValue.epoch != epoch {
 		return errors.New("stream closed")
 	}
 	credit := uint64(len(value.Payload))
