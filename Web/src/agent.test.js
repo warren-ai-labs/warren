@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   agentDraftKey,
+  AgentMessageQueue,
   agentEventLimit,
   agentLaunchCommand,
   defaultAgentLaunchCommand,
@@ -85,6 +86,28 @@ test("agent queue remains immutable while editing, ordering and retrying", () =>
   const retried = retryAgentQueueItem(moved, "a");
   assert.deepEqual(retried.map(item => item.id), ["a", "b"]);
   assert.deepEqual(deleteAgentQueueItem(retried, "a").map(item => item.id), ["b"]);
+});
+
+test("indeterminate queue retry mints a new command id", () => {
+  const queue = new AgentMessageQueue([{ id: "old-command", text: "run it" }]);
+  assert.equal(queue.markSending("old-command"), true);
+  assert.equal(queue.markFailed("old-command", "delivery is unknown", {
+    code: "command_indeterminate",
+    indeterminate: true,
+  }), true);
+  assert.equal(queue.retry("old-command"), true);
+  assert.equal(queue.items.length, 1);
+  assert.notEqual(queue.items[0].id, "old-command");
+  assert.equal(queue.items[0].status, "queued");
+  assert.equal(queue.items[0].indeterminate, false);
+});
+
+test("connection requeue keeps the command id for idempotent replay", () => {
+  const queue = new AgentMessageQueue([{ id: "stable-command", text: "run it" }]);
+  assert.equal(queue.markSending("stable-command"), true);
+  assert.equal(queue.markQueued("stable-command"), true);
+  assert.equal(queue.items[0].id, "stable-command");
+  assert.equal(queue.items[0].status, "queued");
 });
 
 test("mergeAgentEvents keeps sequence order and deduplicates overlap", () => {

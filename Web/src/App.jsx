@@ -564,7 +564,11 @@ export default function App() {
         const pending = pendingRequestsRef.current.get(id);
         if (!pending) return;
         pendingRequestsRef.current.delete(id);
-        pending.onError?.(`${method} timed out; retry.`);
+        pending.onError?.(`${method} timed out; retry.`, {
+          code: "request_timeout",
+          indeterminate: true,
+          requeue: true,
+        });
       }, REQUEST_TIMEOUT_MS);
       pendingRequestsRef.current.set(id, { onResult, onError, timer });
     }
@@ -1384,7 +1388,7 @@ export default function App() {
       publishAgentQueue(sessionID, queue);
       drainAgentQueue(sessionID);
     };
-    const failed = detail => {
+    const failed = (detail, metadata = {}) => {
       if (agentMessageRequestRef.current.get(queueKey) !== requestToken) return;
       if (!isCurrentRequest()) {
         if (queue.items.some(value => value.id === item.id && value.status === "sending")) {
@@ -1397,8 +1401,28 @@ export default function App() {
       agentMessageRequestRef.current.delete(queueKey);
       const stillFocused = appStateRef.current.activeSession === sessionID
         && focusedSessionRef.current === sessionID;
-      if (stillFocused) queue.markFailed(item.id, detail);
-      else queue.markQueued(item.id);
+      const requeue = Boolean(metadata?.requeue);
+      const indeterminate = Boolean(metadata?.indeterminate)
+        || metadata?.code === "command_indeterminate";
+      if (stillFocused && !requeue && !indeterminate) {
+        queue.markFailed(item.id, detail, {
+          code: metadata?.code || "",
+          indeterminate: false,
+        });
+      } else {
+        // A disconnect/timeout means the command may already have reached the
+        // Host. Keep its stable commandId for an idempotent reconnect retry.
+        queue.markQueued(item.id);
+        if (stillFocused && indeterminate && !requeue) {
+          // The Host explicitly could not determine whether it ran. This is
+          // terminal for the current identity; queue.retry() will mint a new
+          // commandId before the user retries it.
+          queue.markFailed(item.id, detail, {
+            code: metadata?.code || "command_indeterminate",
+            indeterminate: true,
+          });
+        }
+      }
       publishAgentQueue(sessionID, queue);
     };
     if (item.attachments?.length > 0 && !supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-attachments-v1")) {
@@ -1421,7 +1445,10 @@ export default function App() {
         result => result?.accepted ? delivered() : failed("Host did not accept the message"),
         failed,
       );
-      if (!sent) failed("Connection unavailable");
+      if (!sent) failed("Connection unavailable", {
+        code: "connection_unavailable",
+        requeue: true,
+      });
     } else {
       failed("This Host does not expose the canonical Agent timeline");
     }
@@ -1572,17 +1599,32 @@ export default function App() {
     agentInterruptInFlightRef.current.add(sessionID);
     setAgentActionError("");
     return new Promise((resolve, reject) => {
-      const finish = (result, error = "") => {
+      const finish = (result, error = "", metadata = {}) => {
         const currentInterrupt = requestGeneration === agentInterruptGenerationRef.current;
         if (currentInterrupt) agentInterruptInFlightRef.current.delete(sessionID);
         const stillFocused = appStateRef.current.activeSession === sessionID
           && focusedSessionRef.current === sessionID
           && currentInterrupt;
         if (error || !result?.accepted) {
-          if (stillFocused) queue.markFailed(item.id, error || "Host did not accept Send now");
-          else queue.markQueued(item.id);
+          const reason = error || "Host did not accept Send now";
+          const indeterminate = Boolean(metadata?.indeterminate)
+            || metadata?.code === "command_indeterminate";
+          if (stillFocused && !metadata?.requeue && !indeterminate) {
+            queue.markFailed(item.id, reason, {
+              code: metadata?.code || "",
+              indeterminate: false,
+            });
+          } else {
+            queue.markQueued(item.id);
+            if (stillFocused && indeterminate && !metadata?.requeue) {
+              queue.markFailed(item.id, reason, {
+                code: metadata?.code || "command_indeterminate",
+                indeterminate: true,
+              });
+            }
+          }
           publishAgentQueue(sessionID, queue);
-          const detail = error || "Host did not accept Send now";
+          const detail = reason;
           if (appStateRef.current.activeSession === sessionID) {
             setAgentActionError(detail);
           }
@@ -1609,9 +1651,12 @@ export default function App() {
         "agent.turn.steer",
         params,
         result => finish(result),
-        error => finish(null, String(error || "Send now failed")),
+        (error, metadata) => finish(null, String(error || "Send now failed"), metadata),
       );
-      if (!sent) finish(null, "Connection unavailable");
+      if (!sent) finish(null, "Connection unavailable", {
+        code: "connection_unavailable",
+        requeue: true,
+      });
     });
   }, [activeAgentTurn, publishAgentQueue, queueAgentMessage, request]);
 
@@ -2291,6 +2336,7 @@ export default function App() {
         const structured = {
           code: typeof message.code === "string" ? message.code : "",
           details: message.details && typeof message.details === "object" ? message.details : null,
+          indeterminate: message.code === "command_indeterminate",
         };
         if (handler?.onError) {
           // Keep the first argument source-compatible for existing UI code,

@@ -15,14 +15,18 @@ export function reconnectDelay(attempt, random = Math.random) {
   return Math.round(base * (0.8 + random() * 0.4));
 }
 
-export function rejectPendingRequests(pending, detail = "Connection lost") {
+export function rejectPendingRequests(
+  pending,
+  detail = "Connection lost",
+  metadata = { code: "connection_lost", indeterminate: true, requeue: true },
+) {
   const handlers = [...pending.values()];
   pending.clear();
   for (const handler of handlers) {
     if (handler?.timer !== undefined && handler?.timer !== null) {
       clearTimeout(handler.timer);
     }
-    handler?.onError?.(detail);
+    handler?.onError?.(detail, metadata);
   }
 }
 

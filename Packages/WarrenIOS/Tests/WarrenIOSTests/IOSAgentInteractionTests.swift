@@ -77,4 +77,34 @@ final class IOSAgentInteractionTests: XCTestCase {
         XCTAssertEqual(IOSAgentReasoningEffort.low.displayName, "Low")
         XCTAssertEqual(IOSAgentReasoningEffort.off.displayName, "Off")
     }
+
+    func testIndeterminateQueueRetryMintsANewCommandID() {
+        let item = IOSAgentQueueItem(id: "command-old", text: "run it")
+        var queue = IOSAgentMessageQueue(items: [item])
+
+        XCTAssertTrue(queue.markSending(id: "command-old"))
+        XCTAssertTrue(queue.markFailed(
+            id: "command-old",
+            reason: "Host could not determine delivery",
+            code: "command_indeterminate",
+            indeterminate: true
+        ))
+        XCTAssertTrue(queue.retry(id: "command-old"))
+
+        XCTAssertEqual(queue.items.count, 1)
+        XCTAssertNotEqual(queue.items[0].id, "command-old")
+        XCTAssertEqual(queue.items[0].status, .queued)
+        XCTAssertFalse(queue.items[0].indeterminate)
+    }
+
+    func testConnectionRequeuePreservesCommandID() {
+        let item = IOSAgentQueueItem(id: "command-stable", text: "run it")
+        var queue = IOSAgentMessageQueue(items: [item])
+
+        XCTAssertTrue(queue.markSending(id: "command-stable"))
+        XCTAssertTrue(queue.markQueued(id: "command-stable"))
+
+        XCTAssertEqual(queue.items[0].id, "command-stable")
+        XCTAssertEqual(queue.items[0].status, .queued)
+    }
 }
