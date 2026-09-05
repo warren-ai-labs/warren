@@ -2018,8 +2018,13 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
     // Structured objects are append-only updates keyed by their provider ID.
     // Keep the latest complete payload in the projection while preserving
     // every ordinary event (including unknown events for sequence order).
+    // Normalized types are computed once up front: the predicates below each
+    // redo trim + lowercase + dash-fold, which dominated rebuild cost.
     var structuredByID: [String: WarrenRemoteAgentEvent] = [:]
     var renderEvents: [WarrenRemoteAgentEvent] = []
+    renderEvents.reserveCapacity(events.count)
+    var renderNorms: [String] = []
+    renderNorms.reserveCapacity(events.count)
     for event in events where !event.isHiddenFromMobile {
         let type = event.normalizedType.replacingOccurrences(of: "-", with: "_")
         if IOSAgentStructuredEventKind(rawValue: type) != nil {
@@ -2027,10 +2032,51 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
             structuredByID["\(type):\(identity)"] = event
         } else {
             renderEvents.append(event)
+            renderNorms.append(type)
         }
     }
-    renderEvents.append(contentsOf: structuredByID.values)
-    renderEvents.sort { $0.sequence < $1.sequence }
+    // Structured snapshots carry their own sequence; restore timeline order.
+    // Sort indexes instead of events so the precomputed norms stay aligned.
+    let renderOrder: [Int] = {
+        var order = Array(renderEvents.indices)
+        let structured = Array(structuredByID.values)
+        guard !structured.isEmpty else {
+            // Fast path: live tail is already sequence-ordered.
+            var ordered = true
+            var last: UInt64 = 0
+            for event in renderEvents {
+                if event.sequence < last {
+                    ordered = false
+                    break
+                }
+                last = event.sequence
+            }
+            if ordered { return order }
+            order.sort { renderEvents[$0].sequence < renderEvents[$1].sequence }
+            var sortedEvents = [WarrenRemoteAgentEvent]()
+            sortedEvents.reserveCapacity(renderEvents.count)
+            var sortedNorms = [String]()
+            sortedNorms.reserveCapacity(renderNorms.count)
+            for index in order {
+                sortedEvents.append(renderEvents[index])
+                sortedNorms.append(renderNorms[index])
+            }
+            renderEvents = sortedEvents
+            renderNorms = sortedNorms
+            return Array(renderEvents.indices)
+        }
+        var combined = renderEvents
+        var combinedNorms = renderNorms
+        combined.append(contentsOf: structured)
+        combinedNorms.append(contentsOf: structured.map {
+            $0.normalizedType.replacingOccurrences(of: "-", with: "_")
+        })
+        order = Array(combined.indices)
+        order.sort { combined[$0].sequence < combined[$1].sequence }
+        renderEvents = order.map { combined[$0] }
+        renderNorms = order.map { combinedNorms[$0] }
+        return Array(renderEvents.indices)
+    }()
 
     /// Activity is a timeline segment, not a whole user turn. Ending the
     /// segment at every visible conversation event keeps tool/thinking work
@@ -3623,8 +3669,32 @@ private func toolStatusTitle(_ status: String) -> String {
 }
 
 func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
-    for (index, event) in events.enumerated().reversed() {
-        let type = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !events.isEmpty else { return nil }
+    // Single-pass indexes: normalized types, first tool-call index by
+    // correlation ID, and the nearest preceding tool call per row. The
+    // previous version ran first(where:) scans inside a reversed loop.
+    var norms = [String]()
+    norms.reserveCapacity(events.count)
+    var callIndexByID: [String: Int] = [:]
+    var prevToolCall = [Int](repeating: -1, count: events.count)
+    var lastCall = -1
+    for (index, event) in events.enumerated() {
+        let norm = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        norms.append(norm)
+        if norm == "tool_call" || norm == "toolcall" {
+            lastCall = index
+            if let callID = event.callID, !callID.isEmpty, callIndexByID[callID] == nil {
+                callIndexByID[callID] = index
+            }
+            if !event.id.isEmpty, callIndexByID[event.id] == nil {
+                callIndexByID[event.id] = index
+            }
+        }
+        prevToolCall[index] = lastCall
+    }
+    for index in events.indices.reversed() {
+        let type = norms[index]
+        let event = events[index]
         if type == "tool_call" || type == "toolcall" {
             let isCmd = isCommandTool(call: event)
             if let summary = toolSummary(for: event), !summary.isEmpty {
@@ -3634,16 +3704,12 @@ func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
         }
         if type == "tool_output" || type == "tooloutput" {
             let matchingCall: WarrenRemoteAgentEvent? = {
-                if let callID = event.callID, !callID.isEmpty {
-                    return events.first(where: {
-                        let ct = $0.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        return (ct == "tool_call" || ct == "toolcall") && ($0.callID == callID || $0.id == callID)
-                    })
+                if let callID = event.callID, !callID.isEmpty,
+                   let matchIndex = callIndexByID[callID] {
+                    return events[matchIndex]
                 }
-                return events[0..<index].reversed().first(where: {
-                    let ct = $0.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    return (ct == "tool_call" || ct == "toolcall")
-                })
+                let prev = prevToolCall[index]
+                return prev >= 0 ? events[prev] : nil
             }()
             if let callEvent = matchingCall {
                 let isCmd = isCommandTool(call: callEvent)
