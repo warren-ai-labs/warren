@@ -253,7 +253,7 @@ derived by a client from the URL or from a display name:
         "version": "0.9.0"
       },
       "accessScopeId": "scope-owner",
-      "capabilities": ["agent.timeline", "agent.interactions"]
+      "capabilities": ["agent-timeline-v1", "agent-interactions-v1"]
     }
 
 `host.id` is stable for the lifetime of a Host installation. `accessScopeId`
