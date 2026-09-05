@@ -281,6 +281,34 @@ type Runtime interface {
 	Kill(context.Context, string) error
 }
 
+// RuntimeProbeState describes what Warren actually learned from a runtime
+// authority. Unknown is deliberately distinct from Dead: a timeout, transport
+// outage, malformed response, or unavailable runtime must never end a durable
+// Session or authorize an orphan reap.
+type RuntimeProbeState uint8
+
+const (
+	RuntimeProbeUnknown RuntimeProbeState = iota
+	RuntimeProbeAlive
+	RuntimeProbeDead
+)
+
+// RuntimeProbeResult is the typed lifecycle result returned by adapters that
+// can distinguish an authoritative negative answer from an unavailable
+// authority. Err is diagnostic only; callers must branch on State.
+type RuntimeProbeResult struct {
+	State    RuntimeProbeState
+	Evidence string
+	Err      error
+}
+
+// RuntimeProber is an additive capability so existing embedders that only
+// implement Runtime keep compiling while production adapters can expose safe
+// lifecycle semantics. New lifecycle decisions always prefer this interface.
+type RuntimeProber interface {
+	Probe(context.Context, string) RuntimeProbeResult
+}
+
 type RuntimeLister interface {
 	List(context.Context) (map[string]bool, error)
 }
@@ -672,9 +700,35 @@ func (s *Service) reconcile(ctx context.Context) {
 		if changed {
 			s.persistRuntimeKind(adopted)
 		}
-		if !running(adopted) && !s.anyRuntimeOwns(probeContext, adopted) {
-			s.markEnded(session.ID)
+		probe := running(adopted)
+		if probe.State == RuntimeProbeUnknown {
+			// A runtime outage is a loss of knowledge, not evidence of process
+			// death. Keep the durable Session and its output ownership intact.
+			s.logWarn("runtime probe unavailable; preserving session", "session", session.ID, "runtime", session.Runtime, "evidence", probe.Evidence, "error", probe.Err)
 			continue
+		}
+		if probe.State == RuntimeProbeDead {
+			// A healthy list can race with a just-created/adopted runtime. Confirm
+			// the negative result with the adapter before ending the Session; an
+			// unknown confirmation remains non-destructive.
+			adapter := s.runtimeFor(adopted)
+			if _, canConfirm := adapter.(RuntimeProber); canConfirm {
+				confirmation := s.probeRuntime(probeContext, adapter, adopted.Runtime)
+				if confirmation.State == RuntimeProbeUnknown {
+					s.logWarn("runtime death confirmation unavailable; preserving session", "session", session.ID, "runtime", session.Runtime, "evidence", confirmation.Evidence, "error", confirmation.Err)
+					continue
+				}
+				if confirmation.State == RuntimeProbeAlive {
+					// The direct confirmation is authoritative for this race; keep
+					// the Session running and continue with normal reconciliation.
+				} else {
+					s.markEnded(session.ID)
+					continue
+				}
+			} else {
+				s.markEnded(session.ID)
+				continue
+			}
 		}
 		_, _ = s.ensureOutput(ctx, session)
 		s.applyAgentState(session)
@@ -708,22 +762,37 @@ func (s *Service) adoptRuntimeKind(ctx context.Context, session api.Session) (ap
 	if session.RuntimeKind != "" {
 		return session, false
 	}
-	if adapter := s.Runtimes[settings.RuntimeGhostline]; adapter != nil && adapter.Exists(ctx, session.Runtime) {
+	if adapter := s.Runtimes[settings.RuntimeGhostline]; adapter != nil && s.probeRuntime(ctx, adapter, session.Runtime).State == RuntimeProbeAlive {
 		session.RuntimeKind = settings.RuntimeGhostline
 		return session, true
 	}
 	return session, false
 }
 
-// anyRuntimeOwns is a second, direct existence check used when the cached
-// runningSessions probe failed for a session. A transient probe failure must
-// not end a live session: ending it would let the orphan reaper kill the
-// underlying process minutes later.
-func (s *Service) anyRuntimeOwns(ctx context.Context, session api.Session) bool {
-	if adapter := s.Runtimes[settings.RuntimeGhostline]; adapter != nil && adapter.Exists(ctx, session.Runtime) {
-		return true
+func (s *Service) probeRuntime(ctx context.Context, adapter Runtime, name string) RuntimeProbeResult {
+	if adapter == nil {
+		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "adapter_unavailable"}
 	}
-	return false
+	if prober, ok := adapter.(RuntimeProber); ok {
+		result := prober.Probe(ctx, name)
+		switch result.State {
+		case RuntimeProbeAlive, RuntimeProbeDead, RuntimeProbeUnknown:
+			return result
+		default:
+			return RuntimeProbeResult{
+				State:    RuntimeProbeUnknown,
+				Evidence: "invalid_probe_state",
+				Err:      result.Err,
+			}
+		}
+	}
+	// Compatibility adapters only expose Exists. Preserve their historical
+	// behavior, but keep the fallback isolated so production adapters can no
+	// longer collapse transport errors into a destructive false result.
+	if adapter.Exists(ctx, name) {
+		return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "legacy_exists"}
+	}
+	return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "legacy_not_exists"}
 }
 
 func (s *Service) persistRuntimeKind(session api.Session) {
@@ -982,32 +1051,62 @@ func sortTerminalGroups(groups []api.TerminalGroup) {
 	})
 }
 
-func (s *Service) runningSessions(ctx context.Context) func(api.Session) bool {
-	lists := make(map[string]map[string]bool)
+type runtimeListResult struct {
+	sessions map[string]bool
+	state    RuntimeProbeState
+	err      error
+}
+
+func (s *Service) runningSessions(ctx context.Context) func(api.Session) RuntimeProbeResult {
+	lists := make(map[string]runtimeListResult)
 	for kind, adapter := range s.Runtimes {
 		if lister, ok := adapter.(RuntimeLister); ok {
-			if sessions, err := lister.List(ctx); err == nil {
-				lists[kind] = sessions
+			sessions, err := lister.List(ctx)
+			if err != nil {
+				lists[kind] = runtimeListResult{state: RuntimeProbeUnknown, err: err}
+				continue
 			}
+			lists[kind] = runtimeListResult{sessions: sessions, state: RuntimeProbeAlive}
 		}
 	}
 	if len(lists) == 0 && s.Runtime != nil {
 		if lister, ok := s.Runtime.(RuntimeLister); ok {
-			if sessions, err := lister.List(ctx); err == nil {
-				lists[""] = sessions
+			sessions, err := lister.List(ctx)
+			if err != nil {
+				lists[""] = runtimeListResult{state: RuntimeProbeUnknown, err: err}
+			} else {
+				lists[""] = runtimeListResult{sessions: sessions, state: RuntimeProbeAlive}
 			}
 		}
 	}
-	return func(session api.Session) bool {
+	return func(session api.Session) RuntimeProbeResult {
 		kind := s.runtimeKindFor(session)
-		if _, ok := lists[kind]; !ok {
-			kind = ""
+		if listed, ok := lists[kind]; ok {
+			if listed.state == RuntimeProbeUnknown {
+				return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "list_failed", Err: listed.err}
+			}
+			if listed.sessions[session.Runtime] {
+				return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "healthy_list"}
+			}
+			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "healthy_list_missing"}
 		}
-		if sessions := lists[kind]; sessions != nil {
-			return sessions[session.Runtime]
+		// Compatibility constructions often set only Runtime while the
+		// default kind is "ghostline". Reuse the untyped list only when there
+		// is no explicit runtime registry; never let a different kind's list
+		// decide this Session's lifecycle.
+		if kind != "" && len(s.Runtimes) == 0 {
+			if listed, ok := lists[""]; ok {
+				if listed.state == RuntimeProbeUnknown {
+					return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "list_failed", Err: listed.err}
+				}
+				if listed.sessions[session.Runtime] {
+					return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "healthy_legacy_list"}
+				}
+				return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "healthy_legacy_list_missing"}
+			}
 		}
 		adapter := s.runtimeFor(session)
-		return adapter != nil && adapter.Exists(ctx, session.Runtime)
+		return s.probeRuntime(ctx, adapter, session.Runtime)
 	}
 }
 
