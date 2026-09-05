@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,5 +148,30 @@ func TestCanonicalCommandJournalDoesNotReexecutePendingCommand(t *testing.T) {
 	record, leader, err := s.BeginCanonicalCommand(ctx, "exec-1", "cmd-1", "fp-1")
 	if err != nil || leader || record.Status != CanonicalCommandPending {
 		t.Fatalf("pending retry = %#v leader=%v err=%v", record, leader, err)
+	}
+}
+
+func TestCanonicalCommandJournalReconcilesStalePendingAsUnknown(t *testing.T) {
+	s, err := OpenAgentEventStore(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	record, leader, err := s.BeginCanonicalCommand(ctx, "exec-1", "cmd-1", "fp-1")
+	if err != nil || !leader {
+		t.Fatalf("begin leader=%v err=%v", leader, err)
+	}
+	now := time.UnixMilli(record.CreatedAt + 1)
+	count, err := s.ReconcilePendingCanonicalCommands(ctx, now, 0)
+	if err != nil || count != 1 {
+		t.Fatalf("reconcile count=%d err=%v", count, err)
+	}
+	replay, leader, err := s.BeginCanonicalCommand(ctx, "exec-1", "cmd-1", "fp-1")
+	if err != nil || leader || replay.Status != CanonicalCommandUnknown {
+		t.Fatalf("unknown replay = %#v leader=%v err=%v", replay, leader, err)
+	}
+	if !strings.Contains(replay.Error, "new commandId") {
+		t.Fatalf("unknown replay error = %q", replay.Error)
 	}
 }

@@ -46,6 +46,9 @@ const (
 	agentMessageMaxBytes     = 256 * 1024
 	agentHistoryDefaultLimit = 200
 	agentHistoryMaxLimit     = 500
+	// A pending admission older than this at process startup cannot be safely
+	// replayed: the provider may have completed after the client disconnected.
+	canonicalCommandRecoveryAge = 15 * time.Minute
 	// orphanReapGrace protects a session between runtime creation and its state
 	// record becoming durable, so a concurrent reaper cannot kill a brand-new
 	// runtime while CreateSession is still persisting it.
@@ -204,10 +207,11 @@ type Service struct {
 	liveActivityPublisher   LiveActivityPublisher
 	liveActivityDigest      []byte
 
-	lifecycleOnce   sync.Once
-	lifecycleCancel context.CancelFunc
-	runtimeProbeMu  sync.Mutex
-	runtimeProbeLog map[string]time.Time
+	lifecycleOnce               sync.Once
+	lifecycleCancel             context.CancelFunc
+	canonicalCommandsReconciled bool
+	runtimeProbeMu              sync.Mutex
+	runtimeProbeLog             map[string]time.Time
 }
 
 type canonicalCommandResult struct {
@@ -441,6 +445,15 @@ func (s *Service) lazyInitLocked() {
 		path := resolvePath(expandHome(s.AgentStorePath))
 		if agentStore, err := store.OpenAgentEventStore(path); err == nil {
 			s.AgentStore = agentStore
+		}
+	}
+	if s.AgentStore != nil && !s.canonicalCommandsReconciled {
+		if _, err := s.AgentStore.ReconcilePendingCanonicalCommands(
+			context.Background(), time.Now().UTC(), canonicalCommandRecoveryAge,
+		); err != nil {
+			s.logWarn("reconcile pending canonical commands", "error", err)
+		} else {
+			s.canonicalCommandsReconciled = true
 		}
 	}
 }
