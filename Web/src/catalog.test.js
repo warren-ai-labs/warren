@@ -31,14 +31,12 @@ test("catalog indexes workspaces and open tabs", () => {
   }));
 
   assert.equal(catalog.workspacesByProject.get("project")[0].id, "workspace");
-  assert.deepEqual(workspaceTabs(catalog, "workspace"), [{
-    id: "session",
-    session: "session",
-    workspace: "workspace",
-    tabID: "tab",
-    title: "Shell",
-    kind: undefined,
-  }]);
+  const [tab] = workspaceTabs(catalog, "workspace");
+  assert.equal(tab.id, "session");
+  assert.equal(tab.session, "session");
+  assert.equal(tab.workspace, "workspace");
+  assert.equal(tab.tabID, "session");
+  assert.equal(tab.title, "Shell");
 });
 
 test("catalog indexes task workspaces across projects", () => {

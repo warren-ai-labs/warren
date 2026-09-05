@@ -1391,6 +1391,52 @@ button:disabled {
   padding-inline-end: 2px;
 }
 
+.agent-message.user.queued .agent-bubble {
+  background: var(--fill-secondary);
+  border: 1px dashed var(--color-border);
+  opacity: 0.92;
+}
+
+.agent-queue-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
+.agent-queue-tag.sending {
+  color: var(--color-text-accent);
+}
+
+.agent-queue-tag.failed {
+  color: var(--color-text-danger);
+}
+
+.agent-queue-inline-delete {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  margin-inline-start: 6px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.agent-queue-inline-delete:hover {
+  color: var(--color-text-danger);
+}
+
+.agent-queue-error-text {
+  color: var(--color-text-danger);
+  font-size: var(--text-xs);
+  margin-inline-start: 6px;
+}
+
 .agent-message.assistant {
   padding: 4px 0;
 }

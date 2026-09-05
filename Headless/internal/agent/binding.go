@@ -102,7 +102,7 @@ func configDir() string {
 // hook and the daemon to race: both write the same structured JSON and the
 // daemon only starts a watcher for a path that exists on disk.
 func WriteBinding(path string, binding Binding) error {
-	if binding.Provider == "" || binding.SessionID == "" || binding.TranscriptPath == "" {
+	if binding.Provider == "" || binding.SessionID == "" || (binding.Provider != "opencode" && binding.TranscriptPath == "") {
 		return errors.New("binding needs provider, session id and transcript path")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

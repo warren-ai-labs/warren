@@ -235,7 +235,7 @@ func TestEnsureAgentRebindsDedicatedTranscript(t *testing.T) {
 	projectID := store.NewID()
 	workspaceID := store.NewID()
 	session := api.Session{
-		ID: "session-rebind", WorkspaceID: workspaceID, Title: "Codex", Kind: "codex",
+		ID: "session-rebind", WorkspaceID: workspaceID, Title: "Codex", CustomTitle: "Previous Topic", Kind: "codex",
 		Runtime: "runtime-rebind", Lifecycle: "running", CreatedAt: time.Now().UTC(),
 	}
 	if err := state.Update(func(value *api.State) error {
@@ -302,7 +302,7 @@ func TestEnsureAgentRebindsDedicatedTranscript(t *testing.T) {
 		t.Fatalf("history after rebind = %#v, want only the new transcript event", history)
 	}
 	snapshot, _ := state.SnapshotVersion()
-	if snapshot.Sessions[0].AgentSessionID != "thread-new" || snapshot.Sessions[0].TranscriptPath != newPath {
+	if snapshot.Sessions[0].AgentSessionID != "thread-new" || snapshot.Sessions[0].TranscriptPath != newPath || snapshot.Sessions[0].CustomTitle != "" {
 		t.Fatalf("session meta after rebind = %#v", snapshot.Sessions[0])
 	}
 	entry.watcher.Close()

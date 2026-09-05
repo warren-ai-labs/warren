@@ -1,10 +1,12 @@
 export function rosterFromMessage(message = {}) {
   const source = isRecord(message?.state) ? message.state : message;
-  const sessions = Array.isArray(source?.sessions) ? source.sessions : [];
+  const sessions = Array.isArray(source?.sessions) ? source.sessions : null;
   const tabs = sessions
-    .filter(session => session?.lifecycle === "running")
-    .map(sessionToTab)
-    .filter(Boolean);
+    ? sessions
+      .filter(session => session?.lifecycle === "running")
+      .map(sessionToTab)
+      .filter(Boolean)
+    : arrayOrEmpty(source?.tabs);
   return normalizeRoster({
     revision: normalizeRevision(source?.revision),
     schema: source?.schema,
@@ -106,15 +108,16 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
   });
 }
 
-export function buildCatalog(roster = rosterFromMessage()) {
+export function buildCatalog(input = rosterFromMessage()) {
+  const roster = isRecord(input) && Array.isArray(input.tabs) ? input : rosterFromMessage(input);
   const sessions = new Map();
   const tabsByWorkspace = new Map();
   const workspacesByTask = new Map();
   const workspacesByProject = new Map();
-  const tasks = [...(roster.tasks || [])].sort(pinnedFirst);
-  const projects = [...roster.projects].sort(pinnedFirst);
-  const workspaces = [...roster.workspaces].sort(pinnedFirst);
-  const tabs = [...roster.tabs].sort(pinnedFirst);
+  const tasks = arrayOrEmpty(roster.tasks).sort(pinnedFirst);
+  const projects = arrayOrEmpty(roster.projects).sort(pinnedFirst);
+  const workspaces = arrayOrEmpty(roster.workspaces).sort(pinnedFirst);
+  const tabs = arrayOrEmpty(roster.tabs).sort(pinnedFirst);
 
   for (const tab of tabs) {
     sessions.set(tab.session, { ...tab, id: tab.session });

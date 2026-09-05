@@ -216,7 +216,7 @@ export function AgentView({
       list.scrollTop = list.scrollHeight;
       pinToBottomRef.current = false;
     }
-  }, [events.length, session?.id]);
+  }, [events.length, queueItems.length, session?.id]);
 
   const loadEarlier = () => {
     // Older pages are inserted above the first existing message, so after
@@ -264,7 +264,7 @@ export function AgentView({
     }
     const followsBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
     if (followsBottom) list.scrollTop = list.scrollHeight;
-  }, [events.length]);
+  }, [events.length, queueItems.length]);
 
   const addAttachments = files => {
     const values = Array.from(files || []).filter(file => file && typeof file.name === "string");
@@ -417,7 +417,9 @@ export function AgentView({
     inputRef.current?.focus();
     setUploadingAttachments(false);
     submissionInFlightRef.current = false;
-    setSubmitStatus("sent");
+    const isWorking = agentStatus?.activity === "working";
+    setSubmitStatus(isWorking ? "queued" : "sent");
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
     submitStatusTimerRef.current = setTimeout(() => {
       submitStatusTimerRef.current = null;
       setSubmitStatus("");
@@ -479,27 +481,59 @@ export function AgentView({
                 : "Load earlier messages"}
           </button>
         )}
-        {blocks.length === 0 ? (
+        {blocks.length === 0 && queueItems.length === 0 ? (
           <div className="agent-empty">
             <div className="agent-empty-mark" aria-hidden="true">✦</div>
             <div className="agent-empty-title">What can I help you with?</div>
             <div className="agent-empty-hint">Messages, tool calls and results will appear here.</div>
           </div>
         ) : (
-          blocks.map((block, index) => (
-            // Usage remains in the protocol for future analytics, but it is
-            // intentionally not a conversation row on mobile or Web.
-            block.kind === "usage"
-              ? null
-              : <AgentBlock
-                key={blockKindKey(block, index)}
-                block={block}
-                onInteraction={onInteraction}
-                canInteract={canInteract}
-                onEditResend={editAndResend}
-                isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
-              />
-          ))
+          <>
+            {blocks.map((block, index) => (
+              // Usage remains in the protocol for future analytics, but it is
+              // intentionally not a conversation row on mobile or Web.
+              block.kind === "usage"
+                ? null
+                : <AgentBlock
+                  key={blockKindKey(block, index)}
+                  block={block}
+                  onInteraction={onInteraction}
+                  canInteract={canInteract}
+                  onEditResend={editAndResend}
+                  isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.seq || ""}` === lastUserEventKey)}
+                />
+            ))}
+            {queueItems.map(item => (
+              <div key={item.id} className="agent-message user queued">
+                <div className="agent-bubble">
+                  <MarkdownContent value={item.text || ""} />
+                  {item.attachments?.length > 0 && (
+                    <div className="agent-queue-item-attachments" aria-label="Queued attachments">
+                      {item.attachments.map((att, idx) => (
+                        <span key={idx} className="agent-attachment-chip ready">
+                          {att.name || "Attachment"}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="agent-message-meta">
+                  <span className={`agent-queue-tag ${item.status || "queued"}`}>
+                    {item.status === "sending" ? "Sending…" : item.status === "failed" ? "Failed" : "Queued"}
+                  </span>
+                  {item.failureReason && <span className="agent-queue-error-text">{item.failureReason}</span>}
+                  <button
+                    type="button"
+                    className="agent-queue-inline-delete"
+                    title="Remove queued message"
+                    onClick={() => onQueueDelete && onQueueDelete(item.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} onFocusComposer={() => inputRef.current?.focus()} />}
@@ -517,7 +551,7 @@ export function AgentView({
         <div className={`agent-submit-status ${submitStatus}`} role="status" aria-live="polite">
           {submitStatus === "sending"
             ? (uploadingAttachments ? "Uploading…" : "Sending…")
-            : submitStatus === "sent" ? "Sent" : "Send failed — retry"}
+            : submitStatus === "sent" ? "Sent" : submitStatus === "queued" ? "Queued for next turn" : "Send failed — retry"}
         </div>
       )}
       {draftWarning && (

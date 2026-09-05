@@ -348,4 +348,25 @@ public actor IOSAgentEventStore {
             sqlite3_finalize(stmt2)
         }
     }
+
+    /// Purges all events and sync states for sessions that no longer exist on the Host.
+    /// Runs silently on the actor's background executor without blocking the main actor.
+    public func purgeOrphanSessions(activeSessionIDs: Set<String>) {
+        guard let db, !activeSessionIDs.isEmpty else { return }
+
+        let querySQL = "SELECT DISTINCT session_id FROM ios_agent_sync_state UNION SELECT DISTINCT session_id FROM ios_agent_events;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, querySQL, -1, &stmt, nil) == SQLITE_OK else { return }
+        var storedIDs: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cStr = sqlite3_column_text(stmt, 0) {
+                storedIDs.append(String(cString: cStr))
+            }
+        }
+        sqlite3_finalize(stmt)
+
+        for sessionID in storedIDs where !activeSessionIDs.contains(sessionID) {
+            clearSession(sessionID: sessionID)
+        }
+    }
 }
