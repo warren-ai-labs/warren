@@ -1026,6 +1026,7 @@ private struct IOSEndpointPickerSheet: View {
     let hosts: [IOSEndpointMetadata]
     let title: String
     @Environment(\.dismiss) private var dismiss
+    @State private var hostToDelete: IOSEndpointMetadata?
 
     var body: some View {
         NavigationStack {
@@ -1108,6 +1109,13 @@ private struct IOSEndpointPickerSheet: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                hostToDelete = host
+                            } label: {
+                                Label("Delete Host", systemImage: "trash")
+                            }
+                        }
                     }
                 }
                 .iosCardSurface()
@@ -1127,6 +1135,27 @@ private struct IOSEndpointPickerSheet: View {
                         .font(IOSTypography.bodyEmphasis)
                         .foregroundStyle(IOSTheme.accent)
                 }
+            }
+            .confirmationDialog(
+                "Delete \"\(hostToDelete?.name ?? "Host")\"?",
+                isPresented: Binding(
+                    get: { hostToDelete != nil },
+                    set: { if !$0 { hostToDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete Host", role: .destructive) {
+                    if let target = hostToDelete {
+                        IOSHaptics.warning()
+                        model.removeEndpoint(named: target.name)
+                        hostToDelete = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    hostToDelete = nil
+                }
+            } message: {
+                Text("This will remove the Host and permanently delete all its cached sessions, messages, and saved credentials from this device.")
             }
         }
         .preferredColorScheme(.dark)
@@ -2657,6 +2686,7 @@ public struct IOSEndpointConfigurationView: View {
     @ObservedObject private var model: IOSApplicationModel
     @Environment(\.dismiss) private var dismiss
     @State private var showingRelayScanner = false
+    @State private var hostToDelete: IOSEndpointMetadata?
 
     public init(model: IOSApplicationModel) {
         self.model = model
@@ -2723,6 +2753,13 @@ public struct IOSEndpointConfigurationView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel("Details for \(host.name)")
+                                }
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        hostToDelete = host
+                                    } label: {
+                                        Label("Delete Host", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
@@ -2841,6 +2878,27 @@ public struct IOSEndpointConfigurationView: View {
             )
             .ignoresSafeArea()
         }
+        .confirmationDialog(
+            "Delete \"\(hostToDelete?.name ?? "Host")\"?",
+            isPresented: Binding(
+                get: { hostToDelete != nil },
+                set: { if !$0 { hostToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Host", role: .destructive) {
+                if let target = hostToDelete {
+                    IOSHaptics.warning()
+                    model.removeEndpoint(named: target.name)
+                    hostToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                hostToDelete = nil
+            }
+        } message: {
+            Text("This will remove the Host and permanently delete all its cached sessions, messages, and saved credentials from this device.")
+        }
     }
 
     @ViewBuilder
@@ -2947,6 +3005,7 @@ private struct IOSEndpointDetailView: View {
     @ObservedObject var model: IOSApplicationModel
     let endpoint: IOSEndpointMetadata
     @Environment(\.dismiss) private var dismiss
+    @State private var showingDeleteConfirmation = false
 
     private var currentMetadata: IOSEndpointMetadata {
         model.endpointMetadataList.first(where: { $0.name == endpoint.name })
@@ -2959,17 +3018,31 @@ private struct IOSEndpointDetailView: View {
                 title: currentMetadata.name,
                 subtitle: "Host details",
                 actions: AnyView(
-                    NavigationLink {
-                        IOSEndpointEditorView(model: model, endpoint: currentMetadata)
-                    } label: {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(IOSTheme.secondaryText)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                    HStack(spacing: 0) {
+                        Button {
+                            showingDeleteConfirmation = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(IOSTheme.red)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete \(currentMetadata.name)")
+
+                        NavigationLink {
+                            IOSEndpointEditorView(model: model, endpoint: currentMetadata)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Edit \(currentMetadata.name)")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Edit \(currentMetadata.name)")
                 )
             ) {
                 dismiss()
@@ -3067,6 +3140,28 @@ private struct IOSEndpointDetailView: View {
                     .disabled(isActive)
                     .padding(.top, 22)
 
+                    Button {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "trash")
+                            Text("Delete Host")
+                        }
+                        .font(IOSTypography.button)
+                        .foregroundStyle(IOSTheme.red)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(
+                            IOSTheme.red.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: IOSTheme.cardRadius, style: .continuous)
+                                .stroke(IOSTheme.red.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 12)
+
                     if let error = model.endpointError {
                         IOSInlineNotice(
                             title: "Host action failed",
@@ -3091,6 +3186,20 @@ private struct IOSEndpointDetailView: View {
                 .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
+        }
+        .confirmationDialog(
+            "Delete \"\(currentMetadata.name)\"?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Host", role: .destructive) {
+                IOSHaptics.warning()
+                model.removeEndpoint(named: currentMetadata.name)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove the Host and permanently delete all its cached sessions, messages, and saved credentials from this device.")
         }
         .background(IOSTheme.background.ignoresSafeArea())
         #if os(iOS) || os(visionOS)

@@ -376,8 +376,20 @@ public final class IOSLocalStore: @unchecked Sendable {
         return true
     }
 
-    /// Removes one Host and its corresponding Keychain credential. Callers
-    /// should keep at least one item active when the app is connected.
+    /// Returns all cached rosters stored for an endpoint name across any URLs.
+    public func cachedRosters(forHostNamed name: String) -> [WarrenRemoteRoster] {
+        let prefix = "warren.ios.roster.\(name)|"
+        var results: [WarrenRemoteRoster] = []
+        for (key, val) in defaults.dictionaryRepresentation() where key.hasPrefix(prefix) {
+            if let data = val as? Data,
+               let roster = try? JSONDecoder().decode(WarrenRemoteRoster.self, from: data) {
+                results.append(roster)
+            }
+        }
+        return results
+    }
+
+    /// Removes one Host and all its stored credentials and cached data.
     @discardableResult
     public func removeEndpoint(named name: String) -> Bool {
         var values = endpoints
@@ -388,11 +400,27 @@ public final class IOSLocalStore: @unchecked Sendable {
         _ = keychain.remove(account: "\(name).refresh")
         _ = keychain.remove(account: "\(name).direct")
         _ = keychain.remove(account: "\(name).relay")
+
+        // Purge cached rosters and agent drafts for this host
+        let rosterPrefix = "warren.ios.roster.\(name)|"
+        let hexPrefix = (name + "|").utf8.map { byte in
+            let digits = String(byte, radix: 16)
+            return digits.count == 1 ? "0\(digits)" : digits
+        }.joined()
+        let draftPrefix = "warren.agent-draft.\(hexPrefix)"
+
+        for key in defaults.dictionaryRepresentation().keys {
+            if key.hasPrefix(rosterPrefix) || key.hasPrefix(draftPrefix) {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
         if activeEndpointName() == name {
             if let replacement = values.first?.name {
                 setActiveEndpointName(replacement)
             } else {
                 removeActiveEndpointName()
+                defaults.removeObject(forKey: Keys.navigation)
             }
         }
         return true

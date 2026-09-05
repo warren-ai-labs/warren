@@ -206,7 +206,21 @@ public actor IOSAgentEventStore {
             sqlite3_finalize(syncStmt)
         }
 
-        // Pruning if exceeding maxEventsPerSession
+        // Pruning if exceeding maxEventsPerSession. The COUNT probe keeps
+        // every streaming delta from paying for the NOT IN subquery when the
+        // transcript is still small.
+        let countSQL = "SELECT COUNT(*) FROM ios_agent_events WHERE session_id = ? AND epoch = ?;"
+        var countStmt: OpaquePointer?
+        var storedCount = 0
+        if sqlite3_prepare_v2(db, countSQL, -1, &countStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(countStmt, 1, (sessionID as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(countStmt, 2, Int64(epoch))
+            if sqlite3_step(countStmt) == SQLITE_ROW {
+                storedCount = Int(sqlite3_column_int64(countStmt, 0))
+            }
+            sqlite3_finalize(countStmt)
+        }
+        guard storedCount > maxEventsPerSession else { return }
         let pruneSQL = """
         DELETE FROM ios_agent_events
         WHERE session_id = ? AND epoch = ? AND sequence NOT IN (
@@ -289,10 +303,14 @@ public actor IOSAgentEventStore {
         guard let db else { return [] }
 
         var sql = "SELECT raw_json FROM ios_agent_events WHERE session_id = ?"
-        if let epoch { sql += " AND epoch = \(epoch)" }
-        if let since { sql += " AND sequence >= \(since)" }
-        if let before { sql += " AND sequence < \(before)" }
-        sql += " ORDER BY sequence ASC LIMIT \(limit);"
+        var bindEpoch: UInt64?
+        var bindSince: UInt64?
+        var bindBefore: UInt64?
+        var bindLimit = limit
+        if epoch != nil { sql += " AND epoch = ?" ; bindEpoch = epoch }
+        if since != nil { sql += " AND sequence >= ?"; bindSince = since }
+        if before != nil { sql += " AND sequence < ?"; bindBefore = before }
+        sql += " ORDER BY sequence ASC LIMIT ?;"
 
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -300,7 +318,22 @@ public actor IOSAgentEventStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, (sessionID as NSString).utf8String, -1, nil)
+        var bindIndex: Int32 = 1
+        sqlite3_bind_text(stmt, bindIndex, (sessionID as NSString).utf8String, -1, nil)
+        bindIndex += 1
+        if let bindEpoch {
+            sqlite3_bind_int64(stmt, bindIndex, Int64(bindEpoch))
+            bindIndex += 1
+        }
+        if let bindSince {
+            sqlite3_bind_int64(stmt, bindIndex, Int64(bindSince))
+            bindIndex += 1
+        }
+        if let bindBefore {
+            sqlite3_bind_int64(stmt, bindIndex, Int64(bindBefore))
+            bindIndex += 1
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(bindLimit))
 
         var results: [WarrenRemoteAgentEvent] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -395,5 +428,20 @@ public actor IOSAgentEventStore {
         for sessionID in storedIDs where !activeSessionIDs.contains(sessionID) {
             clearSession(sessionID: sessionID)
         }
+    }
+
+    /// Purges all events and sync states for a specific list of session IDs.
+    public func clearSessions(_ sessionIDs: [String]) {
+        guard !sessionIDs.isEmpty else { return }
+        for sessionID in sessionIDs {
+            clearSession(sessionID: sessionID)
+        }
+    }
+
+    /// Clears all agent events and sync states across all sessions.
+    public func clearAll() {
+        guard let db else { return }
+        sqlite3_exec(db, "DELETE FROM ios_agent_events;", nil, nil, nil)
+        sqlite3_exec(db, "DELETE FROM ios_agent_sync_state;", nil, nil, nil)
     }
 }

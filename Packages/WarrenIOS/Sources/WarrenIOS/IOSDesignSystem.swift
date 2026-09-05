@@ -784,4 +784,10 @@ public enum IOSHaptics {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         #endif
     }
+
+    public static func warning() {
+        #if os(iOS) && canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        #endif
+    }
 }

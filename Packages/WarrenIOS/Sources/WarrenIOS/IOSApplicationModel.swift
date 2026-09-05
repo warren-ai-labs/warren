@@ -761,19 +761,114 @@ public final class IOSApplicationModel: ObservableObject {
         }
     }
 
-    /// Removes a saved Host.
+    /// Removes a saved Host and all its historical data (sessions, events, drafts, credentials).
     @discardableResult
     public func removeEndpoint(named name: String) -> Bool {
         let values = localStore.endpoints
-        guard values.count > 1,
-              values.contains(where: { $0.name == name }) else { return false }
+        guard values.contains(where: { $0.name == name }) else { return false }
         let wasActive = endpointMetadata.name == name
+
+        // Collect all session IDs belonging to this host from cached rosters and active roster
+        var sessionIDsToPurge: Set<String> = []
+        for cachedRoster in localStore.cachedRosters(forHostNamed: name) {
+            sessionIDsToPurge.formUnion(cachedRoster.sessions.map(\.id))
+        }
+        if wasActive, let activeSessions = roster?.sessions {
+            sessionIDsToPurge.formUnion(activeSessions.map(\.id))
+        }
+
+        // Cancel and drop any pending draft save tasks for purged sessions
+        for sid in sessionIDsToPurge {
+            draftSaveTasksBySessionID[sid]?.cancel()
+            draftSaveTasksBySessionID.removeValue(forKey: sid)
+        }
+
         guard localStore.removeEndpoint(named: name) else { return false }
+
+        // Clean up SQLite event store
+        let sids = Array(sessionIDsToPurge)
+        let hasRemainingHosts = !localStore.endpoints.isEmpty
+        Task {
+            if !hasRemainingHosts {
+                await IOSAgentEventStore.shared.clearAll()
+            } else if !sids.isEmpty {
+                await IOSAgentEventStore.shared.clearSessions(sids)
+            }
+        }
+
         endpointMetadataList = localStore.endpoints.map(IOSEndpointMetadata.init)
-        if wasActive, let replacement = localStore.endpoint {
-            activateEndpoint(replacement, shouldRestart: eventTask != nil)
+
+        if wasActive {
+            if let replacement = localStore.endpoint {
+                activateEndpoint(replacement, shouldRestart: eventTask != nil)
+            } else {
+                deactivateCurrentEndpoint()
+            }
         }
         return true
+    }
+
+    private func deactivateCurrentEndpoint() {
+        connectionRequested = false
+        didEnterBackground = false
+        relayBackgroundKeepAlive.end()
+        liveActivityCoordinator.end()
+        liveActivityPushTokensBySessionID.removeAll()
+        eventTask?.cancel()
+        eventTask = nil
+        sessionTask?.cancel()
+        sessionTask = nil
+        mutationGeneration &+= 1
+        clientGeneration &+= 1
+        hasReceivedAuthoritativeRoster = false
+        isMutating = false
+        historyRequestTokenBySessionID.removeAll()
+        historyLoadingBySessionID.removeAll()
+        historyErrorBySessionID.removeAll()
+        terminalFocusGeneration &+= 1
+        terminalFocusRequestsBySessionID.removeAll()
+        lastSentTerminalSizeBySessionID.removeAll()
+
+        let oldClient = client
+        let previousLifecycle = clientLifecycleTask
+        clientLifecycleTask = Task {
+            await previousLifecycle?.value
+            await oldClient.stop()
+        }
+        client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "", url: "http://127.0.0.1:8789"),
+            clientID: localStore.deviceID
+        )
+
+        endpointToken = ""
+        connectionState = .stopped
+        roster = nil
+        currentSessionID = nil
+        sessionDeletionDestination = nil
+        pendingSessionDeletion = nil
+        hasControlLease = false
+        terminalState.reset()
+        agentState.reset()
+        agentStatusBySessionID = [:]
+        agentTurnBySessionID = [:]
+        agentCapabilities = []
+        agentActionError = nil
+        displayModeBySessionID = [:]
+        agentQueuedMessageCountBySessionID = [:]
+        agentQueueBySessionID = [:]
+        pendingAgentMessagesBySessionID = [:]
+        agentHighestSequenceBySessionID.removeAll()
+        agentEpochBySessionID.removeAll()
+        agentSubscribedSessionIDs.removeAll()
+        terminalSubscriptionRequests.removeAll()
+        navigation = IOSNavigationState()
+        localStore.navigation = IOSNavigationState()
+        endpointMetadata = IOSEndpointMetadata(
+            name: "",
+            url: "",
+            hasToken: false,
+            type: "daemon"
+        )
     }
 
     private func activateEndpoint(
@@ -3235,6 +3330,23 @@ public final class IOSApplicationModel: ObservableObject {
         }
         let currentHighest = agentHighestSequenceBySessionID[sessionID] ?? 0
         var didChange = false
+        // One-pass indexes so streaming deltas stay O(1) per event instead of
+        // scanning the whole transcript with lastIndex/contains per delta.
+        var knownSequences = Set<UInt64>(minimumCapacity: events.count + incoming.count)
+        for existing in events {
+            knownSequences.insert(existing.sequence)
+        }
+        // Fold key for content-delta matching (same predicate as the previous
+        // lastIndex scan: type + id). Prepend batches insert at index 0 and
+        // shift every position, so the map is only valid for append merges.
+        var deltaIndexByKey: [String: Int] = [:]
+        if !prepend {
+            deltaIndexByKey.reserveCapacity(events.count)
+            for (index, existing) in events.enumerated() where !existing.id.isEmpty {
+                deltaIndexByKey["\(existing.type)\u{1F}\(existing.id)"] = index
+            }
+        }
+        var needsSort = prepend
         for event in incoming {
             let key = "\(eventEpoch):\(event.sequence)"
             if event.sequence > (agentHighestSequenceBySessionID[sessionID] ?? 0) {
@@ -3243,15 +3355,21 @@ public final class IOSApplicationModel: ObservableObject {
             // Fold any provider's content-delta events by (type,id) key so streaming replies do not
             // produce a bubble per database poll. Seed events have contentDelta=false; later updates
             // carry contentDelta=true and append to the accumulated content.
-            if event.contentDelta,
-               let index = events.lastIndex(where: {
-                   $0.id == event.id && $0.type == event.type
-               }) {
-                let existing = events[index]
-                // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
-                if keys.contains(key) { continue }
-                let merged = WarrenRemoteAgentEvent(
-                    sequence: max(existing.sequence, event.sequence),
+            if event.contentDelta {
+                let foldIndex: Int? = {
+                    if prepend || event.id.isEmpty {
+                        return events.lastIndex(where: {
+                            $0.id == event.id && $0.type == event.type
+                        })
+                    }
+                    return deltaIndexByKey["\(event.type)\u{1F}\(event.id)"]
+                }()
+                if let index = foldIndex {
+                    let existing = events[index]
+                    // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
+                    if keys.contains(key) { continue }
+                    let merged = WarrenRemoteAgentEvent(
+                        sequence: max(existing.sequence, event.sequence),
                     turn: event.turn ?? existing.turn,
                     id: event.id,
                     provider: event.provider.isEmpty ? existing.provider : event.provider,
@@ -3276,22 +3394,35 @@ public final class IOSApplicationModel: ObservableObject {
                 )
                 events[index] = merged
                 keys.insert(key)
+                knownSequences.insert(merged.sequence)
+                if merged.sequence != existing.sequence {
+                    needsSort = true
+                }
                 didChange = true
                 continue
             }
-            if keys.contains(key) || events.contains(where: { $0.sequence == event.sequence }) {
+            if keys.contains(key) || knownSequences.contains(event.sequence) {
                 keys.insert(key)
                 continue
             }
             if prepend {
                 events.insert(event, at: 0)
             } else {
+                if let last = events.last, event.sequence < last.sequence {
+                    needsSort = true
+                }
                 events.append(event)
+                if !event.id.isEmpty {
+                    deltaIndexByKey["\(event.type)\u{1F}\(event.id)"] = events.count - 1
+                }
             }
             keys.insert(key)
+            knownSequences.insert(event.sequence)
             didChange = true
         }
-        events.sort { $0.sequence < $1.sequence }
+        if needsSort {
+            events.sort { $0.sequence < $1.sequence }
+        }
         agentState.agentEventsBySessionID[sessionID] = events
         agentEventKeysBySessionID[sessionID] = keys
         if didChange {

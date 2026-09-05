@@ -600,6 +600,91 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(store.endpoint?.webSocketURL?.absoluteString, "ws://192.168.1.50:8789/v1/ws")
     }
 
+    @MainActor
+    func testRemoveEndpointPurgesCredentialsRosterDraftsAndSwitchesActiveHost() async {
+        let suite = "warren-ios-remove-host-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let keychain = IOSKeychainStore(service: suite)
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+
+        let hostA = WarrenRemoteEndpointConfiguration(
+            name: "HostA",
+            url: "http://192.168.1.10:8789",
+            token: "token-a"
+        )
+        let hostB = WarrenRemoteEndpointConfiguration(
+            name: "HostB",
+            url: "http://192.168.1.20:8789",
+            token: "token-b"
+        )
+
+        store.saveEndpoint(hostA, activate: true)
+        store.saveEndpoint(hostB, activate: false)
+        XCTAssertEqual(store.endpoints.count, 2)
+        XCTAssertEqual(store.endpoint?.name, "HostA")
+
+        _ = keychain.write("token-a-direct", account: "HostA.direct")
+        _ = keychain.write("token-a-relay", account: "HostA.relay")
+        _ = keychain.write("token-a-refresh", account: "HostA.refresh")
+
+        let rosterA = WarrenRemoteRoster(
+            revision: 1,
+            host: WarrenRemoteRoster.Host(id: "h1", name: "HostA"),
+            sessions: [
+                WarrenRemoteRoster.Session(id: "session-a1", kind: "codex"),
+                WarrenRemoteRoster.Session(id: "session-a2", kind: "shell")
+            ]
+        )
+        store.cacheRoster(rosterA, endpointName: "HostA", endpointURL: "http://192.168.1.10:8789")
+        store.saveAgentDraft("draft text for session a1", sessionID: "session-a1", endpointIdentity: "HostA|http://192.168.1.10:8789")
+
+        let model = IOSApplicationModel(configuration: hostA, localStore: store)
+        XCTAssertEqual(model.endpointMetadata.name, "HostA")
+
+        let removed = model.removeEndpoint(named: "HostA")
+        XCTAssertTrue(removed)
+
+        XCTAssertEqual(store.endpoints.count, 1)
+        XCTAssertEqual(store.endpoint?.name, "HostB")
+        XCTAssertEqual(model.endpointMetadata.name, "HostB")
+
+        XCTAssertNil(keychain.read(account: "HostA"))
+        XCTAssertNil(keychain.read(account: "HostA.direct"))
+        XCTAssertNil(keychain.read(account: "HostA.relay"))
+        XCTAssertNil(keychain.read(account: "HostA.refresh"))
+
+        XCTAssertNil(store.cachedRoster(endpointName: "HostA", endpointURL: "http://192.168.1.10:8789"))
+        XCTAssertNil(store.agentDraft(sessionID: "session-a1", endpointIdentity: "HostA|http://192.168.1.10:8789"))
+    }
+
+    @MainActor
+    func testRemoveOnlyEndpointClearsHistoricalDataAndResetsModel() async {
+        let suite = "warren-ios-remove-only-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let keychain = IOSKeychainStore(service: suite)
+        let store = IOSLocalStore(defaults: defaults, keychain: keychain)
+
+        let host = WarrenRemoteEndpointConfiguration(
+            name: "SoleHost",
+            url: "http://192.168.1.30:8789",
+            token: "sole-token"
+        )
+        store.saveEndpoint(host, activate: true)
+        XCTAssertEqual(store.endpoints.count, 1)
+
+        let model = IOSApplicationModel(configuration: host, localStore: store)
+        XCTAssertEqual(model.endpointMetadata.name, "SoleHost")
+
+        let removed = model.removeEndpoint(named: "SoleHost")
+        XCTAssertTrue(removed)
+
+        XCTAssertTrue(store.endpoints.isEmpty)
+        XCTAssertNil(store.endpoint)
+        XCTAssertTrue(model.endpointMetadataList.isEmpty)
+        XCTAssertEqual(model.endpointMetadata.name, "")
+        XCTAssertEqual(model.connectionState, .stopped)
+    }
+
     func testAgentActivityRequiresAnAgentBackedSession() {
         let working = WarrenRemoteAgentStatus(activity: .working)
         let shell = WarrenRemoteRoster.Session(

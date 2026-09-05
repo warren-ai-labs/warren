@@ -35,10 +35,12 @@ const (
 	// small per-peer queue before a mobile or hidden browser drains it. The
 	// queue is deliberately generous: memory is cheap and the only fallback
 	// is closing the peer, which today means a visible reanchor.
-	outboundQueueCapacity = 8192
-	outboundWriteTimeout  = 30 * time.Second
-	slowMutationTimeout   = 30 * time.Second
-	rosterDeltaBatchDelay = 75 * time.Millisecond
+	outboundQueueCapacity        = 8192
+	outboundControlQueueCapacity = 512
+	outboundControlFairness      = 32
+	outboundWriteTimeout         = 30 * time.Second
+	slowMutationTimeout          = 30 * time.Second
+	rosterDeltaBatchDelay        = 75 * time.Millisecond
 )
 
 type HTTPServer struct {
@@ -1519,17 +1521,22 @@ func (s *HTTPServer) authorized(value string) bool {
 }
 
 type outboundMessage struct {
-	kind int
-	data []byte
+	kind    int
+	data    []byte
+	control bool
 }
 
 // wsPeer owns an independent outbound queue and writer goroutine. A slow
 // client only fills its own queue; overflow or a write timeout closes exactly
 // this peer, and the client reconnects from its last Recovery Anchor.
 type wsPeer struct {
-	server     *HTTPServer
-	connection *websocket.Conn
-	outbound   chan outboundMessage
+	server          *HTTPServer
+	connection      *websocket.Conn
+	// outbound is the bounded terminal-output lane. Text/control traffic uses
+	// controlOutbound so a burst of binary output cannot delay a response,
+	// heartbeat, or recovery marker.
+	outbound        chan outboundMessage
+	controlOutbound chan outboundMessage
 	// transport is set for a Relay control peer. It bypasses the WebSocket
 	// socket but is still owned by the peer's writer goroutine, preserving the
 	// same bounded queue and service lifecycle.
@@ -1597,10 +1604,11 @@ func (p *wsPeer) supportsCapability(capability string) bool {
 
 func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 	peer := &wsPeer{
-		server:     server,
-		connection: connection,
-		outbound:   make(chan outboundMessage, outboundQueueCapacity),
-		closed:     make(chan struct{}),
+		server:          server,
+		connection:      connection,
+		outbound:        make(chan outboundMessage, outboundQueueCapacity),
+		controlOutbound: make(chan outboundMessage, outboundControlQueueCapacity),
+		closed:          make(chan struct{}),
 	}
 	go peer.writeLoop()
 	return peer
@@ -1608,10 +1616,11 @@ func newWSPeer(server *HTTPServer, connection *websocket.Conn) *wsPeer {
 
 func newRelayPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsPeer {
 	peer := &wsPeer{
-		server:    server,
-		transport: transport,
-		outbound:  make(chan outboundMessage, outboundQueueCapacity),
-		closed:    make(chan struct{}),
+		server:          server,
+		transport:       transport,
+		outbound:        make(chan outboundMessage, outboundQueueCapacity),
+		controlOutbound: make(chan outboundMessage, outboundControlQueueCapacity),
+		closed:          make(chan struct{}),
 	}
 	go peer.writeLoop()
 	return peer
@@ -1689,7 +1698,12 @@ func (p *wsPeer) writeLoop() {
 	if p.connection == nil && p.transport == nil {
 		return
 	}
-	for item := range p.outbound {
+	controlBurst := 0
+	for {
+		item, ok := p.nextOutbound(&controlBurst)
+		if !ok {
+			break
+		}
 		if p.transport != nil {
 			if !p.transport(item) {
 				// The Relay stream is the writer's ownership boundary. A failed
@@ -1715,6 +1729,60 @@ func (p *wsPeer) writeLoop() {
 	}
 }
 
+// nextOutbound gives control traffic a reserved lane while allowing terminal
+// output to make progress under a continuous stream of responses/events. The
+// non-blocking probes keep the common control-first path cheap; the final
+// select sleeps only when both lanes are empty. A closed lane is drained
+// before the writer exits so teardown can still flush an already-queued error
+// or recovery marker.
+func (p *wsPeer) nextOutbound(controlBurst *int) (outboundMessage, bool) {
+	control := p.controlOutbound
+	data := p.outbound
+	for control != nil || data != nil {
+		if control != nil && (*controlBurst < outboundControlFairness || data == nil) {
+			select {
+			case item, ok := <-control:
+				if !ok {
+					control = nil
+					continue
+				}
+				(*controlBurst)++
+				return item, true
+			default:
+			}
+		}
+		if data != nil {
+			select {
+			case item, ok := <-data:
+				if !ok {
+					data = nil
+					continue
+				}
+				*controlBurst = 0
+				return item, true
+			default:
+			}
+		}
+		select {
+		case item, ok := <-control:
+			if !ok {
+				control = nil
+				continue
+			}
+			(*controlBurst)++
+			return item, true
+		case item, ok := <-data:
+			if !ok {
+				data = nil
+				continue
+			}
+			*controlBurst = 0
+			return item, true
+		}
+	}
+	return outboundMessage{}, false
+}
+
 func (p *wsPeer) enqueue(item outboundMessage) bool {
 	p.enqueueMu.Lock()
 	// A few embedders construct wsPeer directly in tests. Lazily initialize
@@ -1725,7 +1793,11 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 	}
 	if p.outbound == nil && (p.transport != nil || p.connection != nil) {
 		p.outbound = make(chan outboundMessage, outboundQueueCapacity)
+		p.controlOutbound = make(chan outboundMessage, outboundControlQueueCapacity)
 		go p.writeLoop()
+	}
+	if p.controlOutbound == nil && (p.transport != nil || p.connection != nil) {
+		p.controlOutbound = make(chan outboundMessage, outboundControlQueueCapacity)
 	}
 	select {
 	case <-p.closed:
@@ -1733,8 +1805,12 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		return false
 	default:
 	}
+	queue := p.outbound
+	if (item.kind == websocket.TextMessage || item.control) && p.controlOutbound != nil {
+		queue = p.controlOutbound
+	}
 	select {
-	case p.outbound <- item:
+	case queue <- item:
 		p.enqueueMu.Unlock()
 		return true
 	default:
@@ -1794,6 +1870,9 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 		sessionIDs = append(sessionIDs, p.attached.ID)
 	}
 	close(p.closed)
+	if p.controlOutbound != nil {
+		close(p.controlOutbound)
+	}
 	if p.outbound != nil {
 		close(p.outbound)
 	}
@@ -1826,6 +1905,13 @@ func (p *wsPeer) enqueueBinary(data []byte) bool {
 	return p.enqueue(outboundMessage{kind: websocket.BinaryMessage, data: data})
 }
 
+func (p *wsPeer) enqueueControlBinary(data []byte) bool {
+	if !p.enqueue(outboundMessage{kind: websocket.BinaryMessage, data: data, control: true}) {
+		return false
+	}
+	return true
+}
+
 func (p *wsPeer) enqueueAtomicState(
 	sessionID string,
 	epoch, sequence uint64,
@@ -1836,7 +1922,7 @@ func (p *wsPeer) enqueueAtomicState(
 	if err != nil {
 		return err
 	}
-	if !p.enqueueBinary(encoded) {
+	if !p.enqueueControlBinary(encoded) {
 		return errors.New("outbound queue overflow during atomic recovery")
 	}
 	return nil
