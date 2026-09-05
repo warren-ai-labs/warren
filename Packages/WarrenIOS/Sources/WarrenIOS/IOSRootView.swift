@@ -1065,11 +1065,22 @@ private struct IOSEndpointPickerSheet: View {
                                         .font(IOSTypography.bodyEmphasis)
                                         .foregroundStyle(IOSTheme.text)
                                         .lineLimit(1)
-                                    Text(host.isRelay ? "Relay" : host.url)
-                                        .font(IOSTypography.metadata)
-                                        .foregroundStyle(IOSTheme.tertiaryText)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
+                                    HStack(spacing: 6) {
+                                        Text(host.isRelay ? "Relay" : "Direct")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(host.isRelay ? IOSTheme.amber : IOSTheme.secondaryText)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(
+                                                (host.isRelay ? IOSTheme.amber : IOSTheme.muted).opacity(0.18),
+                                                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            )
+                                        Text(host.url)
+                                            .font(IOSTypography.metadata)
+                                            .foregroundStyle(IOSTheme.tertiaryText)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
                                 }
 
                                 Spacer(minLength: 8)
@@ -2937,32 +2948,22 @@ private struct IOSEndpointDetailView: View {
                         .padding(.top, 25)
                         .padding(.bottom, 9)
                     VStack(spacing: 0) {
-                        if endpoint.isRelay {
-                            endpointDetailRow("Type", value: "Relay")
-                            Rectangle()
-                                .fill(IOSTheme.separator.opacity(0.35))
-                                .frame(height: 0.5)
-                                .padding(.leading, 14)
-                            endpointDetailRow(
-                                "Access",
-                                value: endpoint.hasToken ? "Saved in Keychain" : "Needs pairing"
-                            )
-                        } else {
-                            endpointDetailRow("Address", value: endpoint.url, machineText: true)
-                            Rectangle()
-                                .fill(IOSTheme.separator.opacity(0.35))
-                                .frame(height: 0.5)
-                                .padding(.leading, 14)
-                            endpointDetailRow("Type", value: "Direct Host")
-                            Rectangle()
-                                .fill(IOSTheme.separator.opacity(0.35))
-                                .frame(height: 0.5)
-                                .padding(.leading, 14)
-                            endpointDetailRow(
-                                "Token",
-                                value: endpoint.hasToken ? "Saved in Keychain" : "Not saved"
-                            )
-                        }
+                        endpointDetailRow("Address", value: endpoint.url, machineText: true)
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.35))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
+                        endpointDetailRow("Connection", value: endpoint.isRelay ? "Relay" : "Direct Host")
+                        Rectangle()
+                            .fill(IOSTheme.separator.opacity(0.35))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
+                        endpointDetailRow(
+                            "Access",
+                            value: endpoint.isRelay
+                                ? (endpoint.hasToken ? "Saved in Keychain" : "Needs pairing")
+                                : (endpoint.hasToken ? "Saved in Keychain" : "Not saved")
+                        )
                     }
                     .iosCardSurface()
 

@@ -1053,6 +1053,16 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 		}
 	}
 	if oldHandle != nil || oldWatcher != nil || oldTailer != nil {
+		if s.Store != nil {
+			_ = s.Store.Update(func(value *api.State) error {
+				for index := range value.Sessions {
+					if value.Sessions[index].ID == session.ID {
+						value.Sessions[index].CustomTitle = ""
+					}
+				}
+				return nil
+			})
+		}
 		s.bumpAgentEpoch()
 		s.bumpAgentRosterRevision()
 		s.broadcastAgentReset(session.ID)
@@ -1477,8 +1487,12 @@ func (service *Service) ensureTUIOpenCodeHandle(ctx context.Context, value Agent
 		binding *agent.OpenCodeBinding
 		err     error
 	)
-	if value.AgentSessionID != "" {
-		binding, err = finder.FindBindingBySessionID(ctx, value.SessionID, value.WorkspacePath, value.AgentSessionID)
+	agentSessionID := strings.TrimSpace(value.AgentSessionID)
+	if explicitBinding, bErr := agent.ReadBinding(agent.BindPath(value.SessionID)); bErr == nil && explicitBinding != nil && normalizeProviderKind(explicitBinding.Provider) == "opencode" && explicitBinding.SessionID != "" {
+		agentSessionID = strings.TrimSpace(explicitBinding.SessionID)
+	}
+	if agentSessionID != "" {
+		binding, err = finder.FindBindingBySessionID(ctx, value.SessionID, value.WorkspacePath, agentSessionID)
 	} else {
 		binding, err = service.findOpenCodeBinding(ctx, finder, value.SessionID, value.WorkspacePath, value.Session.CreatedAt)
 	}

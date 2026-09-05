@@ -3705,8 +3705,12 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				return nil, nil
 			}
 			var err error
-			if session.AgentSessionID != "" {
-				opencodeBinding, err = finder.FindBindingBySessionID(ctx, session.ID, workspacePath, session.AgentSessionID)
+			openCodeSessionID := session.AgentSessionID
+			if binding, bErr := agent.ReadBinding(agent.BindPath(session.ID)); bErr == nil && binding != nil && binding.Provider == "opencode" && binding.SessionID != "" {
+				openCodeSessionID = binding.SessionID
+			}
+			if openCodeSessionID != "" {
+				opencodeBinding, err = finder.FindBindingBySessionID(ctx, session.ID, workspacePath, openCodeSessionID)
 				if err == nil && opencodeBinding == nil {
 					// A live projection means the provider was already running in
 					// this Warren process. If its row disappears while that process
@@ -3754,6 +3758,14 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				if transcriptPath == "" && binding.TranscriptPath != "" {
 					if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
 						transcriptPath = binding.TranscriptPath
+					}
+				}
+			} else if session.AgentSessionID != "" {
+				agentSessionID = session.AgentSessionID
+				transcriptPath = agent.FindPiTranscript(session.AgentSessionID)
+				if transcriptPath == "" && session.TranscriptPath != "" {
+					if info, statErr := os.Stat(session.TranscriptPath); statErr == nil && !info.IsDir() {
+						transcriptPath = session.TranscriptPath
 					}
 				}
 			}
@@ -4007,9 +4019,18 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 	}
 	s.agentsMu.Unlock()
 	if rebinding {
-		// A session switch (e.g. `/clear`) starts a fresh projection: bump
-		// the epoch so attached clients drop the old transcript's events and
-		// refetch the new rollout from history.
+		// A session switch (e.g. `/clear` or `/new`) starts a fresh projection:
+		// reset the custom title so a new one can be generated for the fresh conversation,
+		// bump the epoch so attached clients drop the old transcript's events,
+		// and notify all peers.
+		_ = s.Store.Update(func(value *api.State) error {
+			for index := range value.Sessions {
+				if value.Sessions[index].ID == sessionID {
+					value.Sessions[index].CustomTitle = ""
+				}
+			}
+			return nil
+		})
 		s.bumpAgentEpoch()
 		s.bumpAgentRosterRevision()
 		s.broadcastAgentReset(sessionID)
@@ -4187,6 +4208,12 @@ func (s *Service) boundTranscript(session api.Session, workspacePath string) str
 	if err == nil && binding != nil && binding.Provider == session.Kind {
 		if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
 			return binding.TranscriptPath
+		}
+		if session.Kind == "claude" && binding.SessionID != "" {
+			path := agent.ClaudeTranscriptPath(agent.ClaudeProjectsRoot(), workspacePath, binding.SessionID)
+			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+				return path
+			}
 		}
 	}
 	// A Session moved between a Workspace and a Terminal Group keeps its old

@@ -263,6 +263,7 @@ public struct AgentChatView: View {
         // hidden. `renderedBlocks` is refreshed only when Agent events change;
         // connection and terminal publications therefore remain cheap.
         let blocks = model.displayMode == .agent ? renderedBlocks : []
+        let queuedItems = model.displayMode == .agent ? (model.agentQueueBySessionID[sessionID]?.items ?? []) : []
 
         return GeometryReader { viewport in
             ScrollViewReader { proxy in
@@ -299,7 +300,7 @@ public struct AgentChatView: View {
                                 }
                             }
 
-                            if blocks.isEmpty {
+                            if blocks.isEmpty && queuedItems.isEmpty {
                                 AgentEmptyState()
                                     .frame(maxWidth: .infinity, minHeight: 240)
                             } else {
@@ -316,6 +317,14 @@ public struct AgentChatView: View {
                                         )
                                     }
                                         .id(block.id)
+                                }
+                                ForEach(queuedItems) { item in
+                                    AgentQueuedMessageBlock(item: item) {
+                                        _ = model.retryQueuedAgentMessage(sessionID: sessionID, itemID: item.id)
+                                    } onDelete: {
+                                        _ = model.deleteQueuedAgentMessage(sessionID: sessionID, itemID: item.id)
+                                    }
+                                    .id("queued-\(item.id)")
                                 }
                             }
                             GeometryReader { geometry in
@@ -357,6 +366,9 @@ public struct AgentChatView: View {
                     }
                     .onChange(of: agentState.agentEventRevisionBySessionID[sessionID] ?? 0) { _, _ in
                         observeAgentRevision(using: proxy)
+                    }
+                    .onChange(of: queuedItems.count) { _, _ in
+                        scrollToLatest(using: proxy, animated: true)
                     }
                     .onPreferenceChange(AgentChatTopOffsetPreferenceKey.self) { offset in
                         handleTopOffset(offset, blocks: blocks)
@@ -803,6 +815,30 @@ public struct AgentChatView: View {
                                 .accessibilityLabel("Agent model: \(metadata)")
                         }
 
+                        let queuedCount = model.agentQueuedMessageCountBySessionID[sessionID] ?? 0
+                        if queuedCount > 0 {
+                            Button {
+                                isQueueSheetPresented = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "clock")
+                                        .font(.system(size: 11, weight: .medium))
+                                    Text("Queue \(queuedCount)")
+                                        .font(IOSTypography.metadata)
+                                }
+                                .foregroundStyle(IOSTheme.amber)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(IOSTheme.amber.opacity(0.12), in: Capsule())
+                                .overlay {
+                                    Capsule()
+                                        .stroke(IOSTheme.amber.opacity(0.3), lineWidth: 1)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("View \(queuedCount) queued messages")
+                        }
+
                         Spacer(minLength: 0)
 
                         if composerFocused {
@@ -841,7 +877,7 @@ public struct AgentChatView: View {
                 if !sendStatus.isEmpty {
                     Text(sendStatusLabel)
                         .font(IOSTypography.status)
-                        .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
+                        .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : (sendStatus == "queued" ? IOSTheme.amber : IOSTheme.secondaryText))
                         .padding(.horizontal, 13)
                         .padding(.top, 4)
                         .accessibilityLabel(sendStatusLabel)
@@ -987,6 +1023,7 @@ public struct AgentChatView: View {
         switch sendStatus {
         case "sending": return "Sending…"
         case "sent": return "Sent"
+        case "queued": return "Queued for next turn"
         case "failed": return "Send failed — retry"
         default: return ""
         }
@@ -1035,6 +1072,7 @@ public struct AgentChatView: View {
         guard selected.allSatisfy({ $0.state == .selected || $0.state == .ready }) else { return }
         showSendStatus("sending", duration: nil)
         guard !selected.isEmpty else {
+            let isWorking = model.agentStatus(for: sessionID)?.activity == .working
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value)
                 : model.sendAgentMessage(value)
@@ -1047,7 +1085,7 @@ public struct AgentChatView: View {
             composerFocused = false
             model.dismissKeyboard()
             IOSHaptics.light()
-            showSendStatus("sent")
+            showSendStatus(isWorking ? "queued" : "sent")
             return
         }
         isUploadingAttachments = true
@@ -1103,6 +1141,7 @@ public struct AgentChatView: View {
             guard attachmentUploadGeneration == uploadGeneration,
                   model.currentSessionID == uploadSessionID else { return }
             isUploadingAttachments = false
+            let isWorking = model.agentStatus(for: sessionID)?.activity == .working
             let accepted = sendNow
                 ? model.sendAgentMessageNow(value, attachments: references)
                 : model.sendAgentMessage(value, attachments: references)
@@ -1121,7 +1160,7 @@ public struct AgentChatView: View {
             localAttachments.removeAll()
             composerFocused = false
             model.dismissKeyboard()
-            showSendStatus("sent")
+            showSendStatus(isWorking ? "queued" : "sent")
         }
     }
 
@@ -1265,6 +1304,116 @@ public struct AgentChatView: View {
     private var canSend: Bool {
         model.canSendAgent
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !localAttachments.isEmpty)
+    }
+}
+
+private struct AgentQueuedMessageBlock: View {
+    let item: IOSAgentQueueItem
+    let onRetry: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer(minLength: 34)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !item.text.isEmpty {
+                        AgentMarkdownText(value: item.text, font: IOSTypography.userMessage)
+                            .foregroundStyle(IOSTheme.text)
+                            .textSelection(.enabled)
+                    }
+
+                    if !item.attachments.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(Array(item.attachments.enumerated()), id: \.offset) { _, att in
+                                HStack(spacing: 4) {
+                                    Image(systemName: "paperclip")
+                                        .font(.system(size: 10))
+                                    Text(att.name ?? "Attachment")
+                                        .font(IOSTypography.metadata)
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(IOSTheme.chrome.opacity(0.8), in: Capsule())
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(
+                    IOSTheme.muted.opacity(0.72),
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: WarrenRadius.sheet,
+                        bottomLeadingRadius: WarrenRadius.sheet,
+                        bottomTrailingRadius: WarrenRadius.sheet,
+                        topTrailingRadius: WarrenRadius.xs
+                    )
+                )
+                .overlay {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: WarrenRadius.sheet,
+                        bottomLeadingRadius: WarrenRadius.sheet,
+                        bottomTrailingRadius: WarrenRadius.sheet,
+                        topTrailingRadius: WarrenRadius.xs
+                    )
+                    .stroke(
+                        item.status == .failed ? IOSTheme.red.opacity(0.5) : IOSTheme.amber.opacity(0.45),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                    )
+                }
+                .frame(maxWidth: 420, alignment: .trailing)
+            }
+
+            HStack(spacing: 8) {
+                if item.status == .sending {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .frame(width: 12, height: 12)
+                        Text("Sending…")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                    }
+                } else if item.status == .failed {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.red)
+                        Text(item.failureReason ?? "Send failed")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.red)
+                        Button("Retry", action: onRetry)
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.amber)
+                            .padding(.leading, 2)
+                    }
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.amber)
+                        Text("Queued")
+                            .font(IOSTypography.status)
+                            .foregroundStyle(IOSTheme.amber)
+                    }
+                }
+
+                Button(action: onDelete) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 22, height: 22)
+                        .background(IOSTheme.muted.opacity(0.7), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete queued message")
+            }
+            .padding(.trailing, 4)
+        }
+        .padding(.vertical, 6)
     }
 }
 
