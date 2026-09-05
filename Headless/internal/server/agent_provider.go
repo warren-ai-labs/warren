@@ -112,12 +112,6 @@ func IntersectCapabilitySets(sets ...CapabilitySet) CapabilitySet {
 	return result
 }
 
-// AgentMessage and the two request aliases keep the provider boundary tied to
-// the established API shapes without exposing filesystem paths on the wire.
-type AgentMessage = api.AgentMessageSendRequest
-type AgentInterruptRequest = api.AgentTurnInterruptRequest
-type AgentInteractionResponse = api.AgentInteractionResponse
-
 // AgentSessionContext is the provider-facing view of one Warren Session. The
 // full API Session is retained for forward compatibility; the duplicated
 // fields make fake providers and future ACP implementations independent from
@@ -324,9 +318,9 @@ type AgentHandle interface {
 	Start(context.Context, AgentEventSink) error
 	Capabilities() CapabilitySet
 
-	SendMessage(context.Context, AgentMessage) error
-	Interrupt(context.Context, AgentInterruptRequest) error
-	RespondInteraction(context.Context, AgentInteractionResponse) error
+	SendMessage(context.Context, api.AgentMessageSendRequest) error
+	Interrupt(context.Context, api.AgentTurnInterruptRequest) error
+	RespondInteraction(context.Context, api.AgentInteractionResponse) error
 
 	BindingKey() string
 	Close() error
@@ -1315,13 +1309,13 @@ type noopAgentHandle struct {
 
 func (handle *noopAgentHandle) Start(context.Context, AgentEventSink) error { return nil }
 func (handle *noopAgentHandle) Capabilities() CapabilitySet                 { return handle.capabilities.Clone() }
-func (handle *noopAgentHandle) SendMessage(context.Context, AgentMessage) error {
+func (handle *noopAgentHandle) SendMessage(context.Context, api.AgentMessageSendRequest) error {
 	return errors.New("agent message transport is unavailable")
 }
-func (handle *noopAgentHandle) Interrupt(context.Context, AgentInterruptRequest) error {
+func (handle *noopAgentHandle) Interrupt(context.Context, api.AgentTurnInterruptRequest) error {
 	return errors.New("agent interrupt transport is unavailable")
 }
-func (handle *noopAgentHandle) RespondInteraction(context.Context, AgentInteractionResponse) error {
+func (handle *noopAgentHandle) RespondInteraction(context.Context, api.AgentInteractionResponse) error {
 	return errors.New("agent interaction transport is unavailable")
 }
 func (handle *noopAgentHandle) BindingKey() string { return handle.key }
@@ -1628,7 +1622,7 @@ func (handle *tuiAgentHandle) Capabilities() CapabilitySet {
 	return result
 }
 
-func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message AgentMessage) error {
+func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message api.AgentMessageSendRequest) error {
 	if handle == nil || handle.service == nil {
 		return errors.New("agent message transport is unavailable")
 	}
@@ -1663,7 +1657,7 @@ func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message AgentMess
 	return sendAgentMessageInput(ctx, runtime, handle.runtimeName, text)
 }
 
-func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request AgentInterruptRequest) error {
+func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request api.AgentTurnInterruptRequest) error {
 	if handle == nil || handle.service == nil {
 		return errors.New("agent interrupt transport is unavailable")
 	}
@@ -1696,7 +1690,7 @@ func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request AgentInterr
 	return interruptAgentTurnInput(ctx, runtime, handle.runtimeName, request)
 }
 
-func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response AgentInteractionResponse) error {
+func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response api.AgentInteractionResponse) error {
 	if handle == nil || handle.service == nil || !nonNilInterface(handle.service.AgentController) {
 		return errors.New("agent interaction transport is unavailable")
 	}
@@ -1800,15 +1794,15 @@ func (handle *acpAgentHandle) Capabilities() CapabilitySet {
 	return handle.provider.Capabilities()
 }
 
-func (handle *acpAgentHandle) SendMessage(ctx context.Context, message AgentMessage) error {
+func (handle *acpAgentHandle) SendMessage(ctx context.Context, message api.AgentMessageSendRequest) error {
 	return errors.New("acp message transport is not implemented yet")
 }
 
-func (handle *acpAgentHandle) Interrupt(ctx context.Context, request AgentInterruptRequest) error {
+func (handle *acpAgentHandle) Interrupt(ctx context.Context, request api.AgentTurnInterruptRequest) error {
 	return errors.New("acp interrupt transport is not implemented yet")
 }
 
-func (handle *acpAgentHandle) RespondInteraction(ctx context.Context, response AgentInteractionResponse) error {
+func (handle *acpAgentHandle) RespondInteraction(ctx context.Context, response api.AgentInteractionResponse) error {
 	return errors.New("acp interaction transport is not implemented yet")
 }
 

@@ -7,7 +7,7 @@
  */
 
 const DB_NAME = "warren_agent_db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const EVENTS_STORE = "agent_events";
 const STATE_STORE = "agent_sync_state";
 export const MAX_EVENTS_PER_STREAM = 5000;
@@ -40,12 +40,12 @@ function streamIdentity(namespace, streamId) {
 }
 
 function eventSequence(event) {
-  const value = Number(event?.sequence);
+  const value = event?.sequence;
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 function eventID(event, streamId, sequence) {
-  return String(event?.eventId || event?.id || `${streamId}:${sequence}`).trim();
+  return event.eventId;
 }
 
 function stableJSON(value) {
@@ -56,17 +56,15 @@ function stableJSON(value) {
   return JSON.stringify(value);
 }
 
-function normalizeEvent(event, streamId) {
-  const sequence = eventSequence(event);
-  if (!sequence) return null;
-  const eventId = eventID(event, streamId, sequence);
-  // Preserve the source object for current renderers while making canonical
-  // identity available to new reducers.
-  return {
-    ...event,
-    sequence: event.sequence ?? sequence,
-    eventId: event.eventId ?? eventId,
-  };
+export function validateCanonicalAgentEvent(event, streamId = event?.streamId) {
+  if (!eventSequence(event) || typeof event.eventId !== "string" || !event.eventId
+      || event.streamId !== streamId || !streamId || !event.executionId
+      || typeof event.type !== "string" || !event.type || !event.occurredAt || !event.recordedAt
+      || !event.origin?.kind || !event.origin?.confidence
+      || !event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) {
+    throw new Error("Invalid canonical Agent event envelope");
+  }
+  return event;
 }
 
 function initialState() {
@@ -92,6 +90,7 @@ function eventKey(identity, sequence) {
 function advanceState(state, events) {
   const next = { ...initialState(), ...state };
   const ordered = [...events].sort((left, right) => eventSequence(left) - eventSequence(right));
+  if (ordered.length) next.retainedFromSequence = eventSequence(ordered[0]);
   for (const event of ordered) {
     const sequence = eventSequence(event);
     if (!sequence) continue;
@@ -103,8 +102,6 @@ function advanceState(state, events) {
   // boundary) is present, advance through all adjacent rows in this batch.
   const present = new Set(ordered.map(eventSequence));
   let cursor = next.contiguousThrough;
-  const boundary = next.retainedFromSequence || 1;
-  if (cursor < boundary - 1) cursor = boundary - 1;
   while (present.has(cursor + 1)) cursor += 1;
   next.contiguousThrough = Math.max(next.contiguousThrough, cursor);
   next.updatedAt = Date.now();
@@ -113,6 +110,7 @@ function advanceState(state, events) {
 
 function pruneMemory(identity) {
   const rows = [];
+  const through = memoryState.get(stateKey(identity))?.contiguousThrough || 0;
   for (const [key, value] of memoryEvents) {
     if (value.hostId === identity.hostId
       && value.accessScopeId === identity.accessScopeId
@@ -123,7 +121,7 @@ function pruneMemory(identity) {
   if (rows.length <= MAX_EVENTS_PER_STREAM) return;
   rows.sort((left, right) => right.sequence - left.sequence);
   const retained = rows.slice(0, MAX_EVENTS_PER_STREAM);
-  for (const row of rows.slice(MAX_EVENTS_PER_STREAM)) memoryEvents.delete(row.key);
+  for (const row of rows.slice(MAX_EVENTS_PER_STREAM)) { if (row.sequence <= through) memoryEvents.delete(row.key); }
   const state = memoryState.get(stateKey(identity));
   if (state) {
     state.retainedFromSequence = Math.min(...retained.map(row => row.sequence));
@@ -149,7 +147,7 @@ export function openAgentDB() {
         keyPath: ["hostId", "accessScopeId", "streamId", "sequence"],
       });
       events.createIndex("by_stream_sequence", ["hostId", "accessScopeId", "streamId", "sequence"]);
-      events.createIndex("by_stream_event", ["hostId", "accessScopeId", "streamId", "eventId"]);
+      events.createIndex("by_stream_event", ["hostId", "accessScopeId", "streamId", "eventId"], { unique: true });
       db.createObjectStore(STATE_STORE, {
         keyPath: ["hostId", "accessScopeId", "streamId"],
       });
@@ -169,25 +167,29 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
   checkpoint = null,
 } = {}) {
   const identity = streamIdentity(namespace, streamId);
-  const incoming = events.map(event => normalizeEvent(event, identity.streamId)).filter(Boolean);
+  const incoming = events.map(event => validateCanonicalAgentEvent(event, identity.streamId));
   if (incoming.length === 0 && !checkpoint) return getAgentSyncState(identity, identity.streamId);
 
   if (!hasIndexedDB()) {
     let state = memoryState.get(stateKey(identity)) || initialState();
     const accepted = [];
+    const staged = new Map(memoryEvents);
     for (const event of incoming) {
       const sequence = eventSequence(event);
       const key = eventKey(identity, sequence);
-      const existing = memoryEvents.get(key);
+      const duplicate = [...staged.values()].find(row => row.hostId === identity.hostId && row.accessScopeId === identity.accessScopeId && row.streamId === identity.streamId && row.event.eventId === event.eventId);
+      if (duplicate && stableJSON(duplicate.event) !== stableJSON(event)) throw new Error(`Agent event ID conflict in ${identity.streamId}`);
+      const existing = staged.get(key);
       if (existing) {
         if (stableJSON(existing.event) !== stableJSON(event)) {
           throw new Error(`Agent event sequence conflict at ${identity.streamId}:${sequence}`);
         }
         continue;
       }
-      memoryEvents.set(key, { ...identity, sequence, event });
+      staged.set(key, { ...identity, sequence, event });
       accepted.push(event);
     }
+    for (const event of accepted) memoryEvents.set(eventKey(identity, event.sequence), { ...identity, sequence: event.sequence, event });
     const allEvents = [...memoryEvents.values()]
       .filter(value => value.hostId === identity.hostId
         && value.accessScopeId === identity.accessScopeId

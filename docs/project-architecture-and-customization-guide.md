@@ -542,7 +542,7 @@ The Host normalizes provider-specific JSONL records into events such as:
   exited, with human attention carried separately in `AgentStatus`.
 
 Initial attach sends only a bounded conversation tail. Older history is
-fetched with paginated `agent.history` requests. The PTY remains usable if a
+fetched with paginated `agent.events.history` requests. The PTY remains usable if a
 transcript is missing or its format changes.
 
 Adding another agent provider requires work in all of these areas:

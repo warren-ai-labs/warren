@@ -248,11 +248,10 @@ By default it returns the newest 20 user, assistant, and error activities and
 limits text fields to 2,000 characters. `--tools` adds compact tool-call
 records; `--tool-output` is the explicit opt-in for bounded raw tool results.
 Use `--recent N`, `--all`, `--include TYPE,...`, `--filter TYPE,...`, or
-`--text-only` to control the normalized projection. `--full` is the rare
-escape hatch: it streams the exact JSONL from the transcript bound to that
-Agent, without loading the whole file into the daemon or CLI. `agent send`
-waits for the transcript watcher, writes the composer text, and submits a
-separate kitty-protocol Enter event. `agent wait` blocks until the current or
+`--text-only` to control the local presentation projection. `--full` returns
+the complete canonical event history. `agent send` waits for the Host execution
+binding and submits `agent.turn.start`; the Host owns provider input framing.
+`agent wait` consumes canonical turn events until the current or
 next turn finishes. `agent attach` is the explicit raw TTY operation.
 
 `session` is the generic PTY resource. `session create` starts shells,
@@ -355,38 +354,34 @@ Known limits:
   libghostty-vt dylib for one-time v0 migration. A non-app installation that
   still needs that bridge must provide it through `WARREN_GHOSTLINE_V0_COMPAT`.
 
-## Agent Transcript Projection
+## Canonical Agent Protocol
 
-For `codex`, `claude`, and `opencode` sessions, `warren-headless` projects the
-provider's own activity into normalized `agent` events and sends them to
-attached clients as `{"t":"agent","session":...,"events":[...]}` text messages.
-Codex and Claude write JSONL transcripts (Codex:
-`~/.codex/sessions/**/rollout-*.jsonl`, Claude Code:
-`~/.claude/projects/**/<session>.jsonl`). OpenCode stores SQLite rows in
-`opencode.db`.
-Live batches are split so a single message stays around 256 KiB; the complete
-Host-owned activity/attention status is its own lightweight
-`{"t":"agent.status","session":...,"status":{...}}` message. The
-contract is defined in
-[`docs/rfc/0006-agent-activity-attention.md`](../docs/rfc/0006-agent-activity-attention.md).
-Attach only replays a bounded tail of the conversation, so clients
-that need the full history fetch it page by page with the `agent.history`
-request (`session`, optional `before` sequence cursor and `limit`, returning
-`events`, `cursor` and `hasMore`). This keeps any single WebSocket message far
-below client message-size limits even for transcripts with thousands of events.
-Conversation-first clients may pass `priority: "conversation"` to receive only
-non-empty user and assistant messages for a page. OpenCode content deltas are
-coalesced into one logical message before the page limit is applied. The cursor
-remains the normalized event sequence, while requests without `priority`
-retain the full normalized event page including reasoning and tool activity.
-Clients that do not render heavy event data can pass `wireOptions.omitFields`
-to `session.attach`, `session.subscribe`, `agent.subscribe`, `agent.history`,
-or `agent.turn.events`. The supported fields are `output`, `toolInput`,
-`files`, `payload`, and `usage`; lifecycle and conversational fields cannot be
-omitted. Subscription options apply to that peer and session, while history
-and turn-event options apply only to the current request.
-The PTY byte stream remains the source of truth; the transcript is a
-best-effort, read-only side channel.
+The Host is the sole authority for Agent execution state. Provider adapters
+normalize observations into an append-only journal; clients consume the same
+canonical events through `agent.events` batches. Each event has a required
+`eventId`, `streamId`, `executionId`, immutable `sequence`, timestamps, `origin`,
+and typed `payload`. Status is a journaled `status.changed` event.
+
+Protocol 3.0 starts with an authenticated welcome containing `host.id` and
+`accessScopeId`. Client replicas use `(hostId, accessScopeId, streamId, sequence)`
+as their key and an event-ID duplicate index. They persist unknown event types,
+reject conflicting positions, and reconnect from `contiguousThrough`.
+
+Read the execution with `agent.execution.get`, page immutable events with
+`agent.events.history`, and establish a checkpoint plus live delivery with
+`agent.events.subscribe`. History accepts exclusive `afterSequence` or
+`beforeSequence` cursors and returns `events`, `nextAfterSequence`, and `hasMore`.
+Subscription limits are delivery hints; every event between the client cursor
+and the live boundary is returned before live delivery starts.
+
+Commands use `agent.execution.resume`, `agent.turn.start`, `agent.turn.steer`,
+`agent.turn.cancel`, `agent.interaction.resolve`, and `agent.attachment.*`.
+Each carries an execution target, a durable `commandId`, and the applicable
+version check. Responses acknowledge Host admission; completion is an event.
+PTY bytes remain on DENB and never establish Agent semantics in a client.
+
+See [RFC 0016](../docs/rfc/0016-canonical-agent-execution-protocol.md) for the
+complete protocol and replica invariants.
 
 OpenCode's data root follows `WARREN_OPENCODE_DATA_DIR` when an operator needs
 to point Warren at a separate store, then the provider's platform data

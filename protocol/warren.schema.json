@@ -214,7 +214,7 @@
         "properties": {
           "method": { "type": "string" },
           "paramsRef": { "type": "string", "description": "Pointer to the Go struct field shape (or 'free' if the params map is unconstrained)." },
-          "resultRef": { "type": "string", "description": "Pointer to the api/types.go struct (e.g. 'api.State', 'api.AgentHistoryResult')." }
+          "resultRef": { "type": "string", "description": "Pointer to the api/types.go struct (e.g. 'api.State', 'api.AgentEventsHistoryResult')." }
         }
       },
       "examples": [
@@ -271,9 +271,9 @@
         { "method": "session.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
         { "method": "session.move.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionMovePreflight" },
         { "method": "session.undo", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.attach", "paramsRef": "{id: string, cols?: int, rows?: int, wireOptions?: {omitFields?: ('output'|'toolInput'|'files'|'payload'|'usage')[]}}", "resultRef": "void" },
+        { "method": "session.attach", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
         { "method": "session.detach", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int, wireOptions?: {omitFields?: ('output'|'toolInput'|'files'|'payload'|'usage')[]}}", "resultRef": "void" },
+        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
         { "method": "session.unsubscribe", "paramsRef": "{id: string}", "resultRef": "void" },
         { "method": "session.focus", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
         { "method": "session.input", "paramsRef": "{id: string, data: string}", "resultRef": "void" },
@@ -345,7 +345,7 @@
           "notes": "Session has exited and the binary stream for it is closed."
         },
         "agent.events": {
-          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "replay": "bool", "events": "api.AgentEvent[]" },
+          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "replay": "bool", "events": "api.CanonicalAgentEvent[]" },
           "notes": "The only semantic Agent push. Every event carries eventId, streamId, executionId, sequence, type, timestamps, origin, and typed payload."
         },
         "pong": {

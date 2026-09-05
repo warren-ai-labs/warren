@@ -77,6 +77,7 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	defer connection.Close()
 	subscription := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
 		"streamId": execution.StreamID,
+		"limit":    1,
 	})
 	if len(subscription.Events) == 0 {
 		t.Fatal("canonical subscription returned no initial events")
@@ -748,15 +749,15 @@ func TestAgentHistoryOverWebSocket(t *testing.T) {
 	if len(result.Events) != 2 || !result.HasMore {
 		t.Fatalf("history result = %#v, want a two-event latest page", result)
 	}
-	if result.Events[0].Sequence != 1 || result.Events[1].Sequence != 2 || result.NextAfterSequence != 2 {
+	if result.Events[0].Sequence != result.HeadSequence-1 || result.Events[1].Sequence != result.HeadSequence || result.NextAfterSequence != result.HeadSequence {
 		t.Fatalf("history events are not ordered: %#v", result.Events)
 	}
 	next := requestResult[api.AgentEventsHistoryResult](t, connection, "agent.events.history", map[string]any{
-		"streamId":      execution.StreamID,
-		"afterSequence": result.NextAfterSequence,
-		"limit":         2,
+		"streamId":       execution.StreamID,
+		"beforeSequence": result.Events[0].Sequence,
+		"limit":          2,
 	})
-	if len(next.Events) != 2 || next.Events[0].Sequence != 3 || next.Events[1].Sequence != 4 {
+	if len(next.Events) != 2 || next.Events[0].Sequence != 1 || next.Events[1].Sequence != 2 {
 		t.Fatalf("next history result = %#v, want the second page", next)
 	}
 
@@ -969,6 +970,7 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 	subResult := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
 		"streamId":      execution.StreamID,
 		"afterSequence": 1,
+		"limit":         1,
 	})
 	if len(subResult.Events) < 2 {
 		t.Fatalf("subscription events = %#v, want the suffix after sequence 1", subResult.Events)

@@ -18,6 +18,7 @@ private final class SQLiteHandle: @unchecked Sendable {
 public enum WarrenAgentEventStoreError: Error, Equatable, Sendable {
     case unavailable
     case invalidNamespace
+    case invalidEvent
     case invalidStream
     case sequenceConflict(streamID: String, sequence: UInt64)
     case eventConflict(streamID: String, eventID: String)
@@ -166,8 +167,8 @@ public actor WarrenAgentEventStore {
         }
 
         for event in events {
-            guard event.sequence > 0, event.sequence <= UInt64(Int64.max) else { continue }
-            let eventID = event.eventID.isEmpty ? event.stableID : event.eventID
+            guard event.sequence > 0, event.sequence <= UInt64(Int64.max), !event.eventID.isEmpty, event.streamID == streamID, event.executionID?.isEmpty == false else { throw WarrenAgentEventStoreError.invalidEvent }
+            let eventID = event.eventID
             let data = try encoder.encode(event)
             guard let json = String(data: data, encoding: .utf8) else {
                 throw WarrenAgentEventStoreError.unavailable
@@ -222,7 +223,7 @@ public actor WarrenAgentEventStore {
                 retainedFromSequence: retained,
                 headSequence: max(state.headSequence, maxSequence),
                 contiguousThrough: contiguousThrough(
-                    retainedFrom: retained,
+                    after: state.contiguousThrough,
                     sequences: Set(rows.map(\.sequence))
                 ),
                 checkpointSequence: state.checkpointSequence,
@@ -249,7 +250,7 @@ public actor WarrenAgentEventStore {
         }
 
         if rows.count > maxEventsPerStream {
-            let cutoff = rows.sorted { $0.sequence > $1.sequence }.dropFirst(maxEventsPerStream).map(\.sequence)
+            let cutoff = rows.sorted { $0.sequence > $1.sequence }.dropFirst(maxEventsPerStream).map(\.sequence).filter { $0 <= state.contiguousThrough }
             for sequence in cutoff {
                 deleteEvent(db, namespace: namespace, streamID: streamID, sequence: sequence)
             }
@@ -260,7 +261,7 @@ public actor WarrenAgentEventStore {
                 retainedFromSequence: retained,
                 headSequence: state.headSequence,
                 contiguousThrough: contiguousThrough(
-                    retainedFrom: retained,
+                    after: state.contiguousThrough,
                     sequences: Set(loadAll(db, namespace: namespace, streamID: streamID).map(\.sequence))
                 ),
                 checkpointSequence: state.checkpointSequence,
@@ -526,9 +527,8 @@ public actor WarrenAgentEventStore {
         return lhs == rhs
     }
 
-    private func contiguousThrough(retainedFrom: UInt64, sequences: Set<UInt64>) -> UInt64 {
-        guard retainedFrom > 0 else { return 0 }
-        var cursor = retainedFrom - 1
+    private func contiguousThrough(after: UInt64, sequences: Set<UInt64>) -> UInt64 {
+        var cursor = after
         while sequences.contains(cursor + 1) { cursor += 1 }
         return cursor
     }

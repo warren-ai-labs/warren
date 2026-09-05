@@ -1982,11 +1982,6 @@ func agentSessionMutationCommand(action string, args []string) error {
 
 const (
 	defaultAgentWaitTimeout = 30 * time.Minute
-	// Agent TUIs treat a literal carriage return as composer text. The web
-	// client sends the message and a kitty-protocol Enter event separately so
-	// the TUI submits it as a key press instead of leaving it in the input box.
-	agentSubmitDelay = 80 * time.Millisecond
-	agentSubmitEvent = "\x1b[13u"
 	// Creating a terminal returns before the CLI has necessarily completed its
 	// first-run setup and written a transcript binding. Give normal startup a
 	// bounded window, while still failing clearly when setup is required.
@@ -2044,9 +2039,13 @@ func subscribeAgentExecution(ctx context.Context, c *client.Client, sessionID st
 			return agentSubscription{}, err
 		}
 		// The subscription checkpoint closes the execution.get/live race.
-		if turn, ok := subscription.Checkpoint.State["turn"]; ok {
-			raw, _ := json.Marshal(turn)
-			_ = json.Unmarshal(raw, &execution.ActiveTurn)
+		if turnID, ok := subscription.Checkpoint.State["turnId"].(string); ok {
+			id, err := strconv.ParseUint(turnID, 10, 64)
+			if err != nil {
+				return agentSubscription{}, err
+			}
+			status, _ := subscription.Checkpoint.State["turnStatus"].(string)
+			execution.ActiveTurn = &api.AgentTurn{ID: id, Status: api.AgentTurnStatus(status)}
 		}
 		return agentSubscription{Session: session, Execution: execution}, nil
 	}
@@ -2107,10 +2106,6 @@ func sendTerminalTextWithInput(
 		text += "\r"
 	}
 	return input(ctx, []byte(text))
-}
-
-func sendAgentText(ctx context.Context, c *client.Client, text string) error {
-	return sendAgentTextWithInput(ctx, c.Input, text)
 }
 
 // validateAgentCommand keeps the command field focused on the executable and
@@ -2401,35 +2396,6 @@ func appendAgentInitialPromptForProvider(command, provider, prompt string) strin
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func sendAgentTextWithInput(
-	ctx context.Context,
-	input func(context.Context, []byte) error,
-	text string,
-) error {
-	// Preserve deliberate line breaks as composer returns, then submit with
-	// the same kitty Enter event used by the web Agent view. A CR in the
-	// message itself is text; it is not the submit action.
-	text = strings.ReplaceAll(text, "\n", "\r")
-	if err := input(ctx, []byte(text)); err != nil {
-		return err
-	}
-	if err := waitForInputDelay(ctx, agentSubmitDelay); err != nil {
-		return err
-	}
-	return input(ctx, []byte(agentSubmitEvent))
-}
-
-func waitForInputDelay(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func agentWaitCommand(args []string) error {
@@ -4080,7 +4046,7 @@ newest 20 user, assistant, and error activities are returned and text fields
 are limited to 2000 characters. --tools adds tool-call summaries;
 --tool-output additionally includes bounded tool results. --all returns all
 matching activities (up to 100000). --text-only prints user and assistant
-text. --full streams the exact bound transcript JSONL and cannot be combined
+text. --full returns the complete canonical event history and cannot be combined
 with projection flags.
 `
 }

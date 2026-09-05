@@ -686,6 +686,7 @@ private enum RemoteWireEvent: Sendable {
     case roster
     case rosterDelta(RemoteRoster.Delta)
     case agentProjection(sessionID: TerminalSessionID, status: AgentStatus)
+    case agentStreamError(String)
     case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
     case atomicState(
         sessionID: TerminalSessionID,
@@ -888,6 +889,7 @@ private actor WarrenRemoteWire {
     private var agentSubscriptions: Set<String> = []
     private var agentQuarantined: Set<String> = []
     private var agentProjectionSequence: [String: UInt64] = [:]
+    private var agentPendingProjection: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
     private var pendingInput = Data()
     private var inputTask: Task<Void, Never>?
     // Rosters are snapshots, so intermediate states have no value once a
@@ -1411,13 +1413,25 @@ private actor WarrenRemoteWire {
                     let state = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
                     let cached = await WarrenAgentEventStore.shared.loadRecentEvents(namespace: namespace, streamID: streamID)
                     await projectAgentEvents(cached, streamID: streamID)
-                    let data = try await request("agent.events.subscribe", params: ["streamId": streamID, "afterSequence": String(state?.contiguousThrough ?? 0), "limit": "500"])
+                    let data = try await requestJSON("agent.events.subscribe", params: ["streamId": streamID, "afterSequence": state?.contiguousThrough ?? 0, "limit": 500], contextParams: ["streamId": streamID])
                     let result = try JSONDecoder().decode(WarrenRemoteAgentEventsSubscriptionResult.self, from: data)
-                    _ = try await WarrenAgentEventStore.shared.saveEvents(result.events, namespace: namespace, streamID: streamID, checkpoint: result.checkpoint)
+                    _ = try await WarrenAgentEventStore.shared.saveEvents(result.events, namespace: namespace, streamID: streamID, checkpointSequence: result.checkpoint.sequence, checkpoint: result.checkpoint.state)
                     await projectAgentEvents(result.events, streamID: streamID)
+                    if result.checkpoint.sequence >= (agentProjectionSequence[streamID] ?? 0) {
+                        agentProjectionSequence[streamID] = result.checkpoint.sequence
+                        agentPendingProjection[streamID] = agentPendingProjection[streamID]?.filter { $0.key > result.checkpoint.sequence }
+                        if let sessionID = agentSessions[streamID],
+                           let statusValue = result.checkpoint.state["status"],
+                           let encoded = try? JSONEncoder().encode(statusValue),
+                           let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: encoded),
+                           let status = Self.agentStatus(from: remote) {
+                            _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
+                        }
+                        await projectAgentEvents([], streamID: streamID)
+                    }
                 } catch {
                     agentQuarantined.insert(streamID)
-                    _ = await eventBuffer.send(.disconnected("Agent stream integrity or subscription failure: \(error.localizedDescription)"))
+                    _ = await eventBuffer.send(.agentStreamError("Agent stream integrity or subscription failure: \(error.localizedDescription)"))
                 }
             }
         }
@@ -1434,28 +1448,31 @@ private actor WarrenRemoteWire {
                 // Request outside the receive loop so its response can be read.
                 Task {
                     do {
-                        let data = try await request("agent.events.history", params: ["streamId": streamID, "afterSequence": String(state.contiguousThrough), "limit": "500"])
+                        let data = try await requestJSON("agent.events.history", params: ["streamId": streamID, "afterSequence": state.contiguousThrough, "beforeSequence": state.contiguousThrough == 0 ? state.retainedFromSequence : 0, "limit": 500], contextParams: ["streamId": streamID])
                         let page = try JSONDecoder().decode(WarrenRemoteAgentEventsHistoryResult.self, from: data)
+                        guard !page.events.isEmpty else { throw WarrenRemoteClientError.requestFailed("Host did not return the missing Agent events.") }
                         await receiveAgentEvents(page.events, streamID: streamID)
                     } catch {
                         agentQuarantined.insert(streamID)
-                        _ = await eventBuffer.send(.disconnected("Unable to recover Agent event gap: \(error.localizedDescription)"))
+                        _ = await eventBuffer.send(.agentStreamError("Unable to recover Agent event gap: \(error.localizedDescription)"))
                     }
                 }
             }
         } catch {
             agentQuarantined.insert(streamID)
-            _ = await eventBuffer.send(.disconnected("Agent stream integrity failure: \(error.localizedDescription)"))
+            _ = await eventBuffer.send(.agentStreamError("Agent stream integrity failure: \(error.localizedDescription)"))
         }
     }
 
     private func projectAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
         guard let sessionID = agentSessions[streamID] else { return }
-        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
-            guard event.sequence > (agentProjectionSequence[streamID] ?? 0) else { continue }
+        for event in events where event.sequence > (agentProjectionSequence[streamID] ?? 0) {
+            agentPendingProjection[streamID, default: [:]][event.sequence] = event
+        }
+        while let event = agentPendingProjection[streamID]?.removeValue(forKey: (agentProjectionSequence[streamID] ?? 0) + 1) {
             agentProjectionSequence[streamID] = event.sequence
             guard event.type == "status.changed", let payload = event.payload else { continue }
-            let statusPayload: WarrenRemoteJSONValue = payload["status"] ?? .object(payload)
+            let statusPayload: WarrenRemoteJSONValue = .object(payload)
             guard let data = try? JSONEncoder().encode(statusPayload),
                   let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
                   let status = Self.agentStatus(from: remote) else { continue }
@@ -4324,6 +4341,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             await wire.syncAgentSubscriptions(roster)
             apply(roster)
             ensureDeletionReconciliation(using: wire)
+        case .agentStreamError(let message):
+            addNotice(title: "Agent stream paused", message: message)
         case .agentProjection(let sessionID, let status):
             let previousActivity = lastObservedActivityBySessionID[sessionID]
             lastObservedActivityBySessionID[sessionID] = status.activity

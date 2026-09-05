@@ -5188,7 +5188,7 @@ func (s *Service) canonicalHistoryPage(ctx context.Context, streamID string, aft
 		start = end
 	}
 	if end-start > limit {
-		if before > 0 && after == 0 {
+		if after == 0 {
 			start = end - limit
 		} else {
 			end = start + limit
