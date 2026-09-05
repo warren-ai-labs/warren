@@ -66,7 +66,7 @@ type AgentViewAtomicController interface {
 // while this instance-level projection prevents a Host without a transcript
 // finder or provider bridge from advertising controls it cannot honour.
 func (s *Service) AgentViewCapabilities() []string {
-	capabilities := []string{api.CapabilityRosterDelta}
+	capabilities := []string{api.CapabilityAppHeartbeat, api.CapabilityRosterDelta}
 	if s == nil {
 		return capabilities
 	}

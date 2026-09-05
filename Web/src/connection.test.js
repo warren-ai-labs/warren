@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   WarrenConnection,
+  appHeartbeatCapability,
   connectionErrorDetail,
   reconnectDelay,
   rejectPendingRequests,
@@ -155,4 +156,46 @@ test("connection errors prefer the envelope error field", () => {
   assert.equal(connectionErrorDetail({ error: "server failed", message: "old" }), "server failed");
   assert.equal(connectionErrorDetail({ message: "legacy" }), "Error");
   assert.equal(connectionErrorDetail({}), "Error");
+});
+
+test("browser heartbeat starts after negotiation and closes a half-open socket", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+  const heartbeatTimer = timers.find(item => item.delay === 1_000);
+  assert.ok(heartbeatTimer, "interval is clamped to the safe minimum");
+  heartbeatTimer.callback();
+  const ping = JSON.parse(socket.sent.at(-1));
+  assert.equal(ping.t, "ping");
+  const deadline = timers.find(item => item.delay === 1_000 && item !== heartbeatTimer);
+  assert.ok(deadline);
+  deadline.callback();
+  assert.equal(socket.readyState, 3);
+});
+
+test("browser heartbeat accepts only the matching pong", () => {
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+  });
+  connection.pendingHeartbeatID = "ping-1";
+  assert.equal(connection.acceptHeartbeat({ t: "pong", id: "other" }), false);
+  assert.equal(connection.acceptHeartbeat({ t: "pong", id: "ping-1" }), true);
+  assert.equal(connection.pendingHeartbeatID, null);
 });
