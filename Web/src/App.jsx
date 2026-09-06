@@ -32,7 +32,7 @@ import {
   restoreNavigationPosition,
   resolveWorkspaceSession,
 } from "./navigation.js";
-import { parseAuthInput, runtime, serviceWorkerURL, tokenReady, webSocketURL } from "./runtime.js";
+import { parseAuthInput, runtime, serviceWorkerURL, tokenReady, webSocketURL, hasRelayHostID, hasRelayInviteID } from "./runtime.js";
 import {
   automaticSessionKind,
   defaultHiddenSessionPresetKinds,
@@ -2620,7 +2620,8 @@ export default function App() {
           // through the HttpOnly refresh cookie once before treating an
           // unauthorized socket as terminal; the shareable pairing link is
           // not needed again while this refresh family remains valid.
-          if (runtime.usesControlPlane && !relayRefreshInFlightRef.current) {
+          const hasRelayConfig = hasRelayHostID || hasRelayInviteID;
+          if (hasRelayConfig && !relayRefreshInFlightRef.current) {
             relayRefreshInFlightRef.current = true;
             runtime.refresh().then(token => {
               relayRefreshInFlightRef.current = false;
@@ -2637,7 +2638,7 @@ export default function App() {
               runtime.clearToken?.();
               connectionRef.current?.stop();
             });
-          } else if (!runtime.usesControlPlane) {
+          } else if (!runtime.usesControlPlane || !hasRelayConfig) {
             runtime.clearToken?.();
             connectionRef.current?.stop();
           }

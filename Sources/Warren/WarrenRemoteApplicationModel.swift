@@ -1498,9 +1498,9 @@ private actor WarrenRemoteWire {
             // Clear all pending projections since we're only sending the latest status
             agentPendingProjection[streamID]?.removeAll()
             
-            if let lastStatusEvent = statusEvents.max(by: { $0.sequence < $1.sequence }) {
-                let payload = lastStatusEvent.event.payload
-                let statusPayload: WarrenRemoteJSONValue = .object(payload)
+            if let lastStatusEvent = statusEvents.max(by: { $0.sequence < $1.sequence }),
+               let payload = lastStatusEvent.event.payload {
+                let statusPayload: WarrenRemoteJSONValue = payload["status"] ?? .object(payload)
                 guard let data = try? JSONEncoder().encode(statusPayload),
                       let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
                       let status = Self.agentStatus(from: remote) else { return }
@@ -2421,6 +2421,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     func loadRelayDevices() {
         guard let wire else { return }
         Task { @MainActor [weak self] in
+            // Only attempt to load devices if Relay is configured (URL + Host ID).
+            guard let relaySettings = self?.relaySettings,
+                  relaySettings.isEnrolled else {
+                self?.relayDevices = []
+                return
+            }
             do {
                 let data = try await wire.request("relay.devices.list")
                 guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -3647,7 +3653,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .importSuperset, .requestNewWorkspace, .requestProjectWorktreeImport,
              .requestProjectSetupScript,
              .setProjectAutoImportGitWorktrees, .requestNewSession,
-             .toggleSidebar:
+             .toggleSidebar, .openNotifications:
             break
         }
     }

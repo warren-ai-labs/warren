@@ -1772,3 +1772,304 @@ func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 func contains(text, substring string) bool {
 	return strings.Contains(text, substring)
 }
+
+func TestDisplayTruncatedAndPath(t *testing.T) {
+	if got := displayTruncated("short", 10); got != "short" {
+		t.Errorf("displayTruncated short = %q, want short", got)
+	}
+	if got := displayTruncated("this is a very long string", 12); got != "this is a..." {
+		t.Errorf("displayTruncated long = %q, want 'this is a...'", got)
+	}
+	if got := displayTruncated("", 10); got != "-" {
+		t.Errorf("displayTruncated empty = %q, want -", got)
+	}
+	if got := displayTruncatedPath("/home/user/workspace/repo/.warren/worktree/feature-xyz", 25); got != "...n/worktree/feature-xyz" {
+		t.Errorf("displayTruncatedPath = %q, want '...n/worktree/feature-xyz'", got)
+	}
+	if got := cleanTableCell("hello\nworld\t!"); got != "hello world !" {
+		t.Errorf("cleanTableCell = %q, want 'hello world !'", got)
+	}
+}
+
+func TestFilterSessionRows(t *testing.T) {
+	rows := []SessionRow{
+		{
+			Session:           api.Session{ID: "sess-1", WorkspaceID: "ws-1", Kind: "shell", Lifecycle: "running", Title: "zsh", Command: "/bin/zsh", Pinned: true},
+			WorkspaceName:     "feature-1",
+			ProjectID:         "proj-1",
+			ProjectName:       "my-repo",
+			Branch:            "feat/login",
+		},
+		{
+			Session:           api.Session{ID: "sess-2", WorkspaceID: "ws-2", Kind: "codex", Lifecycle: "running", Title: "Codex Agent", Command: "codex run", AgentStatus: &api.AgentStatus{Activity: api.AgentActivityBlocked}},
+			WorkspaceName:     "feature-2",
+			ProjectID:         "proj-1",
+			ProjectName:       "my-repo",
+			Branch:            "feat/auth",
+		},
+		{
+			Session:           api.Session{ID: "sess-3", TerminalGroupID: "grp-1", Kind: "shell", Lifecycle: "ended", Title: "Bash", Command: "/bin/bash"},
+			TerminalGroupName: "Server Logs",
+		},
+	}
+
+	// Default: running only
+	got, err := filterSessionRows(rows, map[string]any{}, "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterSessionRows default got %d rows (err: %v), want 2", len(got), err)
+	}
+
+	// Status ended
+	got, err = filterSessionRows(rows, map[string]any{"status": "ended"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-3" {
+		t.Fatalf("filterSessionRows status ended got %v, want sess-3", got)
+	}
+
+	// Status running
+	got, err = filterSessionRows(rows, map[string]any{"status": "running"}, "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterSessionRows status running got %d rows, want 2", len(got))
+	}
+
+	// Filter by workspace
+	got, err = filterSessionRows(rows, map[string]any{"workspace": "ws-1"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-1" {
+		t.Fatalf("filterSessionRows workspace ws-1 got %v, want sess-1", got)
+	}
+	got, err = filterSessionRows(rows, map[string]any{"workspace": "feature-2"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-2" {
+		t.Fatalf("filterSessionRows workspace feature-2 got %v, want sess-2", got)
+	}
+
+	// Filter by project
+	got, err = filterSessionRows(rows, map[string]any{"project": "proj-1"}, "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterSessionRows project proj-1 got %d rows, want 2", len(got))
+	}
+
+	// Filter by group
+	got, err = filterSessionRows(rows, map[string]any{"group": "grp-1", "all": true}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-3" {
+		t.Fatalf("filterSessionRows group grp-1 got %v, want sess-3", got)
+	}
+
+	// Filter by kind
+	got, err = filterSessionRows(rows, map[string]any{"kind": "codex"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-2" {
+		t.Fatalf("filterSessionRows kind codex got %v, want sess-2", got)
+	}
+
+	// Filter by activity
+	got, err = filterSessionRows(rows, map[string]any{"activity": "attention"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-2" {
+		t.Fatalf("filterSessionRows activity attention got %v, want sess-2", got)
+	}
+
+	// Filter by pinned
+	got, err = filterSessionRows(rows, map[string]any{"pinned": true}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-1" {
+		t.Fatalf("filterSessionRows pinned true got %v, want sess-1", got)
+	}
+
+	// Filter by search
+	got, err = filterSessionRows(rows, map[string]any{"search": "login"}, "")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-1" {
+		t.Fatalf("filterSessionRows search login got %v, want sess-1", got)
+	}
+
+	// Filter by current
+	got, err = filterSessionRows(rows, map[string]any{"current": true}, "sess-1")
+	if err != nil || len(got) != 1 || got[0].ID != "sess-1" {
+		t.Fatalf("filterSessionRows current sess-1 got %v, want sess-1", got)
+	}
+
+	// Invalid status
+	if _, err := filterSessionRows(rows, map[string]any{"status": "invalid"}, ""); err == nil {
+		t.Fatal("filterSessionRows with invalid status should return error")
+	}
+}
+
+func TestFilterWorkspaceRows(t *testing.T) {
+	rows := []WorkspaceRow{
+		{
+			Workspace:   api.Workspace{ID: "ws-1", ProjectID: "proj-1", TaskID: "task-1", Name: "main-ws", Branch: "main", MergeState: api.MergeStateMerged, Path: "/repo/main"},
+			ProjectName: "core-repo",
+			TaskName:    "Setup CI",
+			Sessions:    2,
+		},
+		{
+			Workspace:   api.Workspace{ID: "ws-2", ProjectID: "proj-1", TaskID: "", Name: "feat-auth", Branch: "feature/auth", MergeState: "", Path: "/repo/feat-auth", Pinned: true},
+			ProjectName: "core-repo",
+			Sessions:    0,
+		},
+		{
+			Workspace:   api.Workspace{ID: "ws-3", ProjectID: "proj-2", TaskID: "task-2", Name: "bug-fix", Branch: "fix/123", MergeState: "", Path: "/other/bug-fix"},
+			ProjectName: "web-ui",
+			TaskName:    "Fix Layout",
+			Sessions:    1,
+		},
+	}
+
+	// Filter by project
+	got, err := filterWorkspaceRows(rows, map[string]any{"project": "proj-1"})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterWorkspaceRows project proj-1 got %d rows, want 2", len(got))
+	}
+	got, err = filterWorkspaceRows(rows, map[string]any{"project": "web-ui"})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-3" {
+		t.Fatalf("filterWorkspaceRows project web-ui got %v, want ws-3", got)
+	}
+
+	// Filter by task
+	got, err = filterWorkspaceRows(rows, map[string]any{"task": "task-1"})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-1" {
+		t.Fatalf("filterWorkspaceRows task task-1 got %v, want ws-1", got)
+	}
+
+	// Filter unattached
+	got, err = filterWorkspaceRows(rows, map[string]any{"unattached": true})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-2" {
+		t.Fatalf("filterWorkspaceRows unattached got %v, want ws-2", got)
+	}
+
+	// Filter merged
+	got, err = filterWorkspaceRows(rows, map[string]any{"merged": true})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-1" {
+		t.Fatalf("filterWorkspaceRows merged got %v, want ws-1", got)
+	}
+
+	// Filter unmerged
+	got, err = filterWorkspaceRows(rows, map[string]any{"unmerged": true})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterWorkspaceRows unmerged got %d rows, want 2", len(got))
+	}
+
+	// Filter branch
+	got, err = filterWorkspaceRows(rows, map[string]any{"branch": "feature/auth"})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-2" {
+		t.Fatalf("filterWorkspaceRows branch got %v, want ws-2", got)
+	}
+
+	// Filter has-sessions
+	got, err = filterWorkspaceRows(rows, map[string]any{"has-sessions": true})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("filterWorkspaceRows has-sessions got %d rows, want 2", len(got))
+	}
+
+	// Filter pinned
+	got, err = filterWorkspaceRows(rows, map[string]any{"pinned": true})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-2" {
+		t.Fatalf("filterWorkspaceRows pinned got %v, want ws-2", got)
+	}
+
+	// Filter search
+	got, err = filterWorkspaceRows(rows, map[string]any{"search": "Layout"})
+	if err != nil || len(got) != 1 || got[0].ID != "ws-3" {
+		t.Fatalf("filterWorkspaceRows search Layout got %v, want ws-3", got)
+	}
+
+	// Merged and unmerged mutually exclusive
+	if _, err := filterWorkspaceRows(rows, map[string]any{"merged": true, "unmerged": true}); err == nil {
+		t.Fatal("expected error for merged and unmerged together")
+	}
+}
+
+func TestFilterTaskRows(t *testing.T) {
+	rows := []TaskRow{
+		{
+			Task:       api.Task{ID: "task-1", Name: "Implement feature", Source: "linear", ExternalID: "ENG-101", URL: "https://linear.app/issue/1", Pinned: true},
+			Workspaces: 2,
+		},
+		{
+			Task:       api.Task{ID: "task-2", Name: "Fix crash", Source: "github", ExternalID: "gh-404"},
+			Workspaces: 0,
+		},
+	}
+
+	// Filter source
+	got, err := filterTaskRows(rows, map[string]any{"source": "linear"})
+	if err != nil || len(got) != 1 || got[0].ID != "task-1" {
+		t.Fatalf("filterTaskRows source linear got %v, want task-1", got)
+	}
+
+	// Filter has-workspaces
+	got, err = filterTaskRows(rows, map[string]any{"has-workspaces": true})
+	if err != nil || len(got) != 1 || got[0].ID != "task-1" {
+		t.Fatalf("filterTaskRows has-workspaces got %v, want task-1", got)
+	}
+
+	// Filter unattached
+	got, err = filterTaskRows(rows, map[string]any{"unattached": true})
+	if err != nil || len(got) != 1 || got[0].ID != "task-2" {
+		t.Fatalf("filterTaskRows unattached got %v, want task-2", got)
+	}
+
+	// Filter search
+	got, err = filterTaskRows(rows, map[string]any{"search": "ENG-101"})
+	if err != nil || len(got) != 1 || got[0].ID != "task-1" {
+		t.Fatalf("filterTaskRows search ENG-101 got %v, want task-1", got)
+	}
+}
+
+func TestListCommandsPositionalValidation(t *testing.T) {
+	// Session list rejects >1 positional
+	err := run([]string{"session", "list", "ws-1", "ws-2"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "at most one workspace ID") {
+		t.Errorf("session list multiple positionals error = %v", err)
+	}
+
+	// Workspace list rejects >1 positional
+	err = run([]string{"workspace", "list", "proj-1", "proj-2"})
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "at most one project ID") {
+		t.Errorf("workspace list multiple positionals error = %v", err)
+	}
+
+	// Task list rejects any positional
+	err = run([]string{"task", "list", "extra"})
+	if !errors.As(err, &usageErr) || !strings.Contains(usageErr.message, "does not accept positional arguments") {
+		t.Errorf("task list positional error = %v", err)
+	}
+}
+
+func TestQuietOutput(t *testing.T) {
+	previousQuiet := outputQuiet
+	outputQuiet = true
+	defer func() { outputQuiet = previousQuiet }()
+
+	reader, writer, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = writer
+
+	err := printValue([]SessionRow{
+		{Session: api.Session{ID: "sess-abc"}},
+		{Session: api.Session{ID: "sess-def"}},
+	})
+	writer.Close()
+	os.Stdout = oldStdout
+
+	out, _ := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("printValue quiet error = %v", err)
+	}
+	if string(out) != "sess-abc\nsess-def\n" {
+		t.Fatalf("printValue quiet out = %q, want sess-abc\\nsess-def\\n", string(out))
+	}
+}
+
+func TestDefaultUsageTextDescribesFilteringAndBestPractices(t *testing.T) {
+	text := usageText()
+	required := []string{
+		"List filtering & display:",
+		"Best practices:",
+		"--search TEXT",
+		"-q, --quiet",
+		"warren session list --current",
+	}
+	for _, req := range required {
+		if !strings.Contains(text, req) {
+			t.Errorf("usageText() missing %q", req)
+		}
+	}
+}
+

@@ -2,6 +2,39 @@ import SwiftUI
 import WarrenDesignSystem
 import WarrenDomain
 
+struct NotificationBellButton: View {
+    let unreadCount: Int
+    let isMuted: Bool
+    let action: () -> Void
+    let tokens: WarrenColorTokens
+    
+    @FocusState private var isFocused: Bool
+    
+    var body: some View {
+        let bellColor = isMuted
+            ? tokens.mutedForeground
+            : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground)
+        
+        Button(action: action) {
+            Image(systemName: isMuted ? "bell.slash" : "bell")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(bellColor)
+                .accessibilityHidden(true)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle())
+        .focused($isFocused)
+        .help(isMuted ? "Notifications muted" : "Notifications")
+        .accessibilityLabel("Notifications")
+        .accessibilityValue(
+            isMuted
+                ? "Muted"
+                : (unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
+        )
+        .accessibilityHint("See system messages and Agent task completion notices")
+    }
+}
+
 struct WarrenDesktopSidebar: View {
     let projection: WarrenDesktopProjection
     @Binding var sidebarState: WarrenDesktopSidebarState
@@ -19,6 +52,15 @@ struct WarrenDesktopSidebar: View {
     let onAction: (WarrenDesktopAction) -> Void
     let onCommandPalette: () -> Void
     let onSettings: () -> Void
+    let notices: [WarrenDesktopNotice]
+    @Binding var isNoticePopoverPresented: Bool
+    let onDismissNoticePopover: () -> Void
+    let onNoticeRead: (WarrenDesktopNotice.ID) -> Void
+    let onNoticeDismiss: (WarrenDesktopNotice.ID) -> Void
+    let onMarkAllNoticesRead: () -> Void
+    
+    @AppStorage("notificationsMuted")
+    private var notificationsMuted = false
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
@@ -154,6 +196,13 @@ struct WarrenDesktopSidebar: View {
                     if updateStatus != .none {
                         updateButton(tokens: tokens)
                     }
+                    // Show notification bell before settings button in collapsed mode
+                    NotificationBellButton(
+                        unreadCount: projection.unreadNoticeCount,
+                        isMuted: notificationsMuted,
+                        action: { onAction(.openNotifications) },
+                        tokens: tokens
+                    )
                     settingsButton(tokens: tokens)
                 }
                 .padding(.vertical, WarrenSpacing.xs)
@@ -171,12 +220,35 @@ struct WarrenDesktopSidebar: View {
                             onUpdateAction: onUpdateAction
                         )
                     }
+                    // Show notification bell before settings button in the bottom bar
+                    NotificationBellButton(
+                        unreadCount: projection.unreadNoticeCount,
+                        isMuted: notificationsMuted,
+                        action: { onAction(.openNotifications) },
+                        tokens: tokens
+                    )
                     settingsButton(tokens: tokens)
                 }
                 .padding(.horizontal, WarrenSpacing.compact)
                 .padding(.vertical, WarrenSpacing.xs)
             }
         }
+        .popover(
+            isPresented: Binding(
+                get: { isNoticePopoverPresented },
+                set: { _ in onDismissNoticePopover() }
+            ),
+            content: {
+                WarrenDesktopNoticePopover(
+                    notices: notices,
+                    onRead: onNoticeRead,
+                    onDismissNotice: onNoticeDismiss,
+                    isMuted: $notificationsMuted,
+                    onMarkAllRead: onMarkAllNoticesRead,
+                    onDismiss: onDismissNoticePopover
+                )
+            }
+        )
     }
 
     private func addProjectButton(tokens: WarrenColorTokens, showsLabel: Bool) -> some View {

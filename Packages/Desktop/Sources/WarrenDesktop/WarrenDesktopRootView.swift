@@ -99,6 +99,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var terminalFontSize = TerminalFontPreference.defaultSize
     @AppStorage(WarrenPreferenceKey.noticeMuted)
     private var notificationsMuted = false
+    @State private var isNoticePopoverPresented = false
     @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
@@ -308,6 +309,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onAction: dispatch,
             onCommandPalette: presentCommandPalette,
             onSettings: openSettings,
+            notices: notices,
+            isNoticePopoverPresented: $isNoticePopoverPresented,
+            onDismissNoticePopover: { isNoticePopoverPresented = false },
+            onNoticeRead: onNoticeRead,
+            onNoticeDismiss: onNoticeDismiss,
+            onMarkAllNoticesRead: markAllNoticesRead,
             onRequestRename: presentRename,
             onRequestDeletion: presentDeletion,
             onRequestTerminalGroupCreate: presentTerminalGroupCreate,
@@ -563,15 +570,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             onDismiss: { setChromePopover(nil) }
                         )
                     }
-                case .notices:
-                    WarrenDesktopNoticePopover(
-                        notices: notices,
-                        onRead: onNoticeRead,
-                        onDismissNotice: onNoticeDismiss,
-                        isMuted: $notificationsMuted,
-                        onMarkAllRead: markAllNoticesRead,
-                        onDismiss: { setChromePopover(nil) }
-                    )
                 case .overflow:
                     WarrenDesktopOverflowPopover(
                         controls: trailingControlLayout.overflow,
@@ -677,11 +675,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             embeddedEditorTabVisible: hasEmbeddedEditorTab(for: presentation.workspace),
             embeddedEditorSelected: contentMode == .editor,
             embeddedEditorDefault: embeddedEditorDefaultIDE,
-            notices: notices,
-            notificationsMuted: notificationsMuted,
             externallyVisibleControls: externallyVisibleControls,
             isOverflowPresented: chromePopover == .overflow,
-            isNoticePresented: chromePopover == .notices,
             onToggleSidebar: toggleSidebar,
             onSettings: openSettings,
             onChromePopover: { popover in
@@ -995,7 +990,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func dispatch(_ action: WarrenDesktopAction) {
-        actions(action)
+        switch action {
+        case .openNotifications:
+            withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+                isNoticePopoverPresented.toggle()
+            }
+            actions(action)
+        default:
+            actions(action)
+        }
     }
 
     private func openSettings() {
@@ -1040,12 +1043,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 return "Public Access on"
             }
             return webStatus.isRunning ? "Web running" : "Web stopped"
-        case .notifications:
-            if notificationsMuted {
-                return "Muted"
-            }
-            let unreadCount = notices.filter(\.isUnread).count
-            return unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications"
         case .settings:
             return nil
         }
@@ -1061,7 +1058,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
             return embeddedEditorChromeAvailable
                 || !(externalIDEOptions?.isEmpty ?? true)
-        case .endpoint, .web, .notifications:
+        case .endpoint, .web:
             return true
         case .settings:
             return false
@@ -1139,15 +1136,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onDismiss: onBack
             )
             return AnyView(panel.inlineContent)
-        case .notifications:
-            return AnyView(
-                WarrenDesktopNoticeInlineContent(
-                    notices: notices,
-                    onRead: onNoticeRead,
-                    onDismissNotice: onNoticeDismiss,
-                    onDismiss: onBack
-                )
-            )
         case .settings:
             return nil
         }
@@ -1156,14 +1144,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func overflowSecondaryTitleAccessory(
         _ control: WarrenDesktopWorkspaceTabTrailingControl
     ) -> AnyView? {
-        guard control == .notifications else { return nil }
-        return AnyView(
-            WarrenDesktopNoticeTitleActions(
-                unreadCount: notices.filter(\.isUnread).count,
-                isMuted: $notificationsMuted,
-                onMarkAllRead: markAllNoticesRead
-            )
-        )
+        return nil
     }
 
     private func markAllNoticesRead() {
@@ -1188,8 +1169,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             setChromePopover(.endpoint)
         case .web:
             setChromePopover(.web)
-        case .notifications:
-            setChromePopover(.notices)
         case .settings:
             setChromePopover(nil)
             openSettings()
