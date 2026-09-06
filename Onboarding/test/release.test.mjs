@@ -15,6 +15,18 @@ test("releaseAssetFromHtml selects a Warren archive and ignores checksums", () =
   });
 });
 
+test("releaseAssetFromHtml selects a Warren archive with warren-ai-labs path and ignores checksums", () => {
+  const asset = releaseAssetFromHtml(`
+    <a href="/warren-ai-labs/warren/releases/download/v0.5.1/checksums.txt">checksums</a>
+    <a href="/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip">Warren</a>
+  `);
+
+  assert.deepEqual(asset, {
+    name: "Warren-0.5.1.zip",
+    path: "/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip",
+  });
+});
+
 test("normalizeRelease preserves onboarding and desktop response fields", () => {
   const release = normalizeRelease(
     {

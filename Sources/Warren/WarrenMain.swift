@@ -223,11 +223,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 }
             } catch {
                 NSLog("Unable to check for Warren updates automatically: %@", error.localizedDescription)
-                NotificationCenter.default.post(
-                    name: WarrenUpdateNotification.failed,
-                    object: nil,
-                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
-                )
             }
         }
     }
@@ -261,9 +256,8 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             } catch {
                 NSLog("Unable to check for Warren updates: %@", error.localizedDescription)
                 NotificationCenter.default.post(
-                    name: WarrenUpdateNotification.failed,
-                    object: nil,
-                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
+                    name: WarrenUpdateNotification.dismiss,
+                    object: nil
                 )
             }
         }
