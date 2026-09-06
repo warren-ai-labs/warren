@@ -16,7 +16,9 @@ Warren is a local-first workspace for **durable AI workflows**, organized around
 | --- | --- |
 | <img src="docs/warren-web-terminal.png" width="440" alt="Warren web terminal"> | <img src="docs/warren-web-agent.png" width="440" alt="Warren web agent"> |
 
-### Mobile
+### Mobile *(Coming Soon)*
+
+*The native iOS companion client is in active development and coming soon.*
 
 | Terminal | Agent |
 | --- | --- |
@@ -46,15 +48,16 @@ you want a structured conversation around the same session.
 
 Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
 
-### Client surface priority: Desktop & Mobile first
+### Client surface priority
 
-Warren's product design and interactive capabilities follow a strict surface hierarchy:
-- **macOS Desktop & iOS Mobile (First-Class Surfaces)**: Primary design, native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction reside here. All interaction paradigms, session controls, and structured views are designed and verified for Desktop and Mobile first.
-- **Web / PWA (Fallback Surface)**: Exclusively a fallback for the desktop client and a lightweight remote viewer under Public Access or Relay pairing. It does not carry primary design or feature priority.
+Warren's product design and interactive capabilities follow a clear surface hierarchy:
+- **macOS Desktop (Primary First-Class Surface)**: Primary design, native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction reside here. All interaction paradigms, session controls, and structured views are designed and verified for Desktop first.
+- **Web / PWA (Remote & Fallback Surface)**: Lightweight remote viewer and execution control under Public Access or Relay pairing.
+- **iOS Mobile (Native Companion — Coming Soon)**: Companion mobile client currently in active development.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
-The current code is licensed under [Apache-2.0](LICENSE). This permits commercial use of the present open-source code without implying that Warren currently offers a hosted or enterprise product.
+The open-source repository code is licensed under [Apache-2.0](LICENSE). This covers the macOS Desktop app, Headless daemon, CLI, Relay Service, and Web client. The upcoming iOS companion client is distributed separately.
 
 ## Repository Layout
 
