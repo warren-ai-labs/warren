@@ -290,3 +290,6 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 <a href="https://github.com/abcdlsj" title="abcdlsj">
   <img src="https://github.com/abcdlsj.png?size=96" width="64" alt="abcdlsj avatar">
 </a>
+<a href="https://github.com/izy1sky" title="izy1sky">
+  <img src="https://github.com/izy1sky.png?size=96" width="64" alt="izy1sky avatar">
+</a>

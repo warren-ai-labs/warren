@@ -113,12 +113,7 @@ go test -race ./Headless/...
    archives, or generated build output.
 4. Push the release commit and tag to the intended remote, then create or
    update the pull request when branch policy permits.
-5. If an explicitly authorized emergency direct push is required because a
-   pull request is blocked by approval policy, use the repository-local
-   `.local/force-push-once.sh` helper when it is available. Run its dry run
-   first; prefer `--force-with-lease`, use `--allow-direct-push` only for this
-   exceptional case, and verify that branch protection is restored afterward.
-6. Deploy the onboarding Worker from the same tagged release commit:
+5. Deploy the onboarding Worker from the same tagged release commit:
 
    ```sh
    npm --prefix Onboarding run deploy
@@ -126,9 +121,9 @@ go test -race ./Headless/...
 
    Confirm the Worker serves the new release notes and that its offline
    English and Simplified Chinese fallbacks match `CHANGELOG.md`.
-7. Publish a GitHub release with `Warren-<version>.zip` attached and the
+6. Publish a GitHub release with `Warren-<version>.zip` attached and the
    corresponding `CHANGELOG.md` notes.
-8. Verify the tag, release asset, download URL, and onboarding release
+7. Verify the tag, release asset, download URL, and onboarding release
    response after publishing.
 
 ## Rollback
