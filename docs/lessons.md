@@ -1,8 +1,19 @@
 # Warren engineering lessons
 
-High-value pitfalls and the context around them, numbered in the order they
-were recorded. Each entry is a short story: symptom, root cause, what we
-learned, and the current state.
+High-value pitfalls and the architectural context around them, categorized and numbered in the order they were recorded. Each entry captures: symptom, root cause, what we learned, and the current state.
+
+## Index & Categories
+
+| ID | Title | Domain | Key Invariant |
+| :--- | :--- | :--- | :--- |
+| **001** | [tmux is a deprecated legacy runtime](#001---tmux-is-a-deprecated-legacy-runtime-and-why-ghostline-exists) | Terminal Runtime | Ghostline with server-side libghostty-vt is the single authoritative PTY runtime. |
+| **002** | [Ghostty open-url fallback flooded os_log](#002---ghostty-open-url-fallback-flooded-os_log-and-pegged-a-core) | Native Integration | Embedders must handle open-url explicitly; never fall back to unbounded unhandled spawning. |
+| **003** | [Black terminal pane on empty workspace transition](#003---black-terminal-pane-after-empty-workspace---populated-workspace) | UI Lifecycle | Keep expensive render surfaces mounted across transient UI state transitions. |
+| **004** | [Idle output observers consumed interactive-path CPU](#004---idle-output-observers-consumed-interactive-path-cpu) | Resource Scaling | Observer costs must scale with active mutations, not total retained session count. |
+| **005** | [Warm TUI reattach viewport size divergence](#005---warm-tui-reattach-can-leave-the-viewport-misaligned-until-a-second-switch) | Viewport Geometry | Surface display size must reconcile on every reattach, decoupled from input focus. |
+
+> [!NOTE]
+> Detailed historical single-issue postmortems are archived in [docs/archive/problems/](archive/problems/).
 
 ## 001 - tmux is a deprecated legacy runtime (and why ghostline exists)
 
