@@ -36,6 +36,7 @@ type claudeRecord struct {
 	Subtype          string          `json:"subtype"`
 	Timestamp        string          `json:"timestamp"`
 	UUID             string          `json:"uuid"`
+	SessionID        string          `json:"sessionId"`
 	DurationMs       int64           `json:"durationMs"`
 	IsSidechain      bool            `json:"isSidechain"`
 	IsMeta           bool            `json:"isMeta"`
@@ -61,6 +62,7 @@ type claudeRecord struct {
 		Type      string          `json:"type"`
 		HookName  string          `json:"hookName"`
 		HookEvent string          `json:"hookEvent"`
+		Prompt    string          `json:"prompt"`
 		Content   json.RawMessage `json:"content"`
 		ExitCode  int             `json:"exitCode"`
 	} `json:"attachment"`
@@ -355,6 +357,25 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		}
 		if strings.HasPrefix(kind, "hook_") {
 			return nil
+		}
+		if kind == "queued_command" {
+			prompt := firstNonEmpty(record.Attachment.Prompt, p.content(record.Attachment.Content), p.content(record.Content))
+			payload := map[string]any{
+				"action":  "enqueue",
+				"content": prompt,
+				"prompt":  prompt,
+				"state":   "queued",
+			}
+			if record.SessionID != "" {
+				payload["sessionId"] = record.SessionID
+			}
+			return []api.AgentEvent{{
+				Provider:  "claude",
+				ID:        record.UUID,
+				Type:      "queue",
+				Payload:   payload,
+				Timestamp: timestamp,
+			}}
 		}
 		if kind == "agent_listing_delta" || kind == "skill_listing" {
 			content := p.content(record.Attachment.Content)

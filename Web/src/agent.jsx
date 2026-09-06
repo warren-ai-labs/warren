@@ -1469,8 +1469,8 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
           ))}
         </ul>
       )}
-      {type !== "question" && type !== "permission" && type !== "confirmation" && type !== "plan" && type !== "todo" && (payload.summary || payload.detail || payload.name) && (
-        <p className="agent-structured-summary">{payload.summary || payload.detail || payload.name}</p>
+      {type !== "question" && type !== "permission" && type !== "confirmation" && type !== "plan" && type !== "todo" && (payload.content || payload.prompt || payload.summary || payload.detail || payload.name) && (
+        <p className="agent-structured-summary">{payload.content || payload.prompt || payload.summary || payload.detail || payload.name}</p>
       )}
     </section>
   );
@@ -1487,6 +1487,7 @@ function structuredIcon(type) {
     plugin: "◆",
     subagent: "◇",
     attachment: "⌕",
+    queue: "⌛",
   }[type] || "•";
 }
 
@@ -1500,6 +1501,8 @@ function structuredStateLabel(state) {
     canceled: "Cancelled",
     failed: "Failed",
     in_progress: "In progress",
+    queued: "Queued",
+    dequeued: "Dispatched",
   }[state] || (state ? state.replaceAll("_", " ") : "Details");
 }
 

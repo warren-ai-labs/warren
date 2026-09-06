@@ -255,6 +255,36 @@ test("projectAgentEvents keeps structured cards as activity boundaries", () => {
   assert.deepEqual(blocks[2].reasoning.map(event => event.content), ["after resolution"]);
 });
 
+test("canonical normalization projects tool semantics and queue identity", () => {
+  const tool = normalizeCanonicalAgentEvent({
+    ...canonicalEvent(1),
+    type: "tool.started",
+    payload: {
+      callId: "call-1",
+      toolName: "shell",
+      toolKind: "ran",
+      toolDetail: "printf hello",
+    },
+  });
+  assert.equal(tool.toolKind, "ran");
+  assert.equal(tool.toolDetail, "printf hello");
+
+  const blocks = projectAgentEvents([
+    {
+      ...canonicalEvent(2),
+      type: "queue.updated",
+      payload: { queueId: "queue-1", content: "first", state: "queued" },
+    },
+    {
+      ...canonicalEvent(3),
+      type: "queue.updated",
+      payload: { queueId: "queue-1", content: "edited", state: "queued" },
+    },
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].event.payload.content, "edited");
+});
+
 test("groupAgentEvents treats role-only messages as visible message boundaries", () => {
   const blocks = groupAgentEvents([
     { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
@@ -555,4 +585,3 @@ test("isHiddenAgentEvent hides status, turn, and execution control-plane events 
   assert.equal(isHiddenAgentEvent({ type: "tool_output" }), false);
   assert.equal(isHiddenAgentEvent({ type: "question" }), false);
 });
-

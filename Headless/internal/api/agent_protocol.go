@@ -251,6 +251,18 @@ func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID strin
 	putAgentPayload(payload, "model", event.Model)
 	putAgentPayload(payload, "stopReason", event.StopReason)
 	putAgentPayload(payload, "toolName", event.ToolName)
+	if isToolAgentEventType(event.Type) {
+		toolKind := event.ToolKind
+		toolDetail := event.ToolDetail
+		if strings.TrimSpace(toolKind) == "" {
+			toolKind = canonicalToolKind(event.ToolName, event.ToolInput)
+		}
+		if strings.TrimSpace(toolDetail) == "" {
+			toolDetail = canonicalToolDetail(event.ToolInput)
+		}
+		putAgentPayload(payload, "toolKind", toolKind)
+		putAgentPayload(payload, "toolDetail", toolDetail)
+	}
 	if event.ToolInput != nil {
 		payload["toolInput"] = event.ToolInput
 	}
@@ -306,13 +318,15 @@ func StableAgentEventID(event AgentEvent) string {
 		Content  string         `json:"content"`
 		Delta    bool           `json:"delta"`
 		Tool     string         `json:"tool"`
+		ToolKind string         `json:"toolKind"`
+		Detail   string         `json:"toolDetail"`
 		CallID   string         `json:"callId"`
 		Output   string         `json:"output"`
 		Error    string         `json:"error"`
 		When     time.Time      `json:"when"`
 		Payload  map[string]any `json:"payload,omitempty"`
 	}{event.Sequence, event.Turn, event.Provider, event.Type, event.ID, event.Role, event.Content,
-		event.ContentDelta, event.ToolName, event.CallID, event.Output, event.Error, event.Timestamp.UTC(), event.Payload}
+		event.ContentDelta, event.ToolName, event.ToolKind, event.ToolDetail, event.CallID, event.Output, event.Error, event.Timestamp.UTC(), event.Payload}
 	encoded, _ := json.Marshal(value)
 	digest := sha256.Sum256(encoded)
 	return "evt-" + hex.EncodeToString(digest[:16])
@@ -350,16 +364,163 @@ func canonicalAgentEventType(value string, delta bool) string {
 		return "reasoning.delta"
 	case "tool_call", "tool_use", "tool":
 		return "tool.started"
+	case "tool_started":
+		return "tool.started"
 	case "tool_output", "tool_result":
 		return "tool.completed"
+	case "tool_updated":
+		return "tool.updated"
+	case "tool_completed":
+		return "tool.completed"
+	case "tool_failed":
+		return "tool.failed"
 	case "question", "permission", "confirmation":
 		return "interaction.requested"
-	case "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics":
+	case "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue":
 		return value + ".updated"
+	case "queue_operation":
+		return "queue.updated"
 	default:
 		if value == "" {
 			return "message.created"
 		}
 		return value
+	}
+}
+
+func isToolAgentEventType(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.NewReplacer("-", "_", ".", "_").Replace(value)))
+	switch normalized {
+	case "tool_call", "tool_use", "tool", "tool_output", "tool_result",
+		"tool_started", "tool_updated", "tool_completed", "tool_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+// canonicalToolKind maps provider-neutral tool names to the small vocabulary
+// used by every client renderer. The past-tense "ran" deliberately describes
+// shell execution while the other values describe the operation being shown.
+func canonicalToolKind(name string, input any) string {
+	value := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(name, "-", "_")))
+	if value == "" {
+		if hasCommandInput(input) {
+			return "ran"
+		}
+		return "tool"
+	}
+	switch value {
+	case "shell", "bash", "exec", "execute", "exec_command", "bash_cmd", "run_command", "local_shell_call", "shell_command":
+		return "ran"
+	case "glob", "find_files", "list_files", "find_by_name", "list_dir":
+		return "glob"
+	case "grep", "ripgrep", "rg", "search_content", "grep_search":
+		return "grep"
+	case "read", "read_file", "view", "view_file", "viewfile":
+		return "read"
+	case "edit", "edit_file", "str_replace_editor", "edit_file_v2", "replace_file_content", "apply_patch":
+		return "edit"
+	case "write", "write_file", "create_file", "write_to_file":
+		return "write"
+	case "webfetch", "web_fetch", "fetch_url", "read_url_content", "fetch":
+		return "fetch"
+	case "websearch", "web_search", "web_search_call", "search_web":
+		return "search"
+	case "task", "subagent", "agent", "delegate", "invoke_subagent", "spawn_agent", "call_omo_agent":
+		return "subagent"
+	case "askuserquestion", "ask_user_question", "ask_question", "request_user_input", "request_user_input_async", "question":
+		return "ask"
+	case "permissionrequest", "permission_request", "permission":
+		return "permission"
+	default:
+		return value
+	}
+}
+
+func hasCommandInput(input any) bool {
+	object, ok := input.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"command", "cmd", "CommandLine", "code", "script", "args", "argv"} {
+		if value, exists := object[key]; exists {
+			switch typed := value.(type) {
+			case string:
+				if strings.TrimSpace(typed) != "" {
+					return true
+				}
+			case []any:
+				if len(typed) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func canonicalToolDetail(input any) string {
+	var detail string
+	switch value := input.(type) {
+	case string:
+		detail = strings.TrimSpace(value)
+	case json.RawMessage:
+		var decoded any
+		if json.Unmarshal(value, &decoded) == nil {
+			return canonicalToolDetail(decoded)
+		}
+	case map[string]any:
+		for _, key := range []string{"command", "cmd", "CommandLine", "code", "script", "path", "file_path", "filePath", "filepath", "AbsolutePath", "TargetFile", "file", "filename", "target", "query", "pattern", "url", "Url", "prompt", "instruction"} {
+			if candidate, ok := value[key].(string); ok && strings.TrimSpace(candidate) != "" {
+				detail = strings.TrimSpace(candidate)
+				break
+			}
+		}
+		if detail == "" {
+			for _, key := range []string{"args", "argv"} {
+				if values, ok := stringSlice(value[key]); ok && len(values) > 0 {
+					detail = strings.Join(values, " ")
+					break
+				}
+			}
+		}
+	case []string:
+		detail = strings.Join(value, " ")
+	case []any:
+		if values, ok := stringSlice(value); ok {
+			detail = strings.Join(values, " ")
+		}
+	}
+	if len(detail) > 512 {
+		detail = detail[:512] + "…"
+	}
+	return detail
+}
+
+func stringSlice(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if text := strings.TrimSpace(value); text != "" {
+				result = append(result, text)
+			}
+		}
+		return result, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			if text = strings.TrimSpace(text); text != "" {
+				result = append(result, text)
+			}
+		}
+		return result, true
+	default:
+		return nil, false
 	}
 }

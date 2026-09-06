@@ -392,18 +392,18 @@ func ensureQoderSettingsHook(settingsPath, provider string) (changed bool, err e
 
 // qoderRecord is one JSONL line in a Qoder session file.
 type qoderRecord struct {
-	Type              string          `json:"type"`
-	UUID              string          `json:"uuid"`
-	ParentID          string          `json:"parentUuid"`
-	Timestamp         any             `json:"timestamp"`
-	SessionID         string          `json:"sessionId"`
-	Cwd               string          `json:"cwd"`
-	Model             string          `json:"model"`
-	ReasoningEffort   any             `json:"reasoningEffort"`
-	Attachment        json.RawMessage `json:"attachment"`
-	IsSidechain       bool            `json:"isSidechain"`
-	Message           json.RawMessage `json:"message"`
-	ToolUseResult     json.RawMessage `json:"toolUseResult"`
+	Type            string          `json:"type"`
+	UUID            string          `json:"uuid"`
+	ParentID        string          `json:"parentUuid"`
+	Timestamp       any             `json:"timestamp"`
+	SessionID       string          `json:"sessionId"`
+	Cwd             string          `json:"cwd"`
+	Model           string          `json:"model"`
+	ReasoningEffort any             `json:"reasoningEffort"`
+	Attachment      json.RawMessage `json:"attachment"`
+	IsSidechain     bool            `json:"isSidechain"`
+	Message         json.RawMessage `json:"message"`
+	ToolUseResult   json.RawMessage `json:"toolUseResult"`
 	// Error records carry the failure at the record level (the message
 	// content is the human-readable fallback text).
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
@@ -483,9 +483,9 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 				p.qoderModel = record.Model
 				p.qoderEffort = effort
 				return []api.AgentEvent{{
-					Provider:  qoderProvider,
-					ID:        "config",
-					Type:      "config",
+					Provider: qoderProvider,
+					ID:       "config",
+					Type:     "config",
 					Payload: map[string]any{
 						"model":           record.Model,
 						"reasoningEffort": effort,
@@ -500,20 +500,42 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 			Type         string `json:"type"`
 			PlanFilePath string `json:"planFilePath"`
 			Content      string `json:"content"`
+			Prompt       string `json:"prompt"`
 		}
-		if json.Unmarshal(record.Attachment, &att) == nil && (att.PlanFilePath != "" || att.Type == "plan") {
-			return []api.AgentEvent{{
-				Provider: qoderProvider,
-				ID:       firstNonEmpty(record.UUID, "qoder-plan"),
-				Type:     "plan",
-				Payload: map[string]any{
-					"planId": firstNonEmpty(record.UUID, "qoder-plan"),
-					"title":  "Plan",
-					"file":   att.PlanFilePath,
-					"state":  "in_progress",
-				},
-				Timestamp: timestamp,
-			}}
+		if json.Unmarshal(record.Attachment, &att) == nil {
+			if att.PlanFilePath != "" || att.Type == "plan" {
+				return []api.AgentEvent{{
+					Provider: qoderProvider,
+					ID:       firstNonEmpty(record.UUID, "qoder-plan"),
+					Type:     "plan",
+					Payload: map[string]any{
+						"planId": firstNonEmpty(record.UUID, "qoder-plan"),
+						"title":  "Plan",
+						"file":   att.PlanFilePath,
+						"state":  "in_progress",
+					},
+					Timestamp: timestamp,
+				}}
+			}
+			if att.Type == "queued_command" {
+				prompt := firstNonEmpty(att.Prompt, att.Content)
+				payload := map[string]any{
+					"action":  "enqueue",
+					"content": prompt,
+					"prompt":  prompt,
+					"state":   "queued",
+				}
+				if record.SessionID != "" {
+					payload["sessionId"] = record.SessionID
+				}
+				return []api.AgentEvent{{
+					Provider:  qoderProvider,
+					ID:        firstNonEmpty(record.UUID, "qoder-queue"),
+					Type:      "queue",
+					Payload:   payload,
+					Timestamp: timestamp,
+				}}
+			}
 		}
 		return nil
 	}

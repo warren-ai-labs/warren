@@ -115,12 +115,13 @@ SessionView（某个 Session）
 
 ### 5.1 时间线容器与滚动
 
-- `AgentComposerTextView` / `AgentComposerInput`（`22-162`）：UIKit `UITextView` 封装。固定
-  44pt 控制高度，内部可滚动；`layoutSubviews` 根据实际行高计算上下 inset，让首行文字和
-  caret 居中，`caretRect` 只缩短插入光标，不改变输入行为。
-- `AgentChatTopOffsetPreferenceKey`（`164-170`）和 `AgentChatBottomOffsetPreferenceKey`
-  （`172-178`）：滚动顶部/底部哨兵的位置测量。
-- `AgentChatView`（`184-529`）：Agent 时间线、空状态、历史加载、回到底部按钮、Attention/
+- `AgentComposerTextField` / `AgentComposerInput` (`21-163`): UIKit `UITextField` wrapper with
+  a fixed 42pt input row. Return submits the message while the coordinator keeps responder
+  state stable across SwiftUI publications.
+- `AgentChatTopOffsetPreferenceKey` (`165-171`) and `AgentChatBottomOffsetPreferenceKey`
+  (`173-179`): scroll-top and scroll-bottom sentinel measurements.
+- `AgentChatView` (`185-590`): Agent timeline, empty state, history loading, return-to-latest
+  action, Attention/
   Working/错误提示和 Composer 的总装配。每个时间线块使用稳定 `.id`。
 - `refreshRenderedBlocks`（`530-534`）：把当前 Session 的事件投影成 `AgentDisplayBlock`。
 - `handleTopOffset` / `requestOlderHistory`（`540-568`）：下拉到顶部阈值时请求旧历史，并用
@@ -130,30 +131,29 @@ SessionView（某个 Session）
 - `scrollToLatest` / `restoreHistoryScrollAnchor`（`603-642`）：主动回到底部或加载历史后恢复
   原可视位置。
 
-### 5.2 Composer（固定两行）
+### 5.2 Composer（单行）
 
-`composer` 位于 `644-777`，外层是一个带边框的 raised surface，结构固定为：
+`composer` is defined at `826-940`. Its bordered raised surface is a single 50pt row:
 
-1. 第一行（44pt）：`Message…` placeholder 和 `AgentComposerInput`。长文本在 UITextView
-   内部滚动，不把 Composer 无限撑高。
-2. 第二行（44pt）：`attachmentControlsWithPlus`、附件 chip（若有）、Agent 类型/Model
-   元数据、右侧白色 `arrow.up` 发送按钮。
+1. A 42pt `Message…` field backed by `AgentComposerInput`.
+2. The same row contains `attachmentControlsWithPlus`, the optional keyboard-dismiss button,
+   and the white `arrow.up` send button. Attachments, queue state, and model/reasoning settings
+   are rendered by the metadata tray below the row.
 
 相关位置：
 
-- `attachmentControlsWithPlus`（`778-818`）：加号入口。iOS 在一个紧凑菜单中同时提供
-  PhotosPicker（照片）和 file importer（普通文件、iCloud Drive）；其他平台直接使用 file
-  importer。不能再把 picker 当成 Button action 内的无效表达式。
-- `filePickerButton` / `attachmentPlusLabel`（`820-846`）：文件选择器和共享的加号图标标签。
-- `loadPhotos` / `handleFileImporter`（约 `1036-1103`）：读取照片或安全作用域文件 URL，转成
+- `attachmentControlsWithPlus` (`1037-1088`): the compact plus menu exposes both PhotosPicker
+  and the file importer on iOS; other platforms use the file importer directly.
+- `filePickerButton` / `attachmentPlusLabel` (`1090-1118`): file importer and shared plus label.
+- `loadPhotos` / `handleFileImporter` (`1335-1425`): read photos or security-scoped file URLs into
   短暂的本地附件数据；附件只在上传期间留在内存。
-- `attachmentChip`（`836-881`）：附件名称、上传进度、失败重试和删除附件。这里的
-  `xmark.circle.fill` 是“删除附件”按钮，不能误认为失败红叉。
-- `agentComposerMetadata` / `agentTypeLabel`（`1105-1130`）：第二行的 provider + model
-  文案，不是新的输入框。
-- `sendComposerMessage`（`935-1032`）：无附件直接发送；有附件先上传，再用 opaque reference
-  发送；失败显示反馈。
-- `canSend`（`1173-1176`）：发送按钮是否启用。
+- `attachmentChip` (`1119-1162`): attachment name, upload progress, retry, and removal. The
+  removal control is not a tool-failure marker.
+- `composerSettingsButton` (`1507-1578`): provider model and reasoning settings in the metadata
+  tray; it is not another input field.
+- `sendComposerMessage` (`1208-1334`): sends directly without attachments, or uploads first and
+  sends opaque references; failures remain actionable.
+- `canSend` (`1632-1635`): send-button eligibility.
 
 附件发送的 View 只负责选择、读取、进度和 opaque reference。iOS 与 Web 都调用
 `agent.attachment.prepare/chunk/complete/abort`，完成后再调用 `agent.turn.start`；
@@ -332,18 +332,18 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
 | “展开后缩进太深” | `AgentStructuredEventBlock` detail（约 `2074`）、`AgentActivityGroupBlock` detail（约 `2650`）、reasoning/tool detail | 优先调固定 indent，不要插入状态圆点 |
 | “右侧红叉” | `AgentToolStatusMark`（由 `AgentToolBlockView` / `AgentToolOutputBlock` 调用） | 失败显示无边框红色 `xmark`，用固定宽度 frame 放在最右侧；不要改成圆形按钮 |
 | “红/绿色竖线压住箭头” | `AgentStatusRail` + `AgentStructuredEventBlock` / `AgentActivityGroupBlock` overlays | Tool/Thinking 子行已经不画竖线；若仍重叠，先查顶层 ActivityGroup 的独立 rail 列与 detail indent |
-| “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`52-162`）与 `composer` 第一行（约 `670-707`） | 固定 44pt；UITextView 内部滚动；`layoutSubviews` 动态计算上下 inset，placeholder 与 caret 对齐 |
-| “Composer 应该两行” | `composer`（`672-815`） | 顶部为附件胶囊托盘；输入框第一行 Message，第二行 +/Model/键盘收起/发送箭头；不要把两行合并成 HStack |
-| “发送按钮椭圆/颜色不对” | `composer` 第二行的 `Button`（约 `770-795`） | 当前是无背景的白色 `arrow.up`，44pt hit area；左侧为键盘收起按钮 |
-| “+ 按钮” | `attachmentControlsWithPlus`（`820-860`） | 直接呈现 PhotosPicker/fileImporter，点击后真正打开选择器 |
-| “Model 文案” | `agentComposerMetadata`（`1170`）与 `IOSAgentInteraction.formatAgentModel` | 第二行 model 胶囊，优先完整展示模型名称，无人工 116pt 截断 |
+| “Message 输入框太高/placeholder 不居中” | `AgentComposerInput`（`43-163`）与 `composer`（`826-940`） | `UITextField` 固定 42pt；单行输入和 placeholder 垂直居中，Return 触发发送 |
+| “Composer 应该两行” | `composer`（`826-940`）与 `composerMetadataTray`（`941-1034`） | 输入控件是单行 50pt；附件、队列和 model/reasoning 设置位于下方 metadata tray |
+| “发送按钮椭圆/颜色不对” | `composer` 的 `Button`（约 `900-918`） | 当前是无背景的白色 `arrow.up`，44pt hit area；键盘收起按钮仅在聚焦时显示 |
+| “+ 按钮” | `attachmentControlsWithPlus`（`1037-1088`） | 直接呈现 PhotosPicker/fileImporter，点击后真正打开选择器 |
+| “Model 文案” | `composerSettingsButton`（`1507-1578`）与 `IOSAgentInteraction.formatAgentModel` | metadata tray 中的 model/reasoning 胶囊，优先完整展示模型名称 |
 | “新增消息没有自动下滚” | `observeAgentRevision`（`585`）、`handleNewContent`（`570`）、底部哨兵（约 `304`） | 刷新前捕获 `isNearLatest`，等待两轮布局后滚动 |
-| “Working/正在思考” | `shouldShowWorking`（约 `1124`）、`AgentWorkingFooter`（`1405`） | 文案动画来自 `IOSShimmerText` |
+| “Working/正在思考” | `shouldShowWorking`（`1603`）、`AgentWorkingFooter`（`2212`） | 文案动画来自 `IOSShimmerText` |
 | “需要我回答/权限” | `AgentAttentionBanner`（`1323`）、`AgentStructuredEventBlock` Question/Permission 分支 | input 可聚焦 Composer，approval 引导 Terminal |
 | “思考步骤” | `AgentActivityGroupBlock` + `AgentReasoningEntry`（`2607`、`2743`） | 第二级折叠，不是普通 assistant 消息 |
 | “工具调用/工具输出” | `AgentToolBlockView` / `AgentToolOutputBlock`（`2810`、`2902`） | 看 status rail、summary、output/error 文本 |
 | “Plan/Todo” | `AgentStructuredEventBlock.detail` Plan/Todo（约 `2232`） | 只读、无状态圆点，使用文字状态 |
-| “队列消息” | `IOSAgentQueueSheet`（`1169`）与 model 队列 API | 队列是本地 View 状态，不是 transcript event |
+| “队列消息” | `IOSAgentQueueSheet`（`1953`）、`makeProtocolQueueItems`（`1647`）与 model 队列 API | 同时显示本地队列和 Host/provider queue events；两者都保持稳定 item ID |
 | “历史加载/上拉” | `AgentHistoryLoadMoreRow`（`1464`）、顶部哨兵和 `requestOlderHistory` | 使用 anchor 保持原可视位置 |
 | “Session 顶栏/Terminal-Agent 切换” | `SessionHeader`、`IOSModeToggle`、`SessionView` | `IOSSessionDisplayMode` 是每个 Session 的本地偏好 |
 | “Session 切换条有左右边框” | `SessionTabRail` | 改为全宽 rail；删除 rounded rectangle stroke 和左右外边距，只保留底部分隔线 |
@@ -380,4 +380,4 @@ PTY prompt 告知 Agent 文件名、MIME、大小和 Host 路径。客户端不�
 - 真机验收：至少检查 1 个普通对话、1 个展开活动组、1 个失败工具、1 个 Plan/Todo、1 个
   Question/Permission、长消息输入、键盘弹出时新增消息和历史上拉。
 - 视觉验收时不要用测试数据替代真实 SwiftUI 表面；尤其确认轨道没有盖住 chevron/图标，
-  Composer 确实是两行，流式新增消息仍贴近底部。
+  Composer 保持单行输入，metadata tray 不遮挡键盘和底部滚动，流式新增消息仍贴近底部。
