@@ -48,4 +48,13 @@ Do not mark a change ready for review while loading, error, empty, retry, keyboa
 
 Warren is local-first. Host-owned resources, client projections, and transport boundaries should remain explicit. New code must not turn a cache, UI projection, or relay into a second authority for Projects, Workspaces, Sessions, or terminal output.
 
+## Vetted Contributor Model
+
+To protect developer workstation security, system-level primitives (PTY, terminal emulation, process execution, and relay tunnels), and multi-client integrity, Warren uses a **vetted contributor model**:
+
+1. **Unvetted Pull Requests**: Pull requests submitted directly to the public repository by unvetted, anonymous, or non-verifiable accounts are not merged into production.
+2. **Community Proposals & PoCs**: External developers are encouraged to open issues, participate in architecture discussions, or submit draft pull requests on the public repository as proof-of-concept proposals.
+3. **Contributor Certification**: When a contribution meets our engineering standards, design principles, and personal identity requirements (see [`REVIEW.md`](REVIEW.md)), maintainers will evaluate the work and invite the contributor to join `warren-private` as a certified collaborator.
+4. **Unified Development**: Certified contributors develop within the primary master repository where full-stack automated checks (including desktop, daemon, and iOS suites) are verified before merging. Approved changes are automatically synchronized to the public repository.
+
 Contributions are accepted under the repository license. By submitting a contribution, you confirm that you have the right to do so and that it contains no confidential or third-party material that you are not allowed to publish.
