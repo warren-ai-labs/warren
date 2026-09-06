@@ -38,9 +38,44 @@ const relayPath = (value) => `${relayPathPrefix}/${String(value).replace(/^\/+/,
 const appBase = location.pathname.endsWith("/")
   ? location.pathname
   : `${location.pathname}/`;
+const daemonTokenStorageKey = "warren.daemon.token";
+
+export function readStoredDaemonToken() {
+  try {
+    return (
+      globalThis.sessionStorage?.getItem?.(daemonTokenStorageKey) ||
+      globalThis.localStorage?.getItem?.(daemonTokenStorageKey) ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+export function persistDaemonToken(token) {
+  try {
+    if (token) {
+      globalThis.sessionStorage?.setItem?.(daemonTokenStorageKey, token);
+      globalThis.localStorage?.setItem?.(daemonTokenStorageKey, token);
+    } else {
+      globalThis.sessionStorage?.removeItem?.(daemonTokenStorageKey);
+      globalThis.localStorage?.removeItem?.(daemonTokenStorageKey);
+    }
+  } catch {
+    // Restricted environments may disallow storage access.
+  }
+}
+
 const suppliedToken = authFragment?.get("t") || "";
 const memoryToken = { value: "" };
-if (!usesControlPlane) memoryToken.value = suppliedToken;
+if (!usesControlPlane) {
+  if (suppliedToken) {
+    memoryToken.value = suppliedToken;
+    persistDaemonToken(suppliedToken);
+  } else {
+    memoryToken.value = readStoredDaemonToken();
+  }
+}
 let resolvedRelayHostID = hasRelayHostID ? relayHostID : "";
 
 const relayClientID = (() => {
@@ -103,7 +138,7 @@ export const tokenReady = usesControlPlane
             return memoryToken.value;
           })
       : refreshRelayToken().catch(() => "")))
-  : Promise.resolve("");
+  : Promise.resolve(memoryToken.value);
 
 export async function refreshRelayToken() {
   if (!usesControlPlane) return memoryToken.value;
@@ -117,6 +152,56 @@ export async function refreshRelayToken() {
   return memoryToken.value;
 }
 
+export function parseAuthInput(input) {
+  if (typeof input !== "string") return { token: "", url: null };
+  const trimmed = input.trim().replace(/^["']|["']$/g, "");
+  if (!trimmed) return { token: "", url: null };
+
+  try {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const url = new URL(trimmed);
+      const hashParams = new URLSearchParams(url.hash.replace(/^[#]/, ""));
+      const token = hashParams.get("t") || url.searchParams.get("t") || "";
+      return { token, url };
+    }
+  } catch {
+    // Fall back to parameter or raw token parsing.
+  }
+
+  if (trimmed.startsWith("#") || trimmed.startsWith("?")) {
+    const params = new URLSearchParams(trimmed.slice(1));
+    const token = params.get("t");
+    if (token) return { token, url: null };
+  } else if (trimmed.startsWith("t=")) {
+    const params = new URLSearchParams(trimmed);
+    const token = params.get("t");
+    if (token) return { token, url: null };
+  }
+
+  return { token: trimmed, url: null };
+}
+
+export async function authenticateToken(tokenOrTicket) {
+  const token = typeof tokenOrTicket === "string" ? tokenOrTicket.trim() : "";
+  if (!token) throw new Error("No token provided");
+  if (usesControlPlane) {
+    const response = await fetch(`${relaySessionBase()}/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ pairing_ticket: token, client_id: relayClientID }),
+    });
+    if (!response.ok) throw new Error("Ticket exchange failed");
+    const result = await response.json();
+    if (!result.access_token) throw new Error("No access token returned");
+    memoryToken.value = result.access_token;
+    return memoryToken.value;
+  }
+  memoryToken.value = token;
+  persistDaemonToken(token);
+  return token;
+}
+
 if (typeof history !== "undefined" && suppliedToken) {
   const clean = `${location.pathname}${location.search}`;
   history.replaceState(history.state, document.title, clean);
@@ -128,11 +213,22 @@ export const runtime = {
   usesControlPlane,
   get token() { return memoryToken.value; },
   set token(value) {
-    memoryToken.value = value || "";
+    const normalized = value || "";
+    memoryToken.value = normalized;
+    if (!usesControlPlane) {
+      persistDaemonToken(normalized);
+    }
   },
   tokenReady,
   get clientID() { return relayClientID; },
   refresh: refreshRelayToken,
+  clearToken() {
+    memoryToken.value = "";
+    if (!usesControlPlane) {
+      persistDaemonToken("");
+    }
+  },
+  authenticate: authenticateToken,
 };
 
 export function webSocketURL() {

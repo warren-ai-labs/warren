@@ -3078,20 +3078,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         }
     }
-    func openWebURL(_ url: URL) {
-        let browserURL = Self.publicAccessBrowserURL(
-            url,
-            currentEndpoint: webStatus.secureURL,
+    func browserURL(for url: URL) -> URL {
+        Self.browserURL(
+            for: url,
+            localURL: webStatus.localURL,
+            lanURL: webStatus.lanURL,
+            secureURL: webStatus.secureURL,
             daemonToken: webAuthToken
         )
+    }
+
+    func openWebURL(_ url: URL) {
+        let browserURL = browserURL(for: url)
         NSWorkspace.shared.open(browserURL)
     }
     func copyWebURL(_ url: URL) {
-        let clipboardURL = Self.publicAccessBrowserURL(
-            url,
-            currentEndpoint: webStatus.secureURL,
-            daemonToken: webAuthToken
-        )
+        let clipboardURL = browserURL(for: url)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
     }
@@ -3107,11 +3109,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ]))
                 return
             }
-            let clipboardURL = Self.publicAccessBrowserURL(
-                url,
-                currentEndpoint: webStatus.secureURL,
-                daemonToken: webAuthToken
-            )
+            let clipboardURL = browserURL(for: url)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(
                 clipboardURL.absoluteString,
@@ -3127,6 +3125,29 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var webAuthToken: String {
         guard endpointConfiguration?.type.lowercased() != "relay" else { return "" }
         return endpointConfiguration?.token ?? ""
+    }
+
+    /// Resolves the browser-open or clipboard URL for a Web address. Local
+    /// and LAN daemon endpoints attach the local daemon authentication fragment.
+    /// Remote public access endpoints attach credentials only when permitted.
+    static func browserURL(
+        for url: URL,
+        localURL: URL?,
+        lanURL: URL?,
+        secureURL: URL?,
+        daemonToken: String
+    ) -> URL {
+        if let localURL, canonicalWebURL(url) == canonicalWebURL(localURL) {
+            return authenticatedWebURL(url, daemonToken: daemonToken)
+        }
+        if let lanURL, canonicalWebURL(url) == canonicalWebURL(lanURL) {
+            return authenticatedWebURL(url, daemonToken: daemonToken)
+        }
+        return publicAccessBrowserURL(
+            url,
+            currentEndpoint: secureURL,
+            daemonToken: daemonToken
+        )
     }
 
     /// Returns the URL used only for an explicit browser-open action. Public

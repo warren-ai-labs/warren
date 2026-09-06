@@ -92,3 +92,73 @@ test("opaque Relay invite exchanges before opening a Host-scoped socket", async 
     "/relay/invite/Abc_123-def/service-worker.js",
   );
 });
+
+test("parseAuthInput handles URLs, fragments, and raw tokens", async () => {
+  const { parseAuthInput } = await import(`./runtime.js?parse-test=${Date.now()}`);
+
+  assert.deepEqual(parseAuthInput(""), { token: "", url: null });
+  assert.deepEqual(parseAuthInput(null), { token: "", url: null });
+  assert.deepEqual(parseAuthInput("my-raw-token"), { token: "my-raw-token", url: null });
+  assert.deepEqual(parseAuthInput("#t=fragment-token"), { token: "fragment-token", url: null });
+  assert.deepEqual(parseAuthInput("t=param-token"), { token: "param-token", url: null });
+  assert.deepEqual(parseAuthInput("?t=query-token"), { token: "query-token", url: null });
+  assert.deepEqual(parseAuthInput("  #t=trimmed-token  "), { token: "trimmed-token", url: null });
+
+  const parsedUrl = parseAuthInput("http://127.0.0.1:8789/#t=url-token");
+  assert.equal(parsedUrl.token, "url-token");
+  assert.ok(parsedUrl.url instanceof URL);
+  assert.equal(parsedUrl.url.origin, "http://127.0.0.1:8789");
+
+  const parsedQueryUrl = parseAuthInput("https://remote.warren.test:9000/?t=query-url-token");
+  assert.equal(parsedQueryUrl.token, "query-url-token");
+  assert.ok(parsedQueryUrl.url instanceof URL);
+});
+
+test("direct daemon runtime persists and restores token from storage across reloads", async () => {
+  const mockStorage = new Map();
+  globalThis.document = {
+    querySelector() {
+      return { content: "" };
+    },
+  };
+  globalThis.sessionStorage = {
+    getItem(key) { return mockStorage.get(key) || null; },
+    setItem(key, value) { mockStorage.set(key, String(value)); },
+    removeItem(key) { mockStorage.delete(key); },
+  };
+  globalThis.localStorage = {
+    getItem(key) { return mockStorage.get(key) || null; },
+    setItem(key, value) { mockStorage.set(key, String(value)); },
+    removeItem(key) { mockStorage.delete(key); },
+  };
+  globalThis.location = {
+    pathname: "/",
+    search: "",
+    hash: "#t=initial-secret-token",
+    protocol: "http:",
+    host: "127.0.0.1:8789",
+    hostname: "127.0.0.1",
+    port: "8789",
+  };
+  globalThis.history = { replaceState() {} };
+
+  // 1. Initial load with #t= token in URL fragment
+  const firstLoad = await import(`./runtime.js?direct-test-1=${Date.now()}`);
+  assert.equal(firstLoad.runtime.token, "initial-secret-token");
+  assert.equal(mockStorage.get("warren.daemon.token"), "initial-secret-token");
+
+  // 2. Simulated reload: URL fragment is now scrubbed (#t= gone)
+  globalThis.location.hash = "";
+  const reload = await import(`./runtime.js?direct-test-2=${Date.now()}`);
+  assert.equal(reload.runtime.token, "initial-secret-token");
+
+  // 3. Clear token on unauthorized error
+  reload.runtime.clearToken();
+  assert.equal(reload.runtime.token, "");
+  assert.equal(mockStorage.get("warren.daemon.token"), undefined);
+
+  // 4. Update runtime token manually (e.g. from reconnect input)
+  reload.runtime.token = "new-recovered-token";
+  assert.equal(reload.runtime.token, "new-recovered-token");
+  assert.equal(mockStorage.get("warren.daemon.token"), "new-recovered-token");
+});
