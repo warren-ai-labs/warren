@@ -1468,19 +1468,53 @@ private actor WarrenRemoteWire {
         }
     }
 
+    /// Projects agent events to the UI projection. Only sends the latest activity state
+    /// to avoid flickering through intermediate states during event replay.
     private func projectAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
         guard let sessionID = agentSessions[streamID] else { return }
-        for event in events where event.sequence > (agentProjectionSequence[streamID] ?? 0) {
-            agentPendingProjection[streamID, default: [:]][event.sequence] = event
+        
+        // Collect all status.changed events that are newer than what we've already projected
+        var statusEvents: [(sequence: UInt64, event: WarrenRemoteAgentEvent)] = []
+        for event in events 
+            where event.type == "status.changed" 
+                  && event.sequence > (agentProjectionSequence[streamID] ?? 0) {
+            statusEvents.append((event.sequence, event))
         }
-        while let event = agentPendingProjection[streamID]?.removeValue(forKey: (agentProjectionSequence[streamID] ?? 0) + 1) {
-            agentProjectionSequence[streamID] = event.sequence
-            guard event.type == "status.changed", let payload = event.payload else { continue }
-            let statusPayload: WarrenRemoteJSONValue = .object(payload)
-            guard let data = try? JSONEncoder().encode(statusPayload),
-                  let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
-                  let status = Self.agentStatus(from: remote) else { continue }
-            _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
+        
+        // If no new status events, still update pending queue for ordering purposes
+        if !statusEvents.isEmpty {
+            // Add non-status events to pending queue for sequencing
+            for event in events where event.type != "status.changed"
+                && event.sequence > (agentProjectionSequence[streamID] ?? 0) {
+                agentPendingProjection[streamID, default: [:]][event.sequence] = event
+            }
+            
+            // Only send the FINAL status change, not intermediate transitions
+            // This prevents UI flickering when replaying history
+            let finalSequence = max(agentProjectionSequence[streamID] ?? 0, 
+                                   statusEvents.map(\.sequence).max() ?? 0)
+            agentProjectionSequence[streamID] = finalSequence
+            
+            // Clear all pending projections since we're only sending the latest status
+            agentPendingProjection[streamID]?.removeAll()
+            
+            if let lastStatusEvent = statusEvents.max(by: { $0.sequence < $1.sequence }) {
+                let payload = lastStatusEvent.event.payload
+                let statusPayload: WarrenRemoteJSONValue = .object(payload)
+                guard let data = try? JSONEncoder().encode(statusPayload),
+                      let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+                      let status = Self.agentStatus(from: remote) else { return }
+                _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
+            }
+        } else {
+            // No new status events - just process any other events for sequencing
+            for event in events where event.sequence > (agentProjectionSequence[streamID] ?? 0) {
+                agentPendingProjection[streamID, default: [:]][event.sequence] = event
+            }
+            while let event = agentPendingProjection[streamID]?.removeValue(
+                forKey: (agentProjectionSequence[streamID] ?? 0) + 1) {
+                agentProjectionSequence[streamID] = event.sequence
+            }
         }
     }
 
@@ -4359,6 +4393,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return true
     }
 
+    @MainActor
     private func consume(_ event: RemoteWireEvent) async {
         switch event {
         case .roster:
@@ -5333,6 +5368,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     @discardableResult
+    @MainActor
     func publishProjectionIfChanged(_ nextProjection: WarrenDesktopProjection) -> Bool {
         guard projection != nextProjection else { return false }
         projection = nextProjection

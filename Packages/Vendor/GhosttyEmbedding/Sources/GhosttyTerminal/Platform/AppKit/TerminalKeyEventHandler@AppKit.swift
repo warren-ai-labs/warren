@@ -20,10 +20,15 @@
         private weak var view: AppTerminalView?
         var inputMethodHandler: TerminalTextInputHandler?
         private var interpretedCommandSelector: Selector?
+        private var modifierState = TerminalAppKitModifierState()
 
         init(view: AppTerminalView) {
             self.view = view
             inputMethodHandler = TerminalTextInputHandler(view: view)
+        }
+
+        func resetModifierState() {
+            modifierState.reset()
         }
 
         nonisolated static func shouldUseDirectInput(
@@ -115,46 +120,15 @@
         }
 
         func handleFlagsChanged(with event: NSEvent) {
-            guard let surface = view?.surface else { return }
+            guard let view, let surface = view.surface else { return }
             guard inputMethodHandler?.hasMarkedText != true else { return }
 
-            let mod: UInt32
-            switch event.keyCode {
-            case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
-            case 0x38, 0x3C: mod = GHOSTTY_MODS_SHIFT.rawValue
-            case 0x3B, 0x3E: mod = GHOSTTY_MODS_CTRL.rawValue
-            case 0x3A, 0x3D: mod = GHOSTTY_MODS_ALT.rawValue
-            case 0x37, 0x36: mod = GHOSTTY_MODS_SUPER.rawValue
-            default: return
-            }
+            guard let modifierEvent = modifierState.resolve(
+                keyCode: event.keyCode,
+                flags: event.modifierFlags
+            ) else { return }
 
-            let mods = TerminalInputModifiers(from: event.modifierFlags).ghosttyMods
-
-            var action = GHOSTTY_ACTION_RELEASE
-            if mods.rawValue & mod != 0 {
-                let sidePressed: Bool = switch event.keyCode {
-                case 0x3C:
-                    event.modifierFlags.rawValue
-                        & UInt(NX_DEVICERSHIFTKEYMASK) != 0
-                case 0x3E:
-                    event.modifierFlags.rawValue
-                        & UInt(NX_DEVICERCTLKEYMASK) != 0
-                case 0x3D:
-                    event.modifierFlags.rawValue
-                        & UInt(NX_DEVICERALTKEYMASK) != 0
-                case 0x36:
-                    event.modifierFlags.rawValue
-                        & UInt(NX_DEVICERCMDKEYMASK) != 0
-                default:
-                    true
-                }
-
-                if sidePressed {
-                    action = GHOSTTY_ACTION_PRESS
-                }
-            }
-
-            var input = event.buildKeyInput(action: action)
+            var input = event.buildKeyInput(action: modifierEvent.action)
             input.text = nil
             surface.sendKeyEvent(input)
         }
