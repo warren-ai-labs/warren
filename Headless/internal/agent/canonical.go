@@ -47,12 +47,12 @@ func canonicalToolName(provider, raw string) string {
 	case "webfetch", "web_fetch", "fetch_url", "read_url_content":
 		return "fetch"
 	// subagent
-	case "task", "subagent", "agent", "delegate", "invoke_subagent", "define_subagent", "spawn_agent":
+	case "task", "subagent", "agent", "delegate", "invoke_subagent", "define_subagent", "spawn_agent", "call_omo_agent":
 		return "subagent"
 	// claude and antigravity structured tool calls — these project to RFC 0010 events and
 	// also surface as tool_call for clients that haven't learned the
 	// structured type yet.
-	case "askuserquestion", "ask_user_question", "ask_question", "request_user_input", "request_user_input_async":
+	case "askuserquestion", "ask_user_question", "ask_question", "request_user_input", "request_user_input_async", "question":
 		return "ask_user_question"
 	case "permissionrequest", "permission_request":
 		return "permission_request"
@@ -111,7 +111,7 @@ func eventIsRenderable(e api.AgentEvent) bool {
 	switch e.Type {
 	case "tool_call", "tool_output",
 		"question", "permission", "plan", "todo",
-		"activity", "plugin", "subagent", "compaction":
+		"activity", "plugin", "subagent", "compaction", "config":
 		return true
 	}
 	return false

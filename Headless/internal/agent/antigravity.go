@@ -402,6 +402,7 @@ type antigravityRecord struct {
 	Type      string                `json:"type"`
 	Status    string                `json:"status"`
 	CreatedAt string                `json:"created_at"`
+	Model     string                `json:"model"`
 	Content   string                `json:"content"`
 	Thinking  string                `json:"thinking"`
 	ToolCalls []antigravityToolCall `json:"tool_calls"`
@@ -414,6 +415,7 @@ type antigravityToolCall struct {
 
 type antigravityParser struct {
 	baseParser
+	antigravityModel        string
 	antigravityCallTool     map[string]string
 	antigravityPendingCalls []string
 	antigravityInteractions map[string]string
@@ -441,6 +443,16 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.CreatedAt)
+	if record.Model != "" && record.Model != p.antigravityModel {
+		p.antigravityModel = record.Model
+		return []api.AgentEvent{{
+			Provider:  antigravityProvider,
+			ID:        "config",
+			Type:      "config",
+			Payload:   map[string]any{"model": record.Model},
+			Timestamp: timestamp,
+		}}
+	}
 	switch strings.ToUpper(record.Type) {
 	case "PLAN":
 		return []api.AgentEvent{{
@@ -450,7 +462,7 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 			Payload: map[string]any{
 				"planId":  "antigravity-plan",
 				"title":   "Plan",
-				"state":   strings.ToLower(record.Status),
+				"state":   canonicalStepStatus(record.Status),
 				"summary": p.clip(record.Content),
 			},
 			Timestamp: timestamp,
@@ -632,6 +644,12 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		return nil
 
 	default:
+		if structured := projectStructuredAgentEvent(antigravityProvider, record.Type, line, timestamp); structured != nil {
+			if structured.ID == "" {
+				structured.ID = fmt.Sprintf("step_%d", record.StepIndex)
+			}
+			return []api.AgentEvent{*structured}
+		}
 		return nil
 	}
 }

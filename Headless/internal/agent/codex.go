@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
@@ -11,7 +12,9 @@ import (
 type codexParser struct {
 	baseParser
 	codexModel           string
+	codexEffort          string
 	codexCallTool        map[string]string
+	codexInteractions    map[string]string
 	codexTurnFailed      bool
 	lastUserContent      string
 	lastAssistantContent string
@@ -21,8 +24,9 @@ type codexParser struct {
 
 func newCodexParser(contentLimit int) *codexParser {
 	return &codexParser{
-		baseParser:    newBaseParser(contentLimit),
-		codexCallTool: make(map[string]string),
+		baseParser:        newBaseParser(contentLimit),
+		codexCallTool:     make(map[string]string),
+		codexInteractions: make(map[string]string),
 	}
 }
 
@@ -91,11 +95,30 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 	case "session_meta":
 		return nil
 	case "turn_context":
-		var payload codexPayload
-		if json.Unmarshal(record.Payload, &payload) != nil || payload.Model == "" || payload.Model == p.codexModel {
+		var payload struct {
+			Model  string `json:"model"`
+			Effort string `json:"effort"`
+		}
+		if json.Unmarshal(record.Payload, &payload) != nil {
 			return nil
 		}
-		p.codexModel = payload.Model
+		changed := false
+		if payload.Model != "" && payload.Model != p.codexModel {
+			p.codexModel = payload.Model
+			changed = true
+		}
+		if payload.Effort != "" && payload.Effort != p.codexEffort {
+			p.codexEffort = payload.Effort
+			changed = true
+		}
+		if changed {
+			event.Type = "config"
+			event.Payload = map[string]any{
+				"model":           p.codexModel,
+				"reasoningEffort": p.codexEffort,
+			}
+			return []api.AgentEvent{event}
+		}
 		return nil
 	case "compacted":
 		event.Type = "compaction"
@@ -158,6 +181,39 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastEventType = "reasoning"
 			return []api.AgentEvent{event}
 		case "function_call", "local_shell_call":
+			canonical := canonicalToolName("codex", payload.Name)
+			if canonical == "ask_user_question" {
+				callID := firstNonEmpty(payload.CallID, payload.ID)
+				event.ID = callID
+				event.Type = "question"
+				event.Payload = codexQuestionPayload(callID, payload.Arguments, p.contentLimit)
+				if callID != "" {
+					p.codexInteractions[callID] = "question"
+				}
+				p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, event.Timestamp)
+				return []api.AgentEvent{event}
+			}
+			if payload.Name == "exec_approval_request" || payload.Name == "apply_patch_approval_request" || payload.Name == "approval_request" {
+				callID := firstNonEmpty(payload.CallID, payload.ID)
+				event.ID = callID
+				event.Type = "permission"
+				event.Payload = map[string]any{
+					"requestId":   callID,
+					"title":       "Permission",
+					"action":      payload.Name,
+					"description": "Codex requests permission to proceed",
+					"options": []any{
+						map[string]any{"id": "allow", "label": "Allow"},
+						map[string]any{"id": "deny", "label": "Deny"},
+					},
+					"state": "pending",
+				}
+				if callID != "" {
+					p.codexInteractions[callID] = "permission"
+				}
+				p.tracker.MarkAttention(api.AgentAttentionApproval, "permission", callID, event.Timestamp)
+				return []api.AgentEvent{event}
+			}
 			if payload.Name == "update_plan" {
 				var planArgs struct {
 					Plan []struct {
@@ -172,7 +228,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 							"id":    fmt.Sprintf("step-%d", i),
 							"title": item.Step,
 							"label": item.Step,
-							"state": item.Status,
+							"state": canonicalStepStatus(item.Status),
 						}
 					}
 					event.ID = "codex-plan"
@@ -180,7 +236,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					event.Payload = map[string]any{
 						"planId": "codex-plan",
 						"title":  "Plan",
-						"state":  "in_progress",
+						"state":  calculatePlanState(items),
 						"items":  items,
 					}
 					return []api.AgentEvent{event}
@@ -214,7 +270,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			}
 			event.ID = payload.ID
 			event.Type = "tool_call"
-			event.ToolName = canonicalToolName("codex", payload.Name)
+			event.ToolName = canonical
 			event.CallID = payload.CallID
 			if event.ToolName == "" && payload.Type == "local_shell_call" {
 				event.ToolName = "shell"
@@ -231,6 +287,22 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastEventType = "tool_call"
 			return []api.AgentEvent{event}
 		case "function_call_output", "custom_tool_call_output":
+			if kind := p.codexInteractions[payload.CallID]; kind != "" {
+				delete(p.codexInteractions, payload.CallID)
+				p.tracker.MarkAttention("", "", "", time.Time{})
+				title := "Question"
+				if kind == "permission" {
+					title = "Permission"
+				}
+				event.ID = payload.CallID
+				event.Type = kind
+				event.Payload = map[string]any{
+					"requestId": payload.CallID,
+					"title":     title,
+					"state":     "resolved",
+				}
+				return []api.AgentEvent{event}
+			}
 			event.ID = payload.ID
 			event.Type = "tool_output"
 			event.CallID = payload.CallID
@@ -258,9 +330,25 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastEventType = "tool_call"
 			return []api.AgentEvent{event}
 		case "custom_tool_call":
+			canonical := canonicalToolName("codex", payload.Name)
+			if canonical == "ask_user_question" {
+				callID := firstNonEmpty(payload.CallID, payload.ID)
+				event.ID = callID
+				event.Type = "question"
+				var rawArgs string
+				if len(payload.Input) > 0 {
+					rawArgs = string(payload.Input)
+				}
+				event.Payload = codexQuestionPayload(callID, rawArgs, p.contentLimit)
+				if callID != "" {
+					p.codexInteractions[callID] = "question"
+				}
+				p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, event.Timestamp)
+				return []api.AgentEvent{event}
+			}
 			event.ID = payload.ID
 			event.Type = "tool_call"
-			event.ToolName = canonicalToolName("codex", payload.Name)
+			event.ToolName = canonical
 			if event.ToolName == "" {
 				event.ToolName = "custom_tool"
 			}
@@ -291,7 +379,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					"id":    fmt.Sprintf("step-%d", i),
 					"title": item.Step,
 					"label": item.Step,
-					"state": item.Status,
+					"state": canonicalStepStatus(item.Status),
 				}
 			}
 			event.ID = "codex-plan"
@@ -299,7 +387,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Payload = map[string]any{
 				"planId": "codex-plan",
 				"title":  "Plan",
-				"state":  "in_progress",
+				"state":  calculatePlanState(items),
 				"items":  items,
 			}
 			return []api.AgentEvent{event}
@@ -596,3 +684,71 @@ func patchFiles(patch string) []string {
 	}
 	return uniqueStrings(files)
 }
+
+func codexQuestionPayload(requestID string, rawArgs string, limit int) map[string]any {
+	var parsed struct {
+		Questions []struct {
+			ID            string `json:"id"`
+			Header        string `json:"header"`
+			Question      string `json:"question"`
+			Prompt        string `json:"prompt"`
+			IsMultiSelect *bool  `json:"is_multi_select"`
+			MultiSelect   *bool  `json:"multiSelect"`
+			Options       any    `json:"options"`
+		} `json:"questions"`
+		Question      string `json:"question"`
+		Prompt        string `json:"prompt"`
+		Header        string `json:"header"`
+		IsMultiSelect *bool  `json:"is_multi_select"`
+		MultiSelect   *bool  `json:"multiSelect"`
+		Options       any    `json:"options"`
+	}
+	_ = json.Unmarshal([]byte(rawArgs), &parsed)
+
+	questions := make([]any, 0)
+	if len(parsed.Questions) > 0 {
+		for index, item := range parsed.Questions {
+			prompt := firstNonEmpty(item.Question, item.Header, item.Prompt, "Question")
+			selection := "single"
+			if (item.IsMultiSelect != nil && *item.IsMultiSelect) || (item.MultiSelect != nil && *item.MultiSelect) {
+				selection = "multiple"
+			}
+			options := parseQuestionOptions(item.Options)
+			qID := item.ID
+			if qID == "" {
+				qID = fmt.Sprintf("q%d", index)
+			}
+			questions = append(questions, map[string]any{
+				"id":          qID,
+				"prompt":      prompt,
+				"selection":   selection,
+				"required":    true,
+				"allowCustom": false,
+				"options":     options,
+			})
+		}
+	} else if parsed.Question != "" || parsed.Prompt != "" || parsed.Header != "" || parsed.Options != nil {
+		prompt := firstNonEmpty(parsed.Question, parsed.Header, parsed.Prompt, "Question")
+		selection := "single"
+		if (parsed.IsMultiSelect != nil && *parsed.IsMultiSelect) || (parsed.MultiSelect != nil && *parsed.MultiSelect) {
+			selection = "multiple"
+		}
+		options := parseQuestionOptions(parsed.Options)
+		questions = append(questions, map[string]any{
+			"id":          "q0",
+			"prompt":      prompt,
+			"selection":   selection,
+			"required":    true,
+			"allowCustom": false,
+			"options":     options,
+		})
+	}
+
+	return map[string]any{
+		"requestId": requestID,
+		"title":     "Question",
+		"questions": questions,
+		"state":     "pending",
+	}
+}
+

@@ -145,6 +145,9 @@ func (t *ActivityTracker) TurnAborted() {
 func (t *ActivityTracker) MarkAttention(kind api.AgentAttentionKind, reason, requestID string, since time.Time) {
 	if kind == "" {
 		t.clearAttention()
+		if t.status.Activity == api.AgentActivityBlocked || t.status.Activity == api.AgentActivityStalled {
+			t.working()
+		}
 		return
 	}
 	if since.IsZero() {
@@ -164,9 +167,12 @@ func (t *ActivityTracker) MarkAttention(kind api.AgentAttentionKind, reason, req
 }
 
 // ClearAttention removes a pending human-facing condition without changing
-// the current lifecycle state.
+// the current lifecycle state unless it was blocked or stalled by the attention.
 func (t *ActivityTracker) ClearAttention() {
 	t.clearAttention()
+	if t.status.Activity == api.AgentActivityBlocked || t.status.Activity == api.AgentActivityStalled {
+		t.working()
+	}
 }
 
 // Turn returns the current turn number. It remains stable after completion so
