@@ -20,6 +20,7 @@ import {
   latestAgentAction,
   loadAgentDraft,
   loadAgentSettings,
+  isHiddenAgentEvent,
   normalizeAgentEventType,
   projectAgentEvents,
   removeAgentDraft,
@@ -1118,18 +1119,6 @@ function agentModel(session, events = []) {
   return model || "";
 }
 
-function isHiddenAgentEvent(event) {
-  const type = String(event?.type || "").toLowerCase().replaceAll("-", "_");
-  return type === "compaction"
-    || type === "compact"
-    || type === "compacted"
-    || type === "usage"
-    || type === "token_usage"
-    || type === "token_count"
-    || type.endsWith("_usage")
-    || type === "system_instructions";
-}
-
 function isUserAgentEvent(event) {
   return normalizeAgentEventType(event?.type) === "user"
     || normalizeAgentEventType(event?.role) === "user";
@@ -1202,6 +1191,12 @@ function AgentBlock({ block, onInteraction = () => {}, onEditResend = () => {}, 
   case "system_instructions":
     return null;
   case "usage":
+    return null;
+  case "status":
+  case "status_changed":
+  case "status.changed":
+  case "turn":
+  case "execution":
     return null;
   case "error":
     return (

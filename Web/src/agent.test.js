@@ -24,6 +24,7 @@ import {
   getAvailableAgentModels,
   groupAgentEvents,
   isCommandTool,
+  isHiddenAgentEvent,
   latestAgentAction,
   loadAgentDraft,
   loadAgentSettings,
@@ -531,3 +532,27 @@ test("control projection waits for missing events and applies unknown types in o
   assert.equal(recovered.projectionThrough, 3);
   assert.equal(recovered.status.activity, "ready");
 });
+
+test("isHiddenAgentEvent hides status, turn, and execution control-plane events from timeline", () => {
+  assert.equal(isHiddenAgentEvent({ type: "status" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "status.changed" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "status_changed" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "turn" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "turn.started" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "turn_completed" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "execution" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "execution.started" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "execution_failed" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "compaction" }), true);
+  assert.equal(isHiddenAgentEvent({ type: "usage" }), true);
+
+  // Normal conversational and tool events must NOT be hidden
+  assert.equal(isHiddenAgentEvent({ type: "user" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "assistant" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "message" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "reasoning" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "tool_call" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "tool_output" }), false);
+  assert.equal(isHiddenAgentEvent({ type: "question" }), false);
+});
+
