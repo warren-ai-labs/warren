@@ -403,6 +403,7 @@ type qoderRecord struct {
 	Attachment        json.RawMessage `json:"attachment"`
 	IsSidechain       bool            `json:"isSidechain"`
 	Message           json.RawMessage `json:"message"`
+	ToolUseResult     json.RawMessage `json:"toolUseResult"`
 	// Error records carry the failure at the record level (the message
 	// content is the human-readable fallback text).
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
@@ -603,6 +604,36 @@ func (p *qoderParser) parseQoderToolResults(record qoderRecord, blocks []qoderCo
 		}
 		if status == "error" {
 			event.Error = output
+		}
+		if len(record.ToolUseResult) > 0 {
+			var tr struct {
+				FilePath        string `json:"filePath"`
+				StructuredPatch any    `json:"structuredPatch"`
+			}
+			if json.Unmarshal(record.ToolUseResult, &tr) == nil && tr.StructuredPatch != nil {
+				adds, dels, diffText := parseStructuredPatchChunks(tr.StructuredPatch)
+				if adds > 0 || dels > 0 || diffText != "" {
+					diffPayload := map[string]any{
+						"file":      tr.FilePath,
+						"files":     []string{tr.FilePath},
+						"additions": adds,
+						"deletions": dels,
+						"diff":      diffText,
+						"callId":    block.ToolUseID,
+					}
+					if event.Payload == nil {
+						event.Payload = make(map[string]any)
+					}
+					event.Payload["diff"] = diffPayload
+					events = append(events, api.AgentEvent{
+						Provider:  qoderProvider,
+						ID:        record.UUID,
+						Type:      "diff",
+						Payload:   diffPayload,
+						Timestamp: timestamp,
+					})
+				}
+			}
 		}
 		events = append(events, event)
 	}

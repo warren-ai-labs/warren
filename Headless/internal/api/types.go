@@ -316,6 +316,32 @@ type AgentUsage struct {
 	TotalTokens              int64 `json:"totalTokens,omitempty"`
 }
 
+// AgentDiff carries normalized metrics and content for a code patch or edit.
+// Clients render a single-line summary card with a git badge and +/- stats
+// (e.g. +11 -0 in green/red or blue/red), expandable to full unified diff.
+type AgentDiff struct {
+	File      string   `json:"file,omitempty"`
+	Files     []string `json:"files,omitempty"`
+	Additions int      `json:"additions,omitempty"`
+	Deletions int      `json:"deletions,omitempty"`
+	Diff      string   `json:"diff,omitempty"`
+	CallID    string   `json:"callId,omitempty"`
+}
+
+// AgentDiagnostic carries normalized compiler or LSP diagnostics attached to
+// file operations.
+type AgentDiagnostic struct {
+	File      string `json:"file"`
+	Line      int    `json:"line"`
+	Column    int    `json:"column,omitempty"`
+	EndLine   int    `json:"endLine,omitempty"`
+	EndColumn int    `json:"endColumn,omitempty"`
+	Severity  string `json:"severity"` // "error", "warning", "info", "hint"
+	Message   string `json:"message"`
+	Source    string `json:"source,omitempty"`
+	Code      string `json:"code,omitempty"`
+}
+
 // AgentWaitResult is printed after a canonical turn completion event.
 type AgentWaitResult struct {
 	Session     string                `json:"session"`

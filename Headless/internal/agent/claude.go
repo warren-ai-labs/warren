@@ -50,10 +50,13 @@ type claudeRecord struct {
 		Usage      json.RawMessage `json:"usage"`
 	} `json:"message"`
 	ToolUseResult struct {
-		FilePath        string `json:"filePath"`
-		StructuredPatch string `json:"structuredPatch"`
-		Interrupted     bool   `json:"interrupted"`
+		FilePath        string          `json:"filePath"`
+		StructuredPatch json.RawMessage `json:"structuredPatch"`
+		Interrupted     bool            `json:"interrupted"`
 	} `json:"toolUseResult"`
+	ToolName   string          `json:"tool_name"`
+	ToolInput  json.RawMessage `json:"tool_input"`
+	ToolOutput json.RawMessage `json:"tool_output"`
 	Attachment struct {
 		Type      string          `json:"type"`
 		HookName  string          `json:"hookName"`
@@ -143,6 +146,39 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					event.Error = output
 				} else {
 					event.ToolStatus = "success"
+				}
+				if len(record.ToolUseResult.StructuredPatch) > 0 {
+					var rawPatch any
+					_ = json.Unmarshal(record.ToolUseResult.StructuredPatch, &rawPatch)
+					var adds, dels int
+					var patchText string
+					if str, ok := rawPatch.(string); ok {
+						patchText = str
+						adds, dels = parseUnifiedDiffStats(str)
+					} else {
+						adds, dels, patchText = parseStructuredPatchChunks(rawPatch)
+					}
+					if adds > 0 || dels > 0 || patchText != "" {
+						diffPayload := map[string]any{
+							"file":      record.ToolUseResult.FilePath,
+							"files":     []string{record.ToolUseResult.FilePath},
+							"additions": adds,
+							"deletions": dels,
+							"diff":      patchText,
+							"callId":    block.ToolUseID,
+						}
+						if event.Payload == nil {
+							event.Payload = make(map[string]any)
+						}
+						event.Payload["diff"] = diffPayload
+						events = append(events, api.AgentEvent{
+							Provider:  "claude",
+							ID:        record.UUID,
+							Type:      "diff",
+							Payload:   diffPayload,
+							Timestamp: timestamp,
+						})
+					}
 				}
 				events = append(events, event)
 			}
@@ -344,6 +380,114 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 			Content:   content,
 			Timestamp: timestamp,
 		}}
+	case "tool_use":
+		canonicalName := canonicalToolName("claude", record.ToolName)
+		input, _ := rawToAny(record.ToolInput, p.contentLimit).(map[string]any)
+		event := api.AgentEvent{
+			Provider:   "claude",
+			ID:         record.UUID,
+			Type:       "tool_call",
+			ToolName:   canonicalName,
+			ToolInput:  input,
+			ToolStatus: "running",
+			Timestamp:  timestamp,
+		}
+		if input != nil {
+			if fp := stringValue(input["filePath"]); fp != "" {
+				event.Files = []string{fp}
+			}
+		}
+		return []api.AgentEvent{event}
+	case "tool_result":
+		var to map[string]any
+		_ = json.Unmarshal(record.ToolOutput, &to)
+		canonicalName := canonicalToolName("claude", record.ToolName)
+		output := stringValue(to["output"])
+		if output == "" {
+			output = p.content(record.ToolOutput)
+		}
+		event := api.AgentEvent{
+			Provider:   "claude",
+			ID:         record.UUID,
+			Type:       "tool_output",
+			ToolName:   canonicalName,
+			Output:     p.clip(output),
+			ToolStatus: "success",
+			Timestamp:  timestamp,
+		}
+		if to != nil {
+			if fp := stringValue(to["filepath"]); fp != "" {
+				event.Files = []string{fp}
+			}
+			if asBool(to["is_error"]) {
+				event.ToolStatus = "error"
+				event.Error = event.Output
+			}
+		}
+		var events []api.AgentEvent
+		events = append(events, event)
+
+		if to != nil {
+			diffStr := stringValue(to["diff"])
+			fd, _ := to["filediff"].(map[string]any)
+			var adds, dels int
+			var targetFile string
+			if fd != nil {
+				targetFile = stringValue(fd["file"])
+				adds = intValue(fd["additions"])
+				dels = intValue(fd["deletions"])
+			}
+			if targetFile == "" && len(event.Files) > 0 {
+				targetFile = event.Files[0]
+			}
+			if diffStr != "" && adds == 0 && dels == 0 {
+				adds, dels = parseUnifiedDiffStats(diffStr)
+			}
+			if diffStr != "" || adds > 0 || dels > 0 {
+				diffPayload := map[string]any{
+					"file":      targetFile,
+					"files":     []string{targetFile},
+					"additions": adds,
+					"deletions": dels,
+					"diff":      diffStr,
+				}
+				if event.Payload == nil {
+					event.Payload = make(map[string]any)
+				}
+				event.Payload["diff"] = diffPayload
+				events = append(events, api.AgentEvent{
+					Provider:  "claude",
+					ID:        record.UUID,
+					Type:      "diff",
+					Payload:   diffPayload,
+					Timestamp: timestamp,
+				})
+			}
+
+			if rawDiag := to["diagnostics"]; rawDiag != nil {
+				diags := parseClaudeDiagnostics(rawDiag)
+				if len(diags) > 0 {
+					diagPayload := map[string]any{
+						"diagnostics": diags,
+					}
+					if len(event.Files) > 0 {
+						diagPayload["file"] = event.Files[0]
+					}
+					if event.Payload == nil {
+						event.Payload = make(map[string]any)
+					}
+					event.Payload["diagnostics"] = diagPayload
+					events = append(events, api.AgentEvent{
+						Provider:  "claude",
+						ID:        record.UUID,
+						Type:      "diagnostics",
+						Payload:   diagPayload,
+						Timestamp: timestamp,
+					})
+				}
+			}
+		}
+		return events
 	default:
 		return nil
 	}

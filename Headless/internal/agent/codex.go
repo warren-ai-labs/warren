@@ -409,6 +409,44 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			}
 			event.Content = "Token usage"
 			return []api.AgentEvent{event}
+		case "patch_apply_end":
+			var data struct {
+				CallID  string `json:"call_id"`
+				TurnID  string `json:"turn_id"`
+				Stdout  string `json:"stdout"`
+				Success bool   `json:"success"`
+				Changes map[string]struct {
+					Type        string `json:"type"`
+					UnifiedDiff string `json:"unified_diff"`
+				} `json:"changes"`
+			}
+			if json.Unmarshal(record.Payload, &data) == nil && len(data.Changes) > 0 {
+				var files []string
+				var totalAdds, totalDels int
+				var firstFile, firstDiff string
+				for f, change := range data.Changes {
+					files = append(files, f)
+					if firstFile == "" {
+						firstFile = f
+						firstDiff = change.UnifiedDiff
+					}
+					adds, dels := parseUnifiedDiffStats(change.UnifiedDiff)
+					totalAdds += adds
+					totalDels += dels
+				}
+				event.Type = "diff"
+				event.Files = files
+				event.Payload = map[string]any{
+					"file":      firstFile,
+					"files":     files,
+					"additions": totalAdds,
+					"deletions": totalDels,
+					"diff":      firstDiff,
+					"callId":    data.CallID,
+				}
+				return []api.AgentEvent{event}
+			}
+			return nil
 		case "turn_aborted":
 			p.tracker.TurnAborted()
 			p.codexTurnFailed = false

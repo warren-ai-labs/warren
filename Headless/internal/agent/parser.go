@@ -118,11 +118,12 @@ func newParserWithContentLimit(provider string, contentLimit int) Parser {
 var structuredAgentEventTypes = map[string]struct{}{
 	"question": {}, "permission": {}, "plan": {}, "todo": {},
 	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {}, "config": {}, "compaction": {},
+	"diff": {}, "diagnostics": {},
 }
 
 func structuredAgentEventType(source string) string {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(source, "-", "_")))
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			return candidate
 		}
@@ -145,7 +146,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	rawType := firstStringValue(source["type"], source["eventType"], outerType)
 	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
 	kind := normalized
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			kind = candidate
 			break
@@ -174,6 +175,12 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	copyStructuredField(payload, source, "detail", "detail")
 	copyStructuredField(payload, source, "mime", "mime", "MIME")
 	copyStructuredField(payload, source, "size", "size")
+	copyStructuredField(payload, source, "file", "file", "filePath", "file_path")
+	copyStructuredField(payload, source, "files", "files")
+	copyStructuredField(payload, source, "additions", "additions")
+	copyStructuredField(payload, source, "deletions", "deletions")
+	copyStructuredField(payload, source, "diff", "diff", "patch")
+	copyStructuredField(payload, source, "diagnostics", "diagnostics")
 	copyStructuredField(payload, source, "state", "state", "status")
 	if st, ok := payload["state"].(string); ok && st != "" {
 		payload["state"] = canonicalStepStatus(st)
@@ -213,6 +220,10 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			id = "config"
 		case "compaction":
 			id = "compaction"
+		case "diff":
+			id = firstNonEmpty(stringValue(payload["file"]), stringValue(payload["diffId"]), "diff")
+		case "diagnostics":
+			id = firstNonEmpty(stringValue(payload["file"]), "diagnostics")
 		}
 	}
 	return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Payload: payload, Timestamp: timestamp}
@@ -249,6 +260,121 @@ func calculatePlanState(items []map[string]any) string {
 		}
 	}
 	return overall
+}
+
+func intValue(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		var i int
+		fmt.Sscanf(v, "%d", &i)
+		return i
+	default:
+		return 0
+	}
+}
+
+// parseUnifiedDiffStats counts addition and deletion lines in a unified diff.
+func parseUnifiedDiffStats(diff string) (additions, deletions int) {
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			additions++
+		} else if strings.HasPrefix(line, "-") {
+			deletions++
+		}
+	}
+	return
+}
+
+// parseStructuredPatchChunks extracts additions, deletions, and reconstructed diff from structuredPatch chunks.
+func parseStructuredPatchChunks(raw any) (additions, deletions int, diff string) {
+	chunks, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	var diffLines []string
+	for _, chunk := range chunks {
+		cm, ok := chunk.(map[string]any)
+		if !ok {
+			continue
+		}
+		lines, ok := cm["lines"].([]any)
+		if !ok {
+			continue
+		}
+		for _, lineItem := range lines {
+			l := stringValue(lineItem)
+			diffLines = append(diffLines, l)
+			if strings.HasPrefix(l, "+") {
+				additions++
+			} else if strings.HasPrefix(l, "-") {
+				deletions++
+			}
+		}
+	}
+	if len(diffLines) > 0 {
+		diff = strings.Join(diffLines, "\n")
+	}
+	return
+}
+
+// parseClaudeDiagnostics parses raw diagnostics into normalized api.AgentDiagnostic items.
+func parseClaudeDiagnostics(raw any) []api.AgentDiagnostic {
+	var results []api.AgentDiagnostic
+	diagMap, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for filePath, fileDiags := range diagMap {
+		items, ok := fileDiags.([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			dm, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			diag := api.AgentDiagnostic{
+				File:    filePath,
+				Message: stringValue(dm["message"]),
+				Source:  stringValue(dm["source"]),
+				Code:    stringValue(dm["code"]),
+			}
+			switch intValue(dm["severity"]) {
+			case 1:
+				diag.Severity = "error"
+			case 2:
+				diag.Severity = "warning"
+			case 3:
+				diag.Severity = "info"
+			case 4:
+				diag.Severity = "hint"
+			default:
+				diag.Severity = firstNonEmpty(stringValue(dm["severity"]), "error")
+			}
+			if rng, ok := dm["range"].(map[string]any); ok {
+				if start, ok := rng["start"].(map[string]any); ok {
+					diag.Line = intValue(start["line"])
+					diag.Column = intValue(start["character"])
+				}
+				if end, ok := rng["end"].(map[string]any); ok {
+					diag.EndLine = intValue(end["line"])
+					diag.EndColumn = intValue(end["character"])
+				}
+			}
+			results = append(results, diag)
+		}
+	}
+	return results
 }
 
 func copyStructuredField(destination, source map[string]any, name string, aliases ...string) {
