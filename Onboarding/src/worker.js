@@ -9,20 +9,20 @@ const securityHeaders = {
   "X-Frame-Options": "DENY",
 };
 
-const RELEASE_API = "https://api.github.com/repos/abcdlsj/warren/releases/latest";
-const RELEASE_PAGE = "https://github.com/abcdlsj/warren/releases/latest";
+const RELEASE_API = "https://api.github.com/repos/warren-ai-labs/warren/releases/latest";
+const RELEASE_PAGE = "https://github.com/warren-ai-labs/warren/releases/latest";
 const RELEASE_CACHE_KEY = new Request("https://warrenai.xyz/__cache/latest-release");
 const RELEASE_TTL_MS = 5 * 60 * 1000;
 const RELEASE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600";
 const RELEASE_USER_AGENT = "warren-release-proxy";
-const CHANGELOG_SOURCE = "https://raw.githubusercontent.com/abcdlsj/warren/main/CHANGELOG.md";
+const CHANGELOG_SOURCE = "https://raw.githubusercontent.com/warren-ai-labs/warren/main/CHANGELOG.md";
 const CHANGELOG_CACHE_KEY = new Request("https://warrenai.xyz/__cache/changelog");
 const CHANGELOG_TTL_MS = 5 * 60 * 1000;
 const CHANGELOG_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600";
 
 export function releaseAssetFromHtml(html) {
   const matches = html.matchAll(
-    /href="(\/abcdlsj\/warren\/releases\/download\/[^"]+?)"/g,
+    /href="(\/(?:abcdlsj|warren-ai-labs)\/warren\/releases\/download\/[^"]+?)"/g,
   );
   for (const match of matches) {
     const name = decodeURIComponent(match[1].split("/").pop() ?? "");
@@ -45,7 +45,7 @@ export function normalizeRelease(release, selectedAsset = null) {
     throw new Error("Latest release has no downloadable asset");
   }
 
-  const htmlURL = release.html_url ?? `https://github.com/abcdlsj/warren/releases/tag/${tag}`;
+  const htmlURL = release.html_url ?? `https://github.com/warren-ai-labs/warren/releases/tag/${tag}`;
   const asset = {
     name: sourceAsset.name,
     browser_download_url: downloadURL,
@@ -79,7 +79,7 @@ async function latestReleaseFromHtml() {
     throw new Error("Could not resolve the latest release tag");
   }
   const assets = await fetch(
-    `https://github.com/abcdlsj/warren/releases/expanded_assets/${tag}`,
+    `https://github.com/warren-ai-labs/warren/releases/expanded_assets/${tag}`,
     { headers: { "User-Agent": RELEASE_USER_AGENT } },
   );
   if (!assets.ok) {
@@ -92,7 +92,7 @@ async function latestReleaseFromHtml() {
   return normalizeRelease(
     {
       tag_name: tag,
-      html_url: `https://github.com/abcdlsj/warren/releases/tag/${tag}`,
+      html_url: `https://github.com/warren-ai-labs/warren/releases/tag/${tag}`,
     },
     {
       name: asset.name,
