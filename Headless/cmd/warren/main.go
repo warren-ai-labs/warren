@@ -30,6 +30,7 @@ import (
 
 var version = "dev"
 var outputJSON bool
+var outputQuiet bool
 var endpointName string
 var endpointURL string
 var endpointToken string
@@ -78,6 +79,8 @@ func run(arguments []string) error {
 	global := flag.NewFlagSet("warren", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	global.BoolVar(&outputJSON, "json", false, "JSON output")
+	global.BoolVar(&outputQuiet, "quiet", false, "only print IDs")
+	global.BoolVar(&outputQuiet, "q", false, "only print IDs")
 	global.StringVar(&endpointName, "endpoint", env("WARREN_ENDPOINT", ""), "endpoint name")
 	global.StringVar(&endpointURL, "server", env("WARREN_SERVER", ""), "server URL")
 	global.StringVar(&endpointToken, "token", env("WARREN_TOKEN", ""), "server token")
@@ -571,15 +574,17 @@ func defaultWarrenDirectory() string {
 
 var globalFlagNames = map[string]bool{
 	"json":     true,
+	"quiet":    true,
+	"q":        true,
 	"endpoint": true,
 	"server":   true,
 	"token":    true,
 	"config":   true,
 }
 
-// hoistGlobalFlags moves global flags (--json, --endpoint, --server, --token,
-// --config) to the front so they work before or after the subcommand. Go's
-// flag package stops parsing at the first positional argument, which would
+// hoistGlobalFlags moves global flags (--json, --quiet, -q, --endpoint, --server,
+// --token, --config) to the front so they work before or after the subcommand.
+// Go's flag package stops parsing at the first positional argument, which would
 // otherwise silently ignore flags such as `warren session list --json`.
 func hoistGlobalFlags(arguments []string) []string {
 	extracted := make([]string, 0, len(arguments))
@@ -605,11 +610,11 @@ func hoistGlobalFlags(arguments []string) []string {
 			rest = append(rest, item)
 			continue
 		}
-		if hasValue || name == "json" {
+		if hasValue || name == "json" || name == "quiet" || name == "q" {
 			extracted = append(extracted, item)
 			continue
 		}
-		if index+1 < len(arguments) && !strings.HasPrefix(arguments[index+1], "--") {
+		if index+1 < len(arguments) && !strings.HasPrefix(arguments[index+1], "-") {
 			extracted = append(extracted, item, arguments[index+1])
 			index++
 			continue
@@ -629,10 +634,10 @@ func isEndpointAdd(arguments []string) bool {
 		item := arguments[index]
 		name, _, hasValue := splitFlag(item)
 		if globalFlagNames[name] {
-			if hasValue || name == "json" {
+			if hasValue || name == "json" || name == "quiet" || name == "q" {
 				continue
 			}
-			if index+1 < len(arguments) && !strings.HasPrefix(arguments[index+1], "--") {
+			if index+1 < len(arguments) && !strings.HasPrefix(arguments[index+1], "-") {
 				index++
 			}
 			continue
@@ -653,6 +658,9 @@ func isEndpointAdd(arguments []string) bool {
 }
 
 func splitFlag(item string) (name, value string, hasValue bool) {
+	if item == "-q" {
+		return "q", "", false
+	}
 	if !strings.HasPrefix(item, "--") {
 		return "", "", false
 	}
@@ -983,6 +991,15 @@ func resourceCommand(args []string) error {
 		if _, err := listLimit(params); err != nil {
 			return newUsageError(err.Error(), actionUsageText(commandName, action))
 		}
+		if resource == "session" && len(positionals(params)) > 1 {
+			return newUsageError("session list accepts at most one workspace ID", actionUsageText(commandName, action))
+		}
+		if resource == "workspace" && len(positionals(params)) > 1 {
+			return newUsageError("workspace list accepts at most one project ID", actionUsageText(commandName, action))
+		}
+		if (resource == "task" || resource == "project" || resource == "terminal-group") && len(positionals(params)) > 0 {
+			return newUsageError(fmt.Sprintf("%s list does not accept positional arguments", commandName), actionUsageText(commandName, action))
+		}
 	}
 	if resource == "session" && action == "send" && (boolValue(params, "wait") || stringValue(params, "timeout") != "") {
 		return newUsageError("session send does not support Agent turn options; use agent send", actionUsageText(commandName, action))
@@ -1036,18 +1053,43 @@ func resourceCommand(args []string) error {
 		limit, _ := listLimit(params)
 		switch resource {
 		case "project":
-			return printValue(limitListRows(projectRows(state), limit))
+			filtered, err := filterProjectRows(projectRows(state), params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
 		case "task":
-			return printValue(limitListRows(taskRows(state), limit))
+			filtered, err := filterTaskRows(taskRows(state), params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
 		case "workspace":
-			return printValue(limitListRows(workspaceRows(state), limit))
+			if len(positionals(params)) == 1 && stringValue(params, "project") == "" {
+				params["project"] = positionals(params)[0]
+			}
+			filtered, err := filterWorkspaceRows(workspaceRows(state), params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
 		case "terminal-group":
-			return printValue(limitListRows(state.TerminalGroups, limit))
+			filtered, err := filterTerminalGroupRows(state.TerminalGroups, params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
 		case "session":
-			return printValue(limitListRows(
-				sessionRowsForCurrent(state, boolValue(params, "all"), boolValue(params, "ended"), strings.TrimSpace(os.Getenv(agent.BindEnvSession))),
-				limit,
-			))
+			if len(positionals(params)) == 1 && stringValue(params, "workspace") == "" {
+				params["workspace"] = positionals(params)[0]
+			}
+			currentID := strings.TrimSpace(os.Getenv(agent.BindEnvSession))
+			rows := sessionRowsForCurrent(state, true, false, currentID)
+			filtered, err := filterSessionRows(rows, params, currentID)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
 		}
 	}
 	method := ""
@@ -1719,8 +1761,11 @@ func agentListCommand(args []string) error {
 		fmt.Print(agentListUsageText())
 		return nil
 	}
-	if len(positionals(params)) > 0 {
-		return newUsageError("agent list does not accept an ID", agentListUsageText())
+	if len(positionals(params)) > 1 {
+		return newUsageError("agent list accepts at most one workspace ID", agentListUsageText())
+	}
+	if len(positionals(params)) == 1 && stringValue(params, "workspace") == "" {
+		params["workspace"] = positionals(params)[0]
 	}
 	if boolValue(params, "all") && boolValue(params, "ended") {
 		return newUsageError("--all and --ended are mutually exclusive", agentListUsageText())
@@ -1738,12 +1783,17 @@ func agentListCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	rows := sessionRowsForCurrent(state, boolValue(params, "all"), boolValue(params, "ended"), strings.TrimSpace(os.Getenv(agent.BindEnvSession)))
+	currentID := strings.TrimSpace(os.Getenv(agent.BindEnvSession))
+	rows := sessionRowsForCurrent(state, true, false, currentID)
 	filtered := rows[:0]
 	for _, row := range rows {
 		if isAgentSession(row.Session) {
 			filtered = append(filtered, row)
 		}
+	}
+	filtered, err = filterSessionRows(filtered, params, currentID)
+	if err != nil {
+		return newUsageError(err.Error(), agentListUsageText())
 	}
 	return printValue(limitListRows(filtered, limit))
 }
@@ -2946,15 +2996,30 @@ func sshCommand(args []string) error {
 			fmt.Print(sshUsageText())
 			return nil
 		}
-		if len(positionals(flags)) > 0 {
-			return newUsageError("ssh list does not accept a target", sshUsageText())
+		if len(positionals(flags)) > 1 {
+			return newUsageError("ssh list accepts at most one pattern", sshUsageText())
 		}
+		searchPattern := ""
+		if len(positionals(flags)) == 1 {
+			searchPattern = positionals(flags)[0]
+		}
+		if s := stringValue(flags, "search"); s != "" {
+			searchPattern = s
+		}
+		searchPattern = strings.ToLower(strings.TrimSpace(searchPattern))
 		entries, err := sshclient.ListHosts(stringValue(flags, "ssh-config"))
 		if err != nil {
 			return err
 		}
 		rows := make([]sshHostRow, 0, len(entries))
 		for _, entry := range entries {
+			if searchPattern != "" {
+				if !strings.Contains(strings.ToLower(entry.Name), searchPattern) &&
+					!strings.Contains(strings.ToLower(entry.Config.Host), searchPattern) &&
+					!strings.Contains(strings.ToLower(entry.Config.User), searchPattern) {
+					continue
+				}
+			}
 			rows = append(rows, sshHostRow{
 				Name:          entry.Name,
 				Host:          entry.Config.Host,
@@ -2963,6 +3028,13 @@ func sshCommand(args []string) error {
 				IdentityFiles: len(entry.Config.IdentityFile),
 				Error:         entry.Error,
 			})
+		}
+		if value, specified := flags["limit"]; specified {
+			limit, err := strconv.Atoi(fmt.Sprint(value))
+			if err != nil || limit <= 0 {
+				return newUsageError("--limit must be a positive integer", sshUsageText())
+			}
+			rows = limitListRows(rows, limit)
 		}
 		return printValue(rows)
 	}
@@ -3086,6 +3158,16 @@ var bareBooleanFlags = map[string]bool{
 	"plain":                 true,
 	"wait":                  true,
 	"use":                   true,
+	"quiet":                 true,
+	"q":                     true,
+	"merged":                true,
+	"unmerged":              true,
+	"unattached":            true,
+	"no-task":               true,
+	"no-workspaces":         true,
+	"has-workspaces":        true,
+	"has-sessions":          true,
+	"active":                true,
 }
 
 func normalizedParams(values map[string]any, resource, action string) map[string]any {
@@ -3428,6 +3510,312 @@ func taskWorkspaceRows(state api.State, taskID string, available bool) ([]Worksp
 	return result, nil
 }
 
+func parseOptionalBool(params map[string]any, key string) (bool, bool) {
+	val, ok := params[key]
+	if !ok {
+		return false, false
+	}
+	switch v := val.(type) {
+	case bool:
+		return v, true
+	case string:
+		lower := strings.ToLower(strings.TrimSpace(v))
+		if lower == "true" || lower == "1" || lower == "yes" {
+			return true, true
+		}
+		if lower == "false" || lower == "0" || lower == "no" {
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func filterSessionRows(rows []SessionRow, params map[string]any, currentID string) ([]SessionRow, error) {
+	status := strings.ToLower(strings.TrimSpace(stringValue(params, "status")))
+	if status != "" && status != "running" && status != "ended" {
+		return nil, errors.New("--status must be running or ended")
+	}
+	if status == "running" && boolValue(params, "ended") {
+		return nil, errors.New("--status running and --ended are mutually exclusive")
+	}
+	if status == "ended" && boolValue(params, "all") {
+		return nil, errors.New("--status ended and --all are mutually exclusive")
+	}
+	onlyEnded := boolValue(params, "ended") || status == "ended"
+	includeEnded := boolValue(params, "all") || onlyEnded
+	if status == "running" {
+		includeEnded = false
+		onlyEnded = false
+	}
+
+	workspaceFilter := strings.TrimSpace(stringValue(params, "workspace"))
+	if workspaceFilter == "" {
+		workspaceFilter = strings.TrimSpace(stringValue(params, "workspace-id"))
+	}
+	projectFilter := strings.TrimSpace(stringValue(params, "project"))
+	if projectFilter == "" {
+		projectFilter = strings.TrimSpace(stringValue(params, "project-id"))
+	}
+	groupFilter := strings.TrimSpace(stringValue(params, "group"))
+	if groupFilter == "" {
+		groupFilter = strings.TrimSpace(stringValue(params, "group-id"))
+	}
+	kindFilter := strings.ToLower(strings.TrimSpace(stringValue(params, "kind")))
+	if kindFilter == "" {
+		kindFilter = strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
+	}
+	activityFilter := strings.ToLower(strings.TrimSpace(stringValue(params, "activity")))
+	searchFilter := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	if searchFilter == "" {
+		searchFilter = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
+	}
+	pinned, hasPinned := parseOptionalBool(params, "pinned")
+
+	filterByCurrent := boolValue(params, "current")
+	var currentSession *SessionRow
+	if filterByCurrent {
+		if currentID == "" {
+			return nil, errors.New("WARREN_SESSION_ID is not set; run this command from a Warren-managed session or pass an explicit context")
+		}
+		for index := range rows {
+			if rows[index].ID == currentID {
+				currentSession = &rows[index]
+				break
+			}
+		}
+		if currentSession == nil {
+			return nil, fmt.Errorf("current session not found: %s", currentID)
+		}
+	}
+
+	result := make([]SessionRow, 0, len(rows))
+	for _, row := range rows {
+		if onlyEnded && row.Lifecycle == "running" {
+			continue
+		}
+		if !onlyEnded && !includeEnded && row.Lifecycle != "running" {
+			continue
+		}
+		if workspaceFilter != "" {
+			if !strings.EqualFold(row.WorkspaceID, workspaceFilter) && !strings.EqualFold(row.WorkspaceName, workspaceFilter) {
+				continue
+			}
+		}
+		if projectFilter != "" {
+			if !strings.EqualFold(row.ProjectID, projectFilter) && !strings.EqualFold(row.ProjectName, projectFilter) {
+				continue
+			}
+		}
+		if groupFilter != "" {
+			if !strings.EqualFold(row.TerminalGroupID, groupFilter) && !strings.EqualFold(row.TerminalGroupName, groupFilter) {
+				continue
+			}
+		}
+		if kindFilter != "" {
+			if !strings.EqualFold(row.Kind, kindFilter) {
+				continue
+			}
+		}
+		if activityFilter != "" {
+			act := strings.ToLower(sessionActivity(row.Session))
+			var rawAct string
+			if row.Session.AgentStatus != nil {
+				rawAct = strings.ToLower(string(row.Session.AgentStatus.Activity))
+			}
+			if act != activityFilter && rawAct != activityFilter {
+				continue
+			}
+		}
+		if hasPinned && row.Pinned != pinned {
+			continue
+		}
+		if filterByCurrent {
+			if currentSession.WorkspaceID != "" {
+				if row.WorkspaceID != currentSession.WorkspaceID {
+					continue
+				}
+			} else if currentSession.TerminalGroupID != "" {
+				if row.TerminalGroupID != currentSession.TerminalGroupID {
+					continue
+				}
+			} else if row.ID != currentSession.ID {
+				continue
+			}
+		}
+		if searchFilter != "" {
+			title := strings.ToLower(effectiveSessionTitle(row.Session))
+			cmd := strings.ToLower(row.Command)
+			id := strings.ToLower(row.ID)
+			ws := strings.ToLower(row.WorkspaceName)
+			proj := strings.ToLower(row.ProjectName)
+			branch := strings.ToLower(row.Branch)
+			agentSession := strings.ToLower(row.AgentSessionID)
+			if !strings.Contains(title, searchFilter) &&
+				!strings.Contains(cmd, searchFilter) &&
+				!strings.Contains(id, searchFilter) &&
+				!strings.Contains(ws, searchFilter) &&
+				!strings.Contains(proj, searchFilter) &&
+				!strings.Contains(branch, searchFilter) &&
+				!strings.Contains(agentSession, searchFilter) {
+				continue
+			}
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func filterWorkspaceRows(rows []WorkspaceRow, params map[string]any) ([]WorkspaceRow, error) {
+	project := strings.TrimSpace(stringValue(params, "project"))
+	if project == "" {
+		project = strings.TrimSpace(stringValue(params, "project-id"))
+	}
+	task := strings.TrimSpace(stringValue(params, "task"))
+	if task == "" {
+		task = strings.TrimSpace(stringValue(params, "task-id"))
+	}
+	branch := strings.TrimSpace(stringValue(params, "branch"))
+	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	if search == "" {
+		search = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
+	}
+	onlyMerged := boolValue(params, "merged")
+	onlyUnmerged := boolValue(params, "unmerged")
+	if onlyMerged && onlyUnmerged {
+		return nil, errors.New("--merged and --unmerged are mutually exclusive")
+	}
+	unattached := boolValue(params, "unattached") || boolValue(params, "no-task")
+	hasSessions := boolValue(params, "has-sessions") || boolValue(params, "active")
+	pinned, hasPinned := parseOptionalBool(params, "pinned")
+
+	result := make([]WorkspaceRow, 0, len(rows))
+	for _, row := range rows {
+		if project != "" && !strings.EqualFold(row.ProjectID, project) && !strings.EqualFold(row.ProjectName, project) {
+			continue
+		}
+		if task != "" && !strings.EqualFold(row.TaskID, task) && !strings.EqualFold(row.TaskName, task) {
+			continue
+		}
+		if unattached && row.TaskID != "" {
+			continue
+		}
+		if onlyMerged && row.MergeState != api.MergeStateMerged {
+			continue
+		}
+		if onlyUnmerged && row.MergeState == api.MergeStateMerged {
+			continue
+		}
+		if branch != "" && !strings.EqualFold(row.Branch, branch) && !strings.Contains(strings.ToLower(row.Branch), strings.ToLower(branch)) {
+			continue
+		}
+		if hasSessions && row.Sessions == 0 {
+			continue
+		}
+		if hasPinned && row.Pinned != pinned {
+			continue
+		}
+		if search != "" {
+			if !strings.Contains(strings.ToLower(row.ID), search) &&
+				!strings.Contains(strings.ToLower(row.Name), search) &&
+				!strings.Contains(strings.ToLower(row.Branch), search) &&
+				!strings.Contains(strings.ToLower(row.Path), search) &&
+				!strings.Contains(strings.ToLower(row.ProjectName), search) &&
+				!strings.Contains(strings.ToLower(row.TaskName), search) {
+				continue
+			}
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func filterTaskRows(rows []TaskRow, params map[string]any) ([]TaskRow, error) {
+	source := strings.TrimSpace(stringValue(params, "source"))
+	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	if search == "" {
+		search = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
+	}
+	hasWorkspaces := boolValue(params, "has-workspaces")
+	unattached := boolValue(params, "unattached") || boolValue(params, "no-workspaces")
+	if hasWorkspaces && unattached {
+		return nil, errors.New("--has-workspaces and --unattached are mutually exclusive")
+	}
+	pinned, hasPinned := parseOptionalBool(params, "pinned")
+
+	result := make([]TaskRow, 0, len(rows))
+	for _, row := range rows {
+		if source != "" && !strings.EqualFold(row.Source, source) {
+			continue
+		}
+		if hasWorkspaces && row.Workspaces == 0 {
+			continue
+		}
+		if unattached && row.Workspaces > 0 {
+			continue
+		}
+		if hasPinned && row.Pinned != pinned {
+			continue
+		}
+		if search != "" {
+			if !strings.Contains(strings.ToLower(row.ID), search) &&
+				!strings.Contains(strings.ToLower(row.Name), search) &&
+				!strings.Contains(strings.ToLower(row.ExternalID), search) &&
+				!strings.Contains(strings.ToLower(row.URL), search) {
+				continue
+			}
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func filterProjectRows(rows []ProjectRow, params map[string]any) ([]ProjectRow, error) {
+	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	if search == "" {
+		search = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
+	}
+	hasWorkspaces := boolValue(params, "has-workspaces")
+	pinned, hasPinned := parseOptionalBool(params, "pinned")
+
+	result := make([]ProjectRow, 0, len(rows))
+	for _, row := range rows {
+		if hasWorkspaces && row.Workspaces == 0 {
+			continue
+		}
+		if hasPinned && row.Pinned != pinned {
+			continue
+		}
+		if search != "" {
+			if !strings.Contains(strings.ToLower(row.ID), search) &&
+				!strings.Contains(strings.ToLower(row.Name), search) &&
+				!strings.Contains(strings.ToLower(row.Path), search) {
+				continue
+			}
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func filterTerminalGroupRows(groups []api.TerminalGroup, params map[string]any) ([]api.TerminalGroup, error) {
+	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	if search == "" {
+		search = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
+	}
+	if search == "" {
+		return groups, nil
+	}
+	result := make([]api.TerminalGroup, 0, len(groups))
+	for _, group := range groups {
+		if strings.Contains(strings.ToLower(group.ID), search) ||
+			strings.Contains(strings.ToLower(group.Name), search) ||
+			strings.Contains(strings.ToLower(group.Home), search) {
+			result = append(result, group)
+		}
+	}
+	return result, nil
+}
+
 type sshHostRow struct {
 	Name          string `json:"name"`
 	Host          string `json:"host"`
@@ -3438,6 +3826,85 @@ type sshHostRow struct {
 }
 
 func printValue(value any) error {
+	if outputQuiet {
+		switch items := value.(type) {
+		case []TaskRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case []sshHostRow:
+			for _, item := range items {
+				fmt.Println(item.Name)
+			}
+			return nil
+		case []ProjectRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case []WorkspaceRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case []api.TerminalGroup:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case []SessionRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case api.WorkspaceCreateResult:
+			fmt.Println(items.ID)
+			return nil
+		case *api.WorkspaceCreateResult:
+			fmt.Println(items.ID)
+			return nil
+		case api.Workspace:
+			fmt.Println(items.ID)
+			return nil
+		case *api.Workspace:
+			fmt.Println(items.ID)
+			return nil
+		case api.Project:
+			fmt.Println(items.ID)
+			return nil
+		case *api.Project:
+			fmt.Println(items.ID)
+			return nil
+		case api.Task:
+			fmt.Println(items.ID)
+			return nil
+		case *api.Task:
+			fmt.Println(items.ID)
+			return nil
+		case api.TerminalGroup:
+			fmt.Println(items.ID)
+			return nil
+		case *api.TerminalGroup:
+			fmt.Println(items.ID)
+			return nil
+		case api.Session:
+			fmt.Println(items.ID)
+			return nil
+		case *api.Session:
+			fmt.Println(items.ID)
+			return nil
+		case agentCreateResult:
+			fmt.Println(items.Session.ID)
+			return nil
+		case *agentCreateResult:
+			fmt.Println(items.Session.ID)
+			return nil
+		case currentSessionValue:
+			fmt.Println(items.Session.ID)
+			return nil
+		}
+	}
 	if outputJSON {
 		data, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
@@ -3457,9 +3924,9 @@ func printValue(value any) error {
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
 			rows = append(rows, []string{
-				item.Name,
-				item.User,
-				item.Host,
+				displayTruncated(item.Name, 25),
+				displayTruncated(item.User, 20),
+				displayTruncated(item.Host, 30),
 				func() string {
 					if item.Port == 0 {
 						return "-"
@@ -3468,7 +3935,7 @@ func printValue(value any) error {
 				}(),
 				func() string {
 					if item.Error != "" {
-						return item.Error
+						return displayTruncated(item.Error, 30)
 					}
 					return strconv.Itoa(item.IdentityFiles)
 				}(),
@@ -3571,10 +4038,10 @@ func printValue(value any) error {
 func taskRowCells(item TaskRow) []string {
 	return []string{
 		item.ID,
-		item.Name,
+		displayTruncated(item.Name, 30),
 		displayValue(item.Source),
-		displayValue(item.ExternalID),
-		displayValue(item.URL),
+		displayTruncated(item.ExternalID, 20),
+		displayTruncated(item.URL, 35),
 		strconv.Itoa(item.Workspaces),
 		displayBool(item.Pinned),
 		formatTime(item.CreatedAt),
@@ -3584,8 +4051,8 @@ func taskRowCells(item TaskRow) []string {
 func projectRowCells(item ProjectRow) []string {
 	return []string{
 		item.ID,
-		item.Name,
-		item.Path,
+		displayTruncated(item.Name, 25),
+		displayTruncatedPath(item.Path, 40),
 		strconv.Itoa(item.Workspaces),
 		displayBool(item.Pinned),
 		formatTime(item.CreatedAt),
@@ -3595,12 +4062,12 @@ func projectRowCells(item ProjectRow) []string {
 func workspaceRowCells(item WorkspaceRow) []string {
 	return []string{
 		item.ID,
-		displayValue(item.ProjectName),
-		displayValue(item.TaskName),
-		item.Name,
-		displayValue(item.Branch),
+		displayTruncated(item.ProjectName, 20),
+		displayTruncated(item.TaskName, 20),
+		displayTruncated(item.Name, 20),
+		displayTruncated(item.Branch, 20),
 		displayMergeState(item.MergeState),
-		item.Path,
+		displayTruncatedPath(item.Path, 35),
 		item.Kind,
 		strconv.Itoa(item.Sessions),
 		displayBool(item.Pinned),
@@ -3630,8 +4097,8 @@ func displayMergeState(value api.MergeState) string {
 func terminalGroupRowCells(item api.TerminalGroup) []string {
 	return []string{
 		item.ID,
-		item.Name,
-		displayValue(item.Home),
+		displayTruncated(item.Name, 25),
+		displayTruncatedPath(item.Home, 35),
 		strconv.Itoa(item.Order),
 		formatTime(item.CreatedAt),
 	}
@@ -3640,16 +4107,16 @@ func terminalGroupRowCells(item api.TerminalGroup) []string {
 func sessionRowCells(item SessionRow) []string {
 	return []string{
 		item.ID,
-		displayValue(item.ProjectName),
-		displayValue(item.WorkspaceName),
-		displayValue(item.TerminalGroupName),
-		displayValue(item.Branch),
-		effectiveSessionTitle(item.Session),
+		displayTruncated(item.ProjectName, 20),
+		displayTruncated(item.WorkspaceName, 20),
+		displayTruncated(item.TerminalGroupName, 20),
+		displayTruncated(item.Branch, 20),
+		displayTruncated(effectiveSessionTitle(item.Session), 30),
 		displayBool(item.Current),
 		item.Kind,
-		displayValue(item.Command),
-		displayValue(item.AgentSessionID),
-		displayValue(item.TranscriptPath),
+		displayTruncated(item.Command, 30),
+		displayTruncated(item.AgentSessionID, 20),
+		displayTruncatedPath(item.TranscriptPath, 30),
 		item.Lifecycle,
 		displayValue(sessionActivity(item.Session)),
 		formatOptionalTime(item.EndedAt),
@@ -3797,6 +4264,14 @@ func displayAny(value any) string {
 	}
 }
 
+func cleanTableCell(val string) string {
+	val = strings.ReplaceAll(val, "\r\n", " ")
+	val = strings.ReplaceAll(val, "\n", " ")
+	val = strings.ReplaceAll(val, "\r", " ")
+	val = strings.ReplaceAll(val, "\t", " ")
+	return strings.TrimSpace(val)
+}
+
 func printTable(headers []string, rows ...[]string) {
 	widths := make([]int, len(headers))
 	for index, header := range headers {
@@ -3804,6 +4279,7 @@ func printTable(headers []string, rows ...[]string) {
 	}
 	for _, row := range rows {
 		for index, cell := range row {
+			cell = cleanTableCell(cell)
 			if index < len(widths) && len(cell) > widths[index] {
 				widths[index] = len(cell)
 			}
@@ -3811,7 +4287,11 @@ func printTable(headers []string, rows ...[]string) {
 	}
 	printTableRow(headers, widths)
 	for _, row := range rows {
-		printTableRow(row, widths)
+		cleanRow := make([]string, len(row))
+		for i, cell := range row {
+			cleanRow[i] = cleanTableCell(cell)
+		}
+		printTableRow(cleanRow, widths)
 	}
 }
 
@@ -3847,6 +4327,28 @@ func displayValue(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func displayTruncated(value string, maxLen int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	if maxLen <= 3 || len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen-3] + "..."
+}
+
+func displayTruncatedPath(value string, maxLen int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	if maxLen <= 3 || len(value) <= maxLen {
+		return value
+	}
+	return "..." + value[len(value)-(maxLen-3):]
 }
 
 func endpointType(value string) string {
@@ -3916,10 +4418,10 @@ func usageText() string {
 	return `Warren CLI
 
 Usage:
-  warren [--endpoint NAME | --server URL --token TOKEN] [--json] <command>
+  warren [--endpoint NAME | --server URL --token TOKEN] [--json] [-q] <command>
 
-	Commands:
-	  relay connect|share
+Commands:
+  relay connect|share
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   endpoint list|add|use|remove|current
   task list|create|remove|rename|pin|move|attach|detach|workspace
@@ -3932,15 +4434,25 @@ Usage:
 
 Global flags:
   --json                            machine-readable JSON output
+  -q, --quiet                       only print resource IDs/names
   --endpoint NAME                   endpoint name from the local config (required when multiple are configured)
   --server URL --token TOKEN        connect directly to a server
   --config PATH                     config file (default ~/.warren/config.json)
 
 Run 'warren <command> --help' for command-specific help.
 
-Roster list commands return at most 10 rows by default to keep agent context small.
-Use --all for a complete list, preferably piped to rg when searching, for
-example: warren session list --all | rg 'codex|workspace-id'.
+List filtering & display:
+  List commands show up to 10 rows by default; long fields are truncated for compact display.
+  • Narrow results: --search TEXT, --current, --status running|ended, or pass context IDs.
+  • Full / raw:     --all (display all rows), --json (complete un-truncated JSON).
+  • Quiet / IDs:    -q, --quiet (print IDs only; minimal output for scripts and AI agents).
+
+Best practices:
+  warren session list --current                # active workspace sessions only
+  warren session list --search <term>          # quickly locate sessions by keyword
+  warren session list -q --status running      # pipe running session IDs to shell scripts
+  warren workspace list -q                     # feed workspace IDs to agents with minimal tokens
+  warren session list --json | jq .            # inspect complete, raw details
 
 Examples:
   warren agent create WORKSPACE_ID --provider codex --prompt "Run the tests"
@@ -3976,7 +4488,7 @@ Examples:
 func agentUsageText() string {
 	return `Usage:
   warren agent create [WORKSPACE_ID] --provider codex|claude|opencode|pi|qoder [--command CMD] [--prompt TEXT | --no-prompt]
-  warren agent list [--all | --ended] [--limit N]
+  warren agent list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--provider PROVIDER] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
   warren agent read AGENT_ID [--current] [--recent N | --all] [--tools] [--tool-output] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
@@ -4010,10 +4522,10 @@ command with options, but must not include a positional prompt or prompt option.
 
 func agentListUsageText() string {
 	return `Usage:
-  warren agent list [--all | --ended] [--limit N]
+  warren agent list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--provider PROVIDER] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
 
-Lists are limited to 10 Agents by default. Use --all for the complete list;
-when looking for one Agent, prefer 'warren agent list --all | rg PATTERN'.
+Lists are limited to 10 Agents by default with long fields truncated.
+Use --search TEXT or filters to narrow down, --all for the complete list, and -q for IDs only.
 `
 }
 
@@ -4053,12 +4565,9 @@ with projection flags.
 
 func agentWaitUsageText() string {
 	return `Usage:
-  warren agent wait AGENT_ID [--timeout DURATION]
-  warren agent wait --current [--timeout DURATION]
+  warren agent wait AGENT_ID [--timeout DURATION] [--current]
 
-Wait for the running turn, or the next turn when the agent is idle. The
-default timeout is 30 minutes. On completion, Warren prints the normalized
-events belonging to that turn.
+Wait for an active Agent turn to finish. Exits 0 on turn completion, 1 on turn error.
 `
 }
 
@@ -4066,7 +4575,7 @@ func agentAttachUsageText() string {
 	return `Usage:
   warren agent attach AGENT_ID [--current]
 
-Attach to the Agent's live terminal. Use agent read for transcript data.
+Connect stdout and stdin to the live interactive PTY for an agent session.
 `
 }
 
@@ -4081,48 +4590,46 @@ func agentActionUsageText(action string) string {
 	case "move":
 		return "Usage:\n  warren agent move AGENT_ID --workspace WORKSPACE_ID [--confirm] [--dry-run]\n"
 	default:
-		return agentUsageText()
+		return "Usage:\n  warren agent remove|rename|pin|move AGENT_ID ...\n"
 	}
 }
 
 func resourceUsageText(commandName string) string {
 	aliasNote := ""
-	switch commandName {
-	case "worktree":
-		aliasNote = "\nworktree is an alias for workspace; use either name.\n"
-	case "workspace":
-		aliasNote = "\nworkspace has alias: worktree.\n"
-	case "group":
-		aliasNote = "\ngroup is an alias for terminal-group; use either name.\n"
+	if commandName == "worktree" {
+		aliasNote = "\nworktree is an alias for workspace."
+	}
+	if commandName == "group" {
+		aliasNote = "\ngroup is an alias for terminal-group."
 	}
 	switch canonicalResource(commandName) {
 	case "task":
-		return `Usage:
-  warren task list [--all] [--limit N]
-  warren task create --name NAME [--source SOURCE --external-id ID] [--url URL]
-  warren task remove TASK_ID
-  warren task rename TASK_ID --name NAME
-  warren task pin TASK_ID --pinned BOOL
-  warren task move TASK_ID [--before OTHER_TASK_ID]
-  warren task attach TASK_ID WORKSPACE_ID
-  warren task detach TASK_ID WORKSPACE_ID
-  warren task workspace list TASK_ID [--available] [--all] [--limit N]
-  warren task workspace attach TASK_ID WORKSPACE_ID
-  warren task workspace detach TASK_ID WORKSPACE_ID
-  warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
-`
+		return fmt.Sprintf(`Usage:
+  warren %s list [--all] [--source SOURCE] [--has-workspaces | --unattached] [--search TEXT] [--pinned] [--limit N] [-q]
+  warren %s create --name NAME [--source SOURCE --external-id ID] [--url URL]
+  warren %s remove TASK_ID
+  warren %s rename TASK_ID --name NAME
+  warren %s pin TASK_ID --pinned BOOL
+  warren %s move TASK_ID [--before OTHER_TASK_ID]
+  warren %s attach TASK_ID WORKSPACE_ID
+  warren %s detach TASK_ID WORKSPACE_ID
+  warren %s workspace list TASK_ID [--available] [--all] [--limit N] [-q]
+  warren %s workspace attach TASK_ID WORKSPACE_ID
+  warren %s workspace detach TASK_ID WORKSPACE_ID
+  warren %s workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
+`, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName)
 	case "project":
-		return `Usage:
-  warren project list [--all] [--limit N]
-  warren project add PATH [--name NAME] [--auto-import-worktrees]
-  warren project remove PROJECT_ID [--force]
-  warren project rename PROJECT_ID --name NAME
-  warren project pin PROJECT_ID --pinned BOOL
-  warren project move PROJECT_ID [--before OTHER_PROJECT_ID]
-`
+		return fmt.Sprintf(`Usage:
+  warren %s list [--all] [--search TEXT] [--has-workspaces] [--pinned] [--limit N] [-q]
+  warren %s add PATH [--name NAME] [--auto-import-worktrees]
+  warren %s remove PROJECT_ID [--force]
+  warren %s rename PROJECT_ID --name NAME
+  warren %s pin PROJECT_ID --pinned BOOL
+  warren %s move PROJECT_ID [--before OTHER_PROJECT_ID]
+`, commandName, commandName, commandName, commandName, commandName, commandName)
 	case "workspace":
 		return fmt.Sprintf(`Usage:
-  warren %s list [--all] [--limit N]
+  warren %s list [--all] [PROJECT_ID] [--project ID] [--task ID] [--branch BRANCH] [--merged | --unmerged] [--unattached] [--has-sessions] [--search TEXT] [--pinned] [--limit N] [-q]
   warren %s create PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
   warren %s remove WORKSPACE_ID [--force] [--keep-worktree]
   warren %s rename WORKSPACE_ID --name NAME
@@ -4131,7 +4638,7 @@ func resourceUsageText(commandName string) string {
 %s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
 	case "terminal-group":
 		return fmt.Sprintf(`Usage:
-  warren %s list [--all] [--limit N]
+  warren %s list [--all] [--search TEXT] [--limit N] [-q]
   warren %s create [--name NAME] [--home PATH]
   warren %s remove GROUP_ID [--force]
   warren %s rename GROUP_ID --name NAME
@@ -4140,7 +4647,7 @@ func resourceUsageText(commandName string) string {
 %s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
 	case "session":
 		return `Usage:
-  warren session list [--all | --ended] [--limit N]
+  warren session list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
   warren session current
   warren session create [WORKSPACE_ID] [--group GROUP_ID] [--kind KIND] [--command CMD] [--title TITLE]
   warren session remove SESSION_ID [--force] [--current] [--dry-run]
@@ -4164,14 +4671,14 @@ Trae is only a shell preset and has no Agent transcript/activity semantics.
 func taskWorkspaceUsageText(action string) string {
 	switch action {
 	case "list":
-		return "Usage:\n  warren task workspace list TASK_ID [--available] [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all for the complete list.\n"
+		return "Usage:\n  warren task workspace list TASK_ID [--available] [--all] [--limit N] [-q]\n\nDefault output is limited to 10 rows. Use --all for the complete list.\n"
 	case "attach", "detach":
 		return fmt.Sprintf("Usage:\n  warren task workspace %s TASK_ID WORKSPACE_ID\n", action)
 	case "create":
 		return "Usage:\n  warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]\n"
 	default:
 		return `Usage:
-  warren task workspace list TASK_ID [--available] [--all] [--limit N]
+  warren task workspace list TASK_ID [--available] [--all] [--limit N] [-q]
   warren task workspace attach TASK_ID WORKSPACE_ID
   warren task workspace detach TASK_ID WORKSPACE_ID
   warren task workspace create TASK_ID PROJECT_ID --branch BRANCH [--name NAME] [--path PATH]
@@ -4184,11 +4691,17 @@ func actionUsageText(commandName, action string) string {
 	switch canonicalResource(commandName) + "." + action {
 	case "task.list", "project.list", "workspace.list", "session.list":
 		if canonicalResource(commandName) == "session" {
-			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
+			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 		}
-		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
+		if canonicalResource(commandName) == "workspace" {
+			return fmt.Sprintf("Usage:\n  warren %s %s [--all] [PROJECT_ID] [--project ID] [--task ID] [--branch BRANCH] [--merged | --unmerged] [--unattached] [--has-sessions] [--search TEXT] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
+		}
+		if canonicalResource(commandName) == "task" {
+			return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--source SOURCE] [--has-workspaces | --unattached] [--search TEXT] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
+		}
+		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--has-workspaces] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 	case "terminal-group.list":
-		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--limit N]\n\nDefault output is limited to 10 rows. Use --all and pipe to rg when searching the full list.\n", name, action)
+		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 	case "task.create", "task.add":
 		return fmt.Sprintf("Usage:\n  warren %s create --name NAME [--source SOURCE --external-id ID] [--url URL]\n", name)
 	case "task.remove", "task.delete":
@@ -4269,7 +4782,7 @@ func endpointUsageText() string {
 
 func sshUsageText() string {
 	return `Usage:
-  warren ssh list [--ssh-config PATH] [--json]
+  warren ssh list [PATTERN] [--search TEXT] [--limit N] [--ssh-config PATH] [--json] [-q]
   warren ssh TARGET [--local-port PORT] [--remote-port PORT] [--name NAME] [--ssh-config PATH] [--known-hosts PATH]
 
 TARGET is an SSH alias from ~/.ssh/config or user@host. The embedded client

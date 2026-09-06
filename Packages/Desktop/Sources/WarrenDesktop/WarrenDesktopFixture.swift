@@ -357,6 +357,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         return result
     }
 
+    /// Count of unread notices from the notification center.
+    public let unreadNoticeCount: Int
+
     public var firstWorkspace: Workspace? {
         firstWorkspaceID.flatMap { workspacesByID[$0] }
     }
@@ -373,6 +376,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             && lhs.tabWorkspaceIDs == rhs.tabWorkspaceIDs
             && lhs.tabTerminalGroupIDs == rhs.tabTerminalGroupIDs
             && lhs.connectionState == rhs.connectionState
+            && lhs.unreadNoticeCount == rhs.unreadNoticeCount
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -387,6 +391,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         hasher.combine(tabWorkspaceIDs)
         hasher.combine(tabTerminalGroupIDs)
         hasher.combine(connectionState)
+        hasher.combine(unreadNoticeCount)
     }
 
     public init(
@@ -400,7 +405,8 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         connectionState: WarrenDesktopConnectionState = .attached,
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
-        tabTerminalGroupIDs: [String: TerminalGroupID] = [:]
+        tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
+        unreadNoticeCount: Int = 0
     ) {
         let pinnedBySessionID = Dictionary(
             uniqueKeysWithValues: sessions.map { ($0.id, $0.pinned) }
@@ -457,6 +463,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         )
         self.tabWorkspaceIDs = resolvedTabWorkspaceIDs
         self.tabTerminalGroupIDs = resolvedTabTerminalGroupIDs
+
+        // Assign the notice count from the projection boundary
+        self.unreadNoticeCount = unreadNoticeCount
 
         var workspacesByID: [WorkspaceID: Workspace] = [:]
         var firstWorkspaceID: WorkspaceID?
@@ -567,7 +576,8 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         connectionState: WarrenDesktopConnectionState = .attached,
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
-        tabTerminalGroupIDs: [String: TerminalGroupID] = [:]
+        tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
+        unreadNoticeCount: Int = 0
     ) {
         var workspacesByProjectID: [ProjectID: [Workspace]] = [:]
         for workspace in Self.pinnedFirst(workspaces, isPinned: \.pinned) {
@@ -590,7 +600,8 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             connectionState: connectionState,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
+            tabTerminalGroupIDs: tabTerminalGroupIDs,
+            unreadNoticeCount: unreadNoticeCount
         )
     }
 
@@ -1041,6 +1052,7 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case closeAllTabs
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar
+    case openNotifications
 }
 
 /// UI-only event surface. The package itself performs no side effects.

@@ -77,8 +77,6 @@ struct WarrenDesktopOverflowPopover: View {
     private var surfaceWidth: CGFloat {
         guard let selectedControl else { return 248 }
         switch selectedControl {
-        case .notifications:
-            return 360
         case .web:
             return WarrenLayoutMetrics.webPopoverWidth
         default:

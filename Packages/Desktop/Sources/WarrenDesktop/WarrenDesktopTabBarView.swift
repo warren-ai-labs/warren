@@ -25,11 +25,8 @@ struct WarrenDesktopTabBar: View {
     let embeddedEditorTabVisible: Bool
     let embeddedEditorSelected: Bool
     let embeddedEditorDefault: Bool
-    let notices: [WarrenDesktopNotice]
-    let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
     let isOverflowPresented: Bool
-    let isNoticePresented: Bool
     let onToggleSidebar: () -> Void
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
@@ -75,11 +72,8 @@ struct WarrenDesktopTabBar: View {
         embeddedEditorTabVisible: Bool,
         embeddedEditorSelected: Bool,
         embeddedEditorDefault: Bool,
-        notices: [WarrenDesktopNotice] = [],
-        notificationsMuted: Bool = false,
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
         isOverflowPresented: Bool = false,
-        isNoticePresented: Bool = false,
         onToggleSidebar: @escaping () -> Void,
         onSettings: @escaping () -> Void,
         onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
@@ -120,14 +114,11 @@ struct WarrenDesktopTabBar: View {
         self.embeddedEditorTabVisible = embeddedEditorTabVisible
         self.embeddedEditorSelected = embeddedEditorSelected
         self.embeddedEditorDefault = embeddedEditorDefault
-        self.notices = notices
-        self.notificationsMuted = notificationsMuted
         self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
             externallyVisibleControls,
             endpointCount: endpointOptions.count
         )
         self.isOverflowPresented = isOverflowPresented
-        self.isNoticePresented = isNoticePresented
         self.onToggleSidebar = onToggleSidebar
         self.onSettings = onSettings
         self.onChromePopover = onChromePopover
@@ -286,11 +277,8 @@ struct WarrenDesktopTabBar: View {
                         embeddedEditorAvailable: embeddedEditorAvailable,
                         embeddedEditorSelected: embeddedEditorSelected,
                         embeddedEditorDefault: embeddedEditorDefault,
-                        notices: notices,
-                        notificationsMuted: notificationsMuted,
                         externallyVisibleControls: externallyVisibleControls,
                         isOverflowPresented: isOverflowPresented,
-                        isNoticePresented: isNoticePresented,
                         onSettings: onSettings,
                         onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
@@ -476,18 +464,15 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
     case externalIDE
     case endpoint
     case web
-    case notifications
     case settings
 
-    public static let maximumExternalButtonCount = 5
+    public static let maximumExternalButtonCount = 4
     /// Locked priority for the workspace trailing chrome: IDE → Endpoint →
-    /// Web → Notifications. Endpoint occupies the second slot only when
-    /// multiple execution servers exist. Settings is intentionally excluded
-    /// from this chrome and lives in the sidebar footer.
+    /// Web → Settings.
     public static let defaultExternalControls: [Self] = [
         .externalIDE,
         .web,
-        .notifications,
+        .settings,
     ]
 
     public static func normalizedExternalControls(_ controls: [Self]) -> [Self] {
@@ -541,7 +526,6 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         case .externalIDE: "Open in IDE"
         case .endpoint: "Execution Server"
         case .web: "Public Access"
-        case .notifications: "Notifications"
         case .settings: "Settings"
         }
     }
@@ -551,7 +535,6 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         case .externalIDE: "macwindow"
         case .endpoint: "server.rack"
         case .web: "globe"
-        case .notifications: "bell"
         case .settings: "gearshape"
         }
     }
@@ -561,7 +544,6 @@ public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Se
         case .externalIDE: "Choose an application for the current workspace"
         case .endpoint: "Switch the execution server"
         case .web: "Manage Public Access"
-        case .notifications: "Show system messages and errors"
         case .settings: "Open Warren settings"
         }
     }
@@ -588,11 +570,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let embeddedEditorAvailable: Bool
     let embeddedEditorSelected: Bool
     let embeddedEditorDefault: Bool
-    let notices: [WarrenDesktopNotice]
-    let notificationsMuted: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
     let isOverflowPresented: Bool
-    let isNoticePresented: Bool
     let onSettings: () -> Void
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
@@ -683,13 +662,6 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     ? tokens.info
                     : (webStatus.isRunning ? tokens.success : nil),
                 edgeSpaced: true
-            )
-        case .notifications:
-            WarrenDesktopNoticeButton(
-                unreadCount: notificationsMuted ? 0 : notices.filter(\.isUnread).count,
-                isPresented: isNoticePresented,
-                isMuted: notificationsMuted,
-                action: { onChromePopover(.notices) }
             )
         case .settings:
             WarrenDesktopChromeButton(

@@ -9,7 +9,6 @@ enum WarrenDesktopChromePopover: Equatable {
     case web
     case endpoint
     case externalIDE
-    case notices
     case overflow
 }
 

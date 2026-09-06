@@ -18,6 +18,8 @@ const relayInviteID = relayInviteMeta?.content || "__WARREN_RELAY_INVITE_ID__";
 const hasRelayHostID = !relayHostID.startsWith("__WARREN_");
 const hasRelayInviteID = !relayInviteID.startsWith("__WARREN_");
 const usesControlPlane = hasRelayHostID || hasRelayInviteID;
+
+export { hasRelayHostID, hasRelayInviteID };
 // A Relay may be mounted below a reverse-proxy path prefix (for example
 // /relay). Preserve that prefix for every browser request; absolute root URLs
 // would otherwise escape the mounted Relay and lose the host namespace.
@@ -104,39 +106,41 @@ const relaySessionBase = () => usesControlPlane
 // the same link.
 export const tokenReady = usesControlPlane
   ? (hasRelayInviteID
-      ? fetch(`${relaySessionBase()}/exchange`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ invite_id: relayInviteID, client_id: relayClientID }),
+    ? fetch(`${relaySessionBase()}/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ invite_id: relayInviteID, client_id: relayClientID }),
+      })
+        .then(response => (response.ok ? response.json() : Promise.reject(new Error("invite exchange failed"))))
+        .then(result => {
+          if (!result.host_id) throw new Error("invite exchange returned no Host");
+          resolvedRelayHostID = result.host_id;
+          memoryToken.value = result.access_token || "";
+          return memoryToken.value;
         })
-          .then(response => (response.ok ? response.json() : Promise.reject(new Error("invite exchange failed"))))
-          .then(result => {
-            if (!result.host_id) throw new Error("invite exchange returned no Host");
-            resolvedRelayHostID = result.host_id;
-            memoryToken.value = result.access_token || "";
-            return memoryToken.value;
-          })
-          .catch(() => {
-            memoryToken.value = "";
-            return memoryToken.value;
-          })
-      : (suppliedToken
-      ? fetch(`${relaySessionBase()}/exchange`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ pairing_ticket: suppliedToken, client_id: relayClientID }),
+        .catch(() => {
+          memoryToken.value = "";
+          return memoryToken.value;
         })
-          .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
-          .then(result => {
-            memoryToken.value = result.access_token || "";
-            return memoryToken.value;
+    : (suppliedToken
+      ? ((hasRelayHostID && hasRelayInviteID)
+        ? fetch(`${relaySessionBase()}/exchange`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ pairing_ticket: suppliedToken, client_id: relayClientID }),
           })
-          .catch(() => {
-            memoryToken.value = "";
-            return memoryToken.value;
-          })
+            .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
+            .then(result => {
+              memoryToken.value = result.access_token || "";
+              return memoryToken.value;
+            })
+            .catch(() => {
+              memoryToken.value = "";
+              return memoryToken.value;
+            })
+        : Promise.resolve(suppliedToken))
       : refreshRelayToken().catch(() => "")))
   : Promise.resolve(memoryToken.value);
 
