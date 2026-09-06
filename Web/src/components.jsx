@@ -100,6 +100,13 @@ const GitIcon = (
   </svg>
 );
 
+const lockIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </svg>
+);
+
 function useBuildVariant() {
   // The Vite dev server is always a preview build. In production the daemon
   // serves a build-variant.txt stamped by scripts/build-app.sh, so a Web UI
@@ -1013,6 +1020,60 @@ export function PresetBar({ presets, onCreateSession, onConfigureSession, creati
   );
 }
 
+export function UnauthorizedScreen({ onReconnect }) {
+  const [inputValue, setInputValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async event => {
+    event.preventDefault();
+    const trimmed = inputValue.trim();
+    if (!trimmed || submitting) return;
+    setError("");
+    setSubmitting(true);
+    try {
+      await onReconnect?.(trimmed);
+    } catch (err) {
+      setError(err?.message || "Authentication failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="empty-state auth-state">
+      {lockIcon}
+      <div className="empty-title">Authentication Required</div>
+      <p className="empty-hint">
+        Your Web link is missing, expired, or invalid. Copy a fresh Web link from the Warren menu bar, or paste a new link or token below.
+      </p>
+      <form className="auth-form" onSubmit={handleSubmit}>
+        <input
+          type="text"
+          className="auth-token-input"
+          placeholder="Paste Web link or token (#t=…)"
+          value={inputValue}
+          onChange={event => {
+            setInputValue(event.target.value);
+            if (error) setError("");
+          }}
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <button
+          type="submit"
+          className="empty-action auth-action"
+          disabled={!inputValue.trim() || submitting}
+        >
+          {submitting ? "Connecting…" : "Reconnect"}
+        </button>
+      </form>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
 export function EmptyTerminal({
   activeWorkspace,
   activeSession,
@@ -1021,12 +1082,17 @@ export function EmptyTerminal({
   projectCount,
   override,
   onNewSession,
+  onReconnect,
 }) {
   let content;
   let hidden = false;
 
   if (override) {
-    content = override.loading ? <Loading message={override.message} /> : <span>{override.message}</span>;
+    if (override.message === "unauthorized") {
+      content = <UnauthorizedScreen onReconnect={onReconnect} />;
+    } else {
+      content = override.loading ? <Loading message={override.message} /> : <span>{override.message}</span>;
+    }
   } else if (activeSession && terminalReadySession === activeSession) {
     hidden = true;
     content = null;

@@ -30,9 +30,11 @@ export function rejectPendingRequests(
   }
 }
 
-// Headless WebSocket errors use the response envelope's `error` field.
+// Headless WebSocket errors use the response envelope's `error` field,
+// while Relay control plane errors use `message`. Accept both so
+// error classification and automatic token refresh work reliably.
 export function connectionErrorDetail(message, fallback = "Error") {
-  return message?.error?.message || message?.error || fallback;
+  return message?.error?.message || message?.error || message?.message || fallback;
 }
 
 export class WarrenConnection {

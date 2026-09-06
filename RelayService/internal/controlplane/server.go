@@ -1141,30 +1141,30 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 		Version     string `json:"version"`
 	}
 	if err != nil || messageType != websocket.TextMessage || json.Unmarshal(authPayload, &auth) != nil || auth.Type != "auth" || auth.Version != clientProtocolVersion || strings.TrimSpace(auth.AccessToken) == "" {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "unauthorized", "message": "unauthorized"})
 		return
 	}
 	claims, err := server.signer.verify(auth.AccessToken, requestedHostID, "control")
 	if err != nil {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "unauthorized", "message": "unauthorized"})
 		return
 	}
 	hostID := claims.HostID
 	if requestedHostID != "" && requestedHostID != hostID {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "unauthorized", "message": "unauthorized"})
 		return
 	}
 	if claims.ClientID != "" && (auth.ClientID == "" || auth.ClientID != claims.ClientID) {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "unauthorized"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "unauthorized", "message": "unauthorized"})
 		return
 	}
 	if !server.clientLimiter.allow("host:" + hostID) {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "rate limit exceeded"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "rate limit exceeded", "message": "rate limit exceeded"})
 		return
 	}
 	tunnel := server.registry.authorizedTunnel(hostID, claims.Generation)
 	if tunnel == nil {
-		_ = client.WriteJSON(map[string]string{"t": "error", "message": "host offline"})
+		_ = client.WriteJSON(map[string]string{"t": "error", "error": "host offline", "message": "host offline"})
 		return
 	}
 	_ = client.SetReadDeadline(time.Now().Add(75 * time.Second))

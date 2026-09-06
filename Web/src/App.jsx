@@ -32,7 +32,7 @@ import {
   restoreNavigationPosition,
   resolveWorkspaceSession,
 } from "./navigation.js";
-import { runtime, serviceWorkerURL, tokenReady, webSocketURL } from "./runtime.js";
+import { parseAuthInput, runtime, serviceWorkerURL, tokenReady, webSocketURL } from "./runtime.js";
 import {
   automaticSessionKind,
   defaultHiddenSessionPresetKinds,
@@ -2217,6 +2217,7 @@ export default function App() {
     }
 
     setConnectionStatus({ message: "Connected", online: true });
+    setEmptyOverride(null);
     if (gitNeedsReloadRef.current || fileDiffNeedsReloadRef.current) {
       gitNeedsReloadRef.current = false;
       gitLoadingRef.current = null;
@@ -2625,6 +2626,7 @@ export default function App() {
               relayRefreshInFlightRef.current = false;
               const connection = connectionRef.current;
               if (!token || !connection) {
+                runtime.clearToken?.();
                 connection?.stop();
                 return;
               }
@@ -2632,9 +2634,11 @@ export default function App() {
               connection.reset();
             }).catch(() => {
               relayRefreshInFlightRef.current = false;
+              runtime.clearToken?.();
               connectionRef.current?.stop();
             });
           } else if (!runtime.usesControlPlane) {
+            runtime.clearToken?.();
             connectionRef.current?.stop();
           }
         }
@@ -3214,6 +3218,35 @@ export default function App() {
   useEffect(() => {
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
       navigator.serviceWorker.register(serviceWorkerURL()).catch(() => {});
+    }
+  }, []);
+
+  const reconnectWithAuth = useCallback(async input => {
+    const { token, url } = parseAuthInput(input);
+    if (url && (url.origin !== location.origin || (url.pathname !== location.pathname && !url.hash.startsWith("#t=")))) {
+      window.location.assign(url.href);
+      return;
+    }
+    if (!token) {
+      throw new Error("Please enter a valid link or token");
+    }
+    setEmptyOverride({ loading: true, message: "Connecting…" });
+    setConnectionStatus({ message: "Connecting…", online: false });
+    try {
+      const authToken = await runtime.authenticate(token);
+      const connection = connectionRef.current;
+      if (connection) {
+        connection.token = authToken;
+        if (!connection.running) {
+          connection.start();
+        } else {
+          connection.reset();
+        }
+      }
+    } catch (error) {
+      setEmptyOverride({ loading: false, message: "unauthorized" });
+      setConnectionStatus({ message: "unauthorized", online: false });
+      throw error;
     }
   }, []);
 
@@ -4150,7 +4183,7 @@ export default function App() {
                 ↓ New output
               </button>
             )}
-            {!(gitOpen && fileView) && (
+            {!(gitOpen && fileView && !emptyOverride) && (
             <EmptyTerminal
               activeWorkspace={selectedWorkspaceID}
               activeSession={activeSession}
@@ -4159,6 +4192,7 @@ export default function App() {
               projectCount={catalog.projects.length}
               override={emptyOverride}
               onNewSession={() => createSession("shell")}
+              onReconnect={reconnectWithAuth}
             />
             )}
           </section>

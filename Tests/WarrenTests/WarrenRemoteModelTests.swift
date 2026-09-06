@@ -103,6 +103,41 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBrowserURLAddsAuthFragmentForLocalAndLANEndpoints() throws {
+        let localURL = try XCTUnwrap(URL(string: "http://127.0.0.1:8789"))
+        let lanURL = try XCTUnwrap(URL(string: "http://192.168.1.10:8789"))
+        let secureURL = try XCTUnwrap(URL(string: "https://relay.example.com/h/host-1/"))
+
+        let openedLocal = WarrenRemoteApplicationModel.browserURL(
+            for: localURL,
+            localURL: localURL,
+            lanURL: lanURL,
+            secureURL: secureURL,
+            daemonToken: "local-secret"
+        )
+        XCTAssertEqual(openedLocal.absoluteString, "http://127.0.0.1:8789#t=local-secret")
+
+        let openedLAN = WarrenRemoteApplicationModel.browserURL(
+            for: lanURL,
+            localURL: localURL,
+            lanURL: lanURL,
+            secureURL: secureURL,
+            daemonToken: "local-secret"
+        )
+        XCTAssertEqual(openedLAN.absoluteString, "http://192.168.1.10:8789#t=local-secret")
+
+        // Without localURL matching and with empty token on relay, secure remains credential-free
+        let openedSecure = WarrenRemoteApplicationModel.browserURL(
+            for: secureURL,
+            localURL: localURL,
+            lanURL: lanURL,
+            secureURL: secureURL,
+            daemonToken: ""
+        )
+        XCTAssertEqual(openedSecure.absoluteString, "https://relay.example.com/h/host-1/")
+    }
+
+    @MainActor
     func testAuthenticatedWebURLEncodesLegacyTokenWithoutAPlaintextFragment() throws {
         let endpoint = try XCTUnwrap(URL(string: "https://tunnel.example/t/host/"))
         let opened = WarrenRemoteApplicationModel.authenticatedWebURL(
