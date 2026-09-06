@@ -936,6 +936,35 @@ public enum WarrenDesktopSidebarSelection: Hashable, Sendable {
     case project(ProjectID)
     case workspace(WorkspaceID)
     case terminalGroup(TerminalGroupID)
+
+    public var serializedKey: String {
+        switch self {
+        case .workspace(let id):
+            return "workspace:\(id.description)"
+        case .project(let id):
+            return "project:\(id.description)"
+        case .terminalGroup(let id):
+            return "terminal-group:\(id.description)"
+        }
+    }
+
+    public init?(serializedKey: String) {
+        let parts = serializedKey.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        switch parts[0] {
+        case "workspace":
+            guard let id = WorkspaceID(uuidString: parts[1]) else { return nil }
+            self = .workspace(id)
+        case "project":
+            guard let id = ProjectID(uuidString: parts[1]) else { return nil }
+            self = .project(id)
+        case "terminal-group":
+            guard let id = TerminalGroupID(uuidString: parts[1]) else { return nil }
+            self = .terminalGroup(id)
+        default:
+            return nil
+        }
+    }
 }
 
 /// The Host context a Session can be moved into. Workspace and Terminal Group

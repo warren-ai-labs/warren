@@ -2558,6 +2558,137 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(restored.selectedTabID, "tab-main")
     }
 
+    func testDeletingWorkspaceReturnsToTheMostRecentlyVisitedWorkspace() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceA = fixture.groups[0].workspaces[0]
+        let workspaceB = fixture.groups[1].workspaces[0]
+
+        // 1. Visit workspace A
+        let stateA = WarrenDesktopNavigationReducer.reduce(
+            .init(),
+            action: .selectWorkspace(workspaceA.id),
+            in: fixture.projection
+        )
+        XCTAssertEqual(stateA.selection, .workspace(workspaceA.id))
+
+        // 2. Jump to workspace B
+        let stateB = WarrenDesktopNavigationReducer.reduce(
+            stateA,
+            action: .selectWorkspace(workspaceB.id),
+            in: fixture.projection
+        )
+        XCTAssertEqual(stateB.selection, .workspace(workspaceB.id))
+
+        // 3. Delete workspace B and reconcile with a projection that no longer has workspace B
+        let deletedState = WarrenDesktopNavigationReducer.reduce(
+            stateB,
+            action: .deleteWorkspace(workspaceB.id, removeLocalWorktree: false),
+            in: fixture.projection
+        )
+
+        let projectionWithoutB = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: [fixture.groups[0]],
+            sessions: fixture.sessions.filter { $0.workspaceID != workspaceB.id },
+            tabs: fixture.tabs.filter { fixture.projection.workspaceID(forTabID: $0.id) != workspaceB.id }
+        )
+
+        let reconciled = WarrenDesktopNavigationReducer.reconcile(deletedState, with: projectionWithoutB)
+        XCTAssertEqual(reconciled.selection, .workspace(workspaceA.id))
+        XCTAssertEqual(reconciled.selectedTabID, "tab-main")
+    }
+
+    func testClosingTabReturnsToTheMostRecentlyVisitedTabInSameScope() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceID = fixture.groups[0].workspaces[0].id
+        let tab1 = ClientTab(id: "tab-1", title: "Tab 1", kind: .shell)
+        let tab2 = ClientTab(id: "tab-2", title: "Tab 2", kind: .shell)
+        let tab3 = ClientTab(id: "tab-3", title: "Tab 3", kind: .shell)
+        let projection = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            sessions: fixture.sessions,
+            tabs: [tab1, tab2, tab3],
+            sessionWorkspaceIDs: fixture.projection.sessionWorkspaceIDs,
+            tabWorkspaceIDs: [tab1.id: workspaceID, tab2.id: workspaceID, tab3.id: workspaceID]
+        )
+
+        // Visit tab 1, then tab 2, then tab 3
+        let state1 = WarrenDesktopNavigationReducer.reduce(.init(), action: .selectTab(tab1.id), in: projection)
+        let state2 = WarrenDesktopNavigationReducer.reduce(state1, action: .selectTab(tab2.id), in: projection)
+        let state3 = WarrenDesktopNavigationReducer.reduce(state2, action: .selectTab(tab3.id), in: projection)
+        XCTAssertEqual(state3.selectedTabID, tab3.id)
+
+        // Close tab 3 -> should return to tab 2 (MRU), not tab 1
+        let afterClose3 = WarrenDesktopNavigationReducer.reduce(state3, action: .closeTab(tab3.id), in: projection)
+        XCTAssertEqual(afterClose3.selectedTabID, tab2.id)
+
+        // Close tab 2 -> should return to tab 1 (MRU)
+        let afterClose2 = WarrenDesktopNavigationReducer.reduce(afterClose3, action: .closeTab(tab2.id), in: projection)
+        XCTAssertEqual(afterClose2.selectedTabID, tab1.id)
+    }
+
+    func testDeletingSessionReturnsToTheMostRecentlyVisitedTab() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceID = fixture.groups[0].workspaces[0].id
+        let session1 = WarrenDesktopSession(id: TerminalSessionID(), workspaceID: workspaceID, tabID: "tab-s1", title: "S1", kind: .shell)
+        let session2 = WarrenDesktopSession(id: TerminalSessionID(), workspaceID: workspaceID, tabID: "tab-s2", title: "S2", kind: .shell)
+        let tab1 = ClientTab(id: "tab-s1", title: "S1", sessionID: session1.id, kind: .shell)
+        let tab2 = ClientTab(id: "tab-s2", title: "S2", sessionID: session2.id, kind: .shell)
+        let projection = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            sessions: [session1, session2],
+            tabs: [tab1, tab2],
+            sessionWorkspaceIDs: [session1.id: workspaceID, session2.id: workspaceID],
+            tabWorkspaceIDs: [tab1.id: workspaceID, tab2.id: workspaceID]
+        )
+
+        let s1 = WarrenDesktopNavigationReducer.reduce(.init(), action: .selectTab(tab1.id), in: projection)
+        let s2 = WarrenDesktopNavigationReducer.reduce(s1, action: .selectTab(tab2.id), in: projection)
+        XCTAssertEqual(s2.selectedTabID, tab2.id)
+
+        let afterDeleteSession2 = WarrenDesktopNavigationReducer.reduce(s2, action: .deleteSession(session2.id), in: projection)
+        XCTAssertEqual(afterDeleteSession2.selectedTabID, tab1.id)
+    }
+
+    func testDeletingTerminalGroupReturnsToPreviousSelection() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceID = fixture.groups[0].workspaces[0].id
+        let group = TerminalGroup(hostID: fixture.host.id, name: "Scratch")
+        let groupTab = ClientTab(id: "group-tab", title: "Scratch Tab", kind: .shell)
+        let projection = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            tabs: fixture.tabs + [groupTab],
+            sessionWorkspaceIDs: fixture.projection.sessionWorkspaceIDs,
+            tabWorkspaceIDs: fixture.projection.tabWorkspaceIDs,
+            terminalGroups: [group],
+            tabTerminalGroupIDs: [groupTab.id: group.id]
+        )
+
+        // 1. Visit workspace
+        let stateWS = WarrenDesktopNavigationReducer.reduce(.init(), action: .selectWorkspace(workspaceID), in: projection)
+        XCTAssertEqual(stateWS.selection, .workspace(workspaceID))
+
+        // 2. Jump to terminal group
+        let stateGroup = WarrenDesktopNavigationReducer.reduce(stateWS, action: .selectTerminalGroup(group.id), in: projection)
+        XCTAssertEqual(stateGroup.selection, .terminalGroup(group.id))
+
+        // 3. Delete terminal group and reconcile with projection without the group
+        let deleted = WarrenDesktopNavigationReducer.reduce(stateGroup, action: .deleteTerminalGroup(group.id), in: projection)
+        let projectionWithoutGroup = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            tabs: fixture.tabs,
+            sessionWorkspaceIDs: fixture.projection.sessionWorkspaceIDs,
+            tabWorkspaceIDs: fixture.projection.tabWorkspaceIDs,
+            terminalGroups: []
+        )
+        let reconciled = WarrenDesktopNavigationReducer.reconcile(deleted, with: projectionWithoutGroup)
+        XCTAssertEqual(reconciled.selection, .workspace(workspaceID))
+    }
+
     func testPendingShellTabBelongsToWorkspaceBeforeSessionExists() {
         let fixture = WarrenDesktopFixture.preview
         let workspaceID = fixture.groups[0].workspaces[1].id
