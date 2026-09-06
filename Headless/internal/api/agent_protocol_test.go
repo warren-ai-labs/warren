@@ -41,7 +41,36 @@ func TestCanonicalAgentEventGeneratesStableIdentity(t *testing.T) {
 	if event.EventID != "exec-1:9" || event.Sequence != 9 || event.Type != "tool.started" {
 		t.Fatalf("event = %#v", event)
 	}
+	if event.Payload["toolKind"] != "tool" {
+		t.Fatalf("tool event should carry a fallback tool kind: %#v", event.Payload)
+	}
 	if event.OccurredAt.IsZero() || event.RecordedAt.IsZero() {
 		t.Fatal("canonical timestamps must be populated")
+	}
+}
+
+func TestCanonicalAgentEventDoesNotAddToolSemanticsToMessages(t *testing.T) {
+	event := CanonicalAgentEventFromLegacy(AgentEvent{
+		Type:      "assistant",
+		Content:   "done",
+		ToolInput: map[string]any{"command": "echo should-not-be-a-tool"},
+		ToolName:  "shell",
+	}, "exec-1", "exec-1", 1, time.Time{})
+	if _, ok := event.Payload["toolKind"]; ok {
+		t.Fatalf("message unexpectedly contains toolKind: %#v", event.Payload)
+	}
+	if _, ok := event.Payload["toolDetail"]; ok {
+		t.Fatalf("message unexpectedly contains toolDetail: %#v", event.Payload)
+	}
+}
+
+func TestCanonicalToolSemanticsNormalizeAliasesAndArguments(t *testing.T) {
+	event := CanonicalAgentEventFromLegacy(AgentEvent{
+		Type:      "tool_call",
+		ToolName:  "run-command",
+		ToolInput: map[string]any{"argv": []any{"printf", "hello"}},
+	}, "exec-1", "exec-1", 1, time.Time{})
+	if event.Payload["toolKind"] != "ran" || event.Payload["toolDetail"] != "printf hello" {
+		t.Fatalf("unexpected tool semantics: %#v", event.Payload)
 	}
 }

@@ -13,6 +13,32 @@ export const agentStructuredEventTypes = new Set([
   "plugin",
   "subagent",
   "attachment",
+  "diff",
+  "diagnostics",
+  "config",
+  "queue",
+]);
+
+// Canonical Host events keep their lifecycle verb in the type (for example
+// `plan.updated`), while the legacy presentation reducer consumes the short
+// card kind (`plan`). Keep both spellings recognized at this boundary so
+// callers can project either raw canonical history or already-normalized rows.
+const canonicalStructuredEventTypes = new Set([
+  "interaction.requested",
+  "interaction.resolved",
+  "interaction.expired",
+  "plan.updated",
+  "tasks.updated",
+  "todo.updated",
+  "activity.updated",
+  "plugin.updated",
+  "subagent.updated",
+  "attachment.updated",
+  "diff.updated",
+  "diagnostics.updated",
+  "config.updated",
+  "compaction.updated",
+  "queue.updated",
 ]);
 
 export function agentEventSequence(event) {
@@ -104,6 +130,20 @@ export function normalizeCanonicalAgentEvent(event) {
     case "context.updated":
       projectedType = "context";
       break;
+    case "diff.updated":
+      projectedType = "diff";
+      break;
+    case "diagnostics.updated":
+      projectedType = "diagnostics";
+      break;
+    case "config.updated":
+      projectedType = "config";
+      break;
+    case "queue.updated":
+    case "queue_operation":
+    case "queue":
+      projectedType = "queue";
+      break;
     default:
       break;
   }
@@ -112,9 +152,11 @@ export function normalizeCanonicalAgentEvent(event) {
   if (role) projected.role = role;
   if (content !== null && content !== undefined) projected.content = String(content);
   if (contentDelta) projected.contentDelta = true;
-  projected.id = String(payload.messageId || payload.callId || payload.interactionId || event.eventId);
+  projected.id = structuredAgentEventIdentity(event, type, payload);
   if (payload.toolName !== undefined) projected.toolName = payload.toolName;
   if (payload.toolInput !== undefined) projected.toolInput = payload.toolInput;
+  if (payload.toolKind !== undefined) projected.toolKind = String(payload.toolKind);
+  if (payload.toolDetail !== undefined) projected.toolDetail = String(payload.toolDetail);
   if (payload.toolStatus !== undefined) projected.toolStatus = payload.toolStatus;
   if (payload.callId !== undefined) projected.callId = payload.callId;
   if (payload.output !== undefined) projected.output = payload.output;
@@ -131,12 +173,67 @@ export function normalizeCanonicalAgentEvent(event) {
   return projected;
 }
 
+function structuredAgentEventIdentity(event, type, payload) {
+  const normalizedType = String(type || "").trim().toLowerCase().replaceAll("-", "_");
+  const canonicalType = normalizedType.includes(".")
+    ? normalizedType
+    : ({
+      question: "interaction.requested",
+      permission: "interaction.requested",
+      confirmation: "interaction.requested",
+      plan: "plan.updated",
+      todo: "todo.updated",
+      activity: "activity.updated",
+      plugin: "plugin.updated",
+      subagent: "subagent.updated",
+      attachment: "attachment.updated",
+      diff: "diff.updated",
+      diagnostics: "diagnostics.updated",
+      config: "config.updated",
+      compaction: "compaction.updated",
+      queue: "queue.updated",
+    }[normalizedType] || normalizedType);
+  const candidates = {
+    "message.created": ["messageId"],
+    "message.delta": ["messageId"],
+    "message.completed": ["messageId"],
+    "reasoning.delta": ["messageId"],
+    "tool.started": ["callId", "toolCallId"],
+    "tool.updated": ["callId", "toolCallId"],
+    "tool.completed": ["callId", "toolCallId"],
+    "tool.failed": ["callId", "toolCallId"],
+    "interaction.requested": ["interactionId", "requestId"],
+    "interaction.resolved": ["interactionId", "requestId"],
+    "interaction.expired": ["interactionId", "requestId"],
+    "plan.updated": ["planId"],
+    "tasks.updated": ["taskListId", "todoId"],
+    "todo.updated": ["todoId", "taskListId"],
+    "activity.updated": ["activityId"],
+    "plugin.updated": ["pluginId"],
+    "subagent.updated": ["subagentId"],
+    "attachment.updated": ["attachmentId"],
+    "diff.updated": ["diffId", "file"],
+    "diagnostics.updated": ["diagnosticsId", "file"],
+    "config.updated": ["configId"],
+    "compaction.updated": ["compactionId"],
+    "queue.updated": ["queueId", "itemId", "requestId"],
+  }[canonicalType] || [];
+  for (const key of candidates) {
+    const value = payload[key];
+    if ((typeof value === "string" || typeof value === "number") && String(value).trim()) {
+      return String(value);
+    }
+  }
+  return String(event.id || event.eventId || `sequence-${event.sequence}`);
+}
+
 export function normalizeAgentEventType(type) {
   return String(type || "").trim().toLowerCase().replaceAll("-", "_");
 }
 
 export function isStructuredAgentEvent(event) {
-  return agentStructuredEventTypes.has(normalizeAgentEventType(event?.type));
+  const type = normalizeAgentEventType(event?.type);
+  return agentStructuredEventTypes.has(type) || canonicalStructuredEventTypes.has(type);
 }
 
 /** Returns true for events that should not be displayed in the conversation message stream. */
@@ -524,7 +621,8 @@ export function projectAgentEvents(events = []) {
   for (const event of events || []) {
     if (isStructuredAgentEvent(event)) {
       const type = normalizeAgentEventType(event.type);
-      const stableID = String(event.id || `sequence-${event.sequence}`);
+      const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+      const stableID = structuredAgentEventIdentity(event, type, payload);
       latestStructured.set(`${type}:${stableID}`, event);
     } else {
       projected.push(event);
@@ -925,7 +1023,9 @@ export function displayToolName(name) {
   return labels[name] || name || "Tool";
 }
 
-export function isCommandTool(toolName, toolInput = null) {
+export function isCommandTool(toolName, toolInput = null, toolKind = "") {
+  const semanticKind = String(toolKind || "").trim().toLowerCase();
+  if (["ran", "shell", "exec"].includes(semanticKind)) return true;
   const name = (toolName || "").toLowerCase().trim();
   if (["shell", "exec", "execute", "run_command", "bash", "local_shell_call"].includes(name)) {
     return true;
@@ -1007,6 +1107,10 @@ export function extractExecCommands(raw) {
 
 export function toolSummary(call) {
   if (!call) return "";
+  const semanticDetail = call.toolDetail || call.payload?.toolDetail;
+  if (typeof semanticDetail === "string" && semanticDetail.trim()) {
+    return truncatePreview(semanticDetail.trim());
+  }
   const input = call.toolInput;
   const files = Array.isArray(call.files) ? call.files.filter(Boolean) : [];
 
@@ -1135,7 +1239,7 @@ export function toolCategoryAndCommand(call, status) {
   const isRunning = effectiveStatus === "running";
 
   let category = "Tool";
-  if (isCommandTool(rawName, call.toolInput)) {
+  if (isCommandTool(rawName, call.toolInput, call.toolKind)) {
     category = isRunning ? "Run" : (isFailed ? "Ran (failed)" : "Ran");
   } else if (["grep", "ripgrep", "rg", "search_content", "grep_search"].includes(rawName)) {
     category = "Grep";

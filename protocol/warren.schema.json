@@ -398,8 +398,10 @@
               "message.created", "message.delta", "message.completed", "reasoning.delta",
               "tool.started", "tool.updated", "tool.completed", "tool.failed",
               "interaction.requested", "interaction.resolved", "interaction.expired",
-              "plan.updated", "tasks.updated", "context.updated", "status.changed",
-              "attention.changed"
+              "plan.updated", "tasks.updated", "todo.updated", "context.updated", "status.changed",
+              "attention.changed", "activity.updated", "plugin.updated", "subagent.updated",
+              "attachment.updated", "config.updated", "compaction.updated", "diff.updated",
+              "diagnostics.updated", "queue.updated"
             ]
           },
           "uniqueItems": true

@@ -320,6 +320,12 @@ type Watcher struct {
 	once       sync.Once
 }
 
+// EventPoller is implemented by Parsers that observe asynchronous states outside
+// the transcript file (such as database queues).
+type EventPoller interface {
+	PollEvents() []api.AgentEvent
+}
+
 // Start begins tailing path immediately in a background goroutine.
 func Start(
 	sessionID, provider, path string,
@@ -327,6 +333,12 @@ func Start(
 	onStatus func(api.AgentStatus),
 	onTurns func([]api.AgentTurn, bool),
 ) *Watcher {
+	p := newParser(provider)
+	if codex, ok := p.(*codexParser); ok {
+		if threadID := codexThreadIDFromTranscriptPath(path); threadID != "" {
+			codex.SetThreadID(threadID)
+		}
+	}
 	watcher := &Watcher{
 		sessionID: sessionID,
 		provider:  provider,
@@ -335,13 +347,57 @@ func Start(
 		onEvents:  onEvents,
 		onStatus:  onStatus,
 		onTurns:   onTurns,
-		parser:    newParser(provider),
+		parser:    p,
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 		ready:     make(chan struct{}),
 	}
 	go watcher.loop()
 	return watcher
+}
+
+// codexThreadIDFromTranscriptPath extracts the Codex conversation ID from a
+// rollout filename. Current Codex names files as rollout-<timestamp>-<uuid>.jsonl;
+// older/test fixtures may use rollout-<id>.jsonl, so retain that simple suffix
+// as a fallback when no UUID-shaped suffix is present.
+func codexThreadIDFromTranscriptPath(path string) string {
+	base := filepath.Base(path)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if !strings.HasPrefix(stem, "rollout-") {
+		return ""
+	}
+	name := strings.TrimPrefix(stem, "rollout-")
+	if name == "" {
+		return ""
+	}
+	if len(name) >= 36 {
+		candidate := name[len(name)-36:]
+		if isUUIDLike(candidate) {
+			return candidate
+		}
+	}
+	return name
+}
+
+func isUUIDLike(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			if !((character >= '0' && character <= '9') ||
+				(character >= 'a' && character <= 'f') ||
+				(character >= 'A' && character <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Close stops the poll loop and waits for it to finish.
@@ -384,22 +440,25 @@ func (w *Watcher) loop() {
 	if err == nil {
 		offset = next
 		fileInfo = currentFileInfo
-		w.lastStatus = w.parser.Status()
-		if len(events) > 0 {
-			for index := range events {
-				sequence++
-				events[index].Sequence = sequence
-			}
-			w.append(events)
-			if w.onEvents != nil {
-				w.onEvents(events, w.lastStatus)
-			}
+	}
+	if poller, ok := w.parser.(EventPoller); ok {
+		events = append(events, poller.PollEvents()...)
+	}
+	w.lastStatus = w.parser.Status()
+	if len(events) > 0 {
+		for index := range events {
+			sequence++
+			events[index].Sequence = sequence
 		}
-		// Historical replay establishes the current turn cursor without
-		// flooding clients with every old lifecycle transition.
-		if turns := w.parser.DrainTurns(); len(turns) > 0 && w.onTurns != nil {
-			w.onTurns(turns[len(turns)-1:], true)
+		w.append(events)
+		if w.onEvents != nil {
+			w.onEvents(events, w.lastStatus)
 		}
+	}
+	// Historical replay establishes the current turn cursor without
+	// flooding clients with every old lifecycle transition.
+	if turns := w.parser.DrainTurns(); len(turns) > 0 && w.onTurns != nil {
+		w.onTurns(turns[len(turns)-1:], true)
 	}
 	close(w.ready)
 	ticker := time.NewTicker(w.interval)
@@ -410,11 +469,13 @@ func (w *Watcher) loop() {
 			return
 		case <-ticker.C:
 			events, next, currentFileInfo, err := readNewTracked(w.path, offset, w.parser, fileInfo)
-			if err != nil {
-				continue
+			if err == nil {
+				offset = next
+				fileInfo = currentFileInfo
 			}
-			offset = next
-			fileInfo = currentFileInfo
+			if poller, ok := w.parser.(EventPoller); ok {
+				events = append(events, poller.PollEvents()...)
+			}
 			status := w.parser.Status()
 			if len(events) > 0 {
 				for index := range events {

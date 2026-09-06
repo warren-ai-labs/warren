@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -804,6 +805,8 @@ func TestEventIsRenderable(t *testing.T) {
 		{"tool call with input", api.AgentEvent{Type: "tool_call", ToolName: "shell", ToolInput: map[string]any{"cmd": "ls"}}, true},
 		{"tool call with name only", api.AgentEvent{Type: "tool_call", ToolName: "shell"}, true},
 		{"tool output bare", api.AgentEvent{Type: "tool_output"}, true},
+		{"canonical tool started bare", api.AgentEvent{Type: "tool_started"}, true},
+		{"canonical tool failed bare", api.AgentEvent{Type: "tool_failed"}, true},
 		{"question structured", api.AgentEvent{Type: "question", Payload: map[string]any{"x": 1}}, true},
 		{"compaction bare", api.AgentEvent{Type: "compaction"}, true},
 		{"subagent bare", api.AgentEvent{Type: "subagent"}, true},
@@ -1750,6 +1753,151 @@ func TestDiffNormalization_Pi(t *testing.T) {
 	}
 }
 
+func TestQueueNormalization_Claude(t *testing.T) {
+	parser := newParser("claude")
+	lineEnqueue := `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-01T10:10:48.592Z","sessionId":"sess-123","content":"Please check line 10"}`
+	events := parser.Parse([]byte(lineEnqueue))
+	if len(events) != 1 || events[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event, got %+v", events)
+	}
+	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Please check line 10" || events[0].Payload["state"] != "queued" {
+		t.Fatalf("unexpected enqueue payload: %+v", events[0].Payload)
+	}
+	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	if canon.Type != "queue.updated" {
+		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
+	}
 
+	lineRemove := `{"type":"queue-operation","operation":"remove","timestamp":"2026-09-01T10:12:07.407Z","sessionId":"sess-123","content":"Please check line 10"}`
+	eventsRemove := parser.Parse([]byte(lineRemove))
+	if len(eventsRemove) != 1 || eventsRemove[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event, got %+v", eventsRemove)
+	}
+	if eventsRemove[0].Payload["action"] != "remove" || eventsRemove[0].Payload["state"] != "cancelled" {
+		t.Fatalf("unexpected remove payload: %+v", eventsRemove[0].Payload)
+	}
 
+	lineDequeue := `{"type":"queue-operation","operation":"dequeue","timestamp":"2026-08-30T12:54:26.367Z","sessionId":"sess-123"}`
+	eventsDequeue := parser.Parse([]byte(lineDequeue))
+	if len(eventsDequeue) != 1 || eventsDequeue[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event, got %+v", eventsDequeue)
+	}
+	if eventsDequeue[0].Payload["action"] != "dequeue" || eventsDequeue[0].Payload["state"] != "dequeued" {
+		t.Fatalf("unexpected dequeue payload: %+v", eventsDequeue[0].Payload)
+	}
 
+	lineAttachment := `{"parentUuid":"p1","type":"attachment","uuid":"att-1","timestamp":"2026-09-01T10:10:48.592Z","attachment":{"type":"queued_command","prompt":"Buffered command prompt"}}`
+	eventsAtt := parser.Parse([]byte(lineAttachment))
+	if len(eventsAtt) != 1 || eventsAtt[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event from attachment, got %+v", eventsAtt)
+	}
+	if eventsAtt[0].Payload["action"] != "enqueue" || eventsAtt[0].Payload["content"] != "Buffered command prompt" {
+		t.Fatalf("unexpected attachment queue payload: %+v", eventsAtt[0].Payload)
+	}
+}
+
+func TestQueueNormalization_Qoder(t *testing.T) {
+	parser := newParser("qoder")
+	line := `{"type":"attachment","uuid":"qatt-1","timestamp":"2026-09-01T10:10:48.592Z","attachment":{"type":"queued_command","prompt":"Qoder buffered command"}}`
+	events := parser.Parse([]byte(line))
+	if len(events) != 1 || events[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event, got %+v", events)
+	}
+	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Qoder buffered command" {
+		t.Fatalf("unexpected qoder queue payload: %+v", events[0].Payload)
+	}
+	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	if canon.Type != "queue.updated" {
+		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
+	}
+}
+
+func TestQueuePolling_Codex(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "queue_1.sqlite")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`CREATE TABLE queued_items (
+		id TEXT PRIMARY KEY NOT NULL,
+		thread_id TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		queue_order INTEGER NOT NULL,
+		created_at_ms INTEGER NOT NULL,
+		updated_at_ms INTEGER NOT NULL
+	);`)
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	threadID := "thread-test-123"
+	_, err = db.Exec(
+		"INSERT INTO queued_items (id, thread_id, payload_json, queue_order, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+		"item-1", threadID, `[{"type":"text","text":"Please optimize the build script"}]`, 0, 1788581900000, 1788581900000,
+	)
+	if err != nil {
+		t.Fatalf("insert queued item: %v", err)
+	}
+
+	p := newCodexParser(maxEventContent)
+	p.SetThreadID(threadID)
+	p.SetQueueDBPath(dbPath)
+
+	// Poll 1: should observe enqueue
+	events := p.PollEvents()
+	if len(events) != 1 || events[0].Type != "queue" {
+		t.Fatalf("expected 1 queue event on poll, got %+v", events)
+	}
+	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Please optimize the build script" {
+		t.Fatalf("unexpected payload: %+v", events[0].Payload)
+	}
+	if events[0].Payload["state"] != "queued" || events[0].Payload["queueId"] != "item-1" {
+		t.Fatalf("unexpected state/id: %+v", events[0].Payload)
+	}
+	if got := events[0].Timestamp.UnixMilli(); got != 1788581900000 {
+		t.Fatalf("queue timestamp = %d, want created_at_ms", got)
+	}
+
+	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	if canon.Type != "queue.updated" {
+		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
+	}
+
+	// Poll 2: no changes, should return nil
+	eventsEmpty := p.PollEvents()
+	if len(eventsEmpty) != 0 {
+		t.Fatalf("expected 0 events on unchanged poll, got %+v", eventsEmpty)
+	}
+
+	// Remove item (simulating Codex popping the message for execution)
+	_, err = db.Exec("DELETE FROM queued_items WHERE id = ?", "item-1")
+	if err != nil {
+		t.Fatalf("delete queued item: %v", err)
+	}
+
+	// Poll 3: should observe dequeue
+	eventsDequeue := p.PollEvents()
+	if len(eventsDequeue) != 1 || eventsDequeue[0].Type != "queue" {
+		t.Fatalf("expected 1 queue dequeue event, got %+v", eventsDequeue)
+	}
+	if eventsDequeue[0].Payload["action"] != "dequeue" || eventsDequeue[0].Payload["state"] != "dequeued" {
+		t.Fatalf("unexpected dequeue payload: %+v", eventsDequeue[0].Payload)
+	}
+}
+
+func TestCodexThreadIDFromTranscriptPath(t *testing.T) {
+	const id = "019efdff-7955-7851-9d59-07134cc1db3b"
+	if got := codexThreadIDFromTranscriptPath("/tmp/rollout-2026-06-25T16-57-18-" + id + ".jsonl"); got != id {
+		t.Fatalf("thread ID = %q, want %q", got, id)
+	}
+	if got := codexThreadIDFromTranscriptPath("/tmp/rollout-fixture.jsonl"); got != "fixture" {
+		t.Fatalf("fixture thread ID = %q, want fixture", got)
+	}
+	if got := codexThreadIDFromTranscriptPath("/tmp/transcript.jsonl"); got != "" {
+		t.Fatalf("non-Codex path produced thread ID %q", got)
+	}
+}

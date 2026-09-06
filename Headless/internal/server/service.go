@@ -4243,6 +4243,12 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 			s.recordAgentTurns(sessionID, turns, !replay || s.hasAgentPeers(sessionID))
 		},
 	)
+	// Agent discovery is complete only after the watcher has replayed the
+	// initial transcript. Waiting here makes ensureAgent's return contract
+	// deterministic for callers that immediately request canonical history;
+	// a missing or unreadable transcript still releases ready promptly because
+	// the watcher closes its ready channel after the best-effort first poll.
+	_ = watcher.WaitReady(context.Background())
 	s.agentsMu.Lock()
 	current := s.agents[sessionID]
 	if current == nil || current.watcher != nil {

@@ -61,6 +61,7 @@ func (b *baseParser) clip(value string) string {
 func (b *baseParser) observe(events []api.AgentEvent) []api.AgentEvent {
 	events = compactRenderable(events)
 	for index := range events {
+		enrichToolSemantics(&events[index])
 		b.tracker.Observe(events[index])
 		if !events[index].Sidechain {
 			events[index].Turn = b.tracker.Turn()
@@ -118,12 +119,12 @@ func newParserWithContentLimit(provider string, contentLimit int) Parser {
 var structuredAgentEventTypes = map[string]struct{}{
 	"question": {}, "permission": {}, "plan": {}, "todo": {},
 	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {}, "config": {}, "compaction": {},
-	"diff": {}, "diagnostics": {},
+	"diff": {}, "diagnostics": {}, "queue": {},
 }
 
 func structuredAgentEventType(source string) string {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(source, "-", "_")))
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			return candidate
 		}
@@ -146,7 +147,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	rawType := firstStringValue(source["type"], source["eventType"], outerType)
 	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
 	kind := normalized
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			kind = candidate
 			break
@@ -161,6 +162,12 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	copyStructuredField(payload, source, "description", "description")
 	copyStructuredField(payload, source, "questions", "questions")
 	copyStructuredField(payload, source, "action", "action")
+	if kind == "queue" {
+		copyStructuredField(payload, source, "action", "action", "operation")
+		copyStructuredField(payload, source, "content", "content", "prompt", "text")
+		copyStructuredField(payload, source, "queueId", "queueId", "queue_id")
+		copyStructuredField(payload, source, "order", "order", "queue_order")
+	}
 	copyStructuredField(payload, source, "options", "options")
 	copyStructuredField(payload, source, "planId", "planId", "plan_id")
 	copyStructuredField(payload, source, "todoId", "todoId", "todo_id")
@@ -168,6 +175,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	copyStructuredField(payload, source, "pluginId", "pluginId", "plugin_id")
 	copyStructuredField(payload, source, "subagentId", "subagentId", "subagent_id")
 	copyStructuredField(payload, source, "attachmentId", "attachmentId", "attachment_id")
+	copyStructuredField(payload, source, "sessionId", "sessionId", "session_id", "threadId", "thread_id")
 	copyStructuredField(payload, source, "items", "items")
 	copyStructuredField(payload, source, "label", "label")
 	copyStructuredField(payload, source, "name", "name")
@@ -196,6 +204,16 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			payload["state"] = "pending"
 		case strings.HasSuffix(normalized, "_resolved") || strings.HasSuffix(normalized, "_replied") || strings.HasSuffix(normalized, "_rejected"):
 			payload["state"] = "resolved"
+		case kind == "queue":
+			action := strings.ToLower(stringValue(payload["action"]))
+			switch action {
+			case "dequeue":
+				payload["state"] = "dequeued"
+			case "remove":
+				payload["state"] = "cancelled"
+			default:
+				payload["state"] = "queued"
+			}
 		}
 	}
 	requestID := stringValue(payload["requestId"])
@@ -224,6 +242,16 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			id = firstNonEmpty(stringValue(payload["file"]), stringValue(payload["diffId"]), "diff")
 		case "diagnostics":
 			id = firstNonEmpty(stringValue(payload["file"]), "diagnostics")
+		case "queue":
+			id = firstNonEmpty(stringValue(payload["queueId"]), stringValue(payload["requestId"]), stringValue(source["uuid"]))
+			if id == "" {
+				action := firstNonEmpty(stringValue(payload["action"]), "item")
+				if !timestamp.IsZero() {
+					id = fmt.Sprintf("queue-%s-%d", action, timestamp.UnixNano())
+				} else {
+					id = fmt.Sprintf("queue-%s", action)
+				}
+			}
 		}
 	}
 	return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Payload: payload, Timestamp: timestamp}

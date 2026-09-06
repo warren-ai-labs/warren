@@ -15,50 +15,28 @@ import UIKit
 #endif
 
 #if canImport(UIKit)
-/// UITextView's stock insertion caret follows the line fragment height, which
-/// is visibly taller than the compact SF Pro glyphs used by the composer.
-/// Keep the native editing behavior, but make the caret follow the font's
-/// point-size scale just like the text it accompanies.
-private final class AgentComposerTextView: UITextView {
-    override func layoutSubviews() {
-        super.layoutSubviews()
+/// A deliberately single-line field keeps the mobile composer at IM density.
+/// The surrounding SwiftUI surface owns the send action and all metadata; the
+/// UIKit bridge only preserves responder stability while the transport updates.
+private final class AgentComposerTextField: UITextField {
+    override func textRect(forBounds bounds: CGRect) -> CGRect {
+        bounds.insetBy(dx: 7, dy: 0)
+    }
 
-        guard bounds.height > 0, let font else { return }
-        let singleLine = contentSize.height <= font.lineHeight + 14
-        let verticalInset: CGFloat = singleLine
-            ? max(6, floor((bounds.height - font.lineHeight) / 2))
-            : 6
-        if abs(textContainerInset.top - verticalInset) > 0.5
-            || abs(textContainerInset.bottom - verticalInset) > 0.5 {
-            textContainerInset.top = verticalInset
-            textContainerInset.bottom = verticalInset
-        }
-        let shouldScroll = contentSize.height > bounds.height + 2
-        if isScrollEnabled != shouldScroll {
-            isScrollEnabled = shouldScroll
-        }
+    override func editingRect(forBounds bounds: CGRect) -> CGRect {
+        bounds.insetBy(dx: 7, dy: 0)
+    }
+
+    override func placeholderRect(forBounds bounds: CGRect) -> CGRect {
+        bounds.insetBy(dx: 7, dy: 0)
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
-        let fitting = super.sizeThatFits(size)
-        let minHeight: CGFloat = 34
-        let maxHeight: CGFloat = 94
-        return CGSize(width: size.width, height: min(max(fitting.height, minHeight), maxHeight))
+        CGSize(width: size.width, height: 42)
     }
 
     override var intrinsicContentSize: CGSize {
-        let width = bounds.width > 0 ? bounds.width : 300
-        return sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-    }
-
-    override func caretRect(for position: UITextPosition) -> CGRect {
-        var rect = super.caretRect(for: position)
-        guard let font else { return rect }
-
-        let targetHeight = max(1, ceil(font.pointSize))
-        rect.origin.y += (rect.height - targetHeight) / 2
-        rect.size.height = targetHeight
-        return rect
+        CGSize(width: UIView.noIntrinsicMetric, height: 42)
     }
 }
 
@@ -66,13 +44,14 @@ private struct AgentComposerInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     let isDisabled: Bool
+    let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: $isFocused)
+        Coordinator(text: $text, isFocused: $isFocused, onSubmit: onSubmit)
     }
 
-    func makeUIView(context: Context) -> AgentComposerTextView {
-        let view = AgentComposerTextView(frame: .zero)
+    func makeUIView(context: Context) -> AgentComposerTextField {
+        let view = AgentComposerTextField(frame: .zero)
         let font = UIFont.preferredFont(forTextStyle: .subheadline)
         let textColor = UIColor(IOSTheme.text)
 
@@ -80,41 +59,28 @@ private struct AgentComposerInput: UIViewRepresentable {
         view.font = font
         view.textColor = textColor
         view.tintColor = textColor
-        view.typingAttributes = [
-            .font: font,
-            .foregroundColor: textColor,
-        ]
         view.backgroundColor = .clear
-        view.isEditable = !isDisabled
+        view.isEnabled = !isDisabled
         view.adjustsFontForContentSizeCategory = true
-        // Keep the composer bounded while letting long drafts and large
-        // Dynamic Type scroll inside the field instead of being clipped.
-        view.isScrollEnabled = true
-        view.showsVerticalScrollIndicator = false
-        view.textContainer.lineFragmentPadding = 0
-        // layoutSubviews derives the exact vertical inset after Auto Layout
-        // gives the text view its 44pt row height.
-        view.textContainerInset = UIEdgeInsets(top: 8, left: 7, bottom: 8, right: 2)
-        view.textContainer.maximumNumberOfLines = 0
-        view.textContainer.lineBreakMode = .byWordWrapping
         view.autocorrectionType = .default
         view.autocapitalizationType = .sentences
-        view.returnKeyType = .default
+        view.returnKeyType = .send
+        view.enablesReturnKeyAutomatically = false
         view.accessibilityLabel = "Agent message"
         view.text = text
+        view.addTarget(context.coordinator, action: #selector(Coordinator.textDidChange(_:)), for: .editingChanged)
         return view
     }
 
-    func updateUIView(_ view: AgentComposerTextView, context: Context) {
+    func updateUIView(_ view: AgentComposerTextField, context: Context) {
         let font = UIFont.preferredFont(forTextStyle: .subheadline)
         if view.font != font {
             view.font = font
-            view.typingAttributes[.font] = font
         }
         if view.text != text {
             view.text = text
         }
-        view.isEditable = !isDisabled
+        view.isEnabled = !isDisabled
 
         // UIKit owns the responder while the text view is editing. Do not
         // resign from updateUIView: SwiftUI can briefly deliver a stale
@@ -140,25 +106,26 @@ private struct AgentComposerInput: UIViewRepresentable {
                 view.resignFirstResponder()
             }
         }
-        view.invalidateIntrinsicContentSize()
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: AgentComposerTextView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: AgentComposerTextField, context: Context) -> CGSize? {
         // Avoid UIScreen.main: it is deprecated in multi-scene contexts and
         // the proposal always carries the row width in practice.
         let width = proposal.width ?? 300
-        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: 42)
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextFieldDelegate {
         private var text: Binding<String>
         private var isFocused: Binding<Bool>
+        private let onSubmit: () -> Void
         fileprivate private(set) var wantsFocus = false
         fileprivate private(set) var focusRequestID: UInt = 0
 
-        init(text: Binding<String>, isFocused: Binding<Bool>) {
+        init(text: Binding<String>, isFocused: Binding<Bool>, onSubmit: @escaping () -> Void) {
             self.text = text
             self.isFocused = isFocused
+            self.onSubmit = onSubmit
         }
 
         func updateFocusIntent(_ focused: Bool) {
@@ -167,20 +134,24 @@ private struct AgentComposerInput: UIViewRepresentable {
             focusRequestID &+= 1
         }
 
-        func textViewDidChange(_ textView: UITextView) {
-            guard text.wrappedValue != textView.text else { return }
-            text.wrappedValue = textView.text
-            textView.invalidateIntrinsicContentSize()
+        @objc func textDidChange(_ textField: UITextField) {
+            guard text.wrappedValue != textField.text else { return }
+            text.wrappedValue = textField.text ?? ""
         }
 
-        func textViewDidBeginEditing(_: UITextView) {
+        func textFieldShouldReturn(_: UITextField) -> Bool {
+            onSubmit()
+            return false
+        }
+
+        func textFieldDidBeginEditing(_: UITextField) {
             wantsFocus = true
             if !isFocused.wrappedValue {
                 isFocused.wrappedValue = true
             }
         }
 
-        func textViewDidEndEditing(_: UITextView) {
+        func textFieldDidEndEditing(_: UITextField) {
             wantsFocus = false
             focusRequestID &+= 1
             if isFocused.wrappedValue {
@@ -226,10 +197,12 @@ public struct AgentChatView: View {
     @State private var workingPhrase = AgentWorkingPhrases.defaultPhrase
     @State private var draftSessionID: String?
     @State private var localAttachments: [IOSAgentLocalAttachment] = []
+    @State private var isAttachmentsExpanded = false
     @State private var isUploadingAttachments = false
     @State private var attachmentUploadGeneration = 0
     @State private var isFileImporterPresented = false
     @State private var isQueueSheetPresented = false
+    @State private var isProtocolQueueExpanded = false
     @State private var sendStatus = ""
     @State private var attachmentFeedback = ""
     @State private var attachmentFeedbackGeneration = 0
@@ -332,7 +305,7 @@ public struct AgentChatView: View {
                                     }
                                 }
 
-                                if blocks.isEmpty && queuedItems.isEmpty {
+                                if blocks.isEmpty {
                                     AgentEmptyState()
                                         .frame(maxWidth: .infinity, minHeight: 240)
                                 } else {
@@ -357,14 +330,14 @@ public struct AgentChatView: View {
                                             .id(block.id)
                                         }
                                     }
-                                    ForEach(queuedItems) { item in
-                                        AgentQueuedMessageBlock(item: item) {
-                                            _ = model.retryQueuedAgentMessage(sessionID: sessionID, itemID: item.id)
-                                        } onDelete: {
-                                            _ = model.deleteQueuedAgentMessage(sessionID: sessionID, itemID: item.id)
-                                        }
-                                        .id("queued-\(item.id)")
-                                    }
+                                }
+                                if shouldShowWorking {
+                                    AgentWorkingFooter(
+                                        phrase: workingPhrase,
+                                        action: latestActionText,
+                                        isVisible: isNearLatest
+                                    )
+                                    .id("agent-working-footer")
                                 }
                                 GeometryReader { geometry in
                                     Color.clear
@@ -560,9 +533,11 @@ public struct AgentChatView: View {
             draftSessionID = selectedSessionID
             draft = model.agentDraft(for: selectedSessionID)
             localAttachments.removeAll()
+            isAttachmentsExpanded = false
             isUploadingAttachments = false
             isFileImporterPresented = false
             isQueueSheetPresented = false
+            isProtocolQueueExpanded = false
             sendStatus = ""
             attachmentFeedback = ""
             sendStatusGeneration &+= 1
@@ -749,10 +724,58 @@ public struct AgentChatView: View {
         latestAgentAction(from: agentState.agentEventsBySessionID[sessionID] ?? [])
     }
 
+    private var latestPlanEvent: WarrenRemoteAgentEvent? {
+        currentEvents
+            .filter { event in
+                guard let kind = IOSAgentStructuredEventKind(eventType: event.type) else { return false }
+                return kind == .plan || kind == .todo
+            }
+            .max { lhs, rhs in lhs.sequence < rhs.sequence }
+    }
+
+    private var protocolQueueItems: [AgentProtocolQueueItem] {
+        makeProtocolQueueItems(from: currentEvents)
+    }
+
+    private var localQueuedCount: Int {
+        model.agentQueuedMessageCountBySessionID[sessionID] ?? 0
+    }
+
+    private var queuedCount: Int {
+        localQueuedCount + protocolQueueItems.count
+    }
+
+    private var protocolAttachmentNames: [String] {
+        var names: [String] = []
+        var seen: Set<String> = []
+        for event in currentEvents {
+            guard IOSAgentStructuredEventKind(eventType: event.type) == .attachment else { continue }
+            let payload = event.payload ?? [:]
+            let state = payload.string("state")?.lowercased() ?? ""
+            if state == "removed" || state == "aborted" || state == "failed" { continue }
+            let id = payload.string("attachmentId") ?? event.id
+            let name = payload.string("name") ?? payload.string("file") ?? event.content ?? "Attachment"
+            let key = id.isEmpty ? name : id
+            guard seen.insert(key).inserted else { continue }
+            names.append(name)
+        }
+        return names
+    }
+
+    private var attachmentCount: Int {
+        localAttachments.count + protocolAttachmentNames.count
+    }
+
     @ViewBuilder
     private var bottomTray: some View {
         if model.displayMode == .agent {
             VStack(alignment: .leading, spacing: 0) {
+                if let plan = latestPlanEvent {
+                    AgentPlanTray(event: plan)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
                 if let attention = model.agentAttention(for: sessionID) {
                     AgentAttentionBanner(
                         attention: attention,
@@ -762,15 +785,7 @@ public struct AgentChatView: View {
                         },
                         focusComposer: { composerFocused = true }
                     )
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                }
-                if shouldShowWorking {
-                    AgentWorkingFooter(
-                        phrase: workingPhrase,
-                        action: latestActionText,
-                        isVisible: isNearLatest
-                    )
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
                 if let actionError = model.agentActionError, !actionError.isEmpty {
                     Text(actionError)
@@ -800,8 +815,9 @@ public struct AgentChatView: View {
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
                 composer
+                composerMetadataTray
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: shouldShowWorking)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: latestPlanEvent?.idForSwiftUI)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: activePendingInteractionID)
         }
@@ -823,21 +839,134 @@ public struct AgentChatView: View {
                     .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                if !attachmentFeedback.isEmpty {
-                    Text(attachmentFeedback)
-                        .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .padding(.horizontal, 13)
-                        .padding(.top, 4)
-                        .accessibilityLabel(attachmentFeedback)
+            // The rounded surface contains only the IM controls: one line of
+            // text, attachment menu, keyboard dismissal, and send.
+            HStack(alignment: .center, spacing: 2) {
+                attachmentControlsWithPlus
+
+                ZStack(alignment: .leading) {
+                    if draft.isEmpty {
+                        Text("Message…")
+                            .font(IOSTypography.input)
+                            .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
+                            .lineLimit(1)
+                            .padding(.leading, 7)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+#if canImport(UIKit)
+                    AgentComposerInput(
+                        text: $draft,
+                        isFocused: Binding(
+                            get: { composerFocused },
+                            set: { composerFocused = $0 }
+                        ),
+                        isDisabled: isUploadingAttachments || sendStatus == "sending",
+                        onSubmit: { sendComposerMessage() }
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42)
+#else
+                    TextField("", text: $draft)
+                        .font(IOSTypography.input)
+                        .foregroundStyle(IOSTheme.text)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1)
+                        .submitLabel(.send)
+                        .onSubmit { sendComposerMessage() }
+                        .disabled(isUploadingAttachments || sendStatus == "sending")
+                        .focused($composerFocused)
+                        .accessibilityLabel("Agent message")
+#endif
+                }
+                .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42)
+
+                if composerFocused {
+                    IOSKeyboardDismissButton {
+                        IOSHaptics.light()
+                        composerFocused = false
+                        model.dismissKeyboard()
+                    }
+                    .transition(.opacity)
                 }
 
-                if !localAttachments.isEmpty {
+                Button {
+                    sendComposerMessage()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(IOSTypography.button)
+                        .foregroundStyle(IOSTheme.text)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
+                .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
+                .accessibilityLabel("Send Agent message")
+            }
+            .padding(.horizontal, 4)
+            .frame(minHeight: 50, maxHeight: 50)
+            .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
+                    .stroke(
+                        composerFocused ? IOSTheme.focusRing : IOSTheme.ring.opacity(0.92),
+                        lineWidth: composerFocused ? 1.5 : 1
+                    )
+            }
+
+            if !attachmentFeedback.isEmpty {
+                Text(attachmentFeedback)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .padding(.horizontal, 13)
+                    .padding(.top, 1)
+                    .accessibilityLabel(attachmentFeedback)
+            }
+            if !sendStatus.isEmpty {
+                Text(sendStatusLabel)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : (sendStatus == "queued" ? IOSTheme.amber : IOSTheme.secondaryText))
+                    .padding(.horizontal, 13)
+                    .padding(.top, 1)
+                    .accessibilityLabel(sendStatusLabel)
+            }
+        }
+        .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, 3)
+        .padding(.bottom, 6)
+            .background(IOSTheme.background)
+    }
+
+    @ViewBuilder
+    private var composerMetadataTray: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if attachmentCount > 0 {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                        isAttachmentsExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Attachments \(attachmentCount)")
+                            .font(IOSTypography.metadata)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .frame(minHeight: 30, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(attachmentCount) attachments")
+
+                if isAttachmentsExpanded {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(localAttachments) { attachment in
                                 attachmentChip(attachment)
+                            }
+                            ForEach(Array(protocolAttachmentNames.enumerated()), id: \.offset) { _, name in
+                                AgentProtocolMetadataChip(name: name, symbol: "paperclip")
                             }
                         }
                         .padding(.horizontal, 4)
@@ -845,128 +974,62 @@ public struct AgentChatView: View {
                     }
                     .accessibilityLabel("Selected attachments")
                 }
-
-                VStack(spacing: 0) {
-                    // Row 1: Message input. Sized dynamically from 34pt up to 94pt
-                    // via sizeThatFits, scrolling long drafts inside once max height is reached.
-                    ZStack(alignment: .leading) {
-                        if draft.isEmpty {
-                            Text("Message…")
-                                .font(IOSTypography.input)
-                                .foregroundStyle(IOSTheme.secondaryText.opacity(0.78))
-                                .lineLimit(1)
-                                .padding(.leading, 7)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-#if canImport(UIKit)
-                        AgentComposerInput(
-                            text: $draft,
-                            isFocused: Binding(
-                                get: { composerFocused },
-                                set: { composerFocused = $0 }
-                            ),
-                            isDisabled: isUploadingAttachments || sendStatus == "sending"
-                        )
-                        .frame(maxWidth: .infinity)
-#else
-                        GeometryReader { geometry in
-                            TextField("", text: $draft, axis: .vertical)
-                                .font(IOSTypography.input)
-                                .foregroundStyle(IOSTheme.text)
-                                .textFieldStyle(.plain)
-                                .lineLimit(1...4)
-                                .multilineTextAlignment(.leading)
-                                .frame(width: geometry.size.width, alignment: .leading)
-                                .disabled(isUploadingAttachments || sendStatus == "sending")
-                                .focused($composerFocused)
-                                .accessibilityLabel("Agent message")
-                        }
-                        .frame(minHeight: 34, maxHeight: 94)
-#endif
-                    }
-                    .frame(minWidth: 0, maxWidth: .infinity)
-                    .padding(.horizontal, 8)
-
-                    // Row 2: Attachment, model, keyboard dismiss, and send controls.
-                    HStack(alignment: .center, spacing: 4) {
-                        attachmentControlsWithPlus
-
-                        composerSettingsButton
-
-                        let queuedCount = model.agentQueuedMessageCountBySessionID[sessionID] ?? 0
-                        if queuedCount > 0 {
-                            Button {
-                                isQueueSheetPresented = true
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "clock")
-                                        .font(.system(size: 11, weight: .medium))
-                                    Text("Queue \(queuedCount)")
-                                        .font(IOSTypography.metadata)
-                                }
-                                .foregroundStyle(IOSTheme.amber)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(IOSTheme.amber.opacity(0.12), in: Capsule())
-                                .overlay {
-                                    Capsule()
-                                        .stroke(IOSTheme.amber.opacity(0.3), lineWidth: 1)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("View \(queuedCount) queued messages")
-                        }
-
-                        Spacer(minLength: 0)
-
-                        if composerFocused {
-                            IOSKeyboardDismissButton {
-                                IOSHaptics.light()
-                                composerFocused = false
-                                model.dismissKeyboard()
-                            }
-                            .transition(.opacity)
-                        }
-
-                        Button {
-                            sendComposerMessage()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(IOSTypography.button)
-                                .foregroundStyle(IOSTheme.text)
-                                .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend || isUploadingAttachments || sendStatus == "sending")
-                        .opacity(canSend && !isUploadingAttachments && sendStatus != "sending" ? 1 : 0.32)
-                        .accessibilityLabel("Send Agent message")
-                    }
-                    .frame(minHeight: 44, maxHeight: 44)
-                    .padding(.horizontal, 4)
-                }
-                .background(IOSTheme.raised, in: RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: IOSTheme.radius, style: .continuous)
-                        .stroke(
-                            composerFocused ? IOSTheme.focusRing : IOSTheme.ring.opacity(0.92),
-                            lineWidth: composerFocused ? 1.5 : 1
-                        )
-                }
-                if !sendStatus.isEmpty {
-                    Text(sendStatusLabel)
-                        .font(IOSTypography.status)
-                        .foregroundStyle(sendStatus == "failed" ? IOSTheme.red : (sendStatus == "queued" ? IOSTheme.amber : IOSTheme.secondaryText))
-                        .padding(.horizontal, 13)
-                        .padding(.top, 4)
-                        .accessibilityLabel(sendStatusLabel)
-                }
             }
-            .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
+
+            HStack(spacing: 8) {
+                if queuedCount > 0 {
+                    Button {
+                        if localQueuedCount > 0 {
+                            isQueueSheetPresented = true
+                        } else {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                                isProtocolQueueExpanded.toggle()
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("Queue \(queuedCount)")
+                                .font(IOSTypography.metadata)
+                        }
+                        .foregroundStyle(IOSTheme.amber)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(IOSTheme.amber.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("View \(queuedCount) queued messages")
+                }
+
+                composerSettingsButton
+                Spacer(minLength: 0)
+            }
+
+            if isProtocolQueueExpanded, !protocolQueueItems.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(protocolQueueItems) { item in
+                        HStack(spacing: 6) {
+                            Image(systemName: "clock")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.amber)
+                            Text(item.content.isEmpty ? "Queued message" : item.content)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(IOSTheme.muted.opacity(0.08), in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
+                .accessibilityElement(children: .contain)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.top, 3)
-        .padding(.bottom, 6)
+        .containerRelativeFrame(.horizontal) { length, _ in length * 0.9 }
+        .padding(.horizontal, 2)
+        .padding(.bottom, 5)
         .background(IOSTheme.background)
     }
 
@@ -1505,9 +1568,6 @@ public struct AgentChatView: View {
                     .foregroundStyle(IOSTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(IOSTheme.secondaryText.opacity(0.8))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -1572,6 +1632,192 @@ public struct AgentChatView: View {
     private var canSend: Bool {
         model.canSendAgent
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !localAttachments.isEmpty)
+    }
+}
+
+private struct AgentProtocolQueueItem: Identifiable, Equatable {
+    let id: String
+    let content: String
+    let state: String
+    let order: Int
+
+    var sortKey: (Int, String) { (order, id) }
+}
+
+private func makeProtocolQueueItems(from events: [WarrenRemoteAgentEvent]) -> [AgentProtocolQueueItem] {
+    var active: [String: AgentProtocolQueueItem] = [:]
+    for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+        guard IOSAgentStructuredEventKind(eventType: event.type) == .queue else { continue }
+        let payload = event.payload ?? [:]
+        let action = payload.string("action")?.lowercased() ?? "enqueue"
+        let content = payload.string("content")
+            ?? payload.string("prompt")
+            ?? payload.string("text")
+            ?? event.content
+            ?? ""
+        let explicitID = payload.string("queueId")
+            ?? payload.string("itemId")
+            ?? payload.string("requestId")
+        let id = explicitID ?? (event.id.isEmpty ? "queue-\(event.sequence)" : event.id)
+        let state = payload.string("state")?.lowercased()
+            ?? (action == "dequeue" ? "dequeued" : action == "remove" ? "cancelled" : "queued")
+        if action == "dequeue" || action == "remove" || state == "dequeued" || state == "cancelled" || state == "removed" {
+            if active.removeValue(forKey: id) == nil, !content.isEmpty,
+               let match = active.first(where: { $0.value.content == content }) {
+                active.removeValue(forKey: match.key)
+            }
+            continue
+        }
+        let order: Int = {
+            guard case .number(let value) = payload["order"] else { return event.sequence > Int.max ? Int.max : Int(event.sequence) }
+            return Int(value)
+        }()
+        active[id] = AgentProtocolQueueItem(id: id, content: content, state: state, order: order)
+    }
+    return active.values.sorted { lhs, rhs in
+        if lhs.order != rhs.order { return lhs.order < rhs.order }
+        return lhs.id < rhs.id
+    }
+}
+
+private struct AgentProtocolMetadataChip: View {
+    let name: String
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(IOSTypography.metadata)
+                .foregroundStyle(IOSTheme.secondaryText)
+            Text(name)
+                .font(IOSTypography.metadata)
+                .foregroundStyle(IOSTheme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 180, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(IOSTheme.raised, in: Capsule())
+        .overlay {
+            Capsule().stroke(IOSTheme.ring.opacity(0.85), lineWidth: 1)
+        }
+    }
+}
+
+private struct AgentPlanTray: View {
+    let event: WarrenRemoteAgentEvent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+
+    private var payload: [String: WarrenRemoteJSONValue] { event.payload ?? [:] }
+
+    private var items: [AgentPlanTrayItem] {
+        payload.array("items").enumerated().compactMap { index, value in
+            guard case .object(let object) = value else { return nil }
+            let label = object.string("label") ?? object.string("title") ?? object.string("step")
+            guard let label, !label.isEmpty else { return nil }
+            return AgentPlanTrayItem(
+                id: object.string("id") ?? "plan-item-\(index)",
+                label: label,
+                state: object.string("state")?.lowercased() ?? "pending"
+            )
+        }
+    }
+
+    private var title: String {
+        payload.string("title") ?? (event.normalizedType == "todo" ? "Todo" : "Plan")
+    }
+
+    private var completedCount: Int {
+        items.filter { ["completed", "complete", "done"].contains($0.state) }.count
+    }
+
+    private var state: String {
+        payload.string("state")?.lowercased() ?? (items.isEmpty ? "in_progress" : completedCount == items.count ? "completed" : "in_progress")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "checklist")
+                        .font(IOSTypography.label)
+                        .foregroundStyle(stateColor)
+                    Text(title)
+                        .font(IOSTypography.status)
+                        .foregroundStyle(IOSTheme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if !items.isEmpty {
+                        Text("\(completedCount)/\(items.count)")
+                            .font(IOSTypography.metadata)
+                            .foregroundStyle(IOSTheme.secondaryText)
+                    }
+                    Text(stateLabel)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(stateColor)
+                }
+                .frame(minHeight: 30, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title) \(stateLabel)")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+            if expanded, !items.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(items) { item in
+                        HStack(spacing: 6) {
+                            Image(systemName: item.state == "completed" || item.state == "done" ? "checkmark.circle.fill" : "circle")
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(planTrayStateColor(item.state))
+                            Text(item.label)
+                                .font(IOSTypography.metadata)
+                                .foregroundStyle(IOSTheme.secondaryText)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.leading, 21)
+                .padding(.bottom, 3)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .background(IOSTheme.muted.opacity(expanded ? 0.16 : 0.08), in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var stateLabel: String {
+        switch state {
+        case "completed", "complete", "done": return "Complete"
+        case "in_progress", "in-progress", "running": return "In progress"
+        case "cancelled", "canceled": return "Cancelled"
+        default: return state.capitalized
+        }
+    }
+
+    private var stateColor: Color { planTrayStateColor(state) }
+}
+
+private struct AgentPlanTrayItem: Identifiable {
+    let id: String
+    let label: String
+    let state: String
+}
+
+private func planTrayStateColor(_ state: String) -> Color {
+    switch state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "completed", "complete", "done": return IOSTheme.green
+    case "failed", "error", "cancelled", "canceled": return IOSTheme.red
+    case "in_progress", "in-progress", "running": return IOSTheme.amber
+    default: return IOSTheme.secondaryText
     }
 }
 
@@ -2148,14 +2394,14 @@ struct AgentActivityGroup {
 
     var toolCount: Int {
         entries.reduce(into: 0) { count, entry in
-            if case .tool = entry { count += 1 }
+            if case .tool(let tool) = entry, toolHasRenderableDetail(tool) { count += 1 }
         }
     }
 
     var toolBlocks: [AgentToolBlock] {
         entries.compactMap { entry in
             guard case .tool(let tool) = entry else { return nil }
-            return tool
+            return toolHasRenderableDetail(tool) ? tool : nil
         }
     }
 
@@ -2165,22 +2411,22 @@ struct AgentActivityGroup {
             parts.append(reasoningCount == 1 ? "Thinking" : "Thinking × \(reasoningCount)")
         }
         if toolCount > 0 {
-            if toolCount == 1, let firstTool = toolBlocks.first?.call.toolName {
-                parts.append(displayToolName(firstTool))
+            if toolCount == 1, let firstTool = toolBlocks.first {
+                parts.append(displayToolKind(semanticToolKind(for: firstTool.call)))
             } else {
-                let toolNames = Set(toolBlocks.compactMap { $0.call.toolName?.lowercased() })
-                if toolNames.count == 1, let singleType = toolNames.first {
+                let toolKinds = Set(toolBlocks.map { semanticToolKind(for: $0.call) })
+                if toolKinds.count == 1, let singleType = toolKinds.first {
                     switch singleType {
-                    case "read", "view_file", "viewfile", "read_file":
+                    case "read":
                         parts.append("Read \(toolCount) files")
-                    case "edit", "write", "apply_patch", "replace_file_content", "write_to_file":
+                    case "edit", "write":
                         parts.append("Edited \(toolCount) files")
-                    case "grep", "glob", "web_search", "grep_search", "find_by_name", "search_web":
+                    case "grep", "glob", "search":
                         parts.append("Searched \(toolCount) times")
-                    case "shell", "exec", "execute", "run_command":
+                    case "ran":
                         parts.append("Ran \(toolCount) commands")
                     default:
-                        parts.append("\(displayToolName(singleType)) × \(toolCount)")
+                        parts.append("\(displayToolKind(singleType)) × \(toolCount)")
                     }
                 } else {
                     parts.append("Tools × \(toolCount)")
@@ -2193,7 +2439,8 @@ struct AgentActivityGroup {
     var mergedToolSummary: String? {
         let summaries = entries.compactMap { entry -> String? in
             guard case .tool(let tool) = entry else { return nil }
-            return toolSummary(for: tool.call)
+            guard toolHasRenderableDetail(tool) else { return nil }
+            return semanticToolDetail(for: tool)
         }
         guard !summaries.isEmpty else { return nil }
         var unique: [String] = []
@@ -2310,9 +2557,14 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
     for event in events where !event.isHiddenFromMobile {
         let unfolded = event.normalizedType
         let type = unfolded.replacingOccurrences(of: "-", with: "_")
-        if IOSAgentStructuredEventKind(rawValue: type) != nil {
-            let identity = event.id.isEmpty ? "seq-\(event.sequence)" : event.id
-            structuredByID["\(type):\(identity)"] = event
+        if let kind = IOSAgentStructuredEventKind(eventType: type) {
+            let identity = structuredDisplayIdentity(for: event, kind: kind)
+            // Plan/todo, queue, attachment, and config are persistent
+            // metadata trays. Keep their latest snapshots available to the
+            // composer, but never duplicate them as transcript bubbles.
+            if !kind.isComposerMetadata {
+                structuredByID["\(kind.rawValue):\(identity)"] = event
+            }
         } else {
             renderEvents.append(event)
             renderNorms.append(unfolded)
@@ -2408,6 +2660,7 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
                 }
             }
             if !matched {
+                guard event.hasRenderableActivityContent || event.payload?.string("toolDetail") != nil else { continue }
                 flushActivity()
                 result.append(.event(event))
             }
@@ -2442,7 +2695,61 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
             consolidated.append(block)
         }
     }
-    return consolidated
+    return consolidated.filter { block in
+        guard case .activity(let activity) = block else { return true }
+        return activity.reasoningCount > 0 || !activity.toolBlocks.isEmpty
+    }
+}
+
+/// Structured canonical updates carry their provider object identity in the
+/// payload while the envelope ID identifies the immutable event row. Prefer
+/// that object identity when projecting cards so a raw canonical history page
+/// deduplicates the same object before the model's lossy field projection runs.
+private func structuredDisplayIdentity(
+    for event: WarrenRemoteAgentEvent,
+    kind: IOSAgentStructuredEventKind
+) -> String {
+    let payload = event.payload ?? [:]
+    let keys: [String]
+    switch kind {
+    case .question, .permission, .confirmation:
+        keys = ["interactionId", "requestId"]
+    case .plan:
+        keys = ["planId"]
+    case .todo:
+        keys = ["todoId", "taskListId"]
+    case .activity:
+        keys = ["activityId"]
+    case .plugin:
+        keys = ["pluginId"]
+    case .subagent:
+        keys = ["subagentId"]
+    case .attachment:
+        keys = ["attachmentId"]
+    case .diff:
+        keys = ["diffId", "file"]
+    case .diagnostics:
+        keys = ["diagnosticsId", "file"]
+    case .config:
+        keys = ["configId"]
+    case .compaction:
+        keys = ["compactionId"]
+    case .queue:
+        keys = ["queueId", "itemId", "requestId"]
+    }
+    for key in keys {
+        guard let value = payload[key] else { continue }
+        switch value {
+        case .string(let value):
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        case .number(let value) where value.isFinite:
+            return String(value)
+        default:
+            continue
+        }
+    }
+    return event.id.isEmpty ? "seq-\(event.sequence)" : event.id
 }
 
 private extension WarrenRemoteAgentEvent {
@@ -2489,11 +2796,11 @@ private extension WarrenRemoteAgentEvent {
             .replacingOccurrences(of: "-", with: "_")
             .replacingOccurrences(of: ".", with: "_")
         // Hidden events are those that don't contribute to conversation or activity state:
-        // compaction (UI manages separately), usage/token stats, system_instructions,
-        // and host-level control plane projections (status, turn, execution).
-        return type == "compaction"
-            || type == "compact"
-            || type == "compacted"
+        // usage/token stats, system_instructions, and host-level control plane
+        // projections (status, attention, turn, execution). Compaction stays
+        // visible as a quiet timeline marker.
+        return type == "attention"
+            || type == "attention_changed"
             || type == "usage"
             || type == "token_usage"
             || type == "token_count"
@@ -2512,6 +2819,15 @@ private extension WarrenRemoteAgentEvent {
             guard let value else { return false }
             return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+    }
+
+    var hasRenderableToolInvocation: Bool {
+        if hasRenderableActivityContent { return true }
+        if let detail = payload?.string("toolDetail"), !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if let files, !files.isEmpty { return true }
+        return toolSummary(for: self) != nil
     }
 
     var hasRenderableConversationContent: Bool {
@@ -2590,7 +2906,9 @@ private struct AgentEventBlock: View {
                     .textSelection(.enabled)
             }
             .padding(.vertical, 7)
-        } else if ["question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment"].contains(normalizedType) {
+        } else if ["diff", "diagnostics"].contains(normalizedType) {
+            AgentTechnicalEventBlock(event: event)
+        } else if ["question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config"].contains(normalizedType) {
             AgentStructuredEventBlock(event: event, canInteract: canInteract, onInteraction: onInteraction)
         } else if normalizedType == "system" {
             AgentSecondaryEventBlock(
@@ -2663,8 +2981,8 @@ private struct AgentEventBlock: View {
 
 /// A status rail is a reserved visual column at the leading edge of a
 /// disclosure row. Keeping it as a separate shape (instead of drawing a
-/// full-height rectangle over the content) leaves a predictable gap before
-/// the chevron and stays legible when nested rows are expanded.
+/// full-height rectangle over the content) leaves a predictable leading gap
+/// and stays legible when nested rows are expanded.
 private struct AgentStatusRail: View {
     let color: Color
     let width: CGFloat
@@ -2763,9 +3081,6 @@ private struct AgentStructuredEventBlock: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
-                        .frame(width: 12)
                     Image(systemName: symbol)
                         .font(IOSTypography.label)
                     Text(title)
@@ -2796,7 +3111,7 @@ private struct AgentStructuredEventBlock: View {
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            IOSTheme.muted.opacity(isInteraction ? 0.24 : 0.06),
+            IOSTheme.muted.opacity(expanded ? (isInteraction ? 0.24 : 0.11) : (isInteraction ? 0.18 : 0.05)),
             in: RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
         )
         .overlay(alignment: .leading) {
@@ -2953,9 +3268,6 @@ private struct AgentStructuredEventBlock: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(statusColor.opacity(0.12), in: Capsule())
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(IOSTheme.tertiaryText)
                 }
                 .frame(minHeight: 34)
             }
@@ -3683,9 +3995,92 @@ private extension Dictionary where Key == String, Value == WarrenRemoteJSONValue
         }
     }
 
+    func int64(_ key: String) -> Int64? {
+        switch self[key] {
+        case .number(let value): return Int64(exactly: value)
+        case .string(let value): return Int64(value)
+        default: return nil
+        }
+    }
+
     func object(_ key: String) -> [String: WarrenRemoteJSONValue]? {
         guard case .object(let value) = self[key] else { return nil }
         return value
+    }
+}
+
+private struct AgentTechnicalEventBlock: View {
+    let event: WarrenRemoteAgentEvent
+
+    private var payload: [String: WarrenRemoteJSONValue] { event.payload ?? [:] }
+    private var kind: String {
+        IOSAgentStructuredEventKind(eventType: event.type)?.rawValue
+            ?? event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: kind == "diagnostics" ? "stethoscope" : "arrow.triangle.branch")
+                .font(IOSTypography.label)
+                .foregroundStyle(kind == "diagnostics" ? IOSTheme.yellow : IOSTheme.accent)
+                .frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary)
+                    .font(IOSTypography.status)
+                    .foregroundStyle(IOSTheme.secondaryText)
+                    .lineLimit(2)
+                if let detail, !detail.isEmpty, detail != summary {
+                    Text(detail)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IOSTheme.muted.opacity(0.06), in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var summary: String {
+        if kind == "diagnostics" {
+            let count = diagnosticCount
+            return count == 1 ? "Diagnostics · 1 issue" : "Diagnostics · \(count) issues"
+        }
+        let additions = payload.int64("additions") ?? 0
+        let deletions = payload.int64("deletions") ?? 0
+        let files = payload.string("files") ?? payload.string("file")
+        if additions > 0 || deletions > 0 {
+            var value = "Diff · +\(additions) −\(deletions)"
+            if let files, !files.isEmpty { value += " · \(basename(files))" }
+            return value
+        }
+        return payload.string("summary") ?? event.content ?? "Diff"
+    }
+
+    private var detail: String? {
+        if kind == "diagnostics" {
+            return payload.string("file") ?? event.files?.first.map(basename)
+        }
+        if let files = event.files, !files.isEmpty { return formatFileList(files) }
+        return payload.string("file")
+    }
+
+    private var diagnosticCount: Int {
+        guard let value = payload["diagnostics"] else { return 0 }
+        switch value {
+        case .array(let values): return values.count
+        case .object(let values):
+            return values.values.reduce(0) { count, value in
+                guard case .array(let entries) = value else { return count + 1 }
+                return count + entries.count
+            }
+        default: return 1
+        }
     }
 }
 
@@ -3708,9 +4103,6 @@ private struct AgentSecondaryEventBlock: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.forward")
-                        .font(IOSTypography.label)
-                        .frame(width: 11)
                     Image(systemName: symbol)
                         .font(IOSTypography.label)
                     Text(title)
@@ -3743,6 +4135,7 @@ private struct AgentSecondaryEventBlock: View {
         .padding(.leading, 8)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IOSTheme.muted.opacity(expanded ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
         .overlay(alignment: .leading) {
             AgentStatusRail(color: IOSTheme.separator, width: 1, opacity: 0.52, verticalInset: 2)
         }
@@ -3811,11 +4204,6 @@ private struct AgentActivityGroupBlock: View {
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(activity.status == .running ? IOSTheme.secondaryText : IOSTheme.secondaryText.opacity(0.55))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10, alignment: .center)
                     Image(systemName: activity.toolCount > 0 ? "terminal" : "brain")
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(activity.status == .running ? IOSTheme.text : IOSTheme.secondaryText.opacity(0.75))
@@ -3868,6 +4256,7 @@ private struct AgentActivityGroupBlock: View {
         .padding(.leading, 2)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IOSTheme.muted.opacity(expanded ? 0.11 : 0.04), in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
         .overlay(alignment: .leading) {
             if activity.status == .failed {
                 AgentStatusRail(
@@ -3908,14 +4297,12 @@ private struct AgentActivityGroupBlock: View {
     }
 }
 
-/// Reasoning is useful context when debugging a turn, but it is not the
-/// conversation itself. Keep it behind a second, quiet disclosure so opening
-/// an activity group still exposes the actionable tool calls first.
+/// Reasoning is rendered directly inside the activity disclosure. There is one
+/// expansion affordance for a work segment; nested thinking disclosures make a
+/// streamed turn feel like it has two independent states.
 private struct AgentReasoningEntry: View {
     let event: WarrenRemoteAgentEvent
     let step: Int?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded = false
 
     init(event: WarrenRemoteAgentEvent, step: Int? = nil) {
         self.event = event
@@ -3923,114 +4310,62 @@ private struct AgentReasoningEntry: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button {
-                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(IOSTheme.secondaryText.opacity(0.6))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 10, alignment: .center)
-                    Image(systemName: "brain")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(IOSTheme.secondaryText)
-                        .frame(width: 14, height: 14, alignment: .center)
-                    Text(step.map { "Step \($0)" } ?? "Thinking")
-                        .font(IOSTypography.status)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                    if !expanded, let summary {
-                        Text(summary)
-                            .font(IOSTypography.metadata)
-                            .foregroundStyle(IOSTheme.tertiaryText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    Spacer(minLength: 4)
-                    Color.clear
-                        .frame(width: 14, height: 14)
-                }
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "brain")
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(minHeight: 26)
-                .contentShape(Rectangle())
+                .frame(width: 14, height: 14, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                if let step {
+                    Text("Step \(step)")
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                }
+                if let content = event.content, !content.isEmpty {
+                    AgentMarkdownText(value: content, font: IOSTypography.helper)
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .textSelection(.enabled)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Thinking")
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-
-            if expanded, let content = event.content, !content.isEmpty {
-                AgentMarkdownText(value: content, font: IOSTypography.helper)
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .textSelection(.enabled)
-                    .padding(.leading, 15)
-                    .padding(.vertical, 2)
-            }
+            Spacer(minLength: 0)
         }
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var summary: String? {
-        guard let content = event.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !content.isEmpty else { return nil }
-        let firstLine = content.split(whereSeparator: \.isNewline).first.map(String.init) ?? content
-        return truncateToolSummary(firstLine, maxLength: 90)
+        .accessibilityElement(children: .combine)
     }
 }
 
 private struct AgentToolBlockView: View {
     let tool: AgentToolBlock
 
-    private var isCommand: Bool {
-        isCommandTool(call: tool.call)
-    }
-
     var body: some View {
-        HStack(spacing: 5) {
-            Color.clear.frame(width: 10)
-            if isCommand {
-                Text("$")
-                    .font(IOSTypography.metadata)
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                if let summary = toolSummary(for: tool.call) {
-                    Text(summary)
-                        .font(IOSTypography.metadata)
+        Group {
+            if let detail = semanticToolDetail(for: tool) {
+                HStack(spacing: 5) {
+                    Image(systemName: toolIconName(for: semanticToolKind(for: tool.call)))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
+                    Text(displayToolKind(semanticToolKind(for: tool.call)))
+                        .font(IOSTypography.status)
                         .foregroundStyle(tool.status == "running" ? IOSTheme.text : (tool.status == "error" || tool.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                } else {
-                    Text("exec")
-                        .font(IOSTypography.metadata)
-                        .foregroundStyle(IOSTheme.secondaryText)
-                }
-            } else {
-                Image(systemName: toolIconName(tool.call.toolName))
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(IOSTheme.secondaryText)
-                    .frame(width: 14, height: 14, alignment: .center)
-                Text(displayToolName(tool.call.toolName))
-                    .font(IOSTypography.status)
-                    .foregroundStyle(tool.status == "running" ? IOSTheme.text : (tool.status == "error" || tool.status == "failed" ? IOSTheme.red : IOSTheme.secondaryText))
-                    .lineLimit(1)
-                if let summary = toolSummary(for: tool.call) {
-                    Text(summary)
+                    Text(detail)
                         .font(IOSTypography.metadata)
                         .foregroundStyle(IOSTheme.tertiaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    AgentToolStatusMark(status: tool.status)
+                        .frame(width: 14, height: 14, alignment: .trailing)
                 }
+                .foregroundStyle(IOSTheme.secondaryText)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
+                .accessibilityLabel("\(displayToolKind(semanticToolKind(for: tool.call))): \(detail)")
+                .accessibilityValue(toolStatusTitle(tool.status))
             }
-            Spacer(minLength: 4)
-            AgentToolStatusMark(status: tool.status)
-                .frame(width: 14, height: 14, alignment: .trailing)
         }
-        .foregroundStyle(IOSTheme.secondaryText)
-        .frame(minHeight: 26)
-        .contentShape(Rectangle())
-        .accessibilityLabel(isCommand ? "Command: \(toolSummary(for: tool.call) ?? "exec")" : displayToolName(tool.call.toolName))
-        .accessibilityValue(toolStatusTitle(tool.status))
     }
 }
 
@@ -4038,37 +4373,37 @@ private struct AgentToolOutputBlock: View {
     let event: WarrenRemoteAgentEvent
 
     var body: some View {
-        HStack(spacing: 5) {
-            Color.clear.frame(width: 10)
-            Image(systemName: toolIconName(event.toolName))
-                .font(.system(size: 11, weight: .regular))
+        Group {
+            if let detail = semanticToolOutputDetail(for: event) {
+                HStack(spacing: 5) {
+                    Image(systemName: toolIconName(for: semanticToolKind(for: event)))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(IOSTheme.secondaryText)
+                        .frame(width: 14, height: 14, alignment: .center)
+                    Text(displayToolKind(semanticToolKind(for: event)))
+                        .font(IOSTypography.status)
+                        .foregroundStyle(event.toolStatus?.lowercased() == "error" || event.toolStatus?.lowercased() == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(IOSTypography.metadata)
+                        .foregroundStyle(IOSTheme.tertiaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    AgentToolStatusMark(status: event.toolStatus ?? "success")
+                        .frame(width: 14, height: 14, alignment: .trailing)
+                }
                 .foregroundStyle(IOSTheme.secondaryText)
-                .frame(width: 14, height: 14, alignment: .center)
-            Text(displayToolName(event.toolName))
-                .font(IOSTypography.status)
-                .foregroundStyle(event.toolStatus?.lowercased() == "error" || event.toolStatus?.lowercased() == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
-                .lineLimit(1)
-            if let output = event.output ?? event.content {
-                let firstLine = output.trimmingCharacters(in: .whitespacesAndNewlines).split(whereSeparator: \.isNewline).first.map(String.init) ?? output
-                Text(truncateToolSummary(firstLine, maxLength: 90))
-                    .font(IOSTypography.metadata)
-                    .foregroundStyle(IOSTheme.tertiaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
+                .padding(.vertical, 1)
+                .padding(.leading, 2)
+                .padding(.trailing, WarrenSpacing.compact)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("\(displayToolKind(semanticToolKind(for: event))): \(detail)")
+                .accessibilityValue(toolStatusTitle(event.toolStatus ?? "success"))
             }
-            Spacer(minLength: 4)
-            AgentToolStatusMark(status: event.toolStatus ?? "success")
-                .frame(width: 14, height: 14, alignment: .trailing)
         }
-        .foregroundStyle(IOSTheme.secondaryText)
-        .frame(minHeight: 26)
-        .contentShape(Rectangle())
-        .padding(.vertical, 1)
-        .padding(.leading, 2)
-        .padding(.trailing, WarrenSpacing.compact)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel(displayToolName(event.toolName))
-        .accessibilityValue(toolStatusTitle(event.toolStatus ?? "success"))
     }
 }
 
@@ -4112,6 +4447,77 @@ private extension WarrenRemoteAgentEvent {
     var isAssistantEvent: Bool {
         normalizedType == "assistant" || role?.lowercased() == "assistant"
     }
+}
+
+private func semanticToolKind(for event: WarrenRemoteAgentEvent) -> String {
+    if let value = event.payload?.string("toolKind"), !value.isEmpty {
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    if isCommandTool(call: event) { return "ran" }
+    switch event.toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "glob", "find_by_name", "list_dir": return "glob"
+    case "grep", "grep_search", "ripgrep", "rg": return "grep"
+    case "read", "read_file", "view_file", "viewfile", "view": return "read"
+    case "edit", "edit_file", "replace_file_content", "apply_patch": return "edit"
+    case "write", "write_file", "write_to_file", "create_file": return "write"
+    case "fetch", "webfetch", "web_fetch", "read_url_content": return "fetch"
+    case "web_search", "websearch", "search_web": return "search"
+    case "subagent", "invoke_subagent", "spawn_agent", "call_omo_agent": return "subagent"
+    case "question", "ask_user_question", "ask_question": return "ask"
+    case "permission", "permission_request": return "permission"
+    default: return event.toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "tool"
+    }
+}
+
+private func displayToolKind(_ kind: String) -> String {
+    switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "ran", "shell", "exec": return "Ran"
+    case "glob": return "Glob"
+    case "grep": return "Grep"
+    case "read": return "Read"
+    case "edit": return "Edit"
+    case "write": return "Write"
+    case "fetch": return "Fetch"
+    case "search", "web_search": return "Search"
+    case "subagent": return "Subagent"
+    case "ask": return "Ask"
+    case "permission": return "Permission"
+    case "tool", "": return "Tool"
+    default: return kind.capitalized
+    }
+}
+
+private func semanticToolDetail(for tool: AgentToolBlock) -> String? {
+    if let value = tool.call.payload?.string("toolDetail"), !value.isEmpty {
+        return truncateToolSummary(value)
+    }
+    if let summary = toolSummary(for: tool.call), !summary.isEmpty {
+        return summary
+    }
+    for output in tool.outputs {
+        if let detail = semanticToolOutputDetail(for: output), !detail.isEmpty {
+            return detail
+        }
+    }
+    return nil
+}
+
+private func semanticToolOutputDetail(for event: WarrenRemoteAgentEvent) -> String? {
+    if let value = event.payload?.string("toolDetail"), !value.isEmpty {
+        return truncateToolSummary(value)
+    }
+    let value = event.output ?? event.error ?? event.content ?? ""
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        if let files = event.files, !files.isEmpty { return formatFileList(files) }
+        return nil
+    }
+    let firstLine = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+    return truncateToolSummary(firstLine, maxLength: 90)
+}
+
+private func toolHasRenderableDetail(_ tool: AgentToolBlock) -> Bool {
+    semanticToolDetail(for: tool) != nil
 }
 
 func displayToolName(_ name: String?) -> String {
@@ -4167,6 +4573,20 @@ func toolIconName(_ name: String?) -> String {
     case "question", "ask_user_question", "ask_question": return "questionmark.bubble"
     case "permission", "permission_request": return "shield"
     case "reasoning": return "brain"
+    default: return "hammer"
+    }
+}
+
+private func toolIconName(for kind: String) -> String {
+    switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "ran": return "terminal"
+    case "glob", "grep", "search": return "magnifyingglass"
+    case "read": return "doc.text"
+    case "edit", "write": return "pencil"
+    case "fetch": return "arrow.down.circle"
+    case "subagent": return "person.2"
+    case "ask": return "questionmark.bubble"
+    case "permission": return "shield"
     default: return "hammer"
     }
 }

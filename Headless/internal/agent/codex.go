@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,14 +21,129 @@ type codexParser struct {
 	lastAssistantContent string
 	lastReasoningContent string
 	lastEventType        string
+
+	threadID               string
+	queueDBPath            string
+	lastQueuedItemIDs      map[string]struct{}
+	lastQueuedFingerprints map[string]string
 }
 
 func newCodexParser(contentLimit int) *codexParser {
 	return &codexParser{
-		baseParser:        newBaseParser(contentLimit),
-		codexCallTool:     make(map[string]string),
-		codexInteractions: make(map[string]string),
+		baseParser:             newBaseParser(contentLimit),
+		codexCallTool:          make(map[string]string),
+		codexInteractions:      make(map[string]string),
+		lastQueuedItemIDs:      make(map[string]struct{}),
+		lastQueuedFingerprints: make(map[string]string),
 	}
+}
+
+func (p *codexParser) SetThreadID(id string) {
+	p.threadID = id
+}
+
+func (p *codexParser) SetQueueDBPath(path string) {
+	p.queueDBPath = path
+}
+
+func (p *codexParser) PollEvents() []api.AgentEvent {
+	if p.threadID == "" {
+		return nil
+	}
+	items, err := readCodexQueuedItems(p.queueDBPath, p.threadID)
+	if err != nil {
+		return nil
+	}
+	if len(items) == 0 && len(p.lastQueuedItemIDs) == 0 {
+		return nil
+	}
+	currentIDs := make(map[string]struct{}, len(items))
+	currentFingerprints := make(map[string]string, len(items))
+	var events []api.AgentEvent
+	for _, item := range items {
+		timestamp := item.CreatedAt
+		currentIDs[item.ID] = struct{}{}
+		fingerprint := queuedItemFingerprint(item)
+		currentFingerprints[item.ID] = fingerprint
+		previousFingerprint, exists := p.lastQueuedFingerprints[item.ID]
+		if !exists {
+			payload := map[string]any{
+				"action":    "enqueue",
+				"queueId":   item.ID,
+				"content":   item.Content,
+				"prompt":    item.Prompt,
+				"order":     item.Order,
+				"state":     "queued",
+				"sessionId": item.SessionID,
+			}
+			if len(item.Attachments) > 0 {
+				payload["attachments"] = item.Attachments
+			}
+			events = append(events, api.AgentEvent{
+				Provider:  "codex",
+				ID:        item.ID,
+				Type:      "queue",
+				Timestamp: timestamp,
+				Payload:   payload,
+			})
+		} else if previousFingerprint != fingerprint {
+			payload := map[string]any{
+				"action":    "enqueue",
+				"queueId":   item.ID,
+				"content":   item.Content,
+				"prompt":    item.Prompt,
+				"order":     item.Order,
+				"state":     "queued",
+				"sessionId": item.SessionID,
+				"updated":   true,
+			}
+			if len(item.Attachments) > 0 {
+				payload["attachments"] = item.Attachments
+			}
+			events = append(events, api.AgentEvent{
+				Provider:  "codex",
+				ID:        item.ID,
+				Type:      "queue",
+				Timestamp: timestamp,
+				Payload:   payload,
+			})
+		}
+	}
+	removedIDs := make([]string, 0)
+	for oldID := range p.lastQueuedItemIDs {
+		if _, exists := currentIDs[oldID]; !exists {
+			removedIDs = append(removedIDs, oldID)
+		}
+	}
+	sort.Strings(removedIDs)
+	for _, oldID := range removedIDs {
+		events = append(events, api.AgentEvent{
+			Provider:  "codex",
+			ID:        oldID,
+			Type:      "queue",
+			Timestamp: time.Now(),
+			Payload: map[string]any{
+				"action":    "dequeue",
+				"queueId":   oldID,
+				"state":     "dequeued",
+				"sessionId": p.threadID,
+			},
+		})
+	}
+	p.lastQueuedItemIDs = currentIDs
+	p.lastQueuedFingerprints = currentFingerprints
+	return p.observe(events)
+}
+
+func queuedItemFingerprint(item api.AgentQueueItem) string {
+	value := struct {
+		Content     string                   `json:"content"`
+		Prompt      string                   `json:"prompt"`
+		Order       int                      `json:"order"`
+		Attachments []api.AgentAttachmentRef `json:"attachments,omitempty"`
+	}{item.Content, item.Prompt, item.Order, item.Attachments}
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
 }
 
 func (p *codexParser) Parse(line []byte) []api.AgentEvent {
@@ -93,6 +209,16 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 	}
 	switch record.Type {
 	case "session_meta":
+		var meta struct {
+			ID        string `json:"id"`
+			SessionID string `json:"session_id"`
+			ThreadID  string `json:"thread_id"`
+		}
+		if json.Unmarshal(record.Payload, &meta) == nil {
+			if threadID := firstNonEmpty(meta.ID, meta.SessionID, meta.ThreadID); threadID != "" {
+				p.threadID = threadID
+			}
+		}
 		return nil
 	case "turn_context":
 		var payload struct {
@@ -789,4 +915,3 @@ func codexQuestionPayload(requestID string, rawArgs string, limit int) map[strin
 		"state":     "pending",
 	}
 }
-

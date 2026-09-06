@@ -1,10 +1,130 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
+
+func enrichToolSemantics(event *api.AgentEvent) {
+	if event == nil || !isToolEventType(event.Type) {
+		return
+	}
+	if strings.TrimSpace(event.ToolKind) == "" {
+		switch canonicalToolName(event.Provider, event.ToolName) {
+		case "shell":
+			event.ToolKind = "ran"
+		case "glob":
+			event.ToolKind = "glob"
+		case "grep":
+			event.ToolKind = "grep"
+		case "read":
+			event.ToolKind = "read"
+		case "edit", "apply_patch":
+			event.ToolKind = "edit"
+		case "write":
+			event.ToolKind = "write"
+		case "fetch":
+			event.ToolKind = "fetch"
+		case "web_search":
+			event.ToolKind = "search"
+		case "subagent":
+			event.ToolKind = "subagent"
+		case "ask_user_question":
+			event.ToolKind = "ask"
+		case "permission_request":
+			event.ToolKind = "permission"
+		default:
+			if event.ToolName != "" {
+				event.ToolKind = strings.ToLower(strings.TrimSpace(event.ToolName))
+			} else {
+				event.ToolKind = "tool"
+			}
+		}
+	}
+	if strings.TrimSpace(event.ToolDetail) == "" {
+		event.ToolDetail = toolInputDetail(event.ToolInput)
+	}
+}
+
+func toolInputDetail(input any) string {
+	var detail string
+	switch value := input.(type) {
+	case string:
+		detail = strings.TrimSpace(value)
+	case map[string]any:
+		for _, key := range []string{"command", "cmd", "CommandLine", "code", "script", "path", "file_path", "filePath", "filepath", "AbsolutePath", "TargetFile", "file", "filename", "target", "query", "pattern", "url", "Url", "prompt", "instruction"} {
+			if candidate, ok := value[key].(string); ok && strings.TrimSpace(candidate) != "" {
+				detail = strings.TrimSpace(candidate)
+				break
+			}
+		}
+		if detail == "" {
+			for _, key := range []string{"args", "argv"} {
+				if values, ok := toolStringSlice(value[key]); ok {
+					detail = strings.Join(values, " ")
+					if detail != "" {
+						break
+					}
+				}
+			}
+		}
+	case []string:
+		detail = strings.Join(value, " ")
+	case []any:
+		if values, ok := toolStringSlice(value); ok {
+			detail = strings.Join(values, " ")
+		}
+	case json.RawMessage:
+		var decoded any
+		if json.Unmarshal(value, &decoded) == nil {
+			return toolInputDetail(decoded)
+		}
+	}
+	if len(detail) > 512 {
+		return detail[:512] + "…"
+	}
+	return detail
+}
+
+func isToolEventType(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.NewReplacer("-", "_", ".", "_").Replace(value)))
+	switch normalized {
+	case "tool_call", "tool_use", "tool", "tool_output", "tool_result",
+		"tool_started", "tool_updated", "tool_completed", "tool_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolStringSlice(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if text := strings.TrimSpace(value); text != "" {
+				result = append(result, text)
+			}
+		}
+		return result, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			if text = strings.TrimSpace(text); text != "" {
+				result = append(result, text)
+			}
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
 
 // canonicalToolName maps a provider-native tool name to a provider-neutral
 // canonical name the UI can render directly. Unknown names are returned
@@ -17,7 +137,7 @@ import (
 // Funneling all three through this function lets iOS and Web keep their tool
 // label maps keyed on canonical names only, with no provider branches.
 func canonicalToolName(provider, raw string) string {
-	name := strings.ToLower(strings.TrimSpace(raw))
+	name := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "-", "_")))
 	if name == "" {
 		return ""
 	}
@@ -109,9 +229,10 @@ func eventIsRenderable(e api.AgentEvent) bool {
 		return true
 	}
 	switch e.Type {
-	case "tool_call", "tool_output",
+	case "tool_call", "tool_output", "tool_use", "tool_result",
+		"tool_started", "tool_updated", "tool_completed", "tool_failed",
 		"question", "permission", "plan", "todo",
-		"activity", "plugin", "subagent", "compaction", "config", "diff", "diagnostics":
+		"activity", "plugin", "subagent", "compaction", "config", "diff", "diagnostics", "queue":
 		return true
 	}
 	return false

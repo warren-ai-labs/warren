@@ -3634,7 +3634,7 @@ public final class IOSApplicationModel: ObservableObject {
             .lowercased()
             .replacingOccurrences(of: "-", with: "_")
         guard canonicalType.contains(".") else { return event }
-        let payload = event.payload ?? [:]
+        var payload = event.payload ?? [:]
         func string(_ key: String) -> String? {
             guard case .string(let value) = payload[key], !value.isEmpty else { return nil }
             return value
@@ -3697,14 +3697,24 @@ public final class IOSApplicationModel: ObservableObject {
         case "interaction.requested", "interaction.resolved", "interaction.expired":
             type = string("kind") ?? "question"
             id = interactionID ?? id
+            if payload["requestId"] == nil, let interactionID {
+                payload["requestId"] = .string(interactionID)
+            }
+            if payload["state"] == nil {
+                payload["state"] = .string(
+                    canonicalType == "interaction.requested"
+                        ? "pending"
+                        : canonicalType == "interaction.expired" ? "expired" : "resolved"
+                )
+            }
             content = string("title") ?? string("description") ?? content
         case "plan.updated":
             type = "plan"
             id = string("planId") ?? id
             content = string("content") ?? string("title") ?? content
-        case "tasks.updated":
+        case "tasks.updated", "todo.updated":
             type = "todo"
-            id = string("taskListId") ?? id
+            id = string("taskListId") ?? string("todoId") ?? id
             content = string("content") ?? content
         case "context.updated":
             type = "context"
@@ -3712,6 +3722,12 @@ public final class IOSApplicationModel: ObservableObject {
         case "status.changed":
             type = "status"
             content = string("activity") ?? content
+        case "attention.changed":
+            // Host-wide attention events carry their target execution in the
+            // payload. They are projected into status below and deliberately
+            // remain out of the transcript as control-plane metadata.
+            type = "attention"
+            content = string("reason") ?? content
         case "turn.started", "turn.completed", "turn.failed", "turn.cancelled":
             type = "turn"
             id = string("turnId") ?? id
@@ -3719,6 +3735,38 @@ public final class IOSApplicationModel: ObservableObject {
         case "execution.started", "execution.resumed", "execution.replaced", "execution.failed":
             type = "execution"
             content = string("state") ?? string("reason") ?? content
+        case "plugin.updated":
+            type = "plugin"
+            id = string("pluginId") ?? id
+            content = string("content") ?? string("summary") ?? content
+        case "subagent.updated":
+            type = "subagent"
+            id = string("subagentId") ?? id
+            content = string("content") ?? string("summary") ?? content
+        case "attachment.updated":
+            type = "attachment"
+            id = string("attachmentId") ?? id
+            content = string("content") ?? string("name") ?? content
+        case "config.updated":
+            type = "config"
+            id = string("configId") ?? "config"
+            content = string("summary") ?? content
+        case "compaction.updated":
+            type = "compaction"
+            id = string("compactionId") ?? "compaction"
+            content = string("content") ?? string("summary") ?? content
+        case "diff.updated":
+            type = "diff"
+            id = string("diffId") ?? string("file") ?? id
+            content = string("summary") ?? content
+        case "diagnostics.updated":
+            type = "diagnostics"
+            id = string("diagnosticsId") ?? string("file") ?? id
+            content = string("summary") ?? content
+        case "queue.updated", "queue_operation", "queue":
+            type = "queue"
+            id = string("queueId") ?? string("itemId") ?? id
+            content = string("content") ?? string("prompt") ?? string("text") ?? content
         default:
             content = string("content") ?? content
         }
@@ -3768,7 +3816,7 @@ public final class IOSApplicationModel: ObservableObject {
             recordedAt: event.recordedAt,
             causedBy: event.causedBy,
             origin: event.origin,
-            payload: event.payload
+            payload: payload
         )
     }
 
@@ -3785,6 +3833,30 @@ public final class IOSApplicationModel: ObservableObject {
                let status = try? JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: data) {
                 agentStatusBySessionID[sessionID] = status
             }
+        case "attention.changed":
+            let targetExecution = string("executionId") ?? event.executionID ?? ""
+            if !targetExecution.isEmpty,
+               let boundExecution = agentExecutionID(for: sessionID),
+               targetExecution != boundExecution {
+                return
+            }
+            var attention: WarrenRemoteAgentAttention?
+            if let value = payload["attention"],
+               let data = try? JSONEncoder().encode(value) {
+                attention = try? JSONDecoder().decode(WarrenRemoteAgentAttention.self, from: data)
+            } else if let kind = string("kind"), !kind.isEmpty {
+                attention = WarrenRemoteAgentAttention(
+                    kind: WarrenRemoteAgentAttentionKind(rawValue: kind),
+                    reason: string("reason") ?? "",
+                    requestID: string("requestId"),
+                    since: string("since")
+                )
+            }
+            let activity = agentStatusBySessionID[sessionID]?.activity ?? .unknown
+            agentStatusBySessionID[sessionID] = WarrenRemoteAgentStatus(
+                activity: activity == .unknown && attention != nil ? .blocked : activity,
+                attention: attention
+            )
         case "turn.started", "turn.completed", "turn.failed", "turn.cancelled":
             let rawStatus = string("status") ?? type.split(separator: ".").last.map(String.init) ?? "unknown"
             let status: WarrenRemoteAgentTurnStatus = rawStatus == "cancelled"

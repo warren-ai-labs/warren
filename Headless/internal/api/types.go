@@ -265,20 +265,26 @@ type AgentEvent struct {
 	// with the same provider, type, and ID. It is used by providers such as
 	// OpenCode whose mutable parts are projected into the append-only event
 	// stream.
-	ContentDelta bool        `json:"contentDelta,omitempty"`
-	Model        string      `json:"model,omitempty"`
-	StopReason   string      `json:"stopReason,omitempty"`
-	ToolName     string      `json:"toolName,omitempty"`
-	ToolInput    any         `json:"toolInput,omitempty"`
-	ToolStatus   string      `json:"toolStatus,omitempty"`
-	CallID       string      `json:"callId,omitempty"`
-	Output       string      `json:"output,omitempty"`
-	Files        []string    `json:"files,omitempty"`
-	Error        string      `json:"error,omitempty"`
-	Usage        *AgentUsage `json:"usage,omitempty"`
-	DurationMs   int64       `json:"durationMs,omitempty"`
-	Sidechain    bool        `json:"sidechain,omitempty"`
-	Timestamp    time.Time   `json:"timestamp,omitempty"`
+	ContentDelta bool   `json:"contentDelta,omitempty"`
+	Model        string `json:"model,omitempty"`
+	StopReason   string `json:"stopReason,omitempty"`
+	ToolName     string `json:"toolName,omitempty"`
+	// ToolKind is the provider-neutral action category used by clients for
+	// compact rendering (for example "ran", "glob", or "read").
+	ToolKind string `json:"toolKind,omitempty"`
+	// ToolDetail is the bounded human-readable detail for a tool invocation,
+	// such as a command, path, query, or URL. It is never a second raw tool log.
+	ToolDetail string      `json:"toolDetail,omitempty"`
+	ToolInput  any         `json:"toolInput,omitempty"`
+	ToolStatus string      `json:"toolStatus,omitempty"`
+	CallID     string      `json:"callId,omitempty"`
+	Output     string      `json:"output,omitempty"`
+	Files      []string    `json:"files,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	Usage      *AgentUsage `json:"usage,omitempty"`
+	DurationMs int64       `json:"durationMs,omitempty"`
+	Sidechain  bool        `json:"sidechain,omitempty"`
+	Timestamp  time.Time   `json:"timestamp,omitempty"`
 	// Payload carries the optional structured object used by RFC 0010
 	// interaction, plan, activity, plugin, subagent and attachment events.
 	// A map keeps old clients source-compatible while unknown fields remain
@@ -340,6 +346,20 @@ type AgentDiagnostic struct {
 	Message   string `json:"message"`
 	Source    string `json:"source,omitempty"`
 	Code      string `json:"code,omitempty"`
+}
+
+// AgentQueueItem carries normalized data for a queued prompt or command
+// buffered by an agent CLI waiting to be admitted into an execution turn.
+type AgentQueueItem struct {
+	ID          string               `json:"id"`
+	Action      string               `json:"action,omitempty"` // "enqueue", "dequeue", "remove"
+	Content     string               `json:"content,omitempty"`
+	Prompt      string               `json:"prompt,omitempty"`
+	SessionID   string               `json:"sessionId,omitempty"`
+	Order       int                  `json:"order,omitempty"`
+	State       string               `json:"state,omitempty"` // "queued", "dequeued", "cancelled"
+	Attachments []AgentAttachmentRef `json:"attachments,omitempty"`
+	CreatedAt   time.Time            `json:"createdAt,omitempty"`
 }
 
 // AgentWaitResult is printed after a canonical turn completion event.

@@ -5,6 +5,34 @@ import WarrenTransport
 /// retained by the reducer for sequence accounting but are not rendered.
 public enum IOSAgentStructuredEventKind: String, CaseIterable, Sendable {
     case question, permission, confirmation, plan, todo, activity, plugin, subagent, attachment
+    case diff, diagnostics, config, compaction, queue
+
+    /// Accept both the legacy projected kind (`plan`) and the canonical event
+    /// suffix (`plan.updated`). The transport decoder intentionally keeps
+    /// canonical types opaque, so this normalization belongs in the read model.
+    public init?(eventType: String) {
+        let normalized = eventType
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
+        let suffixStripped = normalized.hasSuffix("_updated")
+            ? String(normalized.dropLast("_updated".count))
+            : normalized
+        // `tasks.updated` is the historical wire spelling for the todo card.
+        // Keep the projection vocabulary singular even when a Host replays
+        // that older canonical event name.
+        self.init(rawValue: suffixStripped == "tasks" ? "todo" : suffixStripped)
+    }
+
+    public var isComposerMetadata: Bool {
+        switch self {
+        case .plan, .todo, .queue, .attachment, .config:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// A sequence-stable projection row. `stableID` is the provider object ID when
@@ -80,17 +108,61 @@ public struct IOSAgentTimelineReducer: Sendable {
     public var structuredEvents: [IOSAgentTimelineEvent] {
         var byID: [String: IOSAgentTimelineEvent] = [:]
         for event in events {
-            let normalized = event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard IOSAgentStructuredEventKind(rawValue: normalized) != nil else { continue }
+            guard let kind = IOSAgentStructuredEventKind(eventType: event.type) else { continue }
             let row = IOSAgentTimelineEvent(epoch: epoch ?? 0, event: event)
             // Updates carry a new sequence but the same stable ID. The latest
             // complete payload is the one a card should display.
-            byID["\(normalized):\(row.stableID)"] = row
+            let identity = structuredEventIdentity(event, kind: kind)
+            byID["\(kind.rawValue):\(identity)"] = row
         }
         return byID.values.sorted { left, right in
             if left.sequence != right.sequence { return left.sequence < right.sequence }
             return left.stableID < right.stableID
         }
+    }
+
+    private func structuredEventIdentity(
+        _ event: WarrenRemoteAgentEvent,
+        kind: IOSAgentStructuredEventKind
+    ) -> String {
+        let payload = event.payload ?? [:]
+        let keys: [String]
+        switch kind {
+        case .question, .permission, .confirmation:
+            keys = ["interactionId", "requestId"]
+        case .plan:
+            keys = ["planId"]
+        case .todo:
+            keys = ["todoId", "taskListId"]
+        case .activity:
+            keys = ["activityId"]
+        case .plugin:
+            keys = ["pluginId"]
+        case .subagent:
+            keys = ["subagentId"]
+        case .attachment:
+            keys = ["attachmentId"]
+        case .diff:
+            keys = ["diffId", "file"]
+        case .diagnostics:
+            keys = ["diagnosticsId", "file"]
+        case .config:
+            keys = ["configId"]
+        case .compaction:
+            keys = ["compactionId"]
+        case .queue:
+            keys = ["queueId", "itemId", "requestId"]
+        }
+        for key in keys {
+            if case .string(let value) = payload[key], !value.isEmpty {
+                return value
+            }
+        }
+        return rowIdentity(event)
+    }
+
+    private func rowIdentity(_ event: WarrenRemoteAgentEvent) -> String {
+        event.id.isEmpty ? "seq-\(event.sequence)" : event.id
     }
 }
 
