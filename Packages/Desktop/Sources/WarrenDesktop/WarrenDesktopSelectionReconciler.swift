@@ -12,21 +12,46 @@ public struct WarrenDesktopNavigationMemory: Codable, Equatable, Hashable, Senda
     public var tabByWorkspaceID: [String: String]
     /// The last tab selected in each terminal group.
     public var tabByTerminalGroupID: [String: String]
+    /// The MRU stack of sidebar selections (most recent at the end).
+    public var selectionHistory: [String]
+    /// The MRU stack of tabs selected in each workspace (most recent at the end).
+    public var tabHistoryByWorkspaceID: [String: [String]]
+    /// The MRU stack of tabs selected in each terminal group (most recent at the end).
+    public var tabHistoryByTerminalGroupID: [String: [String]]
 
     public var isEmpty: Bool {
         workspaceByProjectID.isEmpty
             && tabByWorkspaceID.isEmpty
             && tabByTerminalGroupID.isEmpty
+            && selectionHistory.isEmpty
+            && tabHistoryByWorkspaceID.isEmpty
+            && tabHistoryByTerminalGroupID.isEmpty
     }
 
     public init(
         workspaceByProjectID: [String: String] = [:],
         tabByWorkspaceID: [String: String] = [:],
-        tabByTerminalGroupID: [String: String] = [:]
+        tabByTerminalGroupID: [String: String] = [:],
+        selectionHistory: [String] = [],
+        tabHistoryByWorkspaceID: [String: [String]] = [:],
+        tabHistoryByTerminalGroupID: [String: [String]] = [:]
     ) {
         self.workspaceByProjectID = workspaceByProjectID
         self.tabByWorkspaceID = tabByWorkspaceID
         self.tabByTerminalGroupID = tabByTerminalGroupID
+        self.selectionHistory = selectionHistory
+        self.tabHistoryByWorkspaceID = tabHistoryByWorkspaceID
+        self.tabHistoryByTerminalGroupID = tabHistoryByTerminalGroupID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceByProjectID = try container.decodeIfPresent([String: String].self, forKey: .workspaceByProjectID) ?? [:]
+        tabByWorkspaceID = try container.decodeIfPresent([String: String].self, forKey: .tabByWorkspaceID) ?? [:]
+        tabByTerminalGroupID = try container.decodeIfPresent([String: String].self, forKey: .tabByTerminalGroupID) ?? [:]
+        selectionHistory = try container.decodeIfPresent([String].self, forKey: .selectionHistory) ?? []
+        tabHistoryByWorkspaceID = try container.decodeIfPresent([String: [String]].self, forKey: .tabHistoryByWorkspaceID) ?? [:]
+        tabHistoryByTerminalGroupID = try container.decodeIfPresent([String: [String]].self, forKey: .tabHistoryByTerminalGroupID) ?? [:]
     }
 }
 
@@ -77,11 +102,12 @@ public enum WarrenDesktopNavigationReducer {
                 memory: state.memory,
                 projection: projection
             ) ?? projection.firstWorkspace(in: projectID) else {
-                return WarrenDesktopNavigationState(
+                let next = WarrenDesktopNavigationState(
                     selection: .project(projectID),
                     selectedTabID: nil,
                     memory: state.memory
                 )
+                return remembering(next, in: projection)
             }
             let next = WarrenDesktopNavigationState(
                 selection: .workspace(workspace.id),
@@ -150,43 +176,151 @@ public enum WarrenDesktopNavigationReducer {
         case .deleteSession(let sessionID):
             guard projection.sessions.contains(where: { $0.id == sessionID }) else { return state }
             let deletedTabID = projection.sessions.first { $0.id == sessionID }?.tabID
-            var next = state
+            var nextMemory = state.memory
             if let deletedTabID {
-                forget(tabID: deletedTabID, from: &next.memory)
+                forget(tabID: deletedTabID, from: &nextMemory)
             }
-            if state.selectedTabID == deletedTabID {
-                next.selectedTabID = nil
+            guard state.selectedTabID == deletedTabID, let deletedTabID else {
+                return WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: state.selectedTabID,
+                    memory: nextMemory
+                )
             }
-            return next
-        case .closeTab(let tabID):
-            guard state.selectedTabID == tabID else { return state }
             let tabs = tabs(for: state.selection, projection: projection)
-            guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return state }
-            let remaining = tabs.enumerated().filter { $0.element.id != tabID }
-            let replacement = remaining.first(where: { $0.offset >= index })?.element
+            guard let index = tabs.firstIndex(where: { $0.id == deletedTabID }) else {
+                return WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: nil,
+                    memory: nextMemory
+                )
+            }
+            let remaining = tabs.enumerated().filter { $0.element.id != deletedTabID }
+            let replacement = recentTab(for: state.selection, in: remaining.map(\.element), memory: nextMemory)
+                ?? remaining.first(where: { $0.offset >= index })?.element
                 ?? remaining.last?.element
             guard let replacement else {
                 return WarrenDesktopNavigationState(
                     selection: state.selection,
                     selectedTabID: nil,
-                    memory: forgetting(tabID: tabID, from: state.memory)
+                    memory: nextMemory
                 )
             }
-            return reduce(state, action: .selectTab(replacement.id), in: projection)
+            return reduce(
+                WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: state.selectedTabID,
+                    memory: nextMemory
+                ),
+                action: .selectTab(replacement.id),
+                in: projection
+            )
+        case .closeTab(let tabID):
+            var nextMemory = state.memory
+            forget(tabID: tabID, from: &nextMemory)
+            guard state.selectedTabID == tabID else {
+                return WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: state.selectedTabID,
+                    memory: nextMemory
+                )
+            }
+            let tabs = tabs(for: state.selection, projection: projection)
+            guard let index = tabs.firstIndex(where: { $0.id == tabID }) else {
+                return WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: nil,
+                    memory: nextMemory
+                )
+            }
+            let remaining = tabs.enumerated().filter { $0.element.id != tabID }
+            let replacement = recentTab(for: state.selection, in: remaining.map(\.element), memory: nextMemory)
+                ?? remaining.first(where: { $0.offset >= index })?.element
+                ?? remaining.last?.element
+            guard let replacement else {
+                return WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: nil,
+                    memory: nextMemory
+                )
+            }
+            return reduce(
+                WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: state.selectedTabID,
+                    memory: nextMemory
+                ),
+                action: .selectTab(replacement.id),
+                in: projection
+            )
         case .closeOtherTabs(let tabID):
-            return reduce(state, action: .selectTab(tabID), in: projection)
+            var nextMemory = state.memory
+            switch state.selection {
+            case .workspace(let workspaceID):
+                nextMemory.tabHistoryByWorkspaceID[workspaceID.description] = [tabID]
+                nextMemory.tabByWorkspaceID[workspaceID.description] = tabID
+            case .terminalGroup(let groupID):
+                nextMemory.tabHistoryByTerminalGroupID[groupID.description] = [tabID]
+                nextMemory.tabByTerminalGroupID[groupID.description] = tabID
+            case .project, nil:
+                break
+            }
+            return reduce(
+                WarrenDesktopNavigationState(
+                    selection: state.selection,
+                    selectedTabID: state.selectedTabID,
+                    memory: nextMemory
+                ),
+                action: .selectTab(tabID),
+                in: projection
+            )
         case .closeAllTabs:
+            var nextMemory = state.memory
+            switch state.selection {
+            case .workspace(let workspaceID):
+                nextMemory.tabHistoryByWorkspaceID.removeValue(forKey: workspaceID.description)
+                nextMemory.tabByWorkspaceID.removeValue(forKey: workspaceID.description)
+            case .terminalGroup(let groupID):
+                nextMemory.tabHistoryByTerminalGroupID.removeValue(forKey: groupID.description)
+                nextMemory.tabByTerminalGroupID.removeValue(forKey: groupID.description)
+            case .project, nil:
+                break
+            }
             return WarrenDesktopNavigationState(
                 selection: state.selection,
                 selectedTabID: nil,
-                memory: state.memory
+                memory: nextMemory
             )
         case .restoreNavigation(let restoredState):
             return reconcile(restoredState, with: projection)
+        case .deleteWorkspace(let workspaceID, _):
+            var nextMemory = state.memory
+            forget(workspaceID: workspaceID, from: &nextMemory)
+            return WarrenDesktopNavigationState(
+                selection: state.selection,
+                selectedTabID: state.selectedTabID,
+                memory: nextMemory
+            )
+        case .deleteTerminalGroup(let groupID):
+            var nextMemory = state.memory
+            forget(terminalGroupID: groupID, from: &nextMemory)
+            return WarrenDesktopNavigationState(
+                selection: state.selection,
+                selectedTabID: state.selectedTabID,
+                memory: nextMemory
+            )
+        case .deleteProject(let projectID):
+            var nextMemory = state.memory
+            forget(projectID: projectID, from: &nextMemory)
+            return WarrenDesktopNavigationState(
+                selection: state.selection,
+                selectedTabID: state.selectedTabID,
+                memory: nextMemory
+            )
         case .addProject, .importSuperset, .requestNewWorkspace,
              .requestProjectWorktreeImport, .setProjectAutoImportGitWorktrees,
              .requestProjectSetupScript,
-             .renameProject, .renameWorkspace, .deleteProject, .deleteWorkspace,
+             .renameProject, .renameWorkspace,
              .attachWorkspaceToTask, .detachWorkspaceFromTask, .deleteTask,
              .renameSession,
              .setProjectPinned, .setWorkspacePinned, .setSessionPinned,
@@ -195,7 +329,7 @@ public enum WarrenDesktopNavigationReducer {
              .requestNewSession, .launchSession,
              .requestNewTerminalGroupSession, .launchTerminalGroupSession,
              .createTerminalGroup, .renameTerminalGroup, .setTerminalGroupHome,
-             .deleteTerminalGroup, .moveTerminalGroup,
+             .moveTerminalGroup,
              .toggleSidebar:
             return state
         }
@@ -206,7 +340,9 @@ public enum WarrenDesktopNavigationReducer {
         with projection: WarrenDesktopProjection
     ) -> WarrenDesktopNavigationState {
         let hadValidSelection = state.selection.map { isValid($0, in: projection) } ?? false
-        let selection = hadValidSelection ? state.selection : firstSelection(in: projection)
+        let selection = hadValidSelection
+            ? state.selection
+            : recentSelection(from: state.memory, in: projection) ?? firstSelection(in: projection)
 
         if let tabID = state.selectedTabID,
            projection.tabs.contains(where: { $0.id == tabID }),
@@ -244,6 +380,75 @@ public enum WarrenDesktopNavigationReducer {
         return remembering(next, in: projection)
     }
 
+    private static func recordSelection(
+        _ selection: WarrenDesktopSidebarSelection,
+        in memory: inout WarrenDesktopNavigationMemory
+    ) {
+        let key = selection.serializedKey
+        memory.selectionHistory.removeAll { $0 == key }
+        memory.selectionHistory.append(key)
+    }
+
+    private static func recordTab(
+        _ tabID: String,
+        for selection: WarrenDesktopSidebarSelection,
+        in memory: inout WarrenDesktopNavigationMemory
+    ) {
+        switch selection {
+        case .workspace(let workspaceID):
+            var stack = memory.tabHistoryByWorkspaceID[workspaceID.description] ?? []
+            stack.removeAll { $0 == tabID }
+            stack.append(tabID)
+            memory.tabHistoryByWorkspaceID[workspaceID.description] = stack
+        case .terminalGroup(let groupID):
+            var stack = memory.tabHistoryByTerminalGroupID[groupID.description] ?? []
+            stack.removeAll { $0 == tabID }
+            stack.append(tabID)
+            memory.tabHistoryByTerminalGroupID[groupID.description] = stack
+        case .project:
+            break
+        }
+    }
+
+    private static func recentSelection(
+        from memory: WarrenDesktopNavigationMemory,
+        in projection: WarrenDesktopProjection
+    ) -> WarrenDesktopSidebarSelection? {
+        for key in memory.selectionHistory.reversed() {
+            guard let selection = WarrenDesktopSidebarSelection(serializedKey: key),
+                  isValid(selection, in: projection) else {
+                continue
+            }
+            return selection
+        }
+        return nil
+    }
+
+    private static func recentTab(
+        for selection: WarrenDesktopSidebarSelection?,
+        in candidates: [ClientTab],
+        memory: WarrenDesktopNavigationMemory
+    ) -> ClientTab? {
+        guard let selection else { return nil }
+        let stack: [String]
+        switch selection {
+        case .workspace(let workspaceID):
+            stack = memory.tabHistoryByWorkspaceID[workspaceID.description] ?? []
+        case .terminalGroup(let groupID):
+            stack = memory.tabHistoryByTerminalGroupID[groupID.description] ?? []
+        case .project:
+            stack = []
+        }
+        let candidateIDs = Set(candidates.map(\.id))
+        for tabID in stack.reversed() {
+            if candidateIDs.contains(tabID),
+               let match = candidates.first(where: { $0.id == tabID }) {
+                return match
+            }
+        }
+        return nil
+    }
+
     private static func rememberedWorkspace(
         for projectID: ProjectID,
         memory: WarrenDesktopNavigationMemory,
@@ -263,11 +468,18 @@ public enum WarrenDesktopNavigationReducer {
         memory: WarrenDesktopNavigationMemory,
         projection: WarrenDesktopProjection
     ) -> String? {
-        guard let tabID = memory.tabByWorkspaceID[workspaceID.description],
-              projection.workspaceID(forTabID: tabID) == workspaceID else {
-            return nil
+        if let tabID = memory.tabByWorkspaceID[workspaceID.description],
+           projection.workspaceID(forTabID: tabID) == workspaceID {
+            return tabID
         }
-        return tabID
+        if let stack = memory.tabHistoryByWorkspaceID[workspaceID.description] {
+            for tabID in stack.reversed() {
+                if projection.workspaceID(forTabID: tabID) == workspaceID {
+                    return tabID
+                }
+            }
+        }
+        return nil
     }
 
     private static func rememberedTab(
@@ -275,11 +487,18 @@ public enum WarrenDesktopNavigationReducer {
         memory: WarrenDesktopNavigationMemory,
         projection: WarrenDesktopProjection
     ) -> String? {
-        guard let tabID = memory.tabByTerminalGroupID[groupID.description],
-              projection.terminalGroupID(forTabID: tabID) == groupID else {
-            return nil
+        if let tabID = memory.tabByTerminalGroupID[groupID.description],
+           projection.terminalGroupID(forTabID: tabID) == groupID {
+            return tabID
         }
-        return tabID
+        if let stack = memory.tabHistoryByTerminalGroupID[groupID.description] {
+            for tabID in stack.reversed() {
+                if projection.terminalGroupID(forTabID: tabID) == groupID {
+                    return tabID
+                }
+            }
+        }
+        return nil
     }
 
     private static func rememberedTab(
@@ -301,20 +520,25 @@ public enum WarrenDesktopNavigationReducer {
         _ state: WarrenDesktopNavigationState,
         in projection: WarrenDesktopProjection
     ) -> WarrenDesktopNavigationState {
+        var next = state
+        if let selection = state.selection {
+            recordSelection(selection, in: &next.memory)
+        }
         guard let tabID = state.selectedTabID,
               let selection = selection(for: tabID, in: projection) else {
-            return state
+            return next
         }
 
-        var next = state
         switch selection {
         case .workspace(let workspaceID):
             next.memory.tabByWorkspaceID[workspaceID.description] = tabID
+            recordTab(tabID, for: selection, in: &next.memory)
             if let workspace = projection.workspace(id: workspaceID) {
                 next.memory.workspaceByProjectID[workspace.projectID.description] = workspaceID.description
             }
         case .terminalGroup(let groupID):
             next.memory.tabByTerminalGroupID[groupID.description] = tabID
+            recordTab(tabID, for: selection, in: &next.memory)
         case .project:
             break
         }
@@ -329,12 +553,40 @@ public enum WarrenDesktopNavigationReducer {
         guard let workspace = projection.workspace(id: workspaceID) else { return state }
         var next = state
         next.memory.workspaceByProjectID[workspace.projectID.description] = workspaceID.description
+        recordSelection(.workspace(workspaceID), in: &next.memory)
         return next
     }
 
     private static func forget(tabID: String, from memory: inout WarrenDesktopNavigationMemory) {
         memory.tabByWorkspaceID = memory.tabByWorkspaceID.filter { $0.value != tabID }
         memory.tabByTerminalGroupID = memory.tabByTerminalGroupID.filter { $0.value != tabID }
+        for (key, stack) in memory.tabHistoryByWorkspaceID {
+            memory.tabHistoryByWorkspaceID[key] = stack.filter { $0 != tabID }
+        }
+        for (key, stack) in memory.tabHistoryByTerminalGroupID {
+            memory.tabHistoryByTerminalGroupID[key] = stack.filter { $0 != tabID }
+        }
+    }
+
+    private static func forget(workspaceID: WorkspaceID, from memory: inout WarrenDesktopNavigationMemory) {
+        let key = WarrenDesktopSidebarSelection.workspace(workspaceID).serializedKey
+        memory.selectionHistory.removeAll { $0 == key }
+        memory.workspaceByProjectID = memory.workspaceByProjectID.filter { $0.value != workspaceID.description }
+        memory.tabByWorkspaceID.removeValue(forKey: workspaceID.description)
+        memory.tabHistoryByWorkspaceID.removeValue(forKey: workspaceID.description)
+    }
+
+    private static func forget(terminalGroupID: TerminalGroupID, from memory: inout WarrenDesktopNavigationMemory) {
+        let key = WarrenDesktopSidebarSelection.terminalGroup(terminalGroupID).serializedKey
+        memory.selectionHistory.removeAll { $0 == key }
+        memory.tabByTerminalGroupID.removeValue(forKey: terminalGroupID.description)
+        memory.tabHistoryByTerminalGroupID.removeValue(forKey: terminalGroupID.description)
+    }
+
+    private static func forget(projectID: ProjectID, from memory: inout WarrenDesktopNavigationMemory) {
+        let key = WarrenDesktopSidebarSelection.project(projectID).serializedKey
+        memory.selectionHistory.removeAll { $0 == key }
+        memory.workspaceByProjectID.removeValue(forKey: projectID.description)
     }
 
     private static func forgetting(

@@ -37,21 +37,7 @@ public enum WarrenDesktopNavigationPersistence {
                 ? nil
                 : WarrenDesktopNavigationState(memory: memory)
         }
-        let parts = rawSelection.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return nil }
-
-        let selection: WarrenDesktopSidebarSelection?
-        switch parts[0] {
-        case "workspace":
-            guard let id = WorkspaceID(uuidString: parts[1]) else { return nil }
-            selection = .workspace(id)
-        case "project":
-            guard let id = ProjectID(uuidString: parts[1]) else { return nil }
-            selection = .project(id)
-        case "terminal-group":
-            guard let id = TerminalGroupID(uuidString: parts[1]) else { return nil }
-            selection = .terminalGroup(id)
-        default:
+        guard let selection = WarrenDesktopSidebarSelection(serializedKey: rawSelection) else {
             return nil
         }
 
@@ -66,14 +52,9 @@ public enum WarrenDesktopNavigationPersistence {
         _ state: WarrenDesktopNavigationState,
         to defaults: UserDefaults = .standard
     ) {
-        switch state.selection {
-        case .workspace(let id):
-            defaults.set("workspace:\(id.description)", forKey: selectionKey)
-        case .project(let id):
-            defaults.set("project:\(id.description)", forKey: selectionKey)
-        case .terminalGroup(let id):
-            defaults.set("terminal-group:\(id.description)", forKey: selectionKey)
-        case nil:
+        if let selection = state.selection {
+            defaults.set(selection.serializedKey, forKey: selectionKey)
+        } else {
             defaults.removeObject(forKey: selectionKey)
         }
         if let selectedTabID = state.selectedTabID {
