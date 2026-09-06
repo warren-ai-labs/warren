@@ -1362,13 +1362,16 @@ type openCodePartSnapshot struct {
 
 type openCodeParser struct {
 	baseParser
-	opencodeMessages map[string]openCodeMessageSnapshot
+	openCodeModel        string
+	opencodeMessages     map[string]openCodeMessageSnapshot
+	opencodeInteractions map[string]string
 }
 
 func newOpenCodeParser(contentLimit int) *openCodeParser {
 	return &openCodeParser{
-		baseParser:       newBaseParser(contentLimit),
-		opencodeMessages: make(map[string]openCodeMessageSnapshot),
+		baseParser:           newBaseParser(contentLimit),
+		opencodeMessages:     make(map[string]openCodeMessageSnapshot),
+		opencodeInteractions: make(map[string]string),
 	}
 }
 
@@ -1408,6 +1411,20 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 	}
 	timestamp := openCodeMillisTime(envelope.Time.Created)
 	var events []api.AgentEvent
+	if model != "" {
+		if p.openCodeModel == "" {
+			p.openCodeModel = model
+		} else if model != p.openCodeModel {
+			p.openCodeModel = model
+			events = append(events, api.AgentEvent{
+				Provider:  openCodeProvider,
+				ID:        "config",
+				Type:      "config",
+				Payload:   map[string]any{"model": model},
+				Timestamp: timestamp,
+			})
+		}
+	}
 	emittedUserText := false
 	for _, part := range envelope.Parts {
 		if part.ID == "" {
@@ -1434,14 +1451,112 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 			}
 		case "tool":
 			toolName := canonicalToolName(openCodeProvider, part.Tool)
-			if toolName == "" {
-				toolName = "tool"
-			}
 			callID := part.CallID
 			if callID == "" {
 				callID = part.ID
 			}
 			callEmitted := existed && old.CallEmitted
+			currentPart := current.Parts[part.ID]
+
+			if toolName == "ask_user_question" {
+				if !callEmitted && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
+					input, _ := rawToAny(part.State.Input, p.contentLimit).(map[string]any)
+					qPayload := claudeQuestionPayload(callID, input)
+					p.opencodeInteractions[callID] = "question"
+					p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, timestamp)
+					events = append(events, api.AgentEvent{
+						Provider:  openCodeProvider,
+						ID:        callID,
+						Type:      "question",
+						CallID:    callID,
+						Payload:   qPayload,
+						Timestamp: timestamp,
+					})
+					callEmitted = true
+				}
+				if openCodeToolTerminal(part.State.Status) && (!existed || !openCodeToolTerminal(old.State.Status)) {
+					delete(p.opencodeInteractions, callID)
+					p.tracker.MarkAttention("", "", "", time.Time{})
+					state := "resolved"
+					if strings.ToLower(part.State.Status) == "error" {
+						state = "cancelled"
+					}
+					events = append(events, api.AgentEvent{
+						Provider:  openCodeProvider,
+						ID:        callID,
+						Type:      "question",
+						CallID:    callID,
+						Payload:   map[string]any{"requestId": callID, "title": "Question", "state": state},
+						Timestamp: timestamp,
+					})
+				}
+				currentPart.CallEmitted = callEmitted
+				current.Parts[part.ID] = currentPart
+				continue
+			}
+
+			if toolName == "todowrite" {
+				if !callEmitted && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
+					input, _ := rawToAny(part.State.Input, p.contentLimit).(map[string]any)
+					events = append(events, api.AgentEvent{
+						Provider:  openCodeProvider,
+						ID:        "opencode-todos",
+						Type:      "todo",
+						CallID:    callID,
+						Payload:   claudeTodoPayload(input),
+						Timestamp: timestamp,
+					})
+					callEmitted = true
+				}
+				currentPart.CallEmitted = callEmitted
+				current.Parts[part.ID] = currentPart
+				continue
+			}
+
+			if toolName == "subagent" {
+				if !callEmitted && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
+					input, _ := rawToAny(part.State.Input, p.contentLimit).(map[string]any)
+					label := firstNonEmpty(stringValue(input["subagent_type"]), stringValue(input["agent_type"]), "Subagent")
+					summary := firstNonEmpty(stringValue(input["prompt"]), stringValue(input["description"]), "Subagent running")
+					events = append(events, api.AgentEvent{
+						Provider: openCodeProvider,
+						ID:       callID,
+						Type:     "subagent",
+						CallID:   callID,
+						Payload: map[string]any{
+							"subagentId": callID,
+							"title":      label,
+							"label":      label,
+							"state":      "running",
+							"summary":    p.clip(summary),
+						},
+						Timestamp: timestamp,
+					})
+					callEmitted = true
+				}
+				if openCodeToolTerminal(part.State.Status) && (!existed || !openCodeToolTerminal(old.State.Status)) {
+					output, _ := openCodeToolOutput(part.State, p.contentLimit)
+					events = append(events, api.AgentEvent{
+						Provider: openCodeProvider,
+						ID:       callID,
+						Type:     "subagent",
+						CallID:   callID,
+						Payload: map[string]any{
+							"subagentId": callID,
+							"state":      "completed",
+							"summary":    p.clip(output),
+						},
+						Timestamp: timestamp,
+					})
+				}
+				currentPart.CallEmitted = callEmitted
+				current.Parts[part.ID] = currentPart
+				continue
+			}
+
+			if toolName == "" {
+				toolName = "tool"
+			}
 			// OpenCode creates a pending tool part before the model has
 			// finished streaming its input. Wait for a real input or a
 			// non-pending state so the UI receives one useful tool_call rather
@@ -1450,7 +1565,6 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 				events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: part.ID, Type: "tool_call", CallID: callID, ToolName: toolName, ToolInput: rawToAny(part.State.Input, p.contentLimit), ToolStatus: normalizeOpenCodeToolStatus(part.State.Status), Timestamp: timestamp})
 				callEmitted = true
 			}
-			currentPart := current.Parts[part.ID]
 			currentPart.CallEmitted = callEmitted
 			current.Parts[part.ID] = currentPart
 			if openCodeToolTerminal(part.State.Status) && (!existed || !openCodeToolTerminal(old.State.Status) || old.State.Status != part.State.Status || !jsonEqual(old.State.Output, part.State.Output) || !jsonEqual(old.State.Error, part.State.Error)) {

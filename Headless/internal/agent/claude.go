@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
@@ -103,6 +104,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				if kind := p.claudeInteractions[block.ToolUseID]; kind != "" {
 					delete(p.claudeInteractions, block.ToolUseID)
 					if kind == "question" || kind == "permission" {
+						p.tracker.MarkAttention("", "", "", time.Time{})
 						state := "resolved"
 						if block.IsError {
 							state = "cancelled"
@@ -246,6 +248,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					event.Payload = claudeQuestionPayload(block.ID, input)
 					if block.ID != "" {
 						p.claudeInteractions[block.ID] = "question"
+						p.tracker.MarkAttention(api.AgentAttentionInput, "question", block.ID, event.Timestamp)
 					}
 				case "permission_request":
 					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
@@ -253,6 +256,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					event.Payload = claudePermissionPayload(block.ID, input)
 					if block.ID != "" {
 						p.claudeInteractions[block.ID] = "permission"
+						p.tracker.MarkAttention(api.AgentAttentionApproval, "permission", block.ID, event.Timestamp)
 					}
 				case "todowrite":
 					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)

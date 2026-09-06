@@ -392,14 +392,17 @@ func ensureQoderSettingsHook(settingsPath, provider string) (changed bool, err e
 
 // qoderRecord is one JSONL line in a Qoder session file.
 type qoderRecord struct {
-	Type        string          `json:"type"`
-	UUID        string          `json:"uuid"`
-	ParentID    string          `json:"parentUuid"`
-	Timestamp   string          `json:"timestamp"`
-	SessionID   string          `json:"sessionId"`
-	Cwd         string          `json:"cwd"`
-	IsSidechain bool            `json:"isSidechain"`
-	Message     json.RawMessage `json:"message"`
+	Type              string          `json:"type"`
+	UUID              string          `json:"uuid"`
+	ParentID          string          `json:"parentUuid"`
+	Timestamp         any             `json:"timestamp"`
+	SessionID         string          `json:"sessionId"`
+	Cwd               string          `json:"cwd"`
+	Model             string          `json:"model"`
+	ReasoningEffort   any             `json:"reasoningEffort"`
+	Attachment        json.RawMessage `json:"attachment"`
+	IsSidechain       bool            `json:"isSidechain"`
+	Message           json.RawMessage `json:"message"`
 	// Error records carry the failure at the record level (the message
 	// content is the human-readable fallback text).
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
@@ -431,13 +434,17 @@ type qoderContentBlock struct {
 
 type qoderParser struct {
 	baseParser
-	qoderCallTool map[string]string
+	qoderModel        string
+	qoderEffort       string
+	qoderCallTool     map[string]string
+	qoderInteractions map[string]string
 }
 
 func newQoderParser(contentLimit int) *qoderParser {
 	return &qoderParser{
-		baseParser:    newBaseParser(contentLimit),
-		qoderCallTool: make(map[string]string),
+		baseParser:        newBaseParser(contentLimit),
+		qoderCallTool:     make(map[string]string),
+		qoderInteractions: make(map[string]string),
 	}
 }
 
@@ -457,16 +464,56 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
+	if structured := projectStructuredAgentEvent(qoderProvider, record.Type, line, timestamp); structured != nil {
+		if structured.ID == "" {
+			structured.ID = record.UUID
+		}
+		return []api.AgentEvent{*structured}
+	}
 	switch record.Type {
-	case "workspace-directories", "runtime-config", "active-leaf", "ai-title",
-		"last-prompt", "file-history-snapshot", "model_change", "thinking_level_change":
+	case "workspace-directories", "active-leaf", "ai-title",
+		"last-prompt", "file-history-snapshot":
 		// Metadata records do not participate in the visible conversation.
 		return nil
+	case "runtime-config", "model_change", "thinking_level_change":
+		effort := stringValue(record.ReasoningEffort)
+		if record.Model != "" || effort != "" {
+			if record.Model != p.qoderModel || effort != p.qoderEffort {
+				p.qoderModel = record.Model
+				p.qoderEffort = effort
+				return []api.AgentEvent{{
+					Provider:  qoderProvider,
+					ID:        "config",
+					Type:      "config",
+					Payload: map[string]any{
+						"model":           record.Model,
+						"reasoningEffort": effort,
+					},
+					Timestamp: timestamp,
+				}}
+			}
+		}
+		return nil
 	case "attachment":
-		// Startup scaffolding (skill listings, reminders). Claude projects
-		// these as system_instructions when they are real injected context;
-		// Qoder's attachment type is covered by the transcript's own user
-		// turns, so keep the timeline clean and skip them.
+		var att struct {
+			Type         string `json:"type"`
+			PlanFilePath string `json:"planFilePath"`
+			Content      string `json:"content"`
+		}
+		if json.Unmarshal(record.Attachment, &att) == nil && (att.PlanFilePath != "" || att.Type == "plan") {
+			return []api.AgentEvent{{
+				Provider: qoderProvider,
+				ID:       firstNonEmpty(record.UUID, "qoder-plan"),
+				Type:     "plan",
+				Payload: map[string]any{
+					"planId": firstNonEmpty(record.UUID, "qoder-plan"),
+					"title":  "Plan",
+					"file":   att.PlanFilePath,
+					"state":  "in_progress",
+				},
+				Timestamp: timestamp,
+			}}
+		}
 		return nil
 	}
 
@@ -513,6 +560,26 @@ func (p *qoderParser) parseQoderToolResults(record qoderRecord, blocks []qoderCo
 	events := make([]api.AgentEvent, 0, len(blocks))
 	for _, block := range blocks {
 		if block.Type != "tool_result" {
+			continue
+		}
+		if kind := p.qoderInteractions[block.ToolUseID]; kind != "" {
+			delete(p.qoderInteractions, block.ToolUseID)
+			p.tracker.MarkAttention("", "", "", time.Time{})
+			title := "Question"
+			if kind == "permission" {
+				title = "Permission"
+			}
+			state := "resolved"
+			if block.IsError {
+				state = "cancelled"
+			}
+			events = append(events, api.AgentEvent{
+				Provider:  qoderProvider,
+				ID:        block.ToolUseID,
+				Type:      kind,
+				Payload:   map[string]any{"requestId": block.ToolUseID, "title": title, "state": state},
+				Timestamp: timestamp,
+			})
 			continue
 		}
 		output := p.content(block.Content)
@@ -614,6 +681,35 @@ func (p *qoderParser) parseQoderAssistant(record qoderRecord, message qoderMessa
 		callID := blocks[0].ID
 		if callID == "" {
 			callID = record.UUID
+		}
+		if toolName == "ask_user_question" {
+			input, _ := rawToAny(blocks[0].Input, p.contentLimit).(map[string]any)
+			event.Type = "question"
+			event.ID = callID
+			event.Payload = claudeQuestionPayload(callID, input)
+			if callID != "" {
+				p.qoderInteractions[callID] = "question"
+			}
+			p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, timestamp)
+			return []api.AgentEvent{event}
+		}
+		if toolName == "permission_request" {
+			input, _ := rawToAny(blocks[0].Input, p.contentLimit).(map[string]any)
+			event.Type = "permission"
+			event.ID = callID
+			event.Payload = claudePermissionPayload(callID, input)
+			if callID != "" {
+				p.qoderInteractions[callID] = "permission"
+			}
+			p.tracker.MarkAttention(api.AgentAttentionApproval, "permission", callID, timestamp)
+			return []api.AgentEvent{event}
+		}
+		if toolName == "todowrite" {
+			input, _ := rawToAny(blocks[0].Input, p.contentLimit).(map[string]any)
+			event.Type = "todo"
+			event.ID = "qoder-todos"
+			event.Payload = claudeTodoPayload(input)
+			return []api.AgentEvent{event}
 		}
 		if toolName == "" {
 			toolName = "tool"

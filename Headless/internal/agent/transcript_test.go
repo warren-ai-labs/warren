@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
@@ -519,10 +520,14 @@ func TestCodexTokenUsageEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events = %#v, want only the usage event", events)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want config and usage events", events)
 	}
-	usage := events[0]
+	cfg := events[0]
+	if cfg.Type != "config" || cfg.Payload["model"] != "gpt-5" || cfg.Payload["reasoningEffort"] != "high" {
+		t.Fatalf("config event = %#v", cfg)
+	}
+	usage := events[1]
 	if usage.Type != "usage" || usage.Model != "gpt-5" || usage.Usage == nil {
 		t.Fatalf("usage event = %#v", usage)
 	}
@@ -1076,7 +1081,7 @@ func TestAgentEventProtocolAcrossProviders(t *testing.T) {
 		"error": {}, "compaction": {}, "usage": {},
 		"system": {}, "system_instructions": {},
 		"question": {}, "permission": {}, "plan": {}, "todo": {},
-		"activity": {}, "plugin": {}, "subagent": {}, "attachment": {},
+		"activity": {}, "plugin": {}, "subagent": {}, "attachment": {}, "config": {},
 	}
 
 	type fixture struct {
@@ -1158,7 +1163,8 @@ func TestAgentEventProtocolAcrossProviders(t *testing.T) {
 					event.Type != "question" && event.Type != "permission" &&
 					event.Type != "plan" && event.Type != "todo" &&
 					event.Type != "activity" && event.Type != "plugin" &&
-					event.Type != "subagent" && event.Type != "compaction" {
+					event.Type != "subagent" && event.Type != "compaction" &&
+					event.Type != "config" {
 					t.Errorf("event %s/%s slipped through with no payload: %#v", event.Provider, event.Type, event)
 				}
 			}
@@ -1241,4 +1247,423 @@ func TestQoderSidechainSubagent(t *testing.T) {
 		t.Errorf("expected summary %q, got %q", "Explored repo and found entrypoint.", events[0].Payload["summary"])
 	}
 }
+
+func TestCodexQuestionAttentionAndResolution(t *testing.T) {
+	p := newParser("codex")
+	qLine := []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","call_id":"call_q1","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"q1\",\"header\":\"Confirm\",\"question\":\"Do you want to proceed?\",\"options\":[{\"label\":\"yes\",\"description\":\"continue\"},{\"label\":\"no\"}]}]}"}}`)
+	events := p.Parse(qLine)
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected question event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "pending" {
+		t.Fatalf("expected state pending, got %v", events[0].Payload["state"])
+	}
+	status := p.Status()
+	if status.Activity != api.AgentActivityBlocked || status.Attention == nil || status.Attention.Reason != "question" || status.Attention.RequestID != "call_q1" {
+		t.Fatalf("expected blocked attention on question, got %#v", status)
+	}
+
+	ansLine := []byte(`{"timestamp":"2026-08-16T10:00:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_q1","output":"{\"answers\":{\"q1\":{\"answers\":[\"yes\"]}}}"}}`)
+	events = p.Parse(ansLine)
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected resolved question event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "resolved" {
+		t.Fatalf("expected state resolved, got %v", events[0].Payload["state"])
+	}
+	status = p.Status()
+	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+		t.Fatalf("expected attention cleared after answering, got %#v", status)
+	}
+}
+
+func TestCodexPlanStateCalculation(t *testing.T) {
+	p := newParser("codex")
+	inProgLine := []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Step 1\",\"status\":\"completed\"},{\"step\":\"Step 2\",\"status\":\"in_progress\"}]}"}}`)
+	events := p.Parse(inProgLine)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("expected plan event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "in_progress" {
+		t.Fatalf("expected state in_progress, got %v", events[0].Payload["state"])
+	}
+
+	doneLine := []byte(`{"timestamp":"2026-08-16T10:00:10Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Step 1\",\"status\":\"completed\"},{\"step\":\"Step 2\",\"status\":\"completed\"}]}"}}`)
+	events = p.Parse(doneLine)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("expected plan event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "completed" {
+		t.Fatalf("expected state completed, got %v", events[0].Payload["state"])
+	}
+}
+
+func TestQoderQuestionAttentionAndResolution(t *testing.T) {
+	p := newParser("qoder")
+	qLine := []byte(`{"type":"assistant","uuid":"a-q1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which port?","options":[{"label":"8080"}]}]}}]}}`)
+	events := p.Parse(qLine)
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected question event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "pending" {
+		t.Fatalf("expected state pending, got %v", events[0].Payload["state"])
+	}
+	status := p.Status()
+	if status.Activity != api.AgentActivityBlocked || status.Attention == nil || status.Attention.Reason != "question" || status.Attention.RequestID != "tool_q1" {
+		t.Fatalf("expected blocked attention on question, got %#v", status)
+	}
+
+	ansLine := []byte(`{"type":"user","uuid":"u-a1","timestamp":"2026-08-16T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_q1","content":"8080","is_error":false}]}}`)
+	events = p.Parse(ansLine)
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected resolved question event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "resolved" {
+		t.Fatalf("expected state resolved, got %v", events[0].Payload["state"])
+	}
+	status = p.Status()
+	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+		t.Fatalf("expected attention cleared after answering, got %#v", status)
+	}
+}
+
+func TestQoderRuntimeConfigAndPlanAttachment(t *testing.T) {
+	p := newParser("qoder")
+	cfgLine := []byte(`{"type":"runtime-config","sessionId":"s1","model":"claude-3-7-sonnet","reasoningEffort":"high","timestamp":1788350322619}`)
+	events := p.Parse(cfgLine)
+	if len(events) != 1 || events[0].Type != "config" {
+		t.Fatalf("expected config event, got %#v", events)
+	}
+	if events[0].Payload["model"] != "claude-3-7-sonnet" || events[0].Payload["reasoningEffort"] != "high" {
+		t.Fatalf("unexpected config payload: %#v", events[0].Payload)
+	}
+
+	attLine := []byte(`{"type":"attachment","uuid":"att-plan-1","timestamp":"2026-08-16T10:00:01Z","attachment":{"type":"plan","planFilePath":".qoder/plans/setup.md"}}`)
+	events = p.Parse(attLine)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("expected plan event, got %#v", events)
+	}
+	if events[0].Payload["file"] != ".qoder/plans/setup.md" {
+		t.Fatalf("unexpected plan payload: %#v", events[0].Payload)
+	}
+}
+
+func TestOpenCodeQuestionTodoAndSubagent(t *testing.T) {
+	p := newParser("opencode")
+	// Question pending
+	qPending := []byte(`{"messageID":"m1","role":"assistant","parts":[{"id":"p_q1","type":"tool","callID":"call_q1","tool":"question","state":{"status":"running","input":{"questions":[{"question":"Deploy now?","options":[{"label":"yes"},{"label":"no"}]}]}}}]}`)
+	events := p.Parse(qPending)
+	if len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected question event, got %#v", events)
+	}
+	status := p.Status()
+	if status.Activity != api.AgentActivityBlocked || status.Attention == nil || status.Attention.Reason != "question" || status.Attention.RequestID != "call_q1" {
+		t.Fatalf("expected blocked attention on opencode question, got %#v", status)
+	}
+
+	// Question completed
+	qDone := []byte(`{"messageID":"m1","role":"assistant","parts":[{"id":"p_q1","type":"tool","callID":"call_q1","tool":"question","state":{"status":"completed","output":"yes"}}]}`)
+	events = p.Parse(qDone)
+	if len(events) != 1 || events[0].Type != "question" || events[0].Payload["state"] != "resolved" {
+		t.Fatalf("expected resolved question event, got %#v", events)
+	}
+	status = p.Status()
+	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {
+		t.Fatalf("expected attention cleared after opencode question resolved, got %#v", status)
+	}
+
+	// Todowrite
+	todoLine := []byte(`{"messageID":"m2","role":"assistant","parts":[{"id":"p_td","type":"tool","callID":"call_td","tool":"todowrite","state":{"status":"completed","input":{"todos":[{"content":"step 1","status":"completed"},{"content":"step 2","status":"pending"}]}}}]}`)
+	events = p.Parse(todoLine)
+	if len(events) != 1 || events[0].Type != "todo" {
+		t.Fatalf("expected todo event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "in_progress" {
+		t.Fatalf("expected todo state in_progress, got %v", events[0].Payload["state"])
+	}
+
+	// Subagent (call_omo_agent)
+	subLine := []byte(`{"messageID":"m3","role":"assistant","parts":[{"id":"p_sub","type":"tool","callID":"call_sub1","tool":"call_omo_agent","state":{"status":"running","input":{"subagent_type":"explore","prompt":"Search auth logic"}}}]}`)
+	events = p.Parse(subLine)
+	if len(events) != 1 || events[0].Type != "subagent" {
+		t.Fatalf("expected subagent event, got %#v", events)
+	}
+	if events[0].Payload["state"] != "running" || events[0].Payload["label"] != "explore" {
+		t.Fatalf("unexpected subagent payload: %#v", events[0].Payload)
+	}
+}
+
+func TestPiConfigChangeAndCompaction(t *testing.T) {
+	p := newParser("pi")
+	modelLine := []byte(`{"type":"model_change","id":"mc-1","provider":"google","modelId":"gemini-2.5-pro","timestamp":"2026-08-16T10:00:00Z"}`)
+	events := p.Parse(modelLine)
+	if len(events) != 1 || events[0].Type != "config" {
+		t.Fatalf("expected config event from model_change, got %#v", events)
+	}
+	if events[0].Payload["model"] != "google/gemini-2.5-pro" {
+		t.Fatalf("unexpected model in payload: %#v", events[0].Payload)
+	}
+
+	thinkingLine := []byte(`{"type":"thinking_level_change","id":"tc-1","thinkingLevel":"high","timestamp":"2026-08-16T10:00:01Z"}`)
+	events = p.Parse(thinkingLine)
+	if len(events) != 1 || events[0].Type != "config" {
+		t.Fatalf("expected config event from thinking_level_change, got %#v", events)
+	}
+	if events[0].Payload["reasoningEffort"] != "high" {
+		t.Fatalf("unexpected reasoningEffort in payload: %#v", events[0].Payload)
+	}
+
+	compactionLine := []byte(`{"type":"compaction","id":"cmp-1","timestamp":"2026-08-16T10:00:02Z"}`)
+	events = p.Parse(compactionLine)
+	if len(events) != 1 || events[0].Type != "compaction" {
+		t.Fatalf("expected compaction event, got %#v", events)
+	}
+}
+
+func TestCanonicalProtocolProjectionForNewEvents(t *testing.T) {
+	now := time.Now()
+	// Test question -> interaction.requested
+	qEvt := api.AgentEvent{
+		Provider:  "codex",
+		Type:      "question",
+		ID:        "q-1",
+		Payload:   map[string]any{"requestId": "q-1", "title": "Question"},
+		Timestamp: now,
+	}
+	canonQ := api.CanonicalAgentEventFromLegacy(qEvt, "stream-1", "exec-1", 1, now)
+	if canonQ.Type != "interaction.requested" {
+		t.Fatalf("expected interaction.requested, got %s", canonQ.Type)
+	}
+
+	// Test config -> config.updated with model and reasoningEffort preserved
+	cfgEvt := api.AgentEvent{
+		Provider:  "codex",
+		Type:      "config",
+		ID:        "cfg-1",
+		Payload:   map[string]any{"model": "gpt-5", "reasoningEffort": "high"},
+		Timestamp: now,
+	}
+	canonCfg := api.CanonicalAgentEventFromLegacy(cfgEvt, "stream-1", "exec-1", 2, now)
+	if canonCfg.Type != "config.updated" {
+		t.Fatalf("expected config.updated, got %s", canonCfg.Type)
+	}
+	if canonCfg.Payload["model"] != "gpt-5" || canonCfg.Payload["reasoningEffort"] != "high" {
+		t.Fatalf("unexpected canonical config payload: %#v", canonCfg.Payload)
+	}
+
+	// Test compaction -> compaction.updated
+	cmpEvt := api.AgentEvent{
+		Provider:  "pi",
+		Type:      "compaction",
+		ID:        "cmp-1",
+		Payload:   map[string]any{"summary": "History compacted"},
+		Timestamp: now,
+	}
+	canonCmp := api.CanonicalAgentEventFromLegacy(cmpEvt, "stream-1", "exec-1", 3, now)
+	if canonCmp.Type != "compaction.updated" {
+		t.Fatalf("expected compaction.updated, got %s", canonCmp.Type)
+	}
+}
+
+func TestRealDataCodexPlayback(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	sessionsRoot := filepath.Join(home, ".codex", "sessions")
+	var targetFile string
+	_ = filepath.WalkDir(sessionsRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		targetFile = path
+		return filepath.SkipAll
+	})
+	if targetFile == "" {
+		t.Skip("no real codex sessions found")
+	}
+
+	f, err := os.Open(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	parser := newParser("codex")
+	scanner := bufio.NewScanner(f)
+	var totalEvents int
+	typeCounts := make(map[string]int)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		events := parser.Parse(line)
+		for _, e := range events {
+			totalEvents++
+			typeCounts[e.Type]++
+			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			if canon.Type == "" {
+				t.Fatalf("empty canonical type for event: %#v", e)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if totalEvents == 0 {
+		t.Fatalf("expected events parsed from real codex session %s, got 0", targetFile)
+	}
+	t.Logf("Replayed Codex %s: %d total events, breakdown: %+v", filepath.Base(targetFile), totalEvents, typeCounts)
+}
+
+func TestRealDataQoderPlayback(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	projectsRoot := filepath.Join(home, ".qoder", "projects")
+	var targetFile string
+	_ = filepath.WalkDir(projectsRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		targetFile = path
+		return filepath.SkipAll
+	})
+	if targetFile == "" {
+		t.Skip("no real qoder sessions found")
+	}
+
+	f, err := os.Open(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	parser := newParser("qoder")
+	scanner := bufio.NewScanner(f)
+	var totalEvents int
+	typeCounts := make(map[string]int)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		events := parser.Parse(line)
+		for _, e := range events {
+			totalEvents++
+			typeCounts[e.Type]++
+			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			if canon.Type == "" {
+				t.Fatalf("empty canonical type for event: %#v", e)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if totalEvents == 0 {
+		t.Fatalf("expected events parsed from real qoder session %s, got 0", targetFile)
+	}
+	t.Logf("Replayed Qoder %s: %d total events, breakdown: %+v", filepath.Base(targetFile), totalEvents, typeCounts)
+}
+
+func TestRealDataPiPlayback(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	sessionsRoot := filepath.Join(home, ".pi", "agent", "sessions")
+	var targetFile string
+	_ = filepath.WalkDir(sessionsRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		targetFile = path
+		return filepath.SkipAll
+	})
+	if targetFile == "" {
+		t.Skip("no real pi sessions found")
+	}
+
+	f, err := os.Open(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	parser := newParser("pi")
+	scanner := bufio.NewScanner(f)
+	var totalEvents int
+	typeCounts := make(map[string]int)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		events := parser.Parse(line)
+		for _, e := range events {
+			totalEvents++
+			typeCounts[e.Type]++
+			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			if canon.Type == "" {
+				t.Fatalf("empty canonical type for event: %#v", e)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if totalEvents == 0 {
+		t.Fatalf("expected events parsed from real pi session %s, got 0", targetFile)
+	}
+	t.Logf("Replayed Pi %s: %d total events, breakdown: %+v", filepath.Base(targetFile), totalEvents, typeCounts)
+}
+
+func TestRealDataOpenCodePlayback(t *testing.T) {
+	dbPath := OpenCodeDatabasePath("")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Skip("no real opencode.db found")
+	}
+
+	reader := sqliteOpenCodeReader{databasePath: dbPath}
+	sessions, err := findSQLiteOpenCodeSessions(context.Background(), dbPath, "", time.Time{}, "")
+	if err != nil || len(sessions) == 0 {
+		t.Skip("no opencode sessions in db")
+	}
+	sessionID := sessions[0].ID
+
+	messages, err := reader.ReadMessages(context.Background(), sessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) == 0 {
+		t.Skip("session has no messages")
+	}
+
+	parser := newParser("opencode")
+	var totalEvents int
+	typeCounts := make(map[string]int)
+
+	for _, msg := range messages {
+		envelope, complete := openCodeEnvelopeFromSource(msg)
+		if !complete || envelope.MessageID == "" {
+			continue
+		}
+		data, err := json.Marshal(envelope)
+		if err != nil {
+			continue
+		}
+		events := parser.Parse(data)
+		for _, e := range events {
+			totalEvents++
+			typeCounts[e.Type]++
+			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			if canon.Type == "" {
+				t.Fatalf("empty canonical type for event: %#v", e)
+			}
+		}
+	}
+	if totalEvents == 0 {
+		t.Fatalf("expected events parsed from opencode session %s, got 0", sessionID)
+	}
+	t.Logf("Replayed OpenCode %s: %d total events, breakdown: %+v", sessionID, totalEvents, typeCounts)
+}
+
+
 

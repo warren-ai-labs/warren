@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -116,7 +117,17 @@ func newParserWithContentLimit(provider string, contentLimit int) Parser {
 
 var structuredAgentEventTypes = map[string]struct{}{
 	"question": {}, "permission": {}, "plan": {}, "todo": {},
-	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {},
+	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {}, "config": {}, "compaction": {},
+}
+
+func structuredAgentEventType(source string) string {
+	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(source, "-", "_")))
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction"} {
+		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // projectStructuredAgentEvent turns provider-native structured records into
@@ -134,7 +145,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	rawType := firstStringValue(source["type"], source["eventType"], outerType)
 	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
 	kind := normalized
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			kind = candidate
 			break
@@ -164,6 +175,11 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	copyStructuredField(payload, source, "mime", "mime", "MIME")
 	copyStructuredField(payload, source, "size", "size")
 	copyStructuredField(payload, source, "state", "state", "status")
+	if st, ok := payload["state"].(string); ok && st != "" {
+		payload["state"] = canonicalStepStatus(st)
+	}
+	copyStructuredField(payload, source, "model", "model")
+	copyStructuredField(payload, source, "reasoningEffort", "reasoningEffort", "reasoning_effort", "effort")
 	if len(payload) == 0 {
 		return nil
 	}
@@ -193,9 +209,46 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			id = stringValue(payload["subagentId"])
 		case "attachment":
 			id = stringValue(payload["attachmentId"])
+		case "config":
+			id = "config"
+		case "compaction":
+			id = "compaction"
 		}
 	}
 	return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Payload: payload, Timestamp: timestamp}
+}
+
+func canonicalStepStatus(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "completed", "done", "finished", "success":
+		return "completed"
+	case "in_progress", "in-progress", "running", "working":
+		return "in_progress"
+	case "failed", "error", "cancelled", "canceled", "aborted":
+		return "cancelled"
+	case "pending", "todo", "not_started":
+		return "pending"
+	default:
+		if raw == "" {
+			return "pending"
+		}
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func calculatePlanState(items []map[string]any) string {
+	if len(items) == 0 {
+		return "in_progress"
+	}
+	overall := "completed"
+	for _, item := range items {
+		state := stringValue(item["state"])
+		if state != "completed" && state != "cancelled" {
+			overall = "in_progress"
+			break
+		}
+	}
+	return overall
 }
 
 func copyStructuredField(destination, source map[string]any, name string, aliases ...string) {
@@ -219,6 +272,43 @@ func firstStringValue(values ...any) string {
 func stringValue(value any) string {
 	text, _ := value.(string)
 	return strings.TrimSpace(text)
+}
+
+func parseQuestionOptions(rawOpts any) []any {
+	options := make([]any, 0)
+	if rawOpts == nil {
+		return options
+	}
+	switch opts := rawOpts.(type) {
+	case []any:
+		for optIdx, optItem := range opts {
+			if optStr, ok := optItem.(string); ok {
+				options = append(options, map[string]any{
+					"id":    optStr,
+					"label": optStr,
+				})
+			} else if optMap, ok := optItem.(map[string]any); ok {
+				label := firstNonEmpty(stringValue(optMap["label"]), stringValue(optMap["text"]), stringValue(optMap["title"]), stringValue(optMap["value"]))
+				id := firstNonEmpty(stringValue(optMap["id"]), label, fmt.Sprintf("opt-%d", optIdx))
+				entry := map[string]any{
+					"id":    id,
+					"label": label,
+				}
+				if desc := stringValue(optMap["description"]); desc != "" {
+					entry["description"] = desc
+				}
+				options = append(options, entry)
+			}
+		}
+	case []string:
+		for _, optStr := range opts {
+			options = append(options, map[string]any{
+				"id":    optStr,
+				"label": optStr,
+			})
+		}
+	}
+	return options
 }
 
 func parseUsage(raw json.RawMessage) *api.AgentUsage {
@@ -351,10 +441,30 @@ func rawToolInputLimit(contentLimit int) int {
 	return 64 * 1024
 }
 
-func parseTimestamp(value string) time.Time {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed
+func parseTimestamp(value any) time.Time {
+	switch v := value.(type) {
+	case string:
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+			if parsed, err := time.Parse(layout, v); err == nil {
+				return parsed
+			}
+		}
+	case float64:
+		if v > 1e11 {
+			return time.UnixMilli(int64(v))
+		}
+		return time.Unix(int64(v), 0)
+	case int64:
+		if v > 1e11 {
+			return time.UnixMilli(v)
+		}
+		return time.Unix(v, 0)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			if n > 1e11 {
+				return time.UnixMilli(n)
+			}
+			return time.Unix(n, 0)
 		}
 	}
 	return time.Time{}

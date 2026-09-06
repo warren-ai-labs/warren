@@ -285,11 +285,14 @@ func piTranscriptHeaderMatches(path, sessionID string) bool {
 
 // piRecord is one JSONL line in a pi session file.
 type piRecord struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id"`
-	ParentID  string          `json:"parentId"`
-	Timestamp string          `json:"timestamp"`
-	Message   json.RawMessage `json:"message"`
+	Type          string          `json:"type"`
+	ID            string          `json:"id"`
+	ParentID      string          `json:"parentId"`
+	Timestamp     any             `json:"timestamp"`
+	Provider      string          `json:"provider"`
+	ModelID       string          `json:"modelId"`
+	ThinkingLevel string          `json:"thinkingLevel"`
+	Message       json.RawMessage `json:"message"`
 	// Compaction and branch summaries are provider bookkeeping. Their
 	// summaries are projected as compact system events so a long-running
 	// conversation still reads as a coherent transcript.
@@ -304,13 +307,13 @@ type piRecord struct {
 
 // piMessage is the message payload of a pi `message` entry.
 type piMessage struct {
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`
-	Provider  string          `json:"provider"`
-	Model     string          `json:"model"`
-	Usage     json.RawMessage `json:"usage"`
-	StopReason string         `json:"stopReason"`
-	ErrorMessage string        `json:"errorMessage"`
+	Role         string          `json:"role"`
+	Content      json.RawMessage `json:"content"`
+	Provider     string          `json:"provider"`
+	Model        string          `json:"model"`
+	Usage        json.RawMessage `json:"usage"`
+	StopReason   string          `json:"stopReason"`
+	ErrorMessage string          `json:"errorMessage"`
 	// toolResult fields.
 	ToolCallID string `json:"toolCallId"`
 	ToolName   string `json:"toolName"`
@@ -348,6 +351,8 @@ type piUsage struct {
 
 type piParser struct {
 	baseParser
+	piModel  string
+	piEffort string
 }
 
 func newPiParser(contentLimit int) *piParser {
@@ -372,16 +377,57 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 	timestamp := parseTimestamp(record.Timestamp)
 	provider := piProvider
 	model := ""
+	if structured := projectStructuredAgentEvent(provider, record.Type, line, timestamp); structured != nil {
+		if structured.ID == "" {
+			structured.ID = record.ID
+		}
+		return []api.AgentEvent{*structured}
+	}
 	switch record.Type {
-	case "session", "model_change", "thinking_level_change", "label", "session_info", "custom":
+	case "session", "label", "session_info", "custom":
 		// Metadata entries do not participate in the visible conversation.
+		return nil
+	case "model_change":
+		newModel := piDisplayModel(record.Provider, record.ModelID)
+		if newModel != "" && newModel != p.piModel {
+			p.piModel = newModel
+			return []api.AgentEvent{{
+				Provider:  provider,
+				ID:        firstNonEmpty(record.ID, "config"),
+				Type:      "config",
+				Payload: map[string]any{
+					"model":           newModel,
+					"reasoningEffort": p.piEffort,
+				},
+				Timestamp: timestamp,
+			}}
+		}
+		return nil
+	case "thinking_level_change":
+		newEffort := strings.TrimSpace(record.ThinkingLevel)
+		if newEffort != "" && newEffort != p.piEffort {
+			p.piEffort = newEffort
+			return []api.AgentEvent{{
+				Provider:  provider,
+				ID:        firstNonEmpty(record.ID, "config"),
+				Type:      "config",
+				Payload: map[string]any{
+					"model":           p.piModel,
+					"reasoningEffort": newEffort,
+				},
+				Timestamp: timestamp,
+			}}
+		}
 		return nil
 	case "compaction":
 		return []api.AgentEvent{{
 			Provider:  provider,
-			ID:        record.ID,
-			Type:      "system",
+			ID:        firstNonEmpty(record.ID, "compaction"),
+			Type:      "compaction",
 			Content:   "History compacted",
+			Payload: map[string]any{
+				"summary": "History compacted",
+			},
 			Timestamp: timestamp,
 		}}
 	case "branch_summary":
