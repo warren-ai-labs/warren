@@ -331,14 +331,6 @@ public struct AgentChatView: View {
                                         }
                                     }
                                 }
-                                if shouldShowWorking {
-                                    AgentWorkingFooter(
-                                        phrase: workingPhrase,
-                                        action: latestActionText,
-                                        isVisible: isNearLatest
-                                    )
-                                    .id("agent-working-footer")
-                                }
                                 GeometryReader { geometry in
                                     Color.clear
                                         .preference(
@@ -362,6 +354,20 @@ public struct AgentChatView: View {
                     .background(IOSTheme.background)
                     .scrollIndicators(.hidden)
                     .coordinateSpace(name: "agent-chat-scroll")
+                    // Keep the working cue pinned to the message viewport. It
+                    // is an execution status, not transcript content; placing
+                    // it in the LazyVStack makes it disappear as soon as the
+                    // user scrolls away from the latest event.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if shouldShowWorking {
+                            AgentWorkingFooter(
+                                phrase: workingPhrase,
+                                action: latestActionText,
+                                isVisible: isNearLatest
+                            )
+                            .id("agent-working-footer")
+                        }
+                    }
                     // `defaultScrollAnchor(.bottom)` repositions a ScrollView
                     // in the same layout pass as the keyboard inset and looks
                     // like a jump on iPhone. We establish the initial position
@@ -724,13 +730,24 @@ public struct AgentChatView: View {
         latestAgentAction(from: agentState.agentEventsBySessionID[sessionID] ?? [])
     }
 
-    private var latestPlanEvent: WarrenRemoteAgentEvent? {
-        currentEvents
-            .filter { event in
-                guard let kind = IOSAgentStructuredEventKind(eventType: event.type) else { return false }
-                return kind == .plan || kind == .todo
+    private var latestPlanEvents: [WarrenRemoteAgentEvent] {
+        // Plan and Todo are independent read-only projections. Keeping one
+        // latest snapshot per kind prevents an unrelated Todo update from
+        // replacing the active Plan in the composer tray while still avoiding
+        // duplicate historical cards.
+        var latest: [String: WarrenRemoteAgentEvent] = [:]
+        for event in currentEvents {
+            guard let kind = IOSAgentStructuredEventKind(eventType: event.type, payload: event.payload),
+                  kind == .plan || kind == .todo else { continue }
+            let key = kind.rawValue
+            if latest[key]?.sequence ?? 0 < event.sequence {
+                latest[key] = event
             }
-            .max { lhs, rhs in lhs.sequence < rhs.sequence }
+        }
+        return latest.values.sorted { lhs, rhs in
+            if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
+            return lhs.idForSwiftUI < rhs.idForSwiftUI
+        }
     }
 
     private var protocolQueueItems: [AgentProtocolQueueItem] {
@@ -746,20 +763,25 @@ public struct AgentChatView: View {
     }
 
     private var protocolAttachmentNames: [String] {
-        var names: [String] = []
-        var seen: Set<String> = []
+        var latest: [String: (sequence: UInt64, name: String, state: String)] = [:]
         for event in currentEvents {
-            guard IOSAgentStructuredEventKind(eventType: event.type) == .attachment else { continue }
+            guard IOSAgentStructuredEventKind(eventType: event.type, payload: event.payload) == .attachment else { continue }
             let payload = event.payload ?? [:]
             let state = payload.string("state")?.lowercased() ?? ""
-            if state == "removed" || state == "aborted" || state == "failed" { continue }
             let id = payload.string("attachmentId") ?? event.id
             let name = payload.string("name") ?? payload.string("file") ?? event.content ?? "Attachment"
-            let key = id.isEmpty ? name : id
-            guard seen.insert(key).inserted else { continue }
-            names.append(name)
+            let key = id.isEmpty ? "sequence-\(event.sequence)" : id
+            if latest[key]?.sequence ?? 0 < event.sequence {
+                latest[key] = (event.sequence, name, state)
+            }
         }
-        return names
+        return latest.values
+            .filter { !["removed", "deleted", "aborted", "failed", "expired", "cancelled", "canceled"].contains($0.state) }
+            .sorted { lhs, rhs in
+                if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+            .map(\.name)
     }
 
     private var attachmentCount: Int {
@@ -770,11 +792,15 @@ public struct AgentChatView: View {
     private var bottomTray: some View {
         if model.displayMode == .agent {
             VStack(alignment: .leading, spacing: 0) {
-                if let plan = latestPlanEvent {
-                    AgentPlanTray(event: plan)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 4)
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                if !latestPlanEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(latestPlanEvents) { plan in
+                            AgentPlanTray(event: plan)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
                 if let attention = model.agentAttention(for: sessionID) {
                     AgentAttentionBanner(
@@ -817,7 +843,7 @@ public struct AgentChatView: View {
                 composer
                 composerMetadataTray
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: latestPlanEvent?.idForSwiftUI)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: latestPlanEvents.map(\.idForSwiftUI))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.agentAttention(for: sessionID))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: activePendingInteractionID)
         }
@@ -1614,6 +1640,19 @@ public struct AgentChatView: View {
         if let explicit = model.agentTurnBySessionID[sessionID]?.id, explicit > 0 {
             return "turn:\(explicit)"
         }
+        if let explicit = events.reversed().compactMap({ event -> String? in
+            if let turnID = event.turnID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !turnID.isEmpty {
+                return turnID
+            }
+            if case .string(let turnID) = event.payload?["turnId"],
+               !turnID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return turnID.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return nil
+        }).first {
+            return "turn:\(explicit)"
+        }
         if let latestUser = events.last(where: \.isUserEvent) {
             if let turn = latestUser.turn, turn > 0 {
                 return "turn:\(turn)"
@@ -1647,7 +1686,7 @@ private struct AgentProtocolQueueItem: Identifiable, Equatable {
 private func makeProtocolQueueItems(from events: [WarrenRemoteAgentEvent]) -> [AgentProtocolQueueItem] {
     var active: [String: AgentProtocolQueueItem] = [:]
     for event in events.sorted(by: { $0.sequence < $1.sequence }) {
-        guard IOSAgentStructuredEventKind(eventType: event.type) == .queue else { continue }
+        guard IOSAgentStructuredEventKind(eventType: event.type, payload: event.payload) == .queue else { continue }
         let payload = event.payload ?? [:]
         let action = payload.string("action")?.lowercased() ?? "enqueue"
         let content = payload.string("content")
@@ -2468,9 +2507,9 @@ struct AgentActivityGroup {
     var status: AgentActivityStatus {
         let toolStatuses = entries.compactMap { entry -> String? in
             guard case .tool(let tool) = entry else { return nil }
-            return tool.status
+            return normalizedToolStatus(tool.status)
         }
-        if toolStatuses.contains(where: { $0 == "error" || $0 == "failed" }) { return .failed }
+        if toolStatuses.contains("error") { return .failed }
         if toolStatuses.contains("interrupted") { return .interrupted }
         if toolStatuses.contains("running") { return .running }
         return .completed
@@ -2513,12 +2552,12 @@ struct AgentToolBlock: Identifiable {
     }
 
     var status: String {
-        let values = outputs.compactMap { $0.toolStatus?.lowercased() }
+        let values = outputs.compactMap { normalizedToolStatus($0.toolStatus) }
         if values.contains("error") { return "error" }
         if values.contains("interrupted") { return "interrupted" }
-        if values.contains("running") || values.contains("working") { return "running" }
-        if let callStatus = call.toolStatus?.lowercased(), !callStatus.isEmpty {
-            return callStatus == "working" ? "running" : callStatus
+        if values.contains("running") { return "running" }
+        if let callStatus = normalizedToolStatus(call.toolStatus) {
+            return callStatus
         }
         return outputs.isEmpty ? "running" : "success"
     }
@@ -2557,7 +2596,7 @@ func agentDisplayBlocks(from events: [WarrenRemoteAgentEvent]) -> [AgentDisplayB
     for event in events where !event.isHiddenFromMobile {
         let unfolded = event.normalizedType
         let type = unfolded.replacingOccurrences(of: "-", with: "_")
-        if let kind = IOSAgentStructuredEventKind(eventType: type) {
+        if let kind = IOSAgentStructuredEventKind(eventType: type, payload: event.payload) {
             let identity = structuredDisplayIdentity(for: event, kind: kind)
             // Plan/todo, queue, attachment, and config are persistent
             // metadata trays. Keep their latest snapshots available to the
@@ -4014,7 +4053,7 @@ private struct AgentTechnicalEventBlock: View {
 
     private var payload: [String: WarrenRemoteJSONValue] { event.payload ?? [:] }
     private var kind: String {
-        IOSAgentStructuredEventKind(eventType: event.type)?.rawValue
+        IOSAgentStructuredEventKind(eventType: event.type, payload: event.payload)?.rawValue
             ?? event.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
@@ -4382,7 +4421,7 @@ private struct AgentToolOutputBlock: View {
                         .frame(width: 14, height: 14, alignment: .center)
                     Text(displayToolKind(semanticToolKind(for: event)))
                         .font(IOSTypography.status)
-                        .foregroundStyle(event.toolStatus?.lowercased() == "error" || event.toolStatus?.lowercased() == "failed" ? IOSTheme.red : IOSTheme.secondaryText)
+                        .foregroundStyle(normalizedToolStatus(event.toolStatus) == "error" ? IOSTheme.red : IOSTheme.secondaryText)
                         .lineLimit(1)
                     Text(detail)
                         .font(IOSTypography.metadata)
@@ -4414,9 +4453,12 @@ private struct AgentToolStatusMark: View {
     let status: String
 
     var body: some View {
-        switch status.lowercased() {
-        case "error", "failed", "failure":
-            Image(systemName: "exclamationmark.circle")
+        switch normalizedToolStatus(status) {
+        case "error":
+            // Tool rows use a quiet, borderless failure mark. A circled
+            // exclamation reads like a second status badge and competes with
+            // the activity rail at the parent level.
+            Image(systemName: "xmark")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IOSTheme.red)
                 .frame(width: 14, height: 14, alignment: .center)
@@ -4427,11 +4469,12 @@ private struct AgentToolStatusMark: View {
                 .foregroundStyle(IOSTheme.yellow)
                 .frame(width: 14, height: 14, alignment: .center)
                 .accessibilityLabel("Tool interrupted")
-        case "running", "working", "pending":
-            IOSStatusDot(color: IOSTheme.yellow, size: 6)
-                .frame(width: 14, height: 14, alignment: .center)
-                .accessibilityLabel("Tool running")
-        case "success", "completed", "done":
+        case "running":
+            // Running is already conveyed by the activity's working text and
+            // the parent status rail; leave the trailing column empty instead
+            // of adding a conditional dot to every tool row.
+            EmptyView()
+        case "success":
             Image(systemName: "checkmark")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(IOSTheme.secondaryText.opacity(0.65))
@@ -4440,6 +4483,21 @@ private struct AgentToolStatusMark: View {
         default:
             EmptyView()
         }
+    }
+}
+
+/// Provider transcripts use several spellings for the same tool lifecycle.
+/// Normalize them before aggregating a group so a `failed` output cannot be
+/// mistaken for a successful tool merely because it is not the canonical
+/// `error` spelling.
+private func normalizedToolStatus(_ raw: String?) -> String? {
+    guard let raw else { return nil }
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "error", "failed", "failure", "fail": return "error"
+    case "interrupted", "cancelled", "canceled", "aborted": return "interrupted"
+    case "running", "working", "pending", "in_progress", "in-progress": return "running"
+    case "success", "completed", "complete", "done", "ok": return "success"
+    default: return nil
     }
 }
 
@@ -4921,7 +4979,10 @@ func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
             if let summary = toolSummary(for: event), !summary.isEmpty {
                 return isCmd ? summary : "\(displayToolName(event.toolName)) \(summary)"
             }
-            return displayToolName(event.toolName)
+            // A provider may emit a lifecycle boundary before it has any
+            // invocation payload. Do not turn that empty boundary into a
+            // misleading "Tool"/tool-name status in the working footer.
+            continue
         }
         if type == "tool_output" || type == "tooloutput" {
             let matchingCall: WarrenRemoteAgentEvent? = {
@@ -4937,11 +4998,11 @@ func latestAgentAction(from events: [WarrenRemoteAgentEvent]) -> String? {
                 if let summary = toolSummary(for: callEvent), !summary.isEmpty {
                     return isCmd ? summary : "\(displayToolName(callEvent.toolName)) \(summary)"
                 }
-                return displayToolName(callEvent.toolName)
+                continue
             }
-            if let toolName = event.toolName, !toolName.isEmpty {
-                return displayToolName(toolName)
-            }
+            // An unmatched output with no actionable detail is likewise a
+            // lifecycle-only row. The activity renderer already suppresses
+            // such rows, so the footer should remain quiet too.
         }
     }
     return nil

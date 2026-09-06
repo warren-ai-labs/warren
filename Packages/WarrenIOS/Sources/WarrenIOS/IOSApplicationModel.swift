@@ -212,6 +212,11 @@ public final class IOSApplicationModel: ObservableObject {
     /// routing metadata and must never identify an event replica.
     private var agentReplicaNamespaceStorage: WarrenAgentEventStore.Namespace?
     private var agentExecutionIDBySessionID: [String: String] = [:]
+    /// Canonical turn identities are opaque strings. The legacy roster model
+    /// still exposes a numeric turn for older Hosts, so keep the raw token
+    /// separately for cancellation/steer commands and use the numeric field
+    /// only as a compatibility projection.
+    private var agentTurnIdentifierBySessionID: [String: String] = [:]
     private var agentEventWriteTasks: [String: Task<Void, Never>] = [:]
     private var agentPendingProjectionBySessionID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
     private var agentProjectionSequenceBySessionID: [String: UInt64] = [:]
@@ -366,6 +371,32 @@ public final class IOSApplicationModel: ObservableObject {
         return value
     }
 
+    private func agentTurnIdentifier(for sessionID: String) -> String? {
+        let events = agentState.agentEventsBySessionID[sessionID] ?? []
+        for event in events.reversed() {
+            if let turnID = event.turnID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !turnID.isEmpty {
+                return turnID
+            }
+            if case .string(let turnID) = event.payload?["turnId"],
+               !turnID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return turnID.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let turn = event.turn, turn > 0 {
+                return String(turn)
+            }
+        }
+        if let turnID = agentTurnIdentifierBySessionID[sessionID]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !turnID.isEmpty {
+            return turnID
+        }
+        if let turn = agentTurnBySessionID[sessionID]?.id, turn > 0 {
+            return String(turn)
+        }
+        return nil
+    }
+
     private func sessionID(forAgentExecutionID executionID: String) -> String? {
         let value = executionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
@@ -420,6 +451,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentEventErrorBySessionID.removeAll()
         agentProjectionSequenceBySessionID.removeAll()
         agentPendingProjectionBySessionID.removeAll()
+        agentTurnIdentifierBySessionID.removeAll()
         terminalFocusGeneration &+= 1
         terminalFocusRequestsBySessionID.removeAll()
         let client = client
@@ -892,6 +924,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentEventErrorBySessionID.removeAll()
         agentProjectionSequenceBySessionID.removeAll()
         agentPendingProjectionBySessionID.removeAll()
+        agentTurnIdentifierBySessionID.removeAll()
         agentStatusBySessionID = [:]
         agentTurnBySessionID = [:]
         agentCapabilities = []
@@ -991,6 +1024,7 @@ public final class IOSApplicationModel: ObservableObject {
             agentPendingProjectionBySessionID.removeAll()
             agentStatusBySessionID = [:]
             agentTurnBySessionID = [:]
+            agentTurnIdentifierBySessionID = [:]
             agentCapabilities = []
             agentActionError = nil
             displayModeBySessionID = [:]
@@ -1784,10 +1818,7 @@ public final class IOSApplicationModel: ObservableObject {
               let sessionID = currentSessionID,
               let status = agentStatus(for: sessionID),
               status.activity == .working else { return false }
-        let turn = agentTurnBySessionID[sessionID]?.id
-            ?? agentEventsBySessionID[sessionID]?.last?.turn
-            ?? 0
-        return turn > 0
+        return agentTurnIdentifier(for: sessionID) != nil
     }
 
     private func beginAgentInterrupt(for sessionID: String) -> String? {
@@ -1909,10 +1940,8 @@ public final class IOSApplicationModel: ObservableObject {
               let sessionID = currentSessionID,
               let executionID = agentExecutionID(for: sessionID),
               let status = agentStatus(for: sessionID), status.activity == .working else { return false }
-        let turn = agentTurnBySessionID[sessionID]?.id
-            ?? agentEventsBySessionID[sessionID]?.last?.turn
-            ?? 0
-        guard turn > 0, let token = beginAgentInterrupt(for: sessionID) else { return false }
+        guard let turn = agentTurnIdentifier(for: sessionID),
+              let token = beginAgentInterrupt(for: sessionID) else { return false }
         let selectionGeneration = sessionSelectionGeneration
         let currentClientGeneration = clientGeneration
         let client = client
@@ -1926,7 +1955,7 @@ public final class IOSApplicationModel: ObservableObject {
                     // response replay the durable result instead of issuing a
                     // second interrupt.
                     commandID: "cancel-\(executionID)-\(turn)",
-                    turnID: String(turn),
+                    turnID: turn,
                     reason: "cancel"
                 )
                 await MainActor.run {
@@ -1963,8 +1992,7 @@ public final class IOSApplicationModel: ObservableObject {
               let executionID = agentExecutionID(for: sessionID),
               hasControlLease,
               let status = agentStatus(for: sessionID), status.activity == .working,
-              let turn = agentTurnBySessionID[sessionID]?.id ?? agentEventsBySessionID[sessionID]?.last?.turn,
-              turn > 0,
+              let turn = agentTurnIdentifier(for: sessionID),
               !agentMessageSubmissionsInFlight.contains(sessionID),
               let interruptToken = beginAgentInterrupt(for: sessionID) else { return false }
         guard attachments.isEmpty || supportsAgentCapability(WarrenRemoteAgentCapability.attachments) else {
@@ -1989,7 +2017,7 @@ public final class IOSApplicationModel: ObservableObject {
                 let result = try await client.steerAgentTurn(
                     executionID: executionID,
                     commandID: item.id,
-                    turnID: String(turn),
+                    turnID: turn,
                     text: value,
                     attachments: attachments
                 )
@@ -2679,6 +2707,7 @@ public final class IOSApplicationModel: ObservableObject {
         agentPendingProjectionBySessionID.removeValue(forKey: sessionID)
         agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
         agentExecutionIDBySessionID.removeValue(forKey: sessionID)
+        agentTurnIdentifierBySessionID.removeValue(forKey: sessionID)
         agentSubscribedSessionIDs.remove(sessionID)
         terminalState.terminalOutputBySessionID.removeValue(forKey: sessionID)
         terminalState.terminalOutputRevisionBySessionID[sessionID, default: 0] &+= 1
@@ -3228,9 +3257,13 @@ public final class IOSApplicationModel: ObservableObject {
            let status = try? JSONDecoder().decode(WarrenRemoteAgentStatus.self, from: data) {
             agentStatusBySessionID[sessionID] = status
         }
-        if let turnID = string("turnId").flatMap(UInt64.init), turnID > 0 {
-            let turnStatus = WarrenRemoteAgentTurnStatus(rawValue: string("turnStatus") ?? "unknown")
-            agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: turnStatus)
+        if let turnID = string("turnId")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !turnID.isEmpty {
+            agentTurnIdentifierBySessionID[sessionID] = turnID
+            if let numericTurnID = UInt64(turnID), numericTurnID > 0 {
+                let turnStatus = WarrenRemoteAgentTurnStatus(rawValue: string("turnStatus") ?? "unknown")
+                agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: numericTurnID, status: turnStatus)
+            }
         }
         mergeCanonicalAgentEvents([], sessionID: sessionID, prepend: false)
     }
@@ -3250,6 +3283,7 @@ public final class IOSApplicationModel: ObservableObject {
             agentProjectionSequenceBySessionID.removeValue(forKey: sessionID)
             agentPendingProjectionBySessionID.removeValue(forKey: sessionID)
             agentHighestSequenceBySessionID.removeValue(forKey: sessionID)
+            agentTurnIdentifierBySessionID.removeValue(forKey: sessionID)
             historyCursorBySessionID.removeValue(forKey: sessionID)
             historyHasMoreBySessionID.removeValue(forKey: sessionID)
             historyLoadedBySessionID.remove(sessionID)
@@ -3284,13 +3318,17 @@ public final class IOSApplicationModel: ObservableObject {
                 if !cached.isEmpty {
                     let existing = self.agentState.agentEventsBySessionID[sessionID] ?? []
                     if existing.isEmpty {
-                        let projected = cached.map { self.projectCanonicalEvent($0) }
-                        self.agentState.agentEventsBySessionID[sessionID] = projected
-                        var keys = self.agentEventKeysBySessionID[sessionID] ?? []
-                        for event in projected {
-                            keys.insert("0:\(event.sequence)")
-                        }
-                        self.agentEventKeysBySessionID[sessionID] = keys
+                        // Reuse the normal reducer for the cached tail so
+                        // message/reasoning lifecycle rows are coalesced just
+                        // like live delivery. The cache is a raw canonical
+                        // replica; projecting it with a direct array
+                        // assignment would reintroduce one bubble per delta.
+                        self.mergeCanonicalAgentEvents(
+                            cached,
+                            sessionID: sessionID,
+                            prepend: false
+                        )
+                        let projected = self.agentState.agentEventsBySessionID[sessionID] ?? []
                         if let maxSeq = projected.map(\.sequence).max() {
                             self.agentHighestSequenceBySessionID[sessionID] = max(
                                 self.agentHighestSequenceBySessionID[sessionID] ?? 0,
@@ -3300,7 +3338,6 @@ public final class IOSApplicationModel: ObservableObject {
                         if self.historyCursorBySessionID[sessionID] == nil, let minSeq = projected.map(\.sequence).min() {
                             self.historyCursorBySessionID[sessionID] = minSeq
                         }
-                        self.agentState.agentEventRevisionBySessionID[sessionID, default: 0] &+= 1
                     }
                 }
                 return self.agentReplicaNamespace == namespace
@@ -3447,6 +3484,7 @@ public final class IOSApplicationModel: ObservableObject {
                         self.agentEventKeysBySessionID.removeAll()
                         self.agentHighestSequenceBySessionID.removeAll()
                         self.agentExecutionIDBySessionID.removeAll()
+                        self.agentTurnIdentifierBySessionID.removeAll()
                         self.historyCursorBySessionID.removeAll()
                         self.historyHasMoreBySessionID.removeAll()
                         self.historyLoadedBySessionID.removeAll()
@@ -3695,7 +3733,11 @@ public final class IOSApplicationModel: ObservableObject {
             toolStatus = string("toolStatus") ?? toolStatus
                 ?? (canonicalType == "tool.failed" ? "error" : canonicalType == "tool.completed" ? "success" : "running")
         case "interaction.requested", "interaction.resolved", "interaction.expired":
-            type = string("kind") ?? "question"
+            switch string("kind")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "permission", "approval": type = "permission"
+            case "confirmation", "confirm": type = "confirmation"
+            default: type = "question"
+            }
             id = interactionID ?? id
             if payload["requestId"] == nil, let interactionID {
                 payload["requestId"] = .string(interactionID)
@@ -3728,6 +3770,10 @@ public final class IOSApplicationModel: ObservableObject {
             // remain out of the transcript as control-plane metadata.
             type = "attention"
             content = string("reason") ?? content
+        case "activity.updated":
+            type = "activity"
+            id = string("activityId") ?? id
+            content = string("content") ?? string("detail") ?? string("summary") ?? string("label") ?? content
         case "turn.started", "turn.completed", "turn.failed", "turn.cancelled":
             type = "turn"
             id = string("turnId") ?? id
@@ -3751,6 +3797,10 @@ public final class IOSApplicationModel: ObservableObject {
             type = "config"
             id = string("configId") ?? "config"
             content = string("summary") ?? content
+            // Config snapshots are composer metadata, not timeline cards. A
+            // reported model still needs to flow through the legacy projection
+            // so the composer label reflects the latest Host fact.
+            model = string("model") ?? model
         case "compaction.updated":
             type = "compaction"
             id = string("compactionId") ?? "compaction"
@@ -3792,6 +3842,7 @@ public final class IOSApplicationModel: ObservableObject {
             eventID: event.eventID,
             streamID: event.streamID,
             executionID: event.executionID,
+            turnID: event.turnID ?? string("turnId"),
             turn: event.turn,
             id: id,
             provider: event.provider,
@@ -3862,8 +3913,15 @@ public final class IOSApplicationModel: ObservableObject {
             let status: WarrenRemoteAgentTurnStatus = rawStatus == "cancelled"
                 ? .aborted
                 : WarrenRemoteAgentTurnStatus(rawValue: rawStatus)
-            let turnID = event.turn ?? 0
-            agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: turnID, status: status)
+            let turnID = event.turnID?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? string("turnId")?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? event.turn.map(String.init)
+            if let turnID, !turnID.isEmpty {
+                agentTurnIdentifierBySessionID[sessionID] = turnID
+                if let numericTurnID = UInt64(turnID), numericTurnID > 0 {
+                    agentTurnBySessionID[sessionID] = WarrenRemoteAgentTurn(id: numericTurnID, status: status)
+                }
+            }
         default:
             break
         }
@@ -3930,9 +3988,11 @@ public final class IOSApplicationModel: ObservableObject {
         for existing in events {
             knownSequences.insert(existing.sequence)
         }
-        // Fold key for content-delta matching (same predicate as the previous
-        // lastIndex scan: type + id). Prepend batches insert at index 0 and
-        // shift every position, so the map is only valid for append merges.
+        // Fold key for message/reasoning lifecycle updates (type + stable ID).
+        // Prepend batches insert at index 0 and shift every position, so the
+        // map is only valid for append merges. Never fold an event without an
+        // ID: equal empty IDs are not a safe identity for two independent
+        // provider messages.
         var deltaIndexByKey: [String: Int] = [:]
         if !prepend {
             deltaIndexByKey.reserveCapacity(events.count)
@@ -3946,59 +4006,78 @@ public final class IOSApplicationModel: ObservableObject {
             if event.sequence > (agentHighestSequenceBySessionID[sessionID] ?? 0) {
                 agentHighestSequenceBySessionID[sessionID] = event.sequence
             }
-            // Fold any provider's content-delta events by (type,id) key so streaming replies do not
-            // produce a bubble per database poll. Seed events have contentDelta=false; later updates
-            // carry contentDelta=true and append to the accumulated content.
-            if event.contentDelta {
+            // Sequence positions are immutable. Check this before the
+            // message-lifecycle fold so a replayed delta cannot append its
+            // text a second time when it arrived from the cached tail.
+            if keys.contains(key) || knownSequences.contains(event.sequence) {
+                keys.insert(key)
+                continue
+            }
+            let normalizedType = event.type
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let isCoalescibleMessage = ["user", "assistant", "message", "reasoning"].contains(normalizedType)
+            // Fold provider message/reasoning lifecycle updates by (type,id)
+            // so a created → delta* → completed sequence remains one row.
+            // Deltas append; a non-delta completion replaces the content when
+            // it supplies a final value while retaining the original row's
+            // sequence (the point where the message first appeared).
+            if isCoalescibleMessage, !event.id.isEmpty {
                 let foldIndex: Int? = {
-                    if prepend || event.id.isEmpty {
-                        return events.lastIndex(where: {
-                            $0.id == event.id && $0.type == event.type
-                        })
-                    }
+                    if prepend { return events.lastIndex(where: { $0.id == event.id && $0.type == event.type }) }
                     return deltaIndexByKey["\(event.type)\u{1F}\(event.id)"]
                 }()
                 if let index = foldIndex {
                     let existing = events[index]
                     // Sequence-deduplicate before merging deltas to avoid processing the same update twice.
                     if keys.contains(key) { continue }
+                    var mergedPayload = existing.payload ?? [:]
+                    for (payloadKey, payloadValue) in event.payload ?? [:] {
+                        mergedPayload[payloadKey] = payloadValue
+                    }
+                    let mergedContent: String? = {
+                        guard let incoming = event.content else { return existing.content }
+                        if event.contentDelta { return (existing.content ?? "") + incoming }
+                        return incoming.isEmpty ? existing.content : incoming
+                    }()
                     let merged = WarrenRemoteAgentEvent(
-                        sequence: max(existing.sequence, event.sequence),
-                    turn: event.turn ?? existing.turn,
-                    id: event.id,
-                    provider: event.provider.isEmpty ? existing.provider : event.provider,
-                    type: event.type,
-                    role: event.role ?? existing.role,
-                    content: (existing.content ?? "") + (event.content ?? ""),
-                    contentDelta: false,
-                    model: event.model ?? existing.model,
-                    stopReason: event.stopReason ?? existing.stopReason,
-                    toolName: event.toolName ?? existing.toolName,
-                    toolInput: event.toolInput ?? existing.toolInput,
-                    toolStatus: event.toolStatus ?? existing.toolStatus,
-                    callID: event.callID ?? existing.callID,
-                    output: (existing.output ?? "") + (event.output ?? ""),
-                    files: event.files ?? existing.files,
-                    error: event.error ?? existing.error,
-                    usage: event.usage ?? existing.usage,
-                    durationMs: event.durationMs ?? existing.durationMs,
-                    sidechain: event.sidechain || existing.sidechain,
-                    timestamp: event.timestamp ?? existing.timestamp,
-                    payload: event.payload ?? existing.payload
-                )
-                events[index] = merged
-                keys.insert(key)
-                knownSequences.insert(merged.sequence)
-                if merged.sequence != existing.sequence {
-                    needsSort = true
+                        sequence: existing.sequence,
+                        eventID: existing.eventID.isEmpty ? event.eventID : existing.eventID,
+                        streamID: event.streamID ?? existing.streamID,
+                        executionID: event.executionID ?? existing.executionID,
+                        turnID: event.turnID ?? existing.turnID,
+                        turn: event.turn ?? existing.turn,
+                        id: event.id,
+                        provider: event.provider.isEmpty ? existing.provider : event.provider,
+                        type: event.type,
+                        role: event.role ?? existing.role,
+                        content: mergedContent,
+                        contentDelta: false,
+                        model: event.model ?? existing.model,
+                        stopReason: event.stopReason ?? existing.stopReason,
+                        toolName: event.toolName ?? existing.toolName,
+                        toolInput: event.toolInput ?? existing.toolInput,
+                        toolStatus: event.toolStatus ?? existing.toolStatus,
+                        callID: event.callID ?? existing.callID,
+                        output: event.contentDelta ? (existing.output ?? "") + (event.output ?? "") : (event.output ?? existing.output),
+                        files: event.files ?? existing.files,
+                        error: event.error ?? existing.error,
+                        usage: event.usage ?? existing.usage,
+                        durationMs: event.durationMs ?? existing.durationMs,
+                        sidechain: event.sidechain || existing.sidechain,
+                        timestamp: event.timestamp ?? existing.timestamp,
+                        occurredAt: event.occurredAt ?? existing.occurredAt,
+                        recordedAt: event.recordedAt ?? existing.recordedAt,
+                        causedBy: event.causedBy ?? existing.causedBy,
+                        origin: event.origin ?? existing.origin,
+                        payload: mergedPayload.isEmpty ? nil : mergedPayload
+                    )
+                    events[index] = merged
+                    keys.insert(key)
+                    knownSequences.insert(event.sequence)
+                    didChange = true
+                    continue
                 }
-                didChange = true
-                continue
-                }
-            }
-            if keys.contains(key) || knownSequences.contains(event.sequence) {
-                keys.insert(key)
-                continue
             }
             if prepend {
                 events.insert(event, at: 0)
@@ -4074,6 +4153,7 @@ public final class IOSApplicationModel: ObservableObject {
             agentProjectionSequenceBySessionID.removeValue(forKey: session.id)
             agentPendingProjectionBySessionID.removeValue(forKey: session.id)
             agentHighestSequenceBySessionID.removeValue(forKey: session.id)
+            agentTurnIdentifierBySessionID.removeValue(forKey: session.id)
             historyCursorBySessionID.removeValue(forKey: session.id)
             historyHasMoreBySessionID.removeValue(forKey: session.id)
             historyLoadedBySessionID.remove(session.id)
@@ -4097,9 +4177,23 @@ public final class IOSApplicationModel: ObservableObject {
         var nextStatus: [String: WarrenRemoteAgentStatus] = [:]
         var nextTurn: [String: WarrenRemoteAgentTurn] = [:]
         var nextCapabilities: [String: Set<String>] = [:]
+        var nextTurnIdentifiers: [String: String] = [:]
         for session in next.sessions {
             if let status = session.agentStatus { nextStatus[session.id] = status }
-            if let turn = session.agentTurn { nextTurn[session.id] = turn }
+            if let turn = session.agentTurn {
+                nextTurn[session.id] = turn
+                if let existingTurnID = agentTurnIdentifierBySessionID[session.id],
+                   UInt64(existingTurnID) == nil {
+                    // A canonical opaque token is more precise than the
+                    // legacy numeric roster projection; retain it for later
+                    // command targeting while the numeric view stays intact.
+                    nextTurnIdentifiers[session.id] = existingTurnID
+                } else {
+                    nextTurnIdentifiers[session.id] = String(turn.id)
+                }
+            } else if let turnID = agentTurnIdentifierBySessionID[session.id], !turnID.isEmpty {
+                nextTurnIdentifiers[session.id] = turnID
+            }
             if let capabilities = session.agentCapabilities {
                 nextCapabilities[session.id] = Set(capabilities)
             }
@@ -4109,6 +4203,9 @@ public final class IOSApplicationModel: ObservableObject {
         }
         if nextTurn != agentTurnBySessionID {
             agentTurnBySessionID = nextTurn
+        }
+        if nextTurnIdentifiers != agentTurnIdentifierBySessionID {
+            agentTurnIdentifierBySessionID = nextTurnIdentifiers
         }
         if nextCapabilities != agentCapabilitiesBySessionID {
             agentCapabilitiesBySessionID = nextCapabilities

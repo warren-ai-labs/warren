@@ -170,6 +170,106 @@ final class IOSToolFormattingTests: XCTestCase {
         XCTAssertEqual(latestAgentAction(from: [callEvent, outputEvent]), "Read file main.go")
     }
 
+    func testEmptyToolLifecycleBoundaryDoesNotProduceAnAction() {
+        let event = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "shell",
+            callID: "call-empty"
+        )
+        XCTAssertNil(latestAgentAction(from: [event]))
+    }
+
+    func testFailedToolOutputAggregatesAsFailedActivity() {
+        let call = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "tool_call",
+            toolName: "shell",
+            toolInput: .object(["command": .string("make test")]),
+            callID: "call-failed"
+        )
+        let output = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "tool_output",
+            toolName: "shell",
+            toolStatus: "failed",
+            callID: "call-failed",
+            output: "compile error"
+        )
+
+        let blocks = agentDisplayBlocks(from: [call, output])
+        guard case .activity(let group) = blocks.first,
+              case .tool(let tool) = group.entries.first else {
+            return XCTFail("Expected a failed tool activity")
+        }
+        XCTAssertEqual(tool.status, "error")
+        guard case .failed = group.status else {
+            return XCTFail("Expected the activity status to be failed")
+        }
+    }
+
+    func testCanonicalStructuredKindsAndReducerProjection() {
+        XCTAssertEqual(
+            IOSAgentStructuredEventKind(
+                eventType: "interaction.requested",
+                payload: ["kind": .string("approval")]
+            ),
+            .permission
+        )
+        XCTAssertEqual(
+            IOSAgentStructuredEventKind(eventType: "tasks.updated"),
+            .todo
+        )
+
+        var reducer = IOSAgentTimelineReducer(epoch: 3)
+        reducer.apply(epoch: 3, events: [
+            WarrenRemoteAgentEvent(
+                sequence: 1,
+                eventID: "evt-interaction",
+                streamID: "exec-1",
+                executionID: "exec-1",
+                turnID: "turn-008",
+                id: "evt-interaction",
+                type: "interaction.requested",
+                payload: [
+                    "interactionId": .string("int-1"),
+                    "kind": .string("permission"),
+                    "state": .string("pending"),
+                ]
+            ),
+            WarrenRemoteAgentEvent(
+                sequence: 2,
+                eventID: "evt-tasks",
+                streamID: "exec-1",
+                executionID: "exec-1",
+                id: "evt-tasks",
+                type: "tasks.updated",
+                payload: ["taskListId": .string("tasks-1")]
+            ),
+            WarrenRemoteAgentEvent(
+                sequence: 3,
+                eventID: "evt-activity",
+                streamID: "exec-1",
+                executionID: "exec-1",
+                id: "evt-activity",
+                type: "activity.updated",
+                payload: ["activityId": .string("activity-1"), "label": .string("Running")]
+            ),
+        ])
+
+        XCTAssertEqual(reducer.lastSequence, 3)
+        XCTAssertEqual(reducer.structuredEvents.map(\.event.type), [
+            "interaction.requested",
+            "tasks.updated",
+            "activity.updated",
+        ])
+        XCTAssertEqual(reducer.structuredEvents.map(\.stableID), [
+            "evt-interaction",
+            "evt-tasks",
+            "evt-activity",
+        ])
+    }
+
     func testToolOutputCorrelatesAcrossFlushedActivityBlocks() {
         let call = WarrenRemoteAgentEvent(
             sequence: 1,
@@ -250,4 +350,3 @@ final class IOSToolFormattingTests: XCTestCase {
         XCTAssertEqual(event.content, "Hello world")
     }
 }
-

@@ -10,7 +10,7 @@ public enum IOSAgentStructuredEventKind: String, CaseIterable, Sendable {
     /// Accept both the legacy projected kind (`plan`) and the canonical event
     /// suffix (`plan.updated`). The transport decoder intentionally keeps
     /// canonical types opaque, so this normalization belongs in the read model.
-    public init?(eventType: String) {
+    public init?(eventType: String, payload: [String: WarrenRemoteJSONValue]? = nil) {
         let normalized = eventType
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -22,7 +22,26 @@ public enum IOSAgentStructuredEventKind: String, CaseIterable, Sendable {
         // `tasks.updated` is the historical wire spelling for the todo card.
         // Keep the projection vocabulary singular even when a Host replays
         // that older canonical event name.
-        self.init(rawValue: suffixStripped == "tasks" ? "todo" : suffixStripped)
+        let resolvedRawValue: String
+        if ["interaction_requested", "interaction_resolved", "interaction_expired"].contains(suffixStripped) {
+            let rawKind: String? = {
+                guard case .string(let value) = payload?["kind"] else { return nil }
+                return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }()
+            switch rawKind {
+            case "permission", "approval": resolvedRawValue = "permission"
+            case "confirmation", "confirm": resolvedRawValue = "confirmation"
+            default: resolvedRawValue = "question"
+            }
+        } else {
+            switch suffixStripped {
+            case "tasks": resolvedRawValue = "todo"
+            case "approval": resolvedRawValue = "permission"
+            case "confirm": resolvedRawValue = "confirmation"
+            default: resolvedRawValue = suffixStripped
+            }
+        }
+        self.init(rawValue: resolvedRawValue)
     }
 
     public var isComposerMetadata: Bool {
@@ -108,7 +127,7 @@ public struct IOSAgentTimelineReducer: Sendable {
     public var structuredEvents: [IOSAgentTimelineEvent] {
         var byID: [String: IOSAgentTimelineEvent] = [:]
         for event in events {
-            guard let kind = IOSAgentStructuredEventKind(eventType: event.type) else { continue }
+            guard let kind = IOSAgentStructuredEventKind(eventType: event.type, payload: event.payload) else { continue }
             let row = IOSAgentTimelineEvent(epoch: epoch ?? 0, event: event)
             // Updates carry a new sequence but the same stable ID. The latest
             // complete payload is the one a card should display.

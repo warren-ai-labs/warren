@@ -1280,7 +1280,21 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world!")
 
-        // 4. Duplicate sequence delivery does not duplicate content
+        // 4. A completed lifecycle event replaces the streamed content in
+        // place and keeps the row anchored at its original sequence.
+        await task.enqueue(.text(
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-4\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":4,\"type\":\"message.completed\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\"Hello world!\",\"stopReason\":\"stop\"}}]}"
+        ))
+        for _ in 0..<200 {
+            if model.agentEventsBySessionID[sessionID]?.first?.stopReason == "stop" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.sequence, 1)
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world!")
+        XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.stopReason, "stop")
+
+        // 5. Duplicate sequence delivery does not duplicate content
         await task.enqueue(.text(
             "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-3\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":3,\"type\":\"message.delta\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-1\",\"role\":\"assistant\",\"content\":\"!\"}}]}"
         ))
@@ -1288,9 +1302,9 @@ final class IOSPersistenceTests: XCTestCase {
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.count, 1)
         XCTAssertEqual(model.agentEventsBySessionID[sessionID]?.first?.content, "Hello world!")
 
-        // 5. New independent message creates a second event
+        // 6. New independent message creates a second event
         await task.enqueue(.text(
-            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-4\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":4,\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-2\",\"role\":\"assistant\",\"content\":\"Next\"}}]}"
+            "{\"t\":\"agent.events\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"events\":[{\"eventId\":\"evt-delta-5\",\"streamId\":\"exec-deltas\",\"executionId\":\"exec-deltas\",\"sequence\":5,\"type\":\"message.created\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"recordedAt\":\"2026-01-01T00:00:00Z\",\"origin\":{\"kind\":\"host\",\"confidence\":\"native\"},\"payload\":{\"messageId\":\"msg-2\",\"role\":\"assistant\",\"content\":\"Next\"}}]}"
         ))
         for _ in 0..<200 {
             if (model.agentEventsBySessionID[sessionID]?.count ?? 0) >= 2 { break }
