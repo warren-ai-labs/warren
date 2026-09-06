@@ -2485,9 +2485,12 @@ private extension WarrenRemoteAgentEvent {
     }
 
     var isHiddenFromMobile: Bool {
-        let type = normalizedType.replacingOccurrences(of: "-", with: "_")
+        let type = normalizedType
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
         // Hidden events are those that don't contribute to conversation or activity state:
-        // compaction (UI manages separately), usage/token stats, and system_instructions.
+        // compaction (UI manages separately), usage/token stats, system_instructions,
+        // and host-level control plane projections (status, turn, execution).
         return type == "compaction"
             || type == "compact"
             || type == "compacted"
@@ -2496,6 +2499,12 @@ private extension WarrenRemoteAgentEvent {
             || type == "token_count"
             || type.hasSuffix("_usage")
             || type == "system_instructions"
+            || type == "status"
+            || type == "status_changed"
+            || type == "turn"
+            || type.hasPrefix("turn_")
+            || type == "execution"
+            || type.hasPrefix("execution_")
     }
 
     var hasRenderableActivityContent: Bool {
@@ -2597,6 +2606,10 @@ private struct AgentEventBlock: View {
                 content: event.content ?? event.output ?? event.error ?? "",
                 contentFont: IOSTypography.metadata
             )
+        } else if ["status", "status_changed", "turn", "execution"].contains(normalizedType.replacingOccurrences(of: ".", with: "_"))
+            || normalizedType.replacingOccurrences(of: ".", with: "_").hasPrefix("turn_")
+            || normalizedType.replacingOccurrences(of: ".", with: "_").hasPrefix("execution_") {
+            EmptyView()
         } else {
             eventBody
                 .padding(.vertical, 7)
@@ -2641,7 +2654,7 @@ private struct AgentEventBlock: View {
     private var isSecondaryMetadata: Bool {
         guard !event.isAssistantEvent else { return false }
         switch normalizedType.replacingOccurrences(of: "-", with: "_") {
-        case "metadata", "notice", "info", "status", "unknown", "event": return true
+        case "metadata", "notice", "info", "unknown", "event": return true
         default: return false
         }
     }

@@ -214,5 +214,40 @@ final class IOSToolFormattingTests: XCTestCase {
         }
         XCTAssertEqual(event.content, "Searching files...")
     }
+
+    func testControlPlaneEventsAreHiddenFromTimeline() {
+        let statusEvent = WarrenRemoteAgentEvent(
+            sequence: 1,
+            type: "status",
+            content: "stalled"
+        )
+        let statusChangedEvent = WarrenRemoteAgentEvent(
+            sequence: 2,
+            type: "status.changed",
+            content: "working"
+        )
+        let turnEvent = WarrenRemoteAgentEvent(
+            sequence: 3,
+            type: "turn.started",
+            content: "working"
+        )
+        let executionEvent = WarrenRemoteAgentEvent(
+            sequence: 4,
+            type: "execution.started",
+            content: "running"
+        )
+        let assistantMessage = WarrenRemoteAgentEvent(
+            sequence: 5,
+            type: "assistant",
+            content: "Hello world"
+        )
+        let blocks = agentDisplayBlocks(from: [statusEvent, statusChangedEvent, turnEvent, executionEvent, assistantMessage])
+        XCTAssertEqual(blocks.count, 1)
+        guard case .event(let event) = blocks[0] else {
+            XCTFail("Expected only the assistant message block")
+            return
+        }
+        XCTAssertEqual(event.content, "Hello world")
+    }
 }
 

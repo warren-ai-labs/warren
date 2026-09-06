@@ -139,6 +139,25 @@ export function isStructuredAgentEvent(event) {
   return agentStructuredEventTypes.has(normalizeAgentEventType(event?.type));
 }
 
+/** Returns true for events that should not be displayed in the conversation message stream. */
+export function isHiddenAgentEvent(event) {
+  const type = normalizeAgentEventType(event?.type).replaceAll(".", "_");
+  return type === "compaction"
+    || type === "compact"
+    || type === "compacted"
+    || type === "usage"
+    || type === "token_usage"
+    || type === "token_count"
+    || type.endsWith("_usage")
+    || type === "system_instructions"
+    || type === "status"
+    || type === "status_changed"
+    || type === "turn"
+    || type.startsWith("turn_")
+    || type === "execution"
+    || type.startsWith("execution_");
+}
+
 /** Formats wire model identifiers for compact human-facing metadata. */
 export function formatAgentModel(raw) {
   const value = String(raw || "").trim();
