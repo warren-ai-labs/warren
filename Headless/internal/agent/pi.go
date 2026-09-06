@@ -324,6 +324,11 @@ type piMessage struct {
 	ExitCode  int    `json:"exitCode"`
 	Cancelled bool   `json:"cancelled"`
 	Truncated bool   `json:"truncated"`
+	Details   struct {
+		Diff             string `json:"diff"`
+		Patch            string `json:"patch"`
+		FirstChangedLine int    `json:"firstChangedLine"`
+	} `json:"details"`
 	// custom message fields.
 	CustomType string `json:"customType"`
 	Display    bool   `json:"display"`
@@ -623,7 +628,7 @@ func (p *piParser) parsePiToolResult(record piRecord, message piMessage, model s
 	if message.IsError {
 		status = "error"
 	}
-	return []api.AgentEvent{{
+	event := api.AgentEvent{
 		Provider:   piProvider,
 		ID:         record.ID,
 		Type:       "tool_output",
@@ -633,7 +638,29 @@ func (p *piParser) parsePiToolResult(record piRecord, message piMessage, model s
 		Output:     output,
 		Model:      model,
 		Timestamp:  timestamp,
-	}}
+	}
+	diffText := firstNonEmpty(message.Details.Diff, message.Details.Patch)
+	if diffText != "" {
+		adds, dels := parseUnifiedDiffStats(diffText)
+		diffPayload := map[string]any{
+			"additions": adds,
+			"deletions": dels,
+			"diff":      diffText,
+			"callId":    callID,
+		}
+		event.Payload = map[string]any{"diff": diffPayload}
+		return []api.AgentEvent{
+			event,
+			{
+				Provider:  piProvider,
+				ID:        record.ID,
+				Type:      "diff",
+				Payload:   diffPayload,
+				Timestamp: timestamp,
+			},
+		}
+	}
+	return []api.AgentEvent{event}
 }
 
 // parsePiBash projects pi's user-invoked `!`/`!!` shell execution record as a

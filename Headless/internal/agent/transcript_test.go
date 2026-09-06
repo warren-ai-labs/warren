@@ -1665,5 +1665,91 @@ func TestRealDataOpenCodePlayback(t *testing.T) {
 	t.Logf("Replayed OpenCode %s: %d total events, breakdown: %+v", sessionID, totalEvents, typeCounts)
 }
 
+func TestDiffAndDiagnosticsNormalization_Claude(t *testing.T) {
+	parser := newParser("claude")
+	line := `{"type":"tool_result","timestamp":"2026-09-06T10:00:00Z","tool_name":"edit","tool_output":{"filediff":{"file":"/test/app.go","additions":5,"deletions":2},"diff":"--- a/app.go\n+++ b/app.go\n@@ -1,3 +1,6 @@\n+line1\n+line2\n-old\n","diagnostics":{"/test/app.go":[{"range":{"start":{"line":10,"character":2},"end":{"line":10,"character":8}},"severity":1,"message":"syntax error","source":"compiler","code":"syntax"}]}}}`
+	events := parser.Parse([]byte(line))
+	if len(events) < 3 {
+		t.Fatalf("expected tool_output, diff, and diagnostics events, got %d", len(events))
+	}
+
+	var foundDiff, foundDiag bool
+	for _, e := range events {
+		if e.Type == "diff" {
+			foundDiff = true
+			if e.Payload["file"] != "/test/app.go" || e.Payload["additions"] != 5 || e.Payload["deletions"] != 2 {
+				t.Fatalf("unexpected diff payload: %+v", e.Payload)
+			}
+			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 1, time.Now())
+			if canon.Type != "diff.updated" {
+				t.Fatalf("canonical diff type = %q, want diff.updated", canon.Type)
+			}
+		}
+		if e.Type == "diagnostics" {
+			foundDiag = true
+			diags, ok := e.Payload["diagnostics"].([]api.AgentDiagnostic)
+			if !ok || len(diags) == 0 {
+				t.Fatalf("expected diagnostics slice in payload, got %+v", e.Payload)
+			}
+			if diags[0].Severity != "error" || diags[0].Line != 10 || diags[0].Message != "syntax error" {
+				t.Fatalf("unexpected diagnostic item: %+v", diags[0])
+			}
+			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 2, time.Now())
+			if canon.Type != "diagnostics.updated" {
+				t.Fatalf("canonical diagnostics type = %q, want diagnostics.updated", canon.Type)
+			}
+		}
+	}
+	if !foundDiff || !foundDiag {
+		t.Fatalf("foundDiff=%v, foundDiag=%v, want both true", foundDiff, foundDiag)
+	}
+}
+
+func TestDiffNormalization_Codex(t *testing.T) {
+	parser := newParser("codex")
+	line := `{"timestamp":"2026-09-06T10:00:00Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call_123","changes":{"/test/server.go":{"type":"update","unified_diff":"--- a/server.go\n+++ b/server.go\n@@ -1,2 +1,4 @@\n+import \"fmt\"\n+func Run() {}\n-func Old() {}\n"}}}}`
+	events := parser.Parse([]byte(line))
+	if len(events) != 1 || events[0].Type != "diff" {
+		t.Fatalf("expected 1 diff event, got %+v", events)
+	}
+	diffEvent := events[0]
+	if diffEvent.Payload["file"] != "/test/server.go" {
+		t.Fatalf("unexpected file: %+v", diffEvent.Payload)
+	}
+	if diffEvent.Payload["additions"] != 2 || diffEvent.Payload["deletions"] != 1 {
+		t.Fatalf("unexpected adds/dels: %+v", diffEvent.Payload)
+	}
+	canon := api.CanonicalAgentEventFromLegacy(diffEvent, "stream-1", "exec-1", 1, time.Now())
+	if canon.Type != "diff.updated" {
+		t.Fatalf("canonical type = %q, want diff.updated", canon.Type)
+	}
+}
+
+func TestDiffNormalization_Pi(t *testing.T) {
+	parser := newParser("pi")
+	line := `{"type":"message","id":"m1","timestamp":"2026-09-06T10:00:00Z","message":{"role":"toolResult","toolCallId":"c1","toolName":"edit","content":"ok","details":{"diff":"--- a/main.go\n+++ b/main.go\n+new line\n-old line\n"}}}`
+	events := parser.Parse([]byte(line))
+	if len(events) < 2 {
+		t.Fatalf("expected tool_output and diff events, got %d", len(events))
+	}
+	var foundDiff bool
+	for _, e := range events {
+		if e.Type == "diff" {
+			foundDiff = true
+			if e.Payload["additions"] != 1 || e.Payload["deletions"] != 1 {
+				t.Fatalf("unexpected diff payload: %+v", e.Payload)
+			}
+			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 1, time.Now())
+			if canon.Type != "diff.updated" {
+				t.Fatalf("canonical type = %q, want diff.updated", canon.Type)
+			}
+		}
+	}
+	if !foundDiff {
+		t.Fatal("diff event not found in pi output")
+	}
+}
+
+
 
 
