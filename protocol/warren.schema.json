@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://warren.local/protocol/warren.schema.json",
   "title": "Warren Protocol",
-  "description": "Single source of truth for the Warren wire protocol. Bindings: Headless/internal/output, Headless/internal/api, Headless/internal/server, RelayService/internal/controlplane, Packages/Transport, Packages/Protocol, Web/src/wire.js. The canonical client/server control version is 3.0; binary DENB envelopes remain at wire version 1. Treat this document as authoritative — drift between this file and the bindings is a bug to file against whichever binding diverged first.",
+  "description": "Single source of truth for the Warren wire protocol. Bindings: Headless/internal/output, Headless/internal/api, Headless/internal/server, RelayService/internal/controlplane, Packages/Transport, Packages/Protocol, Web/src/wire.js. The canonical client/server control version is 4.0; binary DENB envelopes remain at wire version 1. This is a coordinated clean break: pre-4.0 clients and persisted protocol state are rejected or reset at the release boundary. Treat this document as authoritative — drift between this file and the bindings is a bug to file against whichever binding diverged first.",
   "type": "object",
   "required": [
     "logicalVersion",
@@ -19,8 +19,8 @@
   "properties": {
     "logicalVersion": {
       "type": "string",
-      "const": "3.0",
-      "description": "Header version reported in the welcome message and used to gate capability negotiation. The v3 client surface is intentionally rejected at auth time."
+      "const": "4.0",
+      "description": "Header version reported in the welcome message and used to gate capability negotiation. The v4 client surface is a clean break: pre-4.0 clients are rejected at auth time."
     },
     "binaryEnvelope": {
       "type": "object",
@@ -98,7 +98,7 @@
               "type": "object",
               "required": ["version", "sessionID", "attachmentID", "payloadLength"],
               "properties": {
-                "version": { "type": "string", "description": "Defaults to '3.0' when absent on the wire." },
+                "version": { "type": "string", "const": "4.0" },
                 "sessionID": { "type": "string" },
                 "attachmentID": { "type": "string" },
                 "sequence": { "type": "integer", "minimum": 0 },
@@ -143,7 +143,7 @@
             "t": { "type": "string", "enum": ["request", "ping"] },
             "id": { "type": "string" },
             "token": { "type": "string", "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself." },
-            "version": { "type": "string", "const": "3.0" },
+            "version": { "type": "string", "const": "4.0" },
             "capabilities": { "type": "array", "items": { "type": "string" } },
             "terminalStateFormats": {
               "type": "array",
@@ -173,7 +173,9 @@
             "id": { "type": "string" },
             "ok": { "type": "boolean" },
             "result": { "type": "object", "additionalProperties": true },
-            "error": { "type": "string" }
+            "error": { "type": "string" },
+            "code": { "type": "string" },
+            "details": { "type": "object", "additionalProperties": true }
           }
         }
       }
@@ -189,7 +191,8 @@
           "agent-timeline-v1",
           "agent-interactions-v1",
           "agent-interrupt-v1",
-          "agent-attachments-v1"
+          "agent-attachments-v1",
+          "agent-goals-v1"
         ]
       },
       "uniqueItems": true
@@ -200,6 +203,7 @@
       "items": {
         "type": "string",
         "enum": [
+          "ghostty-vt-snapshot-v1",
           "ghostline-vt-replay-v1"
         ]
       },
@@ -227,13 +231,23 @@
         { "method": "agent.turn.steer", "paramsRef": "api.AgentTurnSteerCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.turn.cancel", "paramsRef": "api.AgentTurnCancelCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.interaction.resolve", "paramsRef": "api.AgentInteractionResolveCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.goal.set", "paramsRef": "api.AgentGoalSetCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.goal.clear", "paramsRef": "api.AgentGoalClearCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.prepare", "paramsRef": "api.AgentAttachmentPrepareCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.chunk", "paramsRef": "api.AgentAttachmentChunkCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.complete", "paramsRef": "api.AgentAttachmentCompleteCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.abort", "paramsRef": "api.AgentAttachmentAbortCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "relay.pairing", "paramsRef": "free", "resultRef": "{pairingCode, expiresAt}" },
+        { "method": "relay.devices.list", "paramsRef": "free", "resultRef": "{devices: any[]}" },
+        { "method": "relay.devices.revoke", "paramsRef": "{deviceID: string}", "resultRef": "void" },
         { "method": "settings.get", "paramsRef": "free", "resultRef": "api.Settings" },
         { "method": "relay.reset", "paramsRef": "free", "resultRef": "void" },
+        { "method": "public-access.status", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
+        { "method": "public-access.enable", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
+        { "method": "public-access.test", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
+        { "method": "public-access.disable", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
+        { "method": "public-access.reset", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
+        { "method": "public-access.restart", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
         { "method": "settings.testOpenAI", "paramsRef": "free", "resultRef": "void" },
         { "method": "settings.put", "paramsRef": "{...settings}", "resultRef": "api.Settings" },
         { "method": "project.add", "paramsRef": "{...}", "resultRef": "api.Project" },
@@ -271,12 +285,9 @@
         { "method": "session.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
         { "method": "session.move.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionMovePreflight" },
         { "method": "session.undo", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.attach", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
-        { "method": "session.detach", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
+        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int, claim?: bool, epoch?: uint64, sequence?: uint64}", "resultRef": "{subscribed: bool, attachmentId: string}" },
         { "method": "session.unsubscribe", "paramsRef": "{id: string}", "resultRef": "void" },
         { "method": "session.focus", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
-        { "method": "session.input", "paramsRef": "{id: string, data: string}", "resultRef": "void" },
         { "method": "session.resize", "paramsRef": "{id: string, cols: int, rows: int}", "resultRef": "void" },
         { "method": "git.panel", "paramsRef": "{workspace: string}", "resultRef": "api.GitPanel" },
         { "method": "git.diff", "paramsRef": "{workspace: string, path: string}", "resultRef": "api.GitDiff" },
@@ -289,7 +300,7 @@
     },
     "serverEvents": {
       "type": "array",
-      "description": "Server-pushed event types. Events do not include a request id. Some carry terminal-session state (attached/synced/exited); Agent semantics use the canonical agent.events envelope.",
+      "description": "Server-pushed event types. Events do not include a request id. Some carry terminal-session state (attached/synced/exited); Agent semantics use the canonical agent.events envelope. The roster event wraps the complete state under state; no migration-era fields are emitted.",
       "items": {
         "type": "string",
         "enum": [
@@ -309,7 +320,7 @@
       "uniqueItems": true,
       "eventDetails": {
         "welcome": {
-          "fields": { "t": "welcome", "version": "3.0", "host": "api.Host", "accessScopeId": "string", "capabilities": "string[]" },
+          "fields": { "t": "welcome", "version": "4.0", "host": "api.Host", "accessScopeId": "string", "capabilities": "string[]" },
           "notes": "First event after upgrade. Carries the stable Host identity, the authenticated visibility scope, and negotiated capabilities."
         },
         "maintenance": {
@@ -325,16 +336,16 @@
           "notes": "Generic error envelope. id is empty when the error is not tied to a request."
         },
         "roster": {
-          "fields": { "t": "roster", "host": "api.Host", "tasks": "api.Task[]", "projects": "api.Project[]", "workspaces": "api.Workspace[]", "terminalGroups": "api.TerminalGroup[]", "sessions": "api.Session[]", "version": "string" },
+          "fields": { "t": "roster", "state": "api.State" },
           "notes": "Full roster snapshot. Sent on welcome and on full re-sync."
         },
         "roster.delta": {
-          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "terminalGroups": "EntityChanges<api.TerminalGroup>?", "sessions": "EntityChanges<api.Session>?", "ghostlineMigration": "api.GhostlineMigration?" },
-          "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision."
+          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "terminalGroups": "EntityChanges<api.TerminalGroup>?", "sessions": "EntityChanges<api.Session>?" },
+          "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision. Migration metadata is intentionally absent after the v4 clean break."
         },
         "attached": {
-          "fields": { "t": "attached", "session": "string" },
-          "notes": "Host acknowledges a session.attach or session.subscribe."
+          "fields": { "t": "attached", "session": "string", "epoch": "uint64", "sequence": "uint64", "reanchor": "bool", "attachmentId": "string" },
+          "notes": "Host acknowledges session.subscribe and publishes the attachment identity used by DENB input frames."
         },
         "synced": {
           "fields": { "t": "synced", "session": "string", "epoch": "uint64", "sequence": "uint64" },
@@ -345,7 +356,7 @@
           "notes": "Session has exited and the binary stream for it is closed."
         },
         "agent.events": {
-          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "replay": "bool", "events": "api.CanonicalAgentEvent[]" },
+          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "events": "api.CanonicalAgentEvent[]" },
           "notes": "The only semantic Agent push. Every event carries eventId, streamId, executionId, sequence, type, timestamps, origin, and typed payload."
         },
         "pong": {

@@ -22,4 +22,6 @@ public enum WarrenDesktopCommand {
     /// underneath Settings, so the composition root uses this to return
     /// keyboard focus and force a repaint of the terminal.
     public static let settingsDismissed = Notification.Name("WarrenDesktopCommand.settingsDismissed")
+    /// Posted to switch the active workspace to Embedded Editor mode.
+    public static let openEmbeddedEditor = Notification.Name("WarrenDesktopCommand.openEmbeddedEditor")
 }

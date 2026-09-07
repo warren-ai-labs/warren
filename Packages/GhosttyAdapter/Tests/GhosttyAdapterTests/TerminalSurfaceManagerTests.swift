@@ -166,9 +166,51 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         try await waitUntil { !(surface.mountedTerminalView?.isHidden ?? true) }
     }
 
+    func testTransientRecoveryPreservesLastPresentedFrame() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        var postRevealRedraws: [TerminalSessionID] = []
+        manager.postRevealRedrawObserver = { postRevealRedraws.append($0) }
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil {
+            surface.terminalViewIsPresentable
+                && manager.isDisplayVisible(surface.id)
+        }
+
+        manager.beginRecovery(for: surface.id, preservingDisplay: true)
+        XCTAssertTrue(manager.isDisplayVisible(surface.id))
+        XCTAssertFalse(surface.mountedTerminalView?.isHidden ?? true)
+        XCTAssertEqual(surface.mountedTerminalView?.alphaValue, 1)
+
+        manager.endRecovery(for: surface.id)
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(postRevealRedraws.isEmpty, "recovery-preserved display must not use warm redraw")
+    }
+
     func testWarmPromotionHoldsDisplayUntilQueuedOutputIsRendered() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 2)
+        var postRevealRedraws: [TerminalSessionID] = []
+        manager.postRevealRedrawObserver = { postRevealRedraws.append($0) }
         let first = makeSurface(
             outputRenderBudgetBytes: 256,
             outputRenderYield: .milliseconds(2)
@@ -231,6 +273,11 @@ final class TerminalSurfaceManagerTests: XCTestCase {
                 && first.outputWriter.renderedBoundary.sequence >= promotionTarget.sequence,
             "promotion must render its captured boundary before reveal"
         )
+        try await waitUntil { postRevealRedraws == [first.id] }
+
+        manager.requestPresent(first.id)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(postRevealRedraws, [first.id], "warm promotion redraw must be one-shot")
     }
 
     func testWarmPromotionDoesNotWaitForAContinuouslyGrowingQueue() async throws {
@@ -289,6 +336,108 @@ final class TerminalSurfaceManagerTests: XCTestCase {
             manager.snapshot().activeSessionID == first.id
                 && manager.isDisplayVisible(first.id)
         }
+    }
+
+    func testWarmPromotionRedrawCancelsWhenTabChangesAgain() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        manager.postRevealRedrawDelay = .seconds(1)
+        var postRevealRedraws: [TerminalSessionID] = []
+        var scheduledRedraws: [TerminalSessionID] = []
+        manager.postRevealRedrawObserver = { postRevealRedraws.append($0) }
+        manager.postRevealRedrawScheduledObserver = { scheduledRedraws.append($0) }
+        let first = makeSurface()
+        let second = makeSurface()
+        manager.insert(first)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            manager.snapshot().activeSessionID == first.id
+                && manager.isDisplayVisible(first.id)
+        }
+
+        manager.insert(second)
+        submit(second.id, to: manager, host: host)
+        try await waitUntil { manager.snapshot().activeSessionID == second.id }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            manager.snapshot().activeSessionID == first.id
+                && manager.isDisplayVisible(first.id)
+        }
+        try await waitUntil { scheduledRedraws == [first.id] }
+
+        // A second tab switch invalidates the pending redraw before its next
+        // display interval. The stale callback must not draw the parked view.
+        submit(second.id, to: manager, host: host)
+        try await waitUntil { manager.snapshot().activeSessionID == second.id }
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertFalse(postRevealRedraws.contains(first.id))
+    }
+
+    func testWarmPromotionRedrawCancelsWhenSurfaceIsDisposed() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        manager.postRevealRedrawDelay = .seconds(1)
+        var postRevealRedraws: [TerminalSessionID] = []
+        var scheduledRedraws: [TerminalSessionID] = []
+        manager.postRevealRedrawObserver = { postRevealRedraws.append($0) }
+        manager.postRevealRedrawScheduledObserver = { scheduledRedraws.append($0) }
+        let first = makeSurface()
+        let second = makeSurface()
+        manager.insert(first)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            manager.snapshot().activeSessionID == first.id
+                && manager.isDisplayVisible(first.id)
+        }
+        manager.insert(second)
+        submit(second.id, to: manager, host: host)
+        try await waitUntil { manager.snapshot().activeSessionID == second.id }
+
+        submit(first.id, to: manager, host: host)
+        try await waitUntil {
+            manager.snapshot().activeSessionID == first.id
+                && manager.isDisplayVisible(first.id)
+        }
+        try await waitUntil { scheduledRedraws == [first.id] }
+        manager.remove(first.id)
+        try await waitUntil {
+            manager.surface(for: first.id) == nil
+        }
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertTrue(postRevealRedraws.isEmpty)
     }
 
     func testAttachUsesMeasuredHostGeometryWhenIntentIsStale() async throws {

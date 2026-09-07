@@ -1,10 +1,10 @@
 # RFC 0016: Canonical Agent Execution Protocol and Client Event Replicas
 
-- Status: Proposed
+- Status: Accepted and implemented
 - Owner: Warren Headless, Web, Desktop, iOS, and CLI
 - Created: 2026-09-05
 - Scope: Agent execution identity, provider adapters, command APIs, append-only event streams, and client persistence
-- Protocol baseline: Warren protocol 3.0
+- Protocol baseline: Warren protocol 4.0
 - Supersedes: the Agent API and wire portions of RFC 0013 and RFC 0010
 - Depends on: RFC 0006 (Agent activity and human attention), RFC 0015 (Cloud Agent daemon and scheduled bots)
 
@@ -246,7 +246,7 @@ derived by a client from the URL or from a display name:
 
     {
       "t": "welcome",
-      "version": "3.0",
+      "version": "4.0",
       "host": {
         "id": "host-01J...",
         "name": "build-mac",
@@ -626,8 +626,8 @@ the PTY, and PTY bytes must not fabricate structured interactions.
 
 ## 11. Wire version and clean break
 
-The JSON control protocol advances to logical version 3.0. An old client is
-rejected during handshake.
+The JSON control protocol is logical version 4.0. An old or future client is
+rejected during handshake before roster or session data is exposed.
 
 The following public types and messages are removed rather than adapted:
 
@@ -646,7 +646,7 @@ The DENB binary terminal envelope remains independently versioned.
 
 ## 12. Implementation plan
 
-1. Add protocol 3.0 types and schema, including welcome.host and
+1. Add protocol 4.0 types and schema, including welcome.host and
    welcome.accessScopeId.
 2. Replace the flattened event struct with typed domain events and one journal
    append path.

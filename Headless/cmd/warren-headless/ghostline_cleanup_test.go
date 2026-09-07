@@ -23,7 +23,6 @@ func TestCleanupStaleGhostlineArtifactsRemovesDeadFiles(t *testing.T) {
 	if err := os.WriteFile(legacyPID, []byte("not-a-pid\n"), 0o600); err != nil {
 		t.Fatalf("write legacy pid: %v", err)
 	}
-
 	removed, err := cleanupStaleGhostlineArtifacts(filepath.Join(directory, "ghostline.sock"))
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)

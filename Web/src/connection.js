@@ -1,6 +1,6 @@
 const connecting = 0;
 const open = 1;
-export const protocolVersion = "3.0";
+export const protocolVersion = "4.0";
 
 export const agentCapabilities = [
   "agent-timeline-v1",
@@ -180,8 +180,8 @@ export class WarrenConnection {
     return this.sendJSON({ t: "request", id, method, params }) ? id : null;
   }
 
-  sendBinary(data) {
-    return this.send(new TextEncoder().encode(data));
+  sendFrame(data) {
+    return this.send(typeof data === "string" ? new TextEncoder().encode(data) : data);
   }
 
   send(data) {

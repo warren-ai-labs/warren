@@ -2,20 +2,37 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
 
-func TestOpenMigratesMissingTerminalGroups(t *testing.T) {
+func TestOpenMigratesCompatibleStateSchemas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
+	migration := &api.GhostlineMigration{
+		SessionID:       "migration-1",
+		SourceSocket:    "/tmp/ghostline-old.sock",
+		TargetSocket:    "/tmp/ghostline-new.sock",
+		SourceProtocol:  "1.0.0",
+		HandoffVersion:  "warren-v0.11.2",
+		Phase:           api.GhostlineMigrationCommitted,
+		SkippedSessions: []string{"session-2"},
+		SkipReasons:     map[string]string{"session-2": "restore failed"},
+		CreatedAt:       time.Unix(1, 0).UTC(),
+		UpdatedAt:       time.Unix(2, 0).UTC(),
+	}
 	data, err := json.Marshal(api.State{
-		Schema: 1,
-		Host:   api.Host{ID: "host-1", Name: "test"},
+		Schema:                    2,
+		Host:                      api.Host{ID: "host-1", Name: "test"},
+		GhostlineMigration:        migration,
+		WorktreeOwnershipMigrated: true,
+		WarrenVersion:             "v0.11.2",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,60 +40,85 @@ func TestOpenMigratesMissingTerminalGroups(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	state, err := Open(path, "test")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open schema 2: %v", err)
 	}
 	snapshot := state.Snapshot()
 	if snapshot.Schema != currentSchema {
 		t.Fatalf("schema = %d, want %d", snapshot.Schema, currentSchema)
 	}
-	if len(snapshot.TerminalGroups) != 1 {
-		t.Fatalf("terminal groups = %#v, want one migrated Inbox", snapshot.TerminalGroups)
+	if snapshot.WarrenVersion != "v0.11.2" || !snapshot.WorktreeOwnershipMigrated {
+		t.Fatalf("compatible state fields were not preserved: %#v", snapshot)
 	}
-	group := snapshot.TerminalGroups[0]
-	if group.Name != "Inbox" || group.Order != 0 || group.ID == "" {
-		t.Fatalf("migrated group = %#v", group)
+	if snapshot.GhostlineMigration == nil || snapshot.GhostlineMigration.SessionID != migration.SessionID ||
+		len(snapshot.GhostlineMigration.SkippedSessions) != 1 ||
+		snapshot.GhostlineMigration.SkipReasons["session-2"] != "restore failed" {
+		t.Fatalf("migration journal was not preserved: %#v", snapshot.GhostlineMigration)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("migrated state was not persisted: %v", err)
-	}
-}
-
-func TestOpenMigratesSchemaOneWithoutLosingResources(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	data, err := json.Marshal(api.State{
-		Schema:     1,
-		Host:       api.Host{ID: "host-1", Name: "test"},
-		Projects:   []api.Project{{ID: "project-1", Name: "project"}},
-		Workspaces: []api.Workspace{{ID: "workspace-1", ProjectID: "project-1", Name: "main"}},
-	})
+	var persisted api.State
+	data, err = os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
+	if persisted.Schema != currentSchema {
+		t.Fatalf("persisted schema = %d, want %d", persisted.Schema, currentSchema)
+	}
 
+	for _, schema := range []int{1, 2} {
+		data, err := json.Marshal(api.State{Schema: schema, Host: api.Host{ID: "host-1", Name: "test"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		state, err := Open(path, "test")
+		if err != nil {
+			t.Fatalf("schema %d error = %v", schema, err)
+		}
+		if state.Snapshot().Schema != currentSchema {
+			t.Fatalf("schema %d snapshot = %d, want %d", schema, state.Snapshot().Schema, currentSchema)
+		}
+	}
+}
+
+func TestOpenRejectsUnknownAndFutureStateSchemas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	for _, schema := range []int{0, 999} {
+		data, err := json.Marshal(api.State{Schema: schema, Host: api.Host{ID: "host-1", Name: "test"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = Open(path, "test")
+		var resetErr *StateResetError
+		if !errors.As(err, &resetErr) {
+			t.Fatalf("schema %d error = %v, want StateResetError", schema, err)
+		}
+		if resetErr.FoundSchema != schema || resetErr.RequiredSchema != currentSchema {
+			t.Fatalf("reset error = %#v", resetErr)
+		}
+	}
+}
+
+func TestOpenCreatesFreshCurrentState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
 	state, err := Open(path, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := state.Snapshot()
-	if snapshot.Schema != currentSchema || len(snapshot.Projects) != 1 || len(snapshot.Workspaces) != 1 {
-		t.Fatalf("migrated state = %#v", snapshot)
+	if snapshot.Schema != currentSchema || len(snapshot.TerminalGroups) != 1 {
+		t.Fatalf("fresh state = %#v", snapshot)
 	}
-	persisted, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reopened api.State
-	if err := json.Unmarshal(persisted, &reopened); err != nil {
-		t.Fatal(err)
-	}
-	if reopened.Schema != currentSchema {
-		t.Fatalf("persisted schema = %d, want %d", reopened.Schema, currentSchema)
+	if snapshot.TerminalGroups[0].Name != "Inbox" {
+		t.Fatalf("fresh terminal group = %#v", snapshot.TerminalGroups[0])
 	}
 }
 
@@ -86,12 +128,14 @@ func TestOpenRejectsFutureSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Open(path, "test"); err == nil {
-		t.Fatal("expected unsupported schema error")
+		t.Fatal("expected state_reset_required error")
+	} else if !strings.Contains(err.Error(), "state_reset_required") {
+		t.Fatalf("error = %v, want state_reset_required", err)
 	}
 }
 
 func BenchmarkSnapshot(b *testing.B) {
-	state := api.State{Schema: 1, Host: api.Host{ID: NewID(), Name: "benchmark"}}
+	state := api.State{Schema: currentSchema, Host: api.Host{ID: NewID(), Name: "benchmark"}}
 	for projectIndex := 0; projectIndex < 50; projectIndex++ {
 		projectID := NewID()
 		state.Projects = append(state.Projects, api.Project{
@@ -147,7 +191,7 @@ func TestUpdateAdvancesRevisionAndNotifiesWatchers(t *testing.T) {
 	changed := store.ChangesSince(revision)
 	store.path = filepath.Join(t.TempDir(), "state.json")
 	if err := store.Update(func(state *api.State) error {
-		state.Schema = 1
+		state.Schema = currentSchema
 		return nil
 	}); err != nil {
 		t.Fatal(err)

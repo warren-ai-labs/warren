@@ -50,19 +50,21 @@ test("connection authenticates and forwards messages", () => {
   connection.start();
   const socket = FakeSocket.instances[0];
   assert.equal(socket.binaryType, "arraybuffer");
-  assert.equal(connection.request("session.attach", { id: "session-1" }), null);
+  assert.equal(connection.request("session.subscribe", { id: "session-1" }), null);
   socket.open();
   assert.deepEqual(JSON.parse(socket.sent[0]), {
     t: "auth",
     token: "secret",
-    version: "3.0",
+    version: "4.0",
     capabilities: ["roster-delta"],
     terminalStateFormats: ["ghostline-vt-replay-v1"],
   });
   socket.onmessage({ data: "roster" });
   assert.deepEqual(messages, ["roster"]);
-  assert.match(connection.request("session.detach"), /^web-/);
-  assert.equal(JSON.parse(socket.sent[1]).method, "session.detach");
+  assert.match(connection.request("session.subscribe", { id: "session-1", claim: true }), /^web-/);
+  assert.equal(JSON.parse(socket.sent[1]).method, "session.subscribe");
+  assert.match(connection.request("session.unsubscribe", { id: "session-1" }), /^web-/);
+  assert.equal(JSON.parse(socket.sent[2]).method, "session.unsubscribe");
 });
 
 test("connection retries after a close and stop cancels retry", () => {

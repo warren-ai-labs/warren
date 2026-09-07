@@ -33,6 +33,7 @@ const (
 	CapabilityInteractions Capability = api.CapabilityAgentInteractions
 	CapabilityInterrupt    Capability = api.CapabilityAgentInterrupt
 	CapabilityAttachments  Capability = api.CapabilityAgentAttachments
+	CapabilityGoals        Capability = api.CapabilityAgentGoals
 )
 
 // Well-known handler names are intentionally transport-oriented. They are
@@ -364,6 +365,26 @@ func NewAgentRegistry(providers ...AgentProvider) *AgentProviderRegistry {
 
 func normalizeProviderKind(kind string) string {
 	return strings.ToLower(strings.TrimSpace(kind))
+}
+
+// tuiSupportsAgentInteractions identifies the provider TUIs for which Warren
+// knows the prompt protocol well enough to send a structured answer through a
+// PTY. Keep this allow-list narrow: a generic terminal prompt is not proof that
+// an arbitrary string is a safe interaction response.
+func tuiSupportsAgentInteractions(kind string) bool {
+	family, _ := splitAgentKey(kind)
+	return family == "codex"
+}
+
+// agentProviderForKind returns the durable provider family for a Session kind.
+// Plain shell/custom sessions are intentionally left unbound until a managed
+// provider writes its binding file.
+func agentProviderForKind(kind string) string {
+	family, _ := splitAgentKey(kind)
+	if family == "shell" || family == "custom" {
+		return ""
+	}
+	return family
 }
 
 // providerMatchesHandler reports whether a registered family default is the
@@ -940,6 +961,10 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 	if contextValue.Kind == "" {
 		return s.ensureAgentPlaceholder(session.ID), nil
 	}
+	// Record the provider family before constructing the handle. A roster can
+	// be requested in this small startup window, and clients should not fall
+	// back to a shell icon merely because the live transport is still warming.
+	s.persistAgentProviderWithState(state, session.ID, contextValue.Kind)
 	provider, ok := registry.ProviderFor(contextValue.Kind, contextValue.Handler)
 	if !ok {
 		// A shell/custom Session has no provider until its managed binding is
@@ -1148,7 +1173,15 @@ func (s *Service) agentCapabilitiesForSession(sessionID string, session api.Sess
 	}
 	s.agentsMu.Unlock()
 	if len(result) > 0 && !hasHandle {
-		if nonNilInterface(s.AgentController) {
+		family := normalizeProviderKind(session.AgentProvider)
+		if family == "" {
+			family = normalizeProviderKind(session.Kind)
+		}
+		if parsedFamily, _ := splitAgentKey(family); parsedFamily != "" {
+			family = parsedFamily
+		}
+		if nonNilInterface(s.AgentController) ||
+			(s.hasRuntimeAdapter() && tuiSupportsAgentInteractions(family)) {
 			result[CapabilityInteractions] = struct{}{}
 		}
 		if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
@@ -1156,6 +1189,13 @@ func (s *Service) agentCapabilitiesForSession(sessionID string, session api.Sess
 		}
 		if s.hasRuntimeAdapter() || nonNilInterface(s.AgentController) {
 			result[CapabilityAttachments] = struct{}{}
+		}
+		if (family == "codex" && s.hasRuntimeAdapter()) ||
+			(nonNilInterface(s.AgentController) && func() bool {
+				_, ok := s.AgentController.(AgentViewGoalController)
+				return ok
+			}()) {
+			result[CapabilityGoals] = struct{}{}
 		}
 	}
 	// A dedicated known agent is still represented before its transcript
@@ -1381,11 +1421,19 @@ func (provider *TUIAgentProvider) Capabilities() CapabilitySet {
 	if provider.service.hasRuntimeAdapter() {
 		result[CapabilityAttachments] = struct{}{}
 	}
-	if nonNilInterface(provider.service.AgentController) {
+	if nonNilInterface(provider.service.AgentController) ||
+		(provider.service.hasRuntimeAdapter() && tuiSupportsAgentInteractions(provider.kind)) {
 		result[CapabilityInteractions] = struct{}{}
 	}
 	if nonNilInterface(provider.service.AgentController) || provider.service.hasRuntimeAdapter() {
 		result[CapabilityInterrupt] = struct{}{}
+	}
+	if (provider.kind == "codex" && provider.service.hasRuntimeAdapter()) ||
+		(nonNilInterface(provider.service.AgentController) && func() bool {
+			_, ok := provider.service.AgentController.(AgentViewGoalController)
+			return ok
+		}()) {
+		result[CapabilityGoals] = struct{}{}
 	}
 	return result
 }
@@ -1618,11 +1666,19 @@ func (handle *tuiAgentHandle) Capabilities() CapabilitySet {
 		if handle.service.hasRuntimeAdapter() {
 			result[CapabilityAttachments] = struct{}{}
 		}
-		if nonNilInterface(handle.service.AgentController) {
+		if nonNilInterface(handle.service.AgentController) ||
+			(handle.service.hasRuntimeAdapter() && tuiSupportsAgentInteractions(handle.provider)) {
 			result[CapabilityInteractions] = struct{}{}
 		}
 		if nonNilInterface(handle.service.AgentController) || handle.service.hasRuntimeAdapter() {
 			result[CapabilityInterrupt] = struct{}{}
+		}
+		if (handle.provider == "codex" && handle.service.hasRuntimeAdapter()) ||
+			(nonNilInterface(handle.service.AgentController) && func() bool {
+				_, ok := handle.service.AgentController.(AgentViewGoalController)
+				return ok
+			}()) {
+			result[CapabilityGoals] = struct{}{}
 		}
 	}
 	return result
@@ -1713,6 +1769,50 @@ func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response a
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
 	defer unlock()
 	return sendAgentInteractionInput(ctx, runtime, handle.runtimeName, response)
+}
+
+func (handle *tuiAgentHandle) SetGoal(ctx context.Context, request api.AgentGoalSetRequest) error {
+	if handle == nil || handle.service == nil {
+		return errors.New("agent goal transport is unavailable")
+	}
+	if controller, ok := handle.service.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
+		return controller.SetGoal(ctx, request)
+	}
+	if !tuiSupportsAgentInteractions(handle.provider) {
+		return errors.New("agent goal transport is unavailable for this provider")
+	}
+	runtime := handle.service.runtimeForKind(handle.runtimeKind)
+	if runtime == nil {
+		runtime = handle.service.runtimeForKind(handle.service.runtimeKindFor(api.Session{Runtime: handle.runtimeName}))
+	}
+	if runtime == nil {
+		return errors.New("agent goal transport is unavailable")
+	}
+	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	defer unlock()
+	return sendAgentGoalInputMode(ctx, runtime, handle.runtimeName, request.Objective, request.ReplaceExisting)
+}
+
+func (handle *tuiAgentHandle) ClearGoal(ctx context.Context, request api.AgentGoalClearRequest) error {
+	if handle == nil || handle.service == nil {
+		return errors.New("agent goal transport is unavailable")
+	}
+	if controller, ok := handle.service.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
+		return controller.ClearGoal(ctx, request)
+	}
+	if !tuiSupportsAgentInteractions(handle.provider) {
+		return errors.New("agent goal transport is unavailable for this provider")
+	}
+	runtime := handle.service.runtimeForKind(handle.runtimeKind)
+	if runtime == nil {
+		runtime = handle.service.runtimeForKind(handle.service.runtimeKindFor(api.Session{Runtime: handle.runtimeName}))
+	}
+	if runtime == nil {
+		return errors.New("agent goal transport is unavailable")
+	}
+	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	defer unlock()
+	return sendAgentGoalInput(ctx, runtime, handle.runtimeName, "clear")
 }
 
 func (handle *tuiAgentHandle) BindingKey() string {

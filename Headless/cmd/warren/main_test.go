@@ -1490,7 +1490,6 @@ func TestRunResourceHelpDoesNotConnect(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"workspace", "create", "--help"},
 		{"worktree", "create", "--help"},
-		{"session", "attach", "--help"},
 		{"agent", "current", "--help"},
 	} {
 		if err := run(arguments); err != nil {
@@ -1794,18 +1793,18 @@ func TestDisplayTruncatedAndPath(t *testing.T) {
 func TestFilterSessionRows(t *testing.T) {
 	rows := []SessionRow{
 		{
-			Session:           api.Session{ID: "sess-1", WorkspaceID: "ws-1", Kind: "shell", Lifecycle: "running", Title: "zsh", Command: "/bin/zsh", Pinned: true},
-			WorkspaceName:     "feature-1",
-			ProjectID:         "proj-1",
-			ProjectName:       "my-repo",
-			Branch:            "feat/login",
+			Session:       api.Session{ID: "sess-1", WorkspaceID: "ws-1", Kind: "shell", Lifecycle: "running", Title: "zsh", Command: "/bin/zsh", Pinned: true},
+			WorkspaceName: "feature-1",
+			ProjectID:     "proj-1",
+			ProjectName:   "my-repo",
+			Branch:        "feat/login",
 		},
 		{
-			Session:           api.Session{ID: "sess-2", WorkspaceID: "ws-2", Kind: "codex", Lifecycle: "running", Title: "Codex Agent", Command: "codex run", AgentStatus: &api.AgentStatus{Activity: api.AgentActivityBlocked}},
-			WorkspaceName:     "feature-2",
-			ProjectID:         "proj-1",
-			ProjectName:       "my-repo",
-			Branch:            "feat/auth",
+			Session:       api.Session{ID: "sess-2", WorkspaceID: "ws-2", Kind: "codex", Lifecycle: "running", Title: "Codex Agent", Command: "codex run", AgentStatus: &api.AgentStatus{Activity: api.AgentActivityBlocked}},
+			WorkspaceName: "feature-2",
+			ProjectID:     "proj-1",
+			ProjectName:   "my-repo",
+			Branch:        "feat/auth",
 		},
 		{
 			Session:           api.Session{ID: "sess-3", TerminalGroupID: "grp-1", Kind: "shell", Lifecycle: "ended", Title: "Bash", Command: "/bin/bash"},
@@ -2072,4 +2071,3 @@ func TestDefaultUsageTextDescribesFilteringAndBestPractices(t *testing.T) {
 		}
 	}
 }
-

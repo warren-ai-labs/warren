@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http/httptest"
 	"sync"
@@ -64,44 +63,6 @@ func (r *recordingAtomicRuntime) snapshotEvents() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.events...)
-}
-
-func TestRosterOmitsGhostlineInternalRecoveryData(t *testing.T) {
-	state := newStateWithSession(t, "session-cursor", "runtime-cursor")
-	if err := state.Update(func(value *api.State) error {
-		value.Sessions[0].OutputCursor = "opaque-v1-cursor"
-		value.GhostlineMigration = &api.GhostlineMigration{
-			SessionID:       "migration",
-			SourceSocket:    "/private/source.sock",
-			TargetSocket:    "/private/target.sock",
-			Phase:           api.GhostlineMigrationCommitted,
-			SkippedSessions: []string{"session-cursor"},
-			SkipReasons:     map[string]string{"session-cursor": "adopt runtime failed"},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed internal state: %v", err)
-	}
-
-	roster := (&Service{Store: state}).Roster(context.Background())
-	if roster.GhostlineMigration == nil || len(roster.GhostlineMigration.SkippedSessions) != 1 {
-		t.Fatalf("roster omitted skipped migration report: %#v", roster.GhostlineMigration)
-	}
-	if roster.GhostlineMigration.SourceSocket != "" || roster.GhostlineMigration.TargetSocket != "" {
-		t.Fatalf("roster exposed migration socket paths: %#v", roster.GhostlineMigration)
-	}
-	if got := roster.Sessions[0].OutputCursor; got != "" {
-		t.Fatalf("roster exposed output cursor %q", got)
-	}
-	encoded, err := json.Marshal(roster)
-	if err != nil {
-		t.Fatalf("marshal roster: %v", err)
-	}
-	for _, internal := range [][]byte{[]byte("outputCursor"), []byte("/private/source.sock"), []byte("/private/target.sock")} {
-		if bytes.Contains(encoded, internal) {
-			t.Fatalf("serialized roster exposed internal value %q: %s", internal, encoded)
-		}
-	}
 }
 
 func TestPublicSessionOmitsOutputCursor(t *testing.T) {
@@ -188,7 +149,7 @@ func TestAtomicDesktopRecoveryResizesBeforeSnapshotAndKeepsSnapshotOpaque(t *tes
 	)
 	defer connection.Close()
 
-	_ = requestResultBeforeBinary[map[string]bool](t, connection, "session.subscribe", map[string]any{
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{
 		"id": sessionID, "claim": true, "cols": 113, "rows": 37,
 	})
 	attached := readBrowserMessage(t, connection, "attached")
@@ -243,7 +204,7 @@ func TestANSITerminalStatePeerReceivesAtomicReplayFrame(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	_ = requestResultBeforeBinary[map[string]bool](t, connection, "session.subscribe", map[string]any{"id": sessionID})
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{"id": sessionID})
 	readBrowserMessage(t, connection, "attached")
 	_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
 	messageType, payload, err := connection.ReadMessage()
@@ -284,7 +245,7 @@ func TestColdAtomicPeerDoesNotInterruptOrDuplicateExistingPeerOutput(t *testing.
 
 	existing := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer existing.Close()
-	_ = requestResultBeforeBinary[map[string]bool](t, existing, "session.subscribe", map[string]any{"id": sessionID})
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, existing, "session.subscribe", map[string]any{"id": sessionID})
 	readBrowserMessage(t, existing, "attached")
 	readAtomicStateFrame(t, existing)
 	readBrowserMessage(t, existing, "synced")
@@ -297,7 +258,7 @@ func TestColdAtomicPeerDoesNotInterruptOrDuplicateExistingPeerOutput(t *testing.
 		ghostline.AtomicStateFormat,
 	)
 	defer cold.Close()
-	_ = requestResultBeforeBinary[map[string]bool](t, cold, "session.subscribe", map[string]any{"id": sessionID})
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, cold, "session.subscribe", map[string]any{"id": sessionID})
 	readBrowserMessage(t, cold, "attached")
 	readAtomicStateFrame(t, cold)
 	readBrowserMessage(t, cold, "synced")

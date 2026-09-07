@@ -3,7 +3,7 @@ import XCTest
 @testable import Warren
 
 final class WarrenEndpointCatalogTests: XCTestCase {
-    func testLoadsCLIConfigurationEndpoints() throws {
+    func testRejectsRemovedSSHRuntimeFields() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -29,16 +29,9 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         """
         try Data(config.utf8).write(to: url)
 
-        let catalog = WarrenEndpointCatalog.load(from: url)
-
-        XCTAssertEqual(catalog.current, "vps")
-        XCTAssertEqual(catalog.endpoints.map(\.name), ["local", "vps"])
-        let vps = try XCTUnwrap(catalog.endpoints.first { $0.name == "vps" })
-        XCTAssertEqual(vps.url, "")
-        XCTAssertEqual(vps.token, "")
-        XCTAssertEqual(vps.ssh, "root@vps.example")
-        let rewritten = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertFalse(rewritten.contains("remote-token"))
+        XCTAssertThrowsError(try WarrenEndpointCatalog.loadThrowing(from: url)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("state_reset_required"))
+        }
     }
 
     func testMissingConfigurationReturnsEmptyCatalog() throws {
@@ -55,7 +48,7 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.endpoints.isEmpty)
     }
 
-    func testIncompleteConfigurationDefaultsToEmptyEndpointMap() throws {
+    func testRejectsIncompleteConfiguration() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -63,10 +56,9 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         let url = directory.appendingPathComponent("config.json")
         try Data("{\"current\":\"local\"}".utf8).write(to: url)
 
-        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
-
-        XCTAssertEqual(catalog.current, "local")
-        XCTAssertTrue(catalog.endpoints.isEmpty)
+        XCTAssertThrowsError(try WarrenEndpointCatalog.loadThrowing(from: url)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Unable to decode endpoint catalog"))
+        }
     }
 
     func testSavesSSHEndpointWithPrivateFilePermissions() throws {
@@ -124,7 +116,7 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertEqual(endpointName, "ssh-local")
     }
 
-    func testSSHEndpointRemotePortRoundTripsAndRuntimeCredentialsAreScrubbed() throws {
+    func testSSHEndpointRemotePortRoundTripsWithoutRuntimeCredentials() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -197,7 +197,7 @@ func main() {
 		Settings:        loadedSettings,
 		SettingsPath:    *settingsFile,
 		WorktreeRoot:    *worktreeRoot,
-		AgentStorePath:  filepath.Join(configDir, "agent-events.db"),
+		AgentStorePath:  filepath.Join(configDir, "agent-journal.db"),
 		AgentFinder:     agent.DefaultFinder{},
 		AgentHooks: func() error {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {
@@ -232,7 +232,6 @@ func main() {
 	httpHandler.BuildVersion = version
 	httpHandler.BuildRevision = revision
 	httpHandler.BuildDirty = dirty == "true"
-	httpHandler.GhostlineVersion = ghostlineRPCVersion
 	httpHandler.GhostlineRPCVersion = ghostlineRPCVersion
 	httpHandler.GhostlineTagVersion = ghostlineTagVersion
 	var lanHTTPServer *http.Server
@@ -309,9 +308,8 @@ func main() {
 			}
 		}()
 	}
-	// Shutting down the control plane must never terminate the ghostline
-	// serve process: it owns the PTY sessions and survives daemon restarts
-	// and upgrades (the next start reuses or adopts it via its admin socket).
+	// Shutting down the control plane must never terminate the Ghostline
+	// serve process: it owns the PTY sessions and survives daemon restarts.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
@@ -727,12 +725,14 @@ func runGhostlineServe(socketPath, outputDir, adoptFrom string, probeForeground 
 			if len(report.Skipped) > 0 {
 				fmt.Fprintf(os.Stderr, "ghostline serve: skipped %d session(s): %v\n", len(report.Skipped), report.Skipped)
 			}
-			// Commit transfers ownership before Adopt performs the old server's
-			// best-effort retirement. The old endpoint may close the admin socket
-			// without replying, so an error can still mean that sessions are
-			// already safely owned by this process. Never tear down a server that
-			// has adopted sessions just because retirement confirmation failed.
+			// Ownership is committed before Adopt performs best-effort source
+			// retirement. A closed admin socket can therefore report an error
+			// after sessions are already safely owned by this process.
 			if ghostlineAdoptionFatal(adopted, len(report.Skipped), adoptErr) {
+				// Never publish a target socket after an adoption transaction
+				// failed. The source remains authoritative and the coordinator
+				// must be able to retry it on the next start.
+				_ = os.Remove(pidPath)
 				os.Exit(1)
 			}
 			fmt.Fprintf(os.Stderr, "ghostline serve: continuing with %d adopted session(s) despite retirement error\n", adopted)
@@ -751,9 +751,10 @@ func runGhostlineServe(socketPath, outputDir, adoptFrom string, probeForeground 
 }
 
 // ghostlineAdoptionFatal reports errors that happened before any session was
-// committed and were not classified as per-session adoption failures.
-func ghostlineAdoptionFatal(adopted, skipped int, adoptErr error) bool {
-	return adoptErr != nil && adopted <= 0 && skipped == 0
+// committed. A skipped session means Ghostline rolled back the whole batch;
+// keeping an empty target alive would make a crash look like a committed route.
+func ghostlineAdoptionFatal(adopted, _ int, adoptErr error) bool {
+	return adoptErr != nil && adopted <= 0
 }
 
 func loadOrCreateToken(path string) (string, error) {

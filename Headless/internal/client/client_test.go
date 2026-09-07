@@ -49,7 +49,7 @@ func TestDialRelayUsesScopedPathAndAccessAuthentication(t *testing.T) {
 	if result.path != "/relay/h/00000000-0000-4000-8000-000000000001/v1/client/connect" {
 		t.Fatalf("path = %q, want scoped Relay path", result.path)
 	}
-	if result.auth["t"] != "auth" || result.auth["version"] != "3.0" || result.auth["access_token"] != "access-token" {
+	if result.auth["t"] != "auth" || result.auth["version"] != "4.0" || result.auth["access_token"] != "access-token" {
 		t.Fatalf("unexpected Relay auth: %#v", result.auth)
 	}
 	if _, ok := result.auth["client_id"].(string); !ok {

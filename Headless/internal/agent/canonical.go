@@ -231,7 +231,7 @@ func eventIsRenderable(e api.AgentEvent) bool {
 	switch e.Type {
 	case "tool_call", "tool_output", "tool_use", "tool_result",
 		"tool_started", "tool_updated", "tool_completed", "tool_failed",
-		"question", "permission", "plan", "todo",
+		"question", "permission", "plan", "todo", "goal",
 		"activity", "plugin", "subagent", "compaction", "config", "diff", "diagnostics", "queue":
 		return true
 	}

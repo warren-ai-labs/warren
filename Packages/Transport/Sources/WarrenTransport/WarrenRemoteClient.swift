@@ -76,7 +76,7 @@ private actor WarrenRemoteSocket {
     private static let requestTimeout: Duration = .seconds(15)
     private static let heartbeatInterval: Duration = .seconds(20)
     private static let maximumWebSocketMessageBytes = 128 * 1024 * 1024
-    private static let terminalStateFormat = "ghostline-vt-replay-v1"
+    private let terminalStateFormats: Set<String>
 
     let events: AsyncThrowingStream<WarrenRemoteSocketEvent, Error>
 
@@ -93,9 +93,14 @@ private actor WarrenRemoteSocket {
     private var welcomeHostID: String?
     private var welcomeAccessScopeID: String?
 
-    init(adapter: any WarrenWebSocketTaskAdapter, codec: WarrenWireCodec = WarrenWireCodec()) {
+    init(
+        adapter: any WarrenWebSocketTaskAdapter,
+        codec: WarrenWireCodec = WarrenWireCodec(),
+        terminalStateFormats: Set<String>
+    ) {
         self.adapter = adapter
         self.codec = codec
+        self.terminalStateFormats = terminalStateFormats
         let pair = AsyncThrowingStream<WarrenRemoteSocketEvent, Error>.makeStream()
         self.events = pair.stream
         self.continuation = pair.continuation
@@ -120,6 +125,7 @@ private actor WarrenRemoteSocket {
             WarrenRemoteAgentCapability.interactions,
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
+            WarrenRemoteAgentCapability.goals,
         ]
     ) async throws -> String {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
@@ -128,9 +134,9 @@ private actor WarrenRemoteSocket {
 
         var auth: [String: Any] = [
             "t": "auth",
-            "version": "3.0",
+            "version": WarrenRemoteClient.protocolVersion,
             "capabilities": capabilities,
-            "terminalStateFormats": [Self.terminalStateFormat],
+            "terminalStateFormats": terminalStateFormats.sorted(),
         ]
         if isRelay {
             auth["access_token"] = token
@@ -330,7 +336,7 @@ private actor WarrenRemoteSocket {
                         guard let sessionID = UUID(uuidString: frame.header.sessionID.description) else {
                             throw WarrenRemoteClientError.invalidResponse
                         }
-                        guard frame.header.format == Self.terminalStateFormat else {
+                        guard terminalStateFormats.contains(frame.header.format) else {
                             throw WarrenRemoteClientError.unsupportedTerminalStateFormat(frame.header.format)
                         }
                         _ = continuation?.yield(.atomicState(WarrenRemoteAtomicState(
@@ -373,8 +379,8 @@ private actor WarrenRemoteSocket {
         switch type {
         case "welcome":
             let version = object["version"] as? String ?? "unknown"
-            guard WarrenRemoteClient.compatibleProtocolVersion(version, with: "3.0") else {
-                let error = WarrenRemoteClientError.incompatibleProtocol(expected: "3.0", received: version)
+            guard WarrenRemoteClient.compatibleProtocolVersion(version, with: WarrenRemoteClient.protocolVersion) else {
+                let error = WarrenRemoteClientError.incompatibleProtocol(expected: WarrenRemoteClient.protocolVersion, received: version)
                 if let welcomeContinuation {
                     self.welcomeContinuation = nil
                     welcomeContinuation.resume(throwing: error)
@@ -511,9 +517,14 @@ private actor WarrenRemoteSocket {
 /// or AppKit consumers should observe `events()` and keep their own rendering
 /// state; no WebSocket or renderer object needs to cross into a View.
 public actor WarrenRemoteClient {
+    public static let replayTerminalStateFormat = "ghostline-vt-replay-v1"
+    public static let snapshotTerminalStateFormat = "ghostty-vt-snapshot-v1"
+    public static let protocolVersion = "4.0"
+
     private struct Subscription: Sendable {
         let size: TerminalSize?
         let claimControl: Bool
+        let attachmentID: String?
     }
 
     private let configuration: WarrenRemoteEndpointConfiguration
@@ -530,6 +541,7 @@ public actor WarrenRemoteClient {
     private let clientID: String?
     private var injectedTask: (any WarrenWebSocketTaskAdapter)?
     private let codec: WarrenWireCodec
+    private let terminalStateFormats: Set<String>
     private let eventStream: AsyncStream<WarrenRemoteEvent>
     private var eventContinuation: AsyncStream<WarrenRemoteEvent>.Continuation?
     private var connectionTask: Task<Void, Never>?
@@ -549,6 +561,7 @@ public actor WarrenRemoteClient {
         configuration: WarrenRemoteEndpointConfiguration,
         urlSession: URLSession = WarrenRemoteNetworking.session,
         codec: WarrenWireCodec = WarrenWireCodec(),
+        terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
@@ -566,9 +579,11 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.interactions,
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
+            WarrenRemoteAgentCapability.goals,
         ]
         self.clientID = clientID ?? configuration.clientID
         self.codec = codec
+        self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
         self.eventStream = pair.stream
         self.eventContinuation = pair.continuation
@@ -580,6 +595,7 @@ public actor WarrenRemoteClient {
         task: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
         capabilities: [String] = ["roster-delta"],
+        terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         urlSession: URLSession = WarrenRemoteNetworking.session,
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
@@ -595,6 +611,7 @@ public actor WarrenRemoteClient {
         self.clientID = clientID ?? configuration.clientID
         self.injectedTask = task
         self.codec = codec
+        self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
         self.eventStream = pair.stream
         self.eventContinuation = pair.continuation
@@ -904,12 +921,17 @@ public actor WarrenRemoteClient {
             // Record intent before the request starts. A Session can be
             // selected while the socket is reconnecting; retaining that
             // intent lets the next socket restore it automatically.
-            subscriptions[sessionID] = Subscription(size: size, claimControl: claimControl)
+            subscriptions[sessionID] = Subscription(size: size, claimControl: claimControl, attachmentID: nil)
         }
         let data: Data
         if let socket { data = try await request(on: socket, method: "session.subscribe", params: params) }
         else { data = try await request("session.subscribe", params: params) }
         let result = try decode(data, as: WarrenRemoteSubscriptionResult.self)
+        subscriptions[sessionID] = Subscription(
+            size: size,
+            claimControl: claimControl,
+            attachmentID: result.attachmentID
+        )
         return result
     }
 
@@ -941,6 +963,15 @@ public actor WarrenRemoteClient {
         return try await request("session.focus", params: params, decoding: WarrenRemoteFocusResult.self)
     }
 
+    /// Promotes the existing terminal subscription to the focused control
+    /// lease. Agent-only surfaces use this just-in-time before an interrupt;
+    /// the protocol has no control-only attach alias.
+    @discardableResult
+    public func claimControl(sessionID: String) async throws -> Bool {
+        let result = try await focus(sessionID: sessionID, focused: true)
+        return result.focused
+    }
+
     @discardableResult
     public func resize(_ size: TerminalSize) async throws -> Bool {
         let result = try await request(
@@ -951,11 +982,25 @@ public actor WarrenRemoteClient {
         return result["resized"] ?? false
     }
 
-    /// Sends raw PTY bytes. The Host accepts these bytes only while this
-    /// client owns the session's control lease.
-    public func sendInput(_ payload: Data) async throws {
+    /// Sends one DENB input frame. The Host accepts it only while this client
+    /// owns the focused control lease for the subscribed session.
+    public func sendInput(sessionID: String, payload: Data) async throws {
         guard let socket else { throw WarrenRemoteClientError.notConnected }
-        try await socket.sendBinary(Array(payload))
+        guard let subscription = subscriptions[sessionID],
+              let attachmentID = subscription.attachmentID,
+              let sessionUUID = UUID(uuidString: sessionID),
+              let attachmentUUID = UUID(uuidString: attachmentID) else {
+            throw WarrenRemoteClientError.requestFailed("terminal subscription is required before input")
+        }
+        guard let metadata = InputMetadata(
+            sessionID: TerminalSessionID(rawValue: sessionUUID),
+            attachmentID: TerminalAttachmentID(rawValue: attachmentUUID),
+            payloadLength: payload.count
+        ) else {
+            throw WarrenRemoteClientError.invalidResponse
+        }
+        let bytes = try codec.encodeInput(metadata: metadata, payload: payload)
+        try await socket.sendBinary(bytes)
     }
 
     @discardableResult
@@ -1205,6 +1250,47 @@ public actor WarrenRemoteClient {
         return try await request("agent.interaction.resolve", jsonParams: params, decoding: WarrenRemoteAgentCommandReceipt.self)
     }
 
+    public func setAgentGoal(
+        executionID: String,
+        commandID: String,
+        objective: String,
+        status: String? = nil,
+        tokenBudget: Int64? = nil,
+        replaceExisting: Bool = false,
+        expectedVersion: UInt64? = nil,
+        leaseID: String? = nil
+    ) async throws -> WarrenRemoteAgentCommandReceipt {
+        var params = canonicalCommandParams(
+            commandID: commandID,
+            executionID: executionID,
+            expectedVersion: expectedVersion,
+            leaseID: leaseID
+        )
+        params["objective"] = objective
+        if let status, !status.isEmpty { params["status"] = status }
+        if let tokenBudget { params["tokenBudget"] = tokenBudget }
+        if replaceExisting { params["replaceExisting"] = true }
+        return try await request("agent.goal.set", jsonParams: params, decoding: WarrenRemoteAgentCommandReceipt.self)
+    }
+
+    public func clearAgentGoal(
+        executionID: String,
+        commandID: String,
+        expectedVersion: UInt64? = nil,
+        leaseID: String? = nil
+    ) async throws -> WarrenRemoteAgentCommandReceipt {
+        return try await request(
+            "agent.goal.clear",
+            jsonParams: canonicalCommandParams(
+                commandID: commandID,
+                executionID: executionID,
+                expectedVersion: expectedVersion,
+                leaseID: leaseID
+            ),
+            decoding: WarrenRemoteAgentCommandReceipt.self
+        )
+    }
+
     private func canonicalCommandParams(
         commandID: String,
         executionID: String,
@@ -1236,7 +1322,7 @@ public actor WarrenRemoteClient {
     }
 
     public static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
-        lhs.split(separator: ".", maxSplits: 1).first == rhs.split(separator: ".", maxSplits: 1).first
+        lhs == rhs
     }
 
     private func runConnectionLoop() async {
@@ -1258,7 +1344,11 @@ public actor WarrenRemoteClient {
             } else {
                 adapter = WarrenRemoteSocket.adapter(url: url, session: urlSession)
             }
-            let socket = WarrenRemoteSocket(adapter: adapter, codec: codec)
+            let socket = WarrenRemoteSocket(
+                adapter: adapter,
+                codec: codec,
+                terminalStateFormats: terminalStateFormats
+            )
             self.socket = socket
             negotiatedCapabilities = []
             let connectionStartedAt = ContinuousClock.now
@@ -1497,7 +1587,7 @@ public actor WarrenRemoteClient {
             } catch {
                 // A Host may evict an old ring or cursor after a restart. In
                 // that case the anchor is only a hint; retry without it so
-				// protocol 3 can deliver a fresh atomic checkpoint. Other
+				// protocol 4 can deliver a fresh atomic checkpoint. Other
                 // failures (for example an ended Session) retain the intent
                 // for a later roster/reconnect without issuing a second
                 // request immediately.

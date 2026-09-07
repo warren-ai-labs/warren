@@ -93,7 +93,7 @@ but the current behavior does not fully implement the intended warm semantics:
 
 - background sessions do not continuously consume output into their retained
   surface;
-- tab switching can call `session.attach` again;
+- tab switching can call `session.subscribe` again;
 - an unrecoverable anchor can enter the ghostline full-capture path;
 - that path clears the surface and feeds a complete snapshot to the same
   surface that may already be visible.
@@ -120,7 +120,7 @@ lifecycle.
 - Continue consuming and applying background output while the surface is
   hidden/occluded.
 - On tab switch, only reparent/present the already-current surface.
-- Do not call `session.attach`, replay a ring, or clear the screen for an
+- Do not call `session.subscribe`, replay a ring, or clear the screen for an
   ordinary switch.
 - Only the active session may receive input, focus, or resize ownership.
 

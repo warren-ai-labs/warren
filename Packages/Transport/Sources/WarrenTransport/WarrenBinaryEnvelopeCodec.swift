@@ -200,8 +200,12 @@ extension WarrenWireCodec {
                 actual: envelope.payloadLength
             )
         }
-        guard let metadata = InputMetadata(
-            version: raw.version,
+        let versionParts = raw.version.split(separator: ".", omittingEmptySubsequences: true)
+        guard versionParts.count == 2,
+              let major = UInt16(versionParts[0]),
+              let minor = UInt16(versionParts[1]),
+              let metadata = InputMetadata(
+            version: ProtocolVersion(major: major, minor: minor),
             sessionID: raw.sessionID,
             attachmentID: raw.attachmentID,
             payloadLength: raw.payloadLength,

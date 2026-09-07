@@ -54,6 +54,9 @@
   --color-accent-solid: var(--ember-highlight);
   --color-accent-subtle: rgba(224, 120, 80, 0.14);
   --color-danger-subtle: rgba(220, 107, 107, 0.14);
+  /* Resolved/approved interaction chips. Pairs with --color-danger-subtle for
+     the denied and cancelled states. */
+  --fill-status-success: rgba(126, 198, 153, 0.14);
   --color-brand-solid: var(--ember-amber);
   --color-selection: rgba(224, 120, 80, 0.32);
   --color-status-working: var(--ember-amber);
@@ -76,6 +79,10 @@
      same semantic palette so a visual adjustment never creates a client-only
      token fork. */
   --color-agent-surface: var(--color-bg-surface);
+  /* The user bubble sits one step above the page so it reads as a distinct
+     turn. It previously hardcoded a cool grey (#26282d) inside a warm Ember
+     palette, which is why the Agent panel read off-family. */
+  --color-agent-bubble-surface: var(--ember-muted);
   --color-agent-card-surface: var(--color-bg-raised);
   --color-agent-card-border: var(--color-border-subtle);
   --color-agent-input-surface: var(--color-bg-raised);
@@ -103,6 +110,9 @@
   --color-mobile-surface: var(--color-bg-surface);
   --color-mobile-border: var(--color-border-separator);
   --space-mobile-safe-bottom: env(safe-area-inset-bottom);
+  /* Comfortable reading measure for Agent prose, shared with the iOS
+     transcript so the two clients break lines at the same width. */
+  --measure-transcript: 720px;
 
   /* Spacing scale (WarrenSpacing parity). */
   --space-hairline: 1px;
@@ -1132,7 +1142,7 @@ button:disabled {
   align-items: center;
   gap: var(--space-sm);
   width: 100%;
-  max-width: 820px;
+  max-width: var(--measure-transcript);
   margin-inline: auto;
   padding: 6px 18px;
   border-top: 1px solid color-mix(in srgb, var(--color-status-warning) 34%, transparent);
@@ -1229,7 +1239,7 @@ button:disabled {
   align-items: center;
   gap: var(--space-sm);
   width: 100%;
-  max-width: 820px;
+  max-width: var(--measure-transcript);
   margin-inline: auto;
   padding: 7px 22px;
   border-top: 1px solid var(--color-border-subtle);
@@ -1248,8 +1258,15 @@ button:disabled {
 }
 
 .agent-working-action {
-  color: #ffffff;
-  background: linear-gradient(90deg, #ffffff 0%, #ffffff 38%, #787878 50%, #ffffff 62%, #ffffff 100%);
+  color: var(--color-text-primary);
+  background: linear-gradient(
+    90deg,
+    var(--color-text-primary) 0%,
+    var(--color-text-primary) 38%,
+    var(--color-text-secondary) 50%,
+    var(--color-text-primary) 62%,
+    var(--color-text-primary) 100%
+  );
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -1259,10 +1276,6 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-working-provider {
-  color: var(--color-text-secondary);
 }
 
 @keyframes agent-working-shimmer {
@@ -1280,7 +1293,7 @@ button:disabled {
   .agent-working-action {
     animation: none;
     background: none;
-    -webkit-text-fill-color: #ffffff;
+    -webkit-text-fill-color: var(--color-text-primary);
   }
 }
 
@@ -1288,12 +1301,14 @@ button:disabled {
   flex: 1 1 0;
   min-height: 0;
   width: 100%;
-  max-width: 820px;
+  /* One reading measure shared with the iOS transcript. 820px let long prose
+     run wider than is comfortable at this type size. */
+  max-width: var(--measure-transcript);
   margin-inline: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 26px 22px 18px;
+  gap: var(--space-lg);
+  padding: var(--space-2xl) var(--space-xl) var(--space-xl);
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -1369,22 +1384,27 @@ button:disabled {
   align-items: flex-end;
 }
 
+/* The user's turn keeps a bubble because it is short and worth locating at a
+   glance. Agent prose deliberately does not: transcripts carry Markdown, code,
+   and tool cards that a bubble would crowd. */
 .agent-bubble {
   max-width: min(85%, 720px);
-  padding: 9px 12px;
-  border-radius: 15px 5px 15px 15px;
-  background: #26282d;
-  color: #e9e9ec;
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-2xl) var(--radius-sm) var(--radius-2xl) var(--radius-2xl);
+  background: var(--color-agent-bubble-surface);
+  color: var(--color-text-primary);
 }
 
 .agent-bubble .agent-markdown {
   font-size: var(--text-base);
 }
 
+/* Timestamps and provider labels are reference detail, not a heading for every
+   turn. They stay one step quieter than secondary prose. */
 .agent-message-meta {
-  margin-top: 4px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  margin-top: var(--space-xs);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
   line-height: 1.4;
 }
 
@@ -1488,11 +1508,11 @@ button:disabled {
 
 .agent-markdown :not(pre) > code {
   padding: 1.5px 5px;
-  border-radius: 4px;
-  background: #1b1d21;
-  color: #d6d8dd;
-  font: 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  border: 1px solid #282a30;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
+  font: var(--text-base) / 1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  border: 1px solid var(--color-border-subtle);
 }
 
 .agent-markdown table {
@@ -1528,9 +1548,9 @@ button:disabled {
 .agent-tool-card {
   width: 100%;
   padding: var(--space-lg);
-  border: 1px solid var(--color-border-subtle, #292b30);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
-  background: var(--fill-agent-card, #17191d);
+  background: var(--fill-agent-card);
   color: var(--color-text-primary);
 }
 
@@ -1855,20 +1875,23 @@ button:disabled {
   gap: var(--space-xs);
   flex: 0 0 auto;
   width: 100%;
-  max-width: 820px;
+  max-width: var(--measure-transcript);
   margin-inline: auto;
-  padding: 0 22px 18px;
+  padding: 0 var(--space-xl) var(--space-xl);
 }
 
+/* A pill rather than a rounded rectangle, matching the iOS composer capsule.
+   The field and its send action are the only things inside; attachments and
+   provider metadata sit in the quiet row below. */
 .agent-input-surface {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-xs);
   width: 100%;
-  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-lg);
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-xl);
   border: 1px solid var(--color-input-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-2xl);
   background: var(--color-input-surface);
   box-shadow: var(--shadow-agent-surface);
   transition-property: border-color, box-shadow;
@@ -1924,7 +1947,7 @@ button:disabled {
   height: 28px;
   padding: 0 10px;
   border-radius: var(--radius-full);
-  border: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--color-border-subtle);
   background: var(--fill-agent-chip, var(--color-input-surface));
   color: var(--color-text-secondary);
   font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -1936,13 +1959,13 @@ button:disabled {
 
 .agent-picker-trigger:hover {
   background: var(--fill-hover);
-  color: var(--color-text);
-  border-color: var(--color-border);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-default);
 }
 
 .agent-picker-trigger.open {
-  background: var(--fill-selected, var(--fill-hover));
-  color: var(--color-text);
+  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
   border-color: var(--color-input-focus);
 }
 
@@ -1971,10 +1994,10 @@ button:disabled {
   z-index: var(--layer-menu);
   min-width: 220px;
   max-width: 320px;
-  background: var(--color-panel, #ffffff);
-  border: 1px solid var(--color-border);
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-border-default);
   border-radius: var(--radius-lg);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-popover);
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -1997,7 +2020,7 @@ button:disabled {
   padding: 4px 8px 6px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-text-tertiary, #888);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -2018,8 +2041,8 @@ button:disabled {
   padding: 6px 10px;
   border-radius: var(--radius-md);
   border: none;
-  background: none;
-  color: var(--color-text);
+  background: transparent;
+  color: var(--color-text-primary);
   cursor: pointer;
   text-align: start;
   font-size: var(--text-sm);
@@ -2027,11 +2050,12 @@ button:disabled {
 }
 
 .agent-picker-item:hover {
-  background: var(--fill-hover, rgba(0, 0, 0, 0.05));
+  background: var(--fill-hover);
 }
 
 .agent-picker-item.selected {
-  background: var(--fill-selected, rgba(0, 0, 0, 0.08));
+  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
   font-weight: 600;
 }
 
@@ -2048,14 +2072,14 @@ button:disabled {
 
 .agent-picker-item-desc {
   font-size: 11px;
-  color: var(--color-text-tertiary, #888);
+  color: var(--color-text-secondary);
   line-height: 1.2;
 }
 
 .agent-picker-check {
   font-size: 12px;
   font-weight: bold;
-  color: var(--color-primary, #0969da);
+  color: var(--color-accent-text);
   margin-inline-start: 8px;
 }
 
@@ -2064,7 +2088,7 @@ button:disabled {
   gap: 4px;
   padding: 6px 4px 2px;
   margin-top: 4px;
-  border-top: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.08));
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .agent-picker-custom-input {
@@ -2076,7 +2100,7 @@ button:disabled {
   border: 1px solid var(--color-input-border);
   border-radius: var(--radius-sm);
   background: var(--color-input-surface);
-  color: var(--color-text);
+  color: var(--color-text-primary);
 }
 
 .agent-picker-custom-input:focus {
@@ -2090,8 +2114,8 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   border-radius: var(--radius-sm);
-  background: var(--color-primary, #0969da);
-  color: #ffffff;
+  background: var(--color-accent-solid);
+  color: var(--color-text-on-accent);
   border: none;
   cursor: pointer;
 }
@@ -2103,7 +2127,7 @@ button:disabled {
 
 .agent-picker-footer {
   padding: 6px 4px 2px;
-  border-top: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.08));
+  border-top: 1px solid var(--color-border-subtle);
   margin-top: 2px;
 }
 
@@ -2113,10 +2137,10 @@ button:disabled {
   padding: 0 8px;
   font-size: 11px;
   font-weight: 500;
-  border: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--fill-button, rgba(0, 0, 0, 0.04));
-  color: var(--color-text);
+  background: var(--fill-tertiary);
+  color: var(--color-text-primary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2124,7 +2148,7 @@ button:disabled {
 }
 
 .agent-picker-apply-btn:hover {
-  background: var(--fill-hover, rgba(0, 0, 0, 0.08));
+  background: var(--fill-hover);
 }
 
 .agent-input-controls .agent-attachment-picker {
@@ -2133,8 +2157,16 @@ button:disabled {
   height: 32px;
 }
 
-.agent-input-controls .agent-send {
+.agent-submit-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
   margin-inline-start: auto;
+}
+
+.agent-submit-controls .agent-send {
+  margin-inline-start: 0;
 }
 
 .agent-input-surface:focus-within {
@@ -2182,7 +2214,7 @@ button:disabled {
 .agent-structured-options button,
 .agent-queue-actions button,
 .agent-queue-button,
-.agent-cancel-button,
+.agent-stop-button,
 .agent-send-now-button {
   border: 1px solid var(--color-agent-card-border);
   border-radius: var(--radius-md);
@@ -2197,13 +2229,13 @@ button:disabled {
 .agent-structured-actions button:focus-visible,
 .agent-queue-actions button:focus-visible,
 .agent-queue-button:focus-visible,
-.agent-cancel-button:focus-visible,
+.agent-stop-button:focus-visible,
 .agent-send-now-button:focus-visible { background: var(--fill-agent-hover); border-color: var(--color-border-default); }
 .agent-structured-options button:active:not(:disabled),
 .agent-structured-actions button:active:not(:disabled),
 .agent-queue-actions button:active:not(:disabled),
 .agent-queue-button:active:not(:disabled),
-.agent-cancel-button:active:not(:disabled),
+.agent-stop-button:active:not(:disabled),
 .agent-send-now-button:active:not(:disabled) {
   background: var(--fill-agent-hover);
   transform: translateY(1px);
@@ -2225,7 +2257,7 @@ button:disabled {
 .agent-structured-actions button:disabled,
 .agent-queue-actions button:disabled,
 .agent-queue-button:disabled,
-.agent-cancel-button:disabled,
+.agent-stop-button:disabled,
 .agent-send-now-button:disabled {
   border-color: var(--color-border-subtle);
   background: transparent;
@@ -2233,6 +2265,55 @@ button:disabled {
   opacity: 0.62;
   cursor: default;
   transform: none;
+}
+
+.agent-stop-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-color: color-mix(in srgb, var(--color-text-danger) 42%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--color-danger-subtle);
+  color: var(--color-text-danger);
+  white-space: nowrap;
+}
+
+.agent-stop-button svg {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+}
+
+.agent-stop-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-text-danger) 68%, transparent);
+  background: color-mix(in srgb, var(--color-text-danger) 20%, transparent);
+}
+
+.agent-stop-button:disabled {
+  background: color-mix(in srgb, var(--color-text-danger) 6%, transparent);
+  color: var(--color-text-tertiary);
+}
+
+.agent-submit-controls .agent-send-now-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  color: var(--color-status-working);
+  border-color: color-mix(in srgb, var(--color-status-working) 40%, transparent);
+  white-space: nowrap;
+}
+
+.agent-metadata-marker {
+  width: 100%;
+  margin: var(--space-xs) 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
 }
 
 /* Docked active interaction at bottom of conversation */
@@ -2245,8 +2326,8 @@ button:disabled {
   margin: 0;
   border: 1px solid var(--color-agent-card-border);
   border-radius: 8px;
-  background: #1a1c20;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  background: var(--color-bg-raised);
+  box-shadow: var(--shadow-popover);
   padding: 10px 14px;
 }
 .agent-docked-interaction .agent-structured-head strong {
@@ -2258,8 +2339,8 @@ button:disabled {
 .agent-interaction-card {
   margin: 4px 0;
   border: 1px solid var(--color-agent-card-border);
-  border-radius: 6px;
-  background: #16181b;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-sunken);
   overflow: hidden;
   transition: border-color var(--duration-fast) var(--ease-out);
 }
@@ -2284,12 +2365,12 @@ button:disabled {
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: #99a1af;
+  color: var(--color-text-secondary);
 }
 .agent-interaction-card-summary {
   flex: 1;
   font-size: var(--text-2sm);
-  color: #9ca3af;
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2302,13 +2383,13 @@ button:disabled {
 }
 .agent-interaction-card-status.resolved,
 .agent-interaction-card-status.approved {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.12);
+  color: var(--color-status-success);
+  background: var(--fill-status-success);
 }
 .agent-interaction-card-status.denied,
 .agent-interaction-card-status.cancelled {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-status-danger);
+  background: var(--color-danger-subtle);
 }
 .agent-interaction-card-caret {
   color: var(--color-agent-meta);
@@ -2317,7 +2398,7 @@ button:disabled {
 .agent-interaction-card-body {
   padding: 8px 10px 10px;
   border-top: 1px solid var(--color-agent-card-border);
-  background: #141518;
+  background: var(--color-bg-page);
   font-size: var(--text-2sm);
   color: var(--color-agent-secondary);
 }
@@ -2336,14 +2417,14 @@ button:disabled {
   align-items: center;
   gap: 6px;
   font-size: var(--text-2sm);
-  color: #6b7280;
+  color: var(--color-text-tertiary);
 }
 .agent-interaction-card-opt.chosen {
   color: var(--color-agent-primary);
   font-weight: 500;
 }
 .agent-interaction-card-opt.chosen .agent-interaction-opt-marker {
-  color: #10b981;
+  color: var(--color-status-success);
 }
 .agent-interaction-opt-marker {
   font-size: 11px;
@@ -2354,7 +2435,7 @@ button:disabled {
   color: var(--color-agent-primary);
 }
 .agent-interaction-card-custom-ans em {
-  color: #6b7280;
+  color: var(--color-text-tertiary);
   font-style: normal;
   margin-right: 4px;
 }
@@ -2428,10 +2509,10 @@ button:disabled {
   padding: 4px 10px;
   border: 1px solid var(--color-input-border);
   border-radius: var(--radius-full);
-  background: var(--color-card-surface, var(--color-input-surface));
+  background: var(--color-card-surface);
   color: var(--color-text-primary);
   font-size: var(--text-xs);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-border);
 }
 .agent-attachment-chip .agent-attachment-icon {
   flex-shrink: 0;
@@ -2555,7 +2636,7 @@ button:disabled {
   place-items: center;
   flex: 0 0 auto;
   width: 100%;
-  max-width: 820px;
+  max-width: var(--measure-transcript);
   margin-inline: auto;
   padding: 18px 22px 22px;
   color: var(--color-text-secondary);
@@ -5011,7 +5092,6 @@ button:disabled {
   .agent-structured-actions button:hover:not(:disabled),
   .agent-queue-actions button:hover:not(:disabled),
   .agent-queue-button:hover:not(:disabled),
-  .agent-cancel-button:hover:not(:disabled),
   .agent-send-now-button:hover:not(:disabled) {
     background: var(--fill-agent-hover);
     border-color: var(--color-border-default);
@@ -5169,7 +5249,7 @@ button:disabled {
   .agent-structured-options button,
   .agent-structured-actions button,
   .agent-queue-button,
-  .agent-cancel-button,
+  .agent-stop-button,
   .agent-send-now-button {
     min-height: 44px;
   }

@@ -15,7 +15,7 @@ The central design decision is ownership:
 
 ```text
 macOS Desktop ---+
-Web / PWA --------+-- Warren control protocol 3.0 --------> warren-headless
+Web / PWA --------+-- Warren control protocol 4.0 --------> warren-headless
 CLI --------------+                                |
                                                    +-- Projects / Workspaces
                                                    +-- Terminal Groups
@@ -301,8 +301,8 @@ Kill
 ```
 
 Ghostline owns one PTY per Session in a detached server process. It exposes a
-durable output cursor, ANSI checkpoint replay for compatibility clients, and
-an opaque native Ghostty snapshot for atomic desktop recovery.
+durable output cursor, `ghostline-vt-replay-v1` checkpoints for replay clients,
+and an opaque `ghostty-vt-snapshot-v1` state for atomic desktop recovery.
 
 The adapter starts an interactive shell and then enters a preset command. As a
 result, exiting Codex or Claude returns to a usable shell instead of ending the
@@ -362,8 +362,8 @@ The Output Ring chooses one of three plans:
 When the Ring cannot serve a Tail, the Host stops and joins the current
 Ghostline reader while holding the attach preparation boundary. A capable
 desktop receives one opaque native Ghostty snapshot paired with the first
-cursor not represented by that state. Web and mobile compatibility peers
-receive Ghostline checkpoint replay. The replacement reader starts at the
+cursor not represented by that state. Web, iOS, and CLI replay peers receive a
+Ghostline checkpoint replay. The replacement reader starts at the
 paired cursor, so recovery and live bytes cannot overlap or leave a gap.
 
 ### 8.3 DENB envelope
@@ -399,11 +399,12 @@ growing memory without limit.
 Several clients may observe one Session, but one peer owns focus and the
 canonical PTY viewport at a time.
 
-- `session.attach` subscribes to output and returns Session metadata.
+- `session.subscribe` subscribes to output and returns the attachment identity.
 - `session.focus` claims or releases focus and may carry rows and columns.
-- input requires the peer to control the attached Session.
+- DENB input requires the peer to control the subscribed Session.
 - background `session.resize` requests are safe no-ops.
-- detach releases focus but does not end the Runtime.
+- `session.unsubscribe` releases the subscription and focus but does not end the
+  Runtime.
 
 On macOS, `TerminalSurfaceManager` is the only owner of AppKit terminal views
 and Ghostty presentation work. SwiftUI submits immutable presentation intent;
@@ -573,15 +574,16 @@ The legacy Swift `WarrenDomain.TerminalSession` is Workspace-scoped. Full
 Workspace-or-Terminal-Group ownership is represented in the Go API and the
 Desktop remote projection, not yet consistently in the base Swift model.
 
-### 12.3 duplicated client abstractions
+### 12.3 shared remote client boundary
 
-Swift contains typed Protocol, ClientCore, and generic Transport packages,
-but the production macOS path still implements much of the request, roster,
-attachment, and reconnect policy directly in `WarrenRemoteApplicationModel`.
+Swift Protocol, ClientCore, and Transport packages now provide the production
+remote transport boundary. `WarrenRemoteApplicationModel` owns application
+projection and surface lifecycle, while `WarrenRemoteClient` owns the wire
+codec, request routing, subscription recovery, and DENB transport.
 
-New protocol work should either deliberately finish that migration or extend
-the current live path consistently. Updating only the unused abstraction is
-not a product change.
+New protocol work must extend the shared client and its contract tests. A
+second client-side wire actor or a direct WebSocket path is not a supported
+extension point.
 
 ### 12.4 explicit deletion and ended history
 

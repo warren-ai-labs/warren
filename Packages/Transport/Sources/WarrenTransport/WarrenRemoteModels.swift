@@ -21,8 +21,8 @@ public enum WarrenRemoteNetworking {
 
 /// The endpoint description used by native clients.
 ///
-/// `type` is kept as a string for compatibility with the desktop endpoint
-/// catalog. A `daemon` endpoint talks to Headless directly; a `relay` endpoint
+/// `type` is kept as a string because the shared endpoint catalog is consumed
+/// by the desktop client. A `daemon` endpoint talks to Headless directly; a `relay` endpoint
 /// uses the host-scoped Relay WebSocket path and treats `hostID` as part of the
 /// routing identity. Callers should load `token` from a Keychain-backed store
 /// on mobile instead of persisting it in UserDefaults. The desktop client
@@ -469,10 +469,71 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    public struct Task: Codable, Equatable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let name: String
+        public let source: String?
+        public let externalID: String?
+        public let url: String?
+        public let creationRequestID: String?
+        public let creationRequestHash: String?
+        public let pinned: Bool
+        public let order: Int
+        public let createdAt: String?
+
+        public init(
+            id: String,
+            name: String,
+            source: String? = nil,
+            externalID: String? = nil,
+            url: String? = nil,
+            creationRequestID: String? = nil,
+            creationRequestHash: String? = nil,
+            pinned: Bool = false,
+            order: Int = 0,
+            createdAt: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.source = source
+            self.externalID = externalID
+            self.url = url
+            self.creationRequestID = creationRequestID
+            self.creationRequestHash = creationRequestHash
+            self.pinned = pinned
+            self.order = order
+            self.createdAt = createdAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, source
+            case externalID = "externalID"
+            case url
+            case creationRequestID = "creationRequestId"
+            case creationRequestHash = "creationRequestHash"
+            case pinned, order, createdAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(String.self, forKey: .id)
+            name = try values.decodeIfPresent(String.self, forKey: .name) ?? id
+            source = try values.decodeIfPresent(String.self, forKey: .source)
+            externalID = try values.decodeIfPresent(String.self, forKey: .externalID)
+            url = try values.decodeIfPresent(String.self, forKey: .url)
+            creationRequestID = try values.decodeIfPresent(String.self, forKey: .creationRequestID)
+            creationRequestHash = try values.decodeIfPresent(String.self, forKey: .creationRequestHash)
+            pinned = try values.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+            order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
+            createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
+        }
+    }
+
     public struct Project: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: String
         public let name: String
         public let path: String
+        public let setupScript: String?
         public let autoImportGitWorktrees: Bool
         public let pinned: Bool
         public let order: Int
@@ -481,6 +542,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             id: String,
             name: String,
             path: String,
+            setupScript: String? = nil,
             autoImportGitWorktrees: Bool = false,
             pinned: Bool = false,
             order: Int = 0
@@ -488,13 +550,14 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.id = id
             self.name = name
             self.path = path
+            self.setupScript = setupScript
             self.autoImportGitWorktrees = autoImportGitWorktrees
             self.pinned = pinned
             self.order = order
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, name, path, autoImportGitWorktrees, pinned, order
+            case id, name, path, setupScript, autoImportGitWorktrees, pinned, order
         }
 
         public init(from decoder: Decoder) throws {
@@ -502,6 +565,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             id = try values.decode(String.self, forKey: .id)
             name = try values.decodeIfPresent(String.self, forKey: .name) ?? id
             path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
+            setupScript = try values.decodeIfPresent(String.self, forKey: .setupScript)
             autoImportGitWorktrees = try values.decodeIfPresent(Bool.self, forKey: .autoImportGitWorktrees) ?? false
             pinned = try values.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
             order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
@@ -511,6 +575,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     public struct Workspace: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: String
         public let projectID: String
+        public let taskID: String?
         public let name: String
         public let path: String
         public let branch: String?
@@ -524,6 +589,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public init(
             id: String,
             projectID: String,
+            taskID: String? = nil,
             name: String,
             path: String,
             branch: String? = nil,
@@ -536,6 +602,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         ) {
             self.id = id
             self.projectID = projectID
+            self.taskID = taskID
             self.name = name
             self.path = path
             self.branch = branch
@@ -550,6 +617,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case id
             case projectID = "project"
+            case taskID = "task"
             case name, path, branch, kind, managedWorktree, worktreeLocked, pinned, order, mergeState
         }
 
@@ -557,6 +625,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             id = try values.decode(String.self, forKey: .id)
             projectID = try values.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+            taskID = try values.decodeIfPresent(String.self, forKey: .taskID)
             name = try values.decodeIfPresent(String.self, forKey: .name) ?? id
             path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
             branch = try values.decodeIfPresent(String.self, forKey: .branch)
@@ -613,6 +682,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let title: String
         public let customTitle: String?
         public let kind: String
+        public let agentProvider: String?
         public let agentHandler: String?
         public let command: String?
         public let process: String?
@@ -643,6 +713,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title: String = "",
             customTitle: String? = nil,
             kind: String = "shell",
+            agentProvider: String? = nil,
             agentHandler: String? = nil,
             command: String? = nil,
             process: String? = nil,
@@ -673,6 +744,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.title = title
             self.customTitle = customTitle
             self.kind = kind
+            self.agentProvider = agentProvider
             self.agentHandler = agentHandler
             self.command = command
             self.process = process
@@ -704,6 +776,11 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         /// Dedicated Agent Sessions identify their provider by kind, while a
         /// shell can become Agent-backed after Warren records its binding.
         public var isAgentBacked: Bool {
+            if let agentProvider,
+               !agentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !["shell", "custom"].contains(agentProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
+                return true
+            }
             if let agentSessionID,
                !agentSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return true
@@ -752,7 +829,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case id
             case workspaceID = "workspace"
             case terminalGroupID = "terminalGroup"
-            case scope, title, customTitle, kind, agentHandler, command, process, directory, runtime, runtimeKind
+            case scope, title, customTitle, kind, agentProvider, agentHandler, command, process, directory, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
@@ -777,6 +854,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
             customTitle = try values.decodeIfPresent(String.self, forKey: .customTitle)
             kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "shell"
+            agentProvider = try values.decodeIfPresent(String.self, forKey: .agentProvider)
             agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)
             command = try values.decodeIfPresent(String.self, forKey: .command)
             process = try values.decodeIfPresent(String.self, forKey: .process)
@@ -853,6 +931,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let baseRevision: UInt64
         public let revision: UInt64
         public let host: Host?
+        public let tasks: EntityChanges<Task>?
         public let projects: EntityChanges<Project>?
         public let workspaces: EntityChanges<Workspace>?
         public let terminalGroups: EntityChanges<TerminalGroup>?
@@ -862,6 +941,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             baseRevision: UInt64,
             revision: UInt64,
             host: Host? = nil,
+            tasks: EntityChanges<Task>? = nil,
             projects: EntityChanges<Project>? = nil,
             workspaces: EntityChanges<Workspace>? = nil,
             terminalGroups: EntityChanges<TerminalGroup>? = nil,
@@ -870,6 +950,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.baseRevision = baseRevision
             self.revision = revision
             self.host = host
+            self.tasks = tasks
             self.projects = projects
             self.workspaces = workspaces
             self.terminalGroups = terminalGroups
@@ -877,7 +958,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case baseRevision, revision, host, projects, workspaces
+            case baseRevision, revision, host, tasks, projects, workspaces
             case terminalGroups
             case groups
             case sessions
@@ -888,6 +969,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             baseRevision = try values.decode(UInt64.self, forKey: .baseRevision)
             revision = try values.decode(UInt64.self, forKey: .revision)
             host = try values.decodeIfPresent(Host.self, forKey: .host)
+            tasks = try values.decodeIfPresent(EntityChanges<Task>.self, forKey: .tasks)
             projects = try values.decodeIfPresent(EntityChanges<Project>.self, forKey: .projects)
             workspaces = try values.decodeIfPresent(EntityChanges<Workspace>.self, forKey: .workspaces)
             terminalGroups = try values.decodeIfPresent(EntityChanges<TerminalGroup>.self, forKey: .terminalGroups)
@@ -900,6 +982,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             try values.encode(baseRevision, forKey: .baseRevision)
             try values.encode(revision, forKey: .revision)
             try values.encodeIfPresent(host, forKey: .host)
+            try values.encodeIfPresent(tasks, forKey: .tasks)
             try values.encodeIfPresent(projects, forKey: .projects)
             try values.encodeIfPresent(workspaces, forKey: .workspaces)
             try values.encodeIfPresent(terminalGroups, forKey: .terminalGroups)
@@ -928,6 +1011,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     public let schema: Int?
     public let revision: UInt64?
     public let host: Host
+    public let tasks: [Task]
     public let projects: [Project]
     public let workspaces: [Workspace]
     public let terminalGroups: [TerminalGroup]
@@ -937,6 +1021,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         schema: Int? = nil,
         revision: UInt64? = nil,
         host: Host,
+        tasks: [Task] = [],
         projects: [Project] = [],
         workspaces: [Workspace] = [],
         terminalGroups: [TerminalGroup] = [],
@@ -945,6 +1030,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         self.schema = schema
         self.revision = revision
         self.host = host
+        self.tasks = tasks
         self.projects = projects
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
@@ -952,7 +1038,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schema, revision, host, projects, workspaces, terminalGroups, sessions
+        case schema, revision, host, tasks, projects, workspaces, terminalGroups, sessions
     }
 
     public init(from decoder: Decoder) throws {
@@ -960,6 +1046,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         schema = try values.decodeIfPresent(Int.self, forKey: .schema)
         revision = try values.decodeIfPresent(UInt64.self, forKey: .revision)
         host = try values.decode(Host.self, forKey: .host)
+        tasks = try values.decodeIfPresent([Task].self, forKey: .tasks) ?? []
         projects = try values.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try values.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try values.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
@@ -974,6 +1061,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             schema: schema,
             revision: delta.revision,
             host: delta.host ?? host,
+            tasks: Self.applying(tasks, changes: delta.tasks, id: \.id),
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
@@ -1016,6 +1104,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
 // Top-level aliases keep call sites concise while retaining the roster's
 // explicit hierarchy in its Codable representation.
 public typealias WarrenRemoteHost = WarrenRemoteRoster.Host
+public typealias WarrenRemoteTask = WarrenRemoteRoster.Task
 public typealias WarrenRemoteProject = WarrenRemoteRoster.Project
 public typealias WarrenRemoteWorkspace = WarrenRemoteRoster.Workspace
 public typealias WarrenRemoteTerminalGroup = WarrenRemoteRoster.TerminalGroup
@@ -1234,6 +1323,7 @@ public enum WarrenRemoteAgentCapability {
     public static let interactions = "agent-interactions-v1"
     public static let interrupt = "agent-interrupt-v1"
     public static let attachments = "agent-attachments-v1"
+    public static let goals = "agent-goals-v1"
 }
 
 public struct WarrenRemoteAgentAttachmentRef: Codable, Equatable, Hashable, Sendable {
@@ -1655,25 +1745,56 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
     public let checkpoint: WarrenRemoteAgentProjectionCheckpoint
     public let events: [WarrenRemoteAgentEvent]
     public let live: Bool
+    /// Additive pagination metadata. Older Hosts omit these fields; the
+    /// zero/false defaults preserve their original one-shot semantics.
+    public let nextAfterSequence: UInt64?
+    public let headSequence: UInt64
+    public let hasMore: Bool
+    public let retainedFromSequence: UInt64?
 
     public init(
         streamID: String,
         executionID: String? = nil,
         checkpoint: WarrenRemoteAgentProjectionCheckpoint,
         events: [WarrenRemoteAgentEvent] = [],
-        live: Bool = false
+        live: Bool = false,
+        nextAfterSequence: UInt64? = nil,
+        headSequence: UInt64 = 0,
+        hasMore: Bool = false,
+        retainedFromSequence: UInt64? = nil
     ) {
         self.streamID = streamID
         self.executionID = executionID
         self.checkpoint = checkpoint
         self.events = events
         self.live = live
+        self.nextAfterSequence = nextAfterSequence
+        self.headSequence = headSequence
+        self.hasMore = hasMore
+        self.retainedFromSequence = retainedFromSequence
     }
 
     private enum CodingKeys: String, CodingKey {
         case streamID = "streamId"
         case executionID = "executionId"
         case checkpoint, events, live
+        case nextAfterSequence
+        case headSequence
+        case hasMore
+        case retainedFromSequence = "retainedFromSequence"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        streamID = try values.decode(String.self, forKey: .streamID)
+        executionID = try values.decodeIfPresent(String.self, forKey: .executionID)
+        checkpoint = try values.decode(WarrenRemoteAgentProjectionCheckpoint.self, forKey: .checkpoint)
+        events = try values.decodeIfPresent([WarrenRemoteAgentEvent].self, forKey: .events) ?? []
+        live = try values.decodeIfPresent(Bool.self, forKey: .live) ?? false
+        nextAfterSequence = try values.decodeIfPresent(UInt64.self, forKey: .nextAfterSequence)
+        headSequence = try values.decodeIfPresent(UInt64.self, forKey: .headSequence) ?? 0
+        hasMore = try values.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        retainedFromSequence = try values.decodeIfPresent(UInt64.self, forKey: .retainedFromSequence)
     }
 }
 
@@ -1752,9 +1873,16 @@ public struct WarrenRemoteFocusResult: Codable, Equatable, Sendable {
 
 public struct WarrenRemoteSubscriptionResult: Codable, Equatable, Sendable {
     public let subscribed: Bool
+    public let attachmentID: String
 
-    public init(subscribed: Bool) {
+    public init(subscribed: Bool, attachmentID: String) {
         self.subscribed = subscribed
+        self.attachmentID = attachmentID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case subscribed
+        case attachmentID = "attachmentId"
     }
 }
 

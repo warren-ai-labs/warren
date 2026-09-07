@@ -9,7 +9,7 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     func testAuthAndImmediateWelcomeAreHandledWithoutAReceiveRace() async throws {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -27,7 +27,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         }
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(auth.utf8)) as? [String: Any])
         XCTAssertEqual(object["t"] as? String, "auth")
-        XCTAssertEqual(object["version"] as? String, "3.0")
+        XCTAssertEqual(object["version"] as? String, "4.0")
         XCTAssertEqual(object["terminalStateFormats"] as? [String], ["ghostline-vt-replay-v1"])
         XCTAssertEqual(object["capabilities"] as? [String], ["roster-delta"])
 
@@ -35,7 +35,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         let initialRevision = await client.roster()?.revision
         XCTAssertEqual(initialRevision, 1)
         let sawWelcome = await recorder.contains { event in
-            if case .welcome(version: "3.0") = event { return true }
+            if case .welcome(version: "4.0") = event { return true }
             return false
         }
         XCTAssertTrue(sawWelcome)
@@ -43,9 +43,40 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testTerminalStateFormatIsConfiguredPerClient() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\"},\"accessScopeId\":\"scope-owner\"}"))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Desktop", url: "http://example.test"),
+            task: task,
+            terminalStateFormats: [WarrenRemoteClient.snapshotTerminalStateFormat]
+        )
+        let consuming = recordEvents(from: client.events(), into: EventRecorder())
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+        let sent = await waitForSentMessages(task, count: 1)
+        guard case .text(let auth) = sent[0],
+              let object = try JSONSerialization.jsonObject(with: Data(auth.utf8)) as? [String: Any] else {
+            XCTFail("auth must be sent as JSON text")
+            return
+        }
+        XCTAssertEqual(
+            object["terminalStateFormats"] as? [String],
+            [WarrenRemoteClient.snapshotTerminalStateFormat]
+        )
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testProtocolVersionRequiresExactMatch() {
+        XCTAssertTrue(WarrenRemoteClient.compatibleProtocolVersion("4.0", with: "4.0"))
+        XCTAssertFalse(WarrenRemoteClient.compatibleProtocolVersion("4.1", with: "4.0"))
+        XCTAssertFalse(WarrenRemoteClient.compatibleProtocolVersion("3.0", with: "4.0"))
+    }
+
     func testRelayAuthUsesAccessTokenAndHostScopedEndpoint() async throws {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let endpoint = WarrenRemoteEndpointConfiguration(
             name: "Relay",
@@ -151,6 +182,61 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testRosterDecodesCurrentTaskAndOwnershipFields() throws {
+        let json = """
+        {
+          "schema": 2,
+          "revision": 4,
+          "host": {"id": "host-1", "name": "Test Host", "version": "dev"},
+          "tasks": [{
+            "id": "task-1", "name": "Fix protocol", "source": "tracker",
+            "externalID": "ext-1", "url": "https://tracker.invalid/1",
+            "creationRequestId": "request-1", "creationRequestHash": "hash-1",
+            "pinned": true, "order": 3, "createdAt": "2026-01-02T03:04:05Z"
+          }],
+          "projects": [{
+            "id": "project-1", "name": "Warren", "path": "/tmp/warren",
+            "setupScript": "scripts/setup.sh", "autoImportGitWorktrees": true
+          }],
+          "workspaces": [{
+            "id": "workspace-1", "project": "project-1", "task": "task-1",
+            "name": "feature/protocol", "path": "/tmp/warren-worktree",
+            "branch": "feature/protocol", "kind": "worktree"
+          }],
+          "terminalGroups": [],
+          "sessions": []
+        }
+        """
+        let roster = try JSONDecoder().decode(WarrenRemoteRoster.self, from: Data(json.utf8))
+        let task = try XCTUnwrap(roster.tasks.first)
+        XCTAssertEqual(task.id, "task-1")
+        XCTAssertEqual(task.creationRequestID, "request-1")
+        XCTAssertTrue(task.pinned)
+        XCTAssertEqual(roster.projects.first?.setupScript, "scripts/setup.sh")
+        XCTAssertEqual(roster.workspaces.first?.taskID, "task-1")
+    }
+
+    func testRosterDeltaAppliesTaskChanges() throws {
+        let roster = WarrenRemoteRoster(
+            revision: 1,
+            host: .init(id: "host-1", name: "Test Host"),
+            tasks: [.init(id: "task-1", name: "Old")]
+        )
+        let delta = WarrenRemoteRoster.Delta(
+            baseRevision: 1,
+            revision: 2,
+            tasks: .init(
+                upsert: [.init(id: "task-1", name: "Updated"), .init(id: "task-2", name: "New")],
+                remove: [],
+                order: ["task-2", "task-1"]
+            )
+        )
+        let merged = try XCTUnwrap(roster.applying(delta))
+        XCTAssertEqual(merged.tasks.map(\.id), ["task-2", "task-1"])
+        XCTAssertEqual(merged.tasks.first?.name, "New")
+        XCTAssertEqual(merged.tasks.last?.name, "Updated")
+    }
+
     func testRosterDeltaMergesAndAStaleBaseRequestsAnAtomicRoster() async throws {
         let (client, task, consuming, recorder) = try await connectedClient()
         let initialRoster = await client.roster()
@@ -236,7 +322,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         let subscribeMessages = await waitForSentMessages(task, count: 2)
         let subscribeMessage = try XCTUnwrap(subscribeMessages.dropFirst().first)
         let subscribeID = try requestID(from: subscribeMessage)
-        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true}}"))
+        await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true,\"attachmentId\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\"}}"))
         let subscribeResult = try await subscribe.value
         XCTAssertTrue(subscribeResult.subscribed)
 
@@ -252,7 +338,6 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     func testAgentEventsHistoryUsesCanonicalCursors() async throws {
         let (client, task, consuming, _) = try await connectedClient()
-        let sessionID = sessionUUID.uuidString.lowercased()
         let request = Task {
             try await client.agentEventsHistory(
                 streamID: "exec-001",
@@ -289,7 +374,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         EventRecorder
     ) {
         let task = ScriptedWebSocketTask()
-        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"3.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
         await task.enqueue(.text(rosterJSON(revision: 1)))
         let client = WarrenRemoteClient(
             configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
@@ -316,7 +401,7 @@ final class WarrenRemoteClientTests: XCTestCase {
     }
 
     private func rosterJSONValue(revision: Int = 1) -> String {
-        "{\"schema\":1,\"revision\":\(revision),\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[]}"
+        "{\"schema\":1,\"revision\":\(revision),\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"tasks\":[],\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[]}"
     }
 
     private func waitForSentMessages(

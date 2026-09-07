@@ -1,5 +1,6 @@
 import SwiftUI
 import WarrenDesignSystem
+import WarrenDomain
 import WarrenObservation
 
 /// Top-right workspace controls share one app-owned popover contract. A
@@ -294,6 +295,8 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
+    @AppStorage(WarrenPreferenceKey.embeddedEditorOpenLinks)
+    private var embeddedEditorOpenLinks = false
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -340,6 +343,17 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
                 .padding(.horizontal, WarrenSpacing.standard)
                 .padding(.vertical, WarrenSpacing.compact)
                 .accessibilityValue(embeddedEditorDefault ? "Checked" : "Unchecked")
+
+                Toggle(
+                    "Open terminal links in embedded editor",
+                    isOn: $embeddedEditorOpenLinks
+                )
+                .toggleStyle(.checkbox)
+                .font(WarrenTypography.popoverMeta)
+                .foregroundStyle(tokens.mutedForeground)
+                .padding(.horizontal, WarrenSpacing.standard)
+                .padding(.vertical, WarrenSpacing.compact)
+                .accessibilityValue(embeddedEditorOpenLinks ? "Checked" : "Unchecked")
 
                 Button(action: openCodeServerInstallationGuide) {
                     HStack(spacing: WarrenSpacing.compact) {

@@ -309,17 +309,32 @@ The Web client mirrors the Desktop resource model:
 - Web Attachments acquire the Control Lease on active input or resize using last-writer-wins semantics.
 - Agent view toggle switches between raw xterm.js terminal and structured conversation view.
 
-## 12. Non-Intrusive Observability and Acceptance
+## 12. Appearance
+
+Appearance is per-surface, not global. The three clients do not share one palette:
+
+- **macOS Desktop**: dark only. It uses the shared `WarrenColorTokens`, whose `resolved(for:)` returns the Ember dark values for every color scheme.
+- **Web/PWA**: dark only. `color-scheme: dark` is declared at `:root`, and there is no light branch.
+- **iOS**: follows the system appearance, with a first-class light palette (Ember Paper) beside the Ember dark one. A phone has a system-level appearance preference and is read in daylight; a developer workbench should not override it. iOS therefore owns its design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens.
+
+Two invariants follow:
+
+1. **The terminal canvas is dark in every appearance, on every client.** ANSI palettes — and the TUIs that assume them — are calibrated against a dark ground, so inverting the canvas would misrender the bright color series rather than merely restyle it. Under a light appearance the canvas is inset and bordered so it reads as a deliberate dark surface.
+2. **Elevation is expressed with opaque per-appearance surfaces, not with alpha.** A translucent light wash lifts a surface off a dark ground but is invisible over a light one, where elevation has to darken instead. Any surface that must read in both appearances resolves an explicit value per appearance.
+
+Colors in each client resolve through that client's semantic token tier. A component never hardcodes a literal color; a missing token should surface as a visible defect rather than silently resolve to a stale fallback.
+
+## 13. Non-Intrusive Observability and Acceptance
 
 Acceptance tests must not take screenshots, move the mouse, or steal keyboard focus.
 
-### 12.1 Three Observation Layers
+### 13.1 Three Observation Layers
 
 1. **Domain Event Log**: Structured JSON events with monotonic timestamps, trace IDs, and resource IDs.
 2. **Semantic UI Snapshot**: Read-only accessibility tree capturing identifier, role, label, value, enabled, selected, and focused state.
 3. **Terminal Probe**: Verifies runtime state, PTY dimensions, input sequences, recovery anchors, and post-ANSI cell attributes.
 
-## 13. Scope and Out of Scope
+## 14. Scope and Out of Scope
 
 Out of scope for the open-source phase-one repository:
 - Multi-user accounts, organizations, and billing.

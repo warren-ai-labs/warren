@@ -448,7 +448,7 @@ func TestClaimingSubscribeResizesBeforeRecovery(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{
+	requestResult[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{
 		"id":    sessionID,
 		"claim": true,
 		"cols":  120,
@@ -463,76 +463,14 @@ func TestClaimingSubscribeResizesBeforeRecovery(t *testing.T) {
 	}
 }
 
-func TestControlOnlyAttachSwapsLeaseWithoutOutputWork(t *testing.T) {
-	const sessionID = "control-only"
-	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
-	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
-
-	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
-	defer connection.Close()
-
-	result := requestResult[map[string]any](t, connection, "session.attach", map[string]any{
-		"id": sessionID, "output": "false",
-	})
-	if result["id"] != sessionID {
-		t.Fatalf("control-only attach result = %#v", result)
-	}
-	if got := subscribedSessionCount(t, service, sessionID); got != 0 {
-		t.Fatalf("control-only attach created %d output subscriptions, want 0", got)
-	}
-	if len(runtime.snapshotResizes()) != 0 {
-		t.Fatal("control-only attach resized the shared runtime")
-	}
-
-	// The lease swap still routes focus claims: focusPeerLocked requires an
-	// output registration, so an unsubscribed control holder stays unfocused.
-	focused := requestResult[map[string]bool](t, connection, "session.focus", map[string]any{
-		"id": sessionID, "focused": "true", "cols": 100, "rows": 30,
-	})
-	if focused["focused"] {
-		t.Fatal("focus claimed without an output registration")
-	}
-	// Final read on this connection: no snapshot, replay, or live output may
-	// leak from a control-only attach.
-	writeMemoryOutput(t, runtime, sessionID, "leak\r")
-	expectNoBinaryFrame(t, connection)
-}
-
-func TestLegacyAttachKeepsSingleSubscriptionSemantics(t *testing.T) {
-	const firstSession = "legacy-first"
-	const secondSession = "legacy-second"
-	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, firstSession, secondSession)
-
-	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
-	defer connection.Close()
-
-	attachBrowser(t, connection, firstSession, nil)
-	readBrowserMessage(t, connection, "attached")
-	readBinaryFrame(t, connection)
-	readBrowserMessage(t, connection, "synced")
-
-	// Switching terminals through the legacy path must unsubscribe the old
-	// session so web/mobile clients do not accumulate background streams.
-	attachBrowser(t, connection, secondSession, nil)
-	readBrowserMessage(t, connection, "attached")
-	readBinaryFrame(t, connection)
-	readBrowserMessage(t, connection, "synced")
-	if got := subscribedSessionCount(t, service, firstSession); got != 0 {
-		t.Fatalf("legacy switch left %d subscriptions on the old session", got)
-	}
-
-	writeMemoryOutput(t, runtime, firstSession, "quiet\r")
-	expectNoBinaryFrame(t, connection)
-}
-
 func TestPeerCloseCleansEverySubscription(t *testing.T) {
 	const firstSession = "close-first"
 	const secondSession = "close-second"
 	service, _, httpServer := newMemoryOutputServiceWithSessions(t, firstSession, secondSession)
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
-	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{"id": firstSession})
-	requestResult[map[string]bool](t, connection, "session.subscribe", map[string]any{"id": secondSession})
+	requestResult[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{"id": firstSession})
+	requestResult[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{"id": secondSession})
 
 	connection.Close()
 	deadline := time.Now().Add(2 * time.Second)
@@ -612,7 +550,7 @@ func TestUnsubscribeCancelsBlockedSubscriptionBeforeReturning(t *testing.T) {
 			continue
 		}
 		if response.ID == subscribeID {
-			// Protocol 3 acknowledges the subscription before replay so input
+			// Protocol 4 acknowledges the subscription before replay so input
 			// remains responsive. Cancellation may therefore produce a later
 			// best-effort error for the same id; the unsubscribe boundary is the
 			// authoritative completion signal for this test.
@@ -826,16 +764,12 @@ func readOutputFrameContaining(t *testing.T, trace *protocolTrace, sessionID, su
 	}
 }
 
-// TestWarmSubscriptionKeepsLiveOutputAfterControlAttach mirrors the desktop
-// tab-promotion flow on a single peer: the client subscribes (the warm path),
-// then later promotes the same tab with a control-lease-only attach
-// (output:false), exactly as WarrenRemoteApplicationModel.promoteRetainedSession
-// does. The warm subscription must keep delivering live output so the promoted
-// surface stays current in the background instead of replaying a stale tail on
-// reveal. If this fails, the daemon is silently dropping a parked tab's output
-// and the fast-forward-on-switch bug lives here.
-func TestWarmSubscriptionKeepsLiveOutputAfterControlAttach(t *testing.T) {
-	const sessionID = "warm-after-attach"
+// TestWarmSubscriptionKeepsLiveOutputAfterFocus mirrors the desktop tab
+// promotion flow on a single peer: the client subscribes once, then later
+// promotes the existing subscription with a focus lease. The warm path must
+// keep delivering live output without replaying a second recovery payload.
+func TestWarmSubscriptionKeepsLiveOutputAfterFocus(t *testing.T) {
+	const sessionID = "warm-after-focus"
 	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
 	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
 
@@ -869,10 +803,10 @@ func TestWarmSubscriptionKeepsLiveOutputAfterControlAttach(t *testing.T) {
 		t.Fatalf("warm subscription count = %d, want 1", got)
 	}
 
-	attachID := traceRequestID("attach")
+	focusID := traceRequestID("focus")
 	if err := connection.WriteJSON(api.Envelope{
-		Type: "request", ID: attachID, Method: "session.attach",
-		Params: map[string]any{"id": sessionID, "output": "false"},
+		Type: "request", ID: focusID, Method: "session.focus",
+		Params: map[string]any{"id": sessionID, "focused": true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -881,9 +815,9 @@ func TestWarmSubscriptionKeepsLiveOutputAfterControlAttach(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.kind == "text" && event.text["t"] == "response" && event.text["id"] == attachID {
+		if event.kind == "text" && event.text["t"] == "response" && event.text["id"] == focusID {
 			if ok, _ := event.text["ok"].(bool); !ok {
-				t.Fatalf("control attach failed: %#v", event.text["error"])
+				t.Fatalf("focus failed: %#v", event.text["error"])
 			}
 			break
 		}

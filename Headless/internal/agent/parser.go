@@ -117,14 +117,14 @@ func newParserWithContentLimit(provider string, contentLimit int) Parser {
 }
 
 var structuredAgentEventTypes = map[string]struct{}{
-	"question": {}, "permission": {}, "plan": {}, "todo": {},
+	"question": {}, "permission": {}, "plan": {}, "todo": {}, "goal": {},
 	"activity": {}, "plugin": {}, "subagent": {}, "attachment": {}, "config": {}, "compaction": {},
 	"diff": {}, "diagnostics": {}, "queue": {},
 }
 
 func structuredAgentEventType(source string) string {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(source, "-", "_")))
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			return candidate
 		}
@@ -147,7 +147,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	rawType := firstStringValue(source["type"], source["eventType"], outerType)
 	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
 	kind := normalized
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
+	for _, candidate := range []string{"question", "permission", "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			kind = candidate
 			break
@@ -171,6 +171,9 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	copyStructuredField(payload, source, "options", "options")
 	copyStructuredField(payload, source, "planId", "planId", "plan_id")
 	copyStructuredField(payload, source, "todoId", "todoId", "todo_id")
+	copyStructuredField(payload, source, "goalId", "goalId", "goal_id")
+	copyStructuredField(payload, source, "objective", "objective")
+	copyStructuredField(payload, source, "steps", "steps")
 	copyStructuredField(payload, source, "activityId", "activityId", "activity_id")
 	copyStructuredField(payload, source, "pluginId", "pluginId", "plugin_id")
 	copyStructuredField(payload, source, "subagentId", "subagentId", "subagent_id")
@@ -226,6 +229,8 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			id = stringValue(payload["planId"])
 		case "todo":
 			id = stringValue(payload["todoId"])
+		case "goal":
+			id = firstNonEmpty(stringValue(payload["goalId"]), stringValue(payload["threadId"]), stringValue(payload["sessionId"]))
 		case "activity":
 			id = stringValue(payload["activityId"])
 		case "plugin":

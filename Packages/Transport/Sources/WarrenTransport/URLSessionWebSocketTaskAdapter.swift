@@ -1,5 +1,9 @@
 import Foundation
 
+public enum WarrenWebSocketTaskAdapterError: Error, Equatable, Sendable {
+    case invalidIncomingMessage
+}
+
 /// Actor-isolated wrapper around URLSession's task. The task never crosses the
 /// adapter's isolation boundary, and the core codec only sees `[UInt8]`.
 public actor URLSessionWebSocketTaskAdapter: WarrenWebSocketTaskAdapter {
@@ -45,7 +49,7 @@ public actor URLSessionWebSocketTaskAdapter: WarrenWebSocketTaskAdapter {
         case .data(let value):
             return .binary(Array(value))
         @unknown default:
-            throw URLSessionWebSocketClientTransportError.invalidIncomingMessage
+            throw WarrenWebSocketTaskAdapterError.invalidIncomingMessage
         }
     }
 }

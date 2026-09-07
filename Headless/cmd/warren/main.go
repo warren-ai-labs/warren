@@ -705,7 +705,7 @@ var resourceActions = map[string]map[string]bool{
 	"session": {
 		"list": true, "create": true, "add": true, "remove": true, "delete": true,
 		"kill": true, "rename": true, "pin": true, "move": true, "send": true, "read": true,
-		"attach": true, "current": true, "undo": true,
+		"current": true, "undo": true,
 	},
 }
 
@@ -730,7 +730,7 @@ func requiredPositionals(resource, action string) []string {
 	case "terminal-group.remove", "terminal-group.delete", "terminal-group.rename", "terminal-group.home", "terminal-group.move":
 		return []string{"GROUP_ID"}
 	case "session.remove", "session.delete", "session.kill", "session.rename", "session.pin", "session.move",
-		"session.send", "session.read", "session.attach":
+		"session.send", "session.read":
 		return []string{"SESSION_ID"}
 	case "session.undo":
 		return []string{"OPERATION_ID"}
@@ -1193,7 +1193,7 @@ func resourceCommand(args []string) error {
 			data, _ := io.ReadAll(os.Stdin)
 			text = string(data)
 		}
-		_, err := c.Attach(ctx, id)
+		_, err := c.Subscribe(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -1201,8 +1201,8 @@ func resourceCommand(args []string) error {
 			return err
 		}
 		return printValue(map[string]any{"sent": true})
-	case "session.read", "session.attach":
-		return sessionRead(ctx, c, params, action == "attach")
+	case "session.read":
+		return sessionRead(ctx, c, params, false)
 	default:
 		return fmt.Errorf("unsupported command: %s %s", resource, action)
 	}
@@ -1395,7 +1395,7 @@ func taskWorkspaceMutation(args []string) (string, string, map[string]any, error
 
 func sessionRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	id := positional(params, 0, "session id")
-	if _, err := c.Attach(ctx, id); err != nil {
+	if _, err := c.Subscribe(ctx, id); err != nil {
 		return err
 	}
 	return sessionTerminalRead(ctx, c, params, follow)
@@ -1881,7 +1881,7 @@ func agentSendCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	session, err := c.Attach(ctx, id)
+	session, err := c.Subscribe(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -2004,7 +2004,7 @@ func agentAttachCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	session, err := c.Attach(ctx, id)
+	session, err := c.Subscribe(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -2485,7 +2485,7 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	session, err := c.Attach(ctx, positions[0])
+	session, err := c.Subscribe(ctx, positions[0])
 	if err != nil {
 		return err
 	}
@@ -4428,7 +4428,7 @@ Commands:
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
-  session list|current|create|delete|rename|pin|move|send|read|attach|undo
+  session list|current|create|delete|rename|pin|move|send|read|undo
   ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
 
@@ -4481,7 +4481,6 @@ Examples:
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
   warren session undo OPERATION_ID
-  warren session attach SESSION_ID [--current]
 `
 }
 
@@ -4658,7 +4657,6 @@ func resourceUsageText(commandName string) string {
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
   warren session send SESSION_ID [TEXT...] [--current] [--raw]
   warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
-  warren session attach SESSION_ID [--current]
   warren session undo OPERATION_ID
 
 Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode, or Pi;
@@ -4758,8 +4756,6 @@ func actionUsageText(commandName, action string) string {
 		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--raw]\n", name)
 	case "session.read":
 		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]\n", name)
-	case "session.attach":
-		return fmt.Sprintf("Usage:\n  warren %s attach SESSION_ID [--current]\n", name)
 	case "session.current":
 		return fmt.Sprintf("Usage:\n  warren %s current\n", name)
 	case "session.undo":

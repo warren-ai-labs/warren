@@ -408,6 +408,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             guard let request = note.object as? WarrenDesktopSettingsDeepLink else { return }
             openSettings(request)
         }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)) { note in
+            let targetWorkspace = (note.object as? WorkspaceID).flatMap { id in
+                projection.groups.flatMap(\.workspaces).first { $0.id == id }
+            } ?? presentation.workspace
+            if let targetWorkspace, presentation.workspace?.id != targetWorkspace.id {
+                actions(.selectWorkspace(targetWorkspace.id))
+            }
+            setWorkspaceContentMode(.editor, for: targetWorkspace)
+        }
         .overlay {
             renameDialog
         }

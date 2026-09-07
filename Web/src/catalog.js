@@ -15,7 +15,6 @@ export function rosterFromMessage(message = {}) {
     projects: arrayOrEmpty(source?.projects),
     workspaces: arrayOrEmpty(source?.workspaces),
     terminalGroups: arrayOrEmpty(source?.terminalGroups),
-    ghostlineMigration: source?.ghostlineMigration || null,
     tabs,
   });
 }
@@ -47,11 +46,6 @@ export function applyRosterDelta(roster, message = {}) {
   if (Object.prototype.hasOwnProperty.call(message, "host") && !isRecord(message.host)) {
     return null;
   }
-  if (Object.prototype.hasOwnProperty.call(message, "ghostlineMigration")
-    && message.ghostlineMigration !== null
-    && !isRecord(message.ghostlineMigration)) {
-    return null;
-  }
   const terminalGroupChanges = message.terminalGroups;
   for (const key of entityKeys) {
     if (Object.prototype.hasOwnProperty.call(message, key)
@@ -78,9 +72,6 @@ export function applyRosterDelta(roster, message = {}) {
       terminalGroupChanges,
       value => value?.id,
     ),
-    ghostlineMigration: Object.prototype.hasOwnProperty.call(message, "ghostlineMigration")
-      ? message.ghostlineMigration || null
-      : current.ghostlineMigration,
     tabs: applyEntityChanges(current.tabs, sessionChanges, value => value?.session),
   });
 }
@@ -103,7 +94,6 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
     projects: catalog.projects,
     workspaces: catalog.workspaces,
     terminalGroups: catalog.terminalGroups,
-    ghostlineMigration: catalog.ghostlineMigration,
     tabs,
   });
 }
@@ -169,7 +159,6 @@ export function moveInCatalog(catalog, kind, id, beforeID) {
     projects: kind === "projects" ? next : catalog.projects,
     workspaces: kind === "workspaces" ? next : catalog.workspaces,
     terminalGroups: catalog.terminalGroups,
-    ghostlineMigration: catalog.ghostlineMigration,
     tabs: catalog.tabs,
   });
 }
@@ -219,7 +208,6 @@ function normalizeRoster(roster) {
     projects: arrayOrEmpty(roster?.projects),
     workspaces: arrayOrEmpty(roster?.workspaces),
     terminalGroups: arrayOrEmpty(roster?.terminalGroups),
-    ghostlineMigration: isRecord(roster?.ghostlineMigration) ? roster.ghostlineMigration : null,
     tabs: arrayOrEmpty(roster?.tabs),
   };
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Agent View capabilities are negotiated independently from protocol 3.0.
+// Agent View capabilities are negotiated independently from protocol 4.0.
 // Keep these strings stable: clients persist no capability state and may
 // safely ignore names introduced by a newer Host.
 const (
@@ -22,6 +22,7 @@ const (
 	CapabilityAgentInteractions = "agent-interactions-v1"
 	CapabilityAgentInterrupt    = "agent-interrupt-v1"
 	CapabilityAgentAttachments  = "agent-attachments-v1"
+	CapabilityAgentGoals        = "agent-goals-v1"
 )
 
 var (
@@ -41,6 +42,7 @@ var AgentViewCapabilities = []string{
 	CapabilityAgentInteractions,
 	CapabilityAgentInterrupt,
 	CapabilityAgentAttachments,
+	CapabilityAgentGoals,
 }
 
 // HostCapabilities returns the capabilities understood by the Headless
@@ -153,6 +155,31 @@ type AgentInteractionResult struct {
 	Session   string `json:"session"`
 	RequestID string `json:"requestId"`
 	Kind      string `json:"kind"`
+}
+
+// AgentGoalSetRequest updates the current goal for one Agent session. The
+// provider owns the goal identity (Codex uses its thread ID), so the Host only
+// carries the Warren Session ID across this bridge. ReplaceExisting is set by
+// the iOS editor to select Codex's dedicated edit prompt when using PTY.
+type AgentGoalSetRequest struct {
+	CommandID       string `json:"commandId,omitempty"`
+	Session         string `json:"session"`
+	Objective       string `json:"objective"`
+	Status          string `json:"status,omitempty"`
+	TokenBudget     *int64 `json:"tokenBudget,omitempty"`
+	ReplaceExisting bool   `json:"replaceExisting,omitempty"`
+}
+
+// AgentGoalClearRequest removes the current goal for one Agent session.
+type AgentGoalClearRequest struct {
+	CommandID string `json:"commandId,omitempty"`
+	Session   string `json:"session"`
+}
+
+type AgentGoalResult struct {
+	Accepted  bool   `json:"accepted"`
+	Session   string `json:"session"`
+	Objective string `json:"objective,omitempty"`
 }
 
 // AgentAttachmentPrepareRequest starts an opaque upload session.

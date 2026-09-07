@@ -31,11 +31,9 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
     private var daemonProcess: Process?
     private var pollTask: Task<Void, Never>?
     private var autoStartDisabled = false
-    private var pendingForceHandoff = false
     private var buildVersion: String?
     private var ghostlineRPCVersion: String?
     private var ghostlineTagVersion: String?
-    private var ghostlineSkippedSessions = 0
     private var state: DaemonState = .checking {
         didSet { updateStatusItem() }
     }
@@ -76,8 +74,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     @objc private func restartDaemon() {
         autoStartDisabled = false
-        pendingForceHandoff = true
-        writeForceHandoffMarker()
         stopDaemon()
         ensureDaemon()
     }
@@ -257,9 +253,8 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             buildVersion = (object["build"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            ghostlineRPCVersion = ((object["ghostlineRPCVersion"] as? String) ?? (object["ghostlineVersion"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
+            ghostlineRPCVersion = (object["ghostlineRPCVersion"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ghostlineTagVersion = (object["ghostlineTagVersion"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            ghostlineSkippedSessions = (object["ghostlineSkippedSessions"] as? NSNumber)?.intValue ?? 0
             updateStatusItem()
         } catch {
             return
@@ -271,15 +266,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         let process = Process()
         process.executableURL = daemonExecutableURL()
         process.arguments = []
-        let childEnvironment = WarrenProcessEnvironment.daemonEnvironment()
-        if pendingForceHandoff {
-            var environment = childEnvironment
-            environment["WARREN_GHOSTLINE_FORCE_HANDOFF"] = "1"
-            writeForceHandoffMarker()
-            process.environment = environment
-        } else {
-            process.environment = childEnvironment
-        }
+        process.environment = WarrenProcessEnvironment.daemonEnvironment()
         process.terminationHandler = { [weak self] _ in
             Task { @MainActor in
                 self?.daemonProcess = nil
@@ -289,8 +276,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         do {
             try process.run()
             daemonProcess = process
-            // Only the explicitly requested restart should force a handoff.
-            pendingForceHandoff = false
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -298,9 +283,8 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func stopDaemon() {
         // Terminate only the control-plane daemon (the process this helper
-        // spawned). The ghostline serve process is a separate long-lived
-        // session owner: it must survive daemon restarts/updates so PTY
-        // sessions keep running, and the next daemon reuses or adopts it.
+        // spawned). The Ghostline serve process is a separate long-lived
+        // session owner and remains independent of this helper.
         daemonProcess?.terminate()
         daemonProcess = nil
         state = .stopped
@@ -417,15 +401,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
 
     private func setStatusDotBreathing(_ breathing: Bool) {
         guard let dot = statusDot, let layer = dot.layer else { return }
-        if ghostlineSkippedSessions > 0 {
-            layer.removeAnimation(forKey: statusDotPulseKey)
-            let red = NSColor.systemRed
-            layer.backgroundColor = red.cgColor
-            layer.shadowColor = red.cgColor
-            layer.opacity = 1
-            dot.isHidden = false
-            return
-        }
         let green = NSColor(srgbRed: 126 / 255, green: 198 / 255, blue: 153 / 255, alpha: 1)
         layer.backgroundColor = green.cgColor
         layer.shadowColor = green.cgColor
@@ -507,9 +482,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         if let ghostlineTagVersion {
             toolTip += " · ghostline tag \(ghostlineTagVersion)"
         }
-        if ghostlineSkippedSessions > 0 {
-            toolTip += " · Adopt runtime failed: \(ghostlineSkippedSessions) session(s) skipped"
-        }
         button.toolTip = toolTip
         if let status = statusItem.menu?.item(withTag: 1) {
             switch state {
@@ -517,9 +489,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             case .running: status.title = "Headless: Running"
             case .stopped: status.title = "Headless: Stopped"
             case .failed(let reason): status.title = "Headless: \(reason)"
-            }
-            if ghostlineSkippedSessions > 0 {
-                status.title += " · Adopt runtime failed (\(ghostlineSkippedSessions) skipped)"
             }
         }
         if let endpoint = statusItem.menu?.item(withTag: 2) {
@@ -544,22 +513,6 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
     }
 }
-
-private func writeForceHandoffMarker() {
-        let marker = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".warren/force-ghostline-handoff")
-        try? FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: marker.path, contents: Data())
-        // Also ensure next daemon start sees the flag even if env propagation fails
-        // (e.g., `open` from install script). The headless daemon clears the file after handoff.
-    }
-
-    private func clearForceHandoffMarkerIfNeeded() {
-        // Called implicitly by the daemon after handoff; keep helper for testing symmetry.
-        let marker = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".warren/force-ghostline-handoff")
-        try? FileManager.default.removeItem(at: marker)
-    }
 
 @MainActor
 private enum WarrenDaemonMenuBarLock {

@@ -1,4 +1,4 @@
-/// The version carried by every control message.
+/// The version carried by every DENB metadata envelope.
 public struct ProtocolVersion: Codable, Hashable, Sendable, Comparable {
     public let major: UInt16
     public let minor: UInt16
@@ -8,40 +8,20 @@ public struct ProtocolVersion: Codable, Hashable, Sendable, Comparable {
         self.minor = minor
     }
 
-    /// Protocol 3 is the canonical control protocol. Agent execution events
-    /// use one append-only envelope and older clients cannot safely downgrade
-    /// to the pre-canonical contract.
-    public static let current = ProtocolVersion(major: 3, minor: 0)
+    /// Protocol 4 is the canonical control protocol. It is a clean break:
+    /// DENB input is mandatory, session subscriptions have one lifecycle, and
+    /// older clients cannot safely downgrade to the removed contract.
+    public static let current = ProtocolVersion(major: 4, minor: 0)
 
     public static func < (lhs: ProtocolVersion, rhs: ProtocolVersion) -> Bool {
         (lhs.major, lhs.minor) < (rhs.major, rhs.minor)
     }
 
-    /// Whether this local version can decode an incoming version.
+    /// Whether this local version can decode an incoming version. Protocol 4
+    /// is a clean-break contract: even a minor-version drift is rejected
+    /// until both sides are upgraded together.
     public func canDecode(_ incoming: ProtocolVersion) -> Bool {
-        major == incoming.major && minor >= incoming.minor
+        self == incoming
     }
 
-    @available(*, deprecated, message: "Use canDecode(_:) to make direction explicit.")
-    public func isCompatible(with incoming: ProtocolVersion) -> Bool {
-        canDecode(incoming)
-    }
-}
-
-/// Features negotiated independently from the message version.
-public struct ProtocolCapabilities: OptionSet, Codable, Hashable, Sendable {
-    public let rawValue: UInt64
-
-    public init(rawValue: UInt64) {
-        self.rawValue = rawValue
-    }
-
-    public static let binaryOutput = Self(rawValue: 1 << 0)
-    public static let input = Self(rawValue: 1 << 1)
-    public static let resize = Self(rawValue: 1 << 2)
-    public static let focus = Self(rawValue: 1 << 3)
-    public static let control = Self(rawValue: 1 << 4)
-    public static let recovery = Self(rawValue: 1 << 5)
-    public static let title = Self(rawValue: 1 << 6)
-    public static let core: Self = [.binaryOutput, .input, .resize, .focus, .control, .recovery]
 }

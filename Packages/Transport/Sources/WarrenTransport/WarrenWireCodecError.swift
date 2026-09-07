@@ -1,13 +1,10 @@
 import WarrenProtocol
 
 public enum WarrenWireCodecError: Error, Equatable, Sendable {
-    case controlTooLarge(actual: Int, limit: Int)
     case headerTooLarge(actual: Int, limit: Int)
     case payloadTooLarge(actual: Int, limit: Int)
     case payloadLengthMismatch(expected: Int, actual: Int)
     case negativePayloadLength
-    case invalidUTF8
-    case invalidControlJSON
     case invalidHeaderJSON
     case truncatedFrame
     case trailingBytes

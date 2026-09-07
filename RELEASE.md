@@ -98,9 +98,12 @@ go test -race ./Headless/...
 
    The package task produces an arm64 macOS archive for macOS 13 and later and
    must run on an arm64 Apple Silicon Mac. Ghostline v1 statically links its
-   terminal core; the app bundles the v0.8 bridge's arm64
-   `libghostty-vt.dylib` only for one-time v0 migration. No separate Ghostty
-   checkout or architecture-specific environment variable is required.
+   terminal core; the app has no v0 bridge, migration binary, or separate
+   Ghostty checkout to package.
+
+   This release is a clean protocol and persistence break. Pre-4.0 clients,
+   old Ghostline sockets, and old Warren state or Agent databases are rejected
+   or require recreation; no in-place migration is shipped.
 
    Public Access is provided by the independently deployed Relay. Confirm that
    the release contains the headless Relay connector and that no external

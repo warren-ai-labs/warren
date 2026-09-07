@@ -153,6 +153,8 @@ struct WarrenDesktopSettingsView: View {
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
     private var embeddedEditorDefaultIDE = false
+    @AppStorage(WarrenPreferenceKey.embeddedEditorOpenLinks)
+    private var embeddedEditorOpenLinks = false
     @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
     private var agentCompletionSoundEnabled = true
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
@@ -947,6 +949,22 @@ struct WarrenDesktopSettingsView: View {
                 Text(
                     "When off, the IDE button opens the IDE picker. This is the "
                         + "same default shown in the IDE menu."
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                Toggle(
+                    "Open terminal links in Embedded Editor by default",
+                    isOn: $embeddedEditorOpenLinks
+                )
+                .toggleStyle(.switch)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityIdentifier("settings.external-ides.embedded-editor-open-links")
+                Text(
+                    "When enabled, ⌘-clicking file paths or file URLs in the terminal opens them in the Embedded Editor."
                 )
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.mutedForeground)

@@ -21,10 +21,8 @@ mise run build:headless
 ```
 
 On macOS, the headless binaries are built for arm64 and require macOS 13 or
-later on an Apple Silicon Mac. Ghostline v1 statically links its terminal core.
-The app package also includes the v0.8 compatibility binary and its arm64
-`libghostty-vt.dylib` for a one-time v0 -> v1 migration, with no separate
-Ghostty checkout.
+later on an Apple Silicon Mac. Ghostline v1 statically links its terminal core,
+so no separate Ghostty checkout or legacy runtime package is required.
 
 `warren-headless` listens on `0.0.0.0:8789` by default so phones and tablets on the same LAN can open the Web UI directly. It also serves the same UI over HTTPS on `0.0.0.0:8788` (see "LAN HTTPS" below). The HTTP port has no TLS, so do not expose it to the public internet.
 
@@ -209,8 +207,8 @@ Tasks are Host-owned work contexts that aggregate Workspaces across Projects.
 `task workspace list TASK_ID` shows attached Workspaces, while `--available`
 shows only Workspaces that do not belong to any Task. Both modes keep the
 normal 10-row limit unless `--all` or `--limit N` is provided. Nested
-`attach` and `detach` are canonical; the flat `task attach` and `task detach`
-commands remain available for compatibility. `task workspace create` creates
+`attach` and `detach` are canonical; both CLI spellings call the same current
+`task.attach` and `task.detach` methods. `task workspace create` creates
 the Git worktree and its Task membership in one `workspace.create` request.
 Each Workspace may belong to at most one Task. A Task's `source` and
 `externalID` are optional but must be provided together; the source is
@@ -302,7 +300,7 @@ CLI works against the local daemon without extra setup. On a remote host, use
 
 ## API Boundaries
 
-The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `task.create`, `task.remove`, `task.rename`, `task.pin`, and `task.move` manage Task lifecycle; `task.attach` and `task.detach` manage Workspace membership. `workspace.create` accepts an optional `task`; when present, the Workspace is inserted with that membership instead of requiring a later attach request. `task.move`, `project.move`, and `workspace.move` persist sidebar order on the Host (each accepts `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.move` accepts optional `expectedWorkspace` and `expectedAgentSession` guards and returns a mutation operation ID; `session.undo` is compare-and-swap guarded. `session.attach` subscribes to output only. The client that owns UI focus sends `session.focus` with optional `cols/rows` to control the shared terminal size, while background `session.resize` requests are safe no-ops. SSH and Relay provide reachability only and do not enter the resource domain model.
+The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `task.create`, `task.remove`, `task.rename`, `task.pin`, and `task.move` manage Task lifecycle; `task.attach` and `task.detach` manage Workspace membership. `workspace.create` accepts an optional `task`; when present, the Workspace is inserted with that membership instead of requiring a later attach request. `task.move`, `project.move`, and `workspace.move` persist sidebar order on the Host (each accepts `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.subscribe` creates an output subscription and returns the attachment identity used by DENB input frames; `session.focus` acquires the shared control lease and may carry the viewport; `session.unsubscribe` removes one output subscription. SSH and Relay provide reachability only and do not enter the resource domain model.
 
 Public Access route state is owned by the Relay and persisted in `publicTunnel`
 metadata in `~/.warren/settings.json`; after a restart the daemon reconnects to
@@ -344,15 +342,10 @@ verbatim, and kitty-protocol keys
 
 Known limits:
 
-- A forced ghostline server restart still ends its sessions (the server
-  process owns the PTY masters). Protocol upgrades are rolled in place: the
-  daemon starts a fresh server, adopts every session over the admin socket,
-  and retires the old process without ending children. If adoption is not
-  possible (for example a server predating the admin socket), the daemon
-  keeps the old server running and retries on a later start.
-- The release app bundles the v0.8 compatibility bridge and its arm64
-  libghostty-vt dylib for one-time v0 migration. A non-app installation that
-  still needs that bridge must provide it through `WARREN_GHOSTLINE_V0_COMPAT`.
+- A forced Ghostline server restart still ends its sessions because the server
+  process owns the PTY masters. A daemon restart reconnects only to the
+  current Ghostline v1 server; an old socket, protocol, or build fails closed
+  and its sessions must be recreated at the reset boundary.
 
 ## Canonical Agent Protocol
 
@@ -362,7 +355,7 @@ canonical events through `agent.events` batches. Each event has a required
 `eventId`, `streamId`, `executionId`, immutable `sequence`, timestamps, `origin`,
 and typed `payload`. Status is a journaled `status.changed` event.
 
-Protocol 3.0 starts with an authenticated welcome containing `host.id` and
+Protocol 4.0 starts with an authenticated welcome containing `host.id` and
 `accessScopeId`. Client replicas use `(hostId, accessScopeId, streamId, sequence)`
 as their key and an event-ID duplicate index. They persist unknown event types,
 reject conflicting positions, and reconnect from `contiguousThrough`.

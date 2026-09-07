@@ -138,8 +138,25 @@ public final class TerminalSurfaceManager {
         var transitionGeneration: UInt64 = 0
         var presentationGeneration: UInt64 = 0
         var presentationTask: Task<Void, Never>?
+        var postRevealRedrawGeneration: UInt64 = 0
+        var postRevealRedrawTask: Task<Void, Never>?
         var recoveryPhase: RecoveryPresentationPhase = .ready
         var displayVisible = false
+        /// Set when a displayed surface is parked and needs the bounded
+        /// post-reveal draw after its next warm promotion.
+        var warmPromotionPending = false
+        /// Reconnect recovery can deliberately keep the old frame visible.
+        /// That path must not be treated as an ordinary warm promotion.
+        var skipNextWarmPromotionRedraw = false
+        /// A transient transport reconnect may keep the last presented frame
+        /// visible while the replacement snapshot is installed. The normal
+        /// cold-attach path still hides the view behind its recovery gate.
+        var preserveDisplayDuringRecovery = false
+        /// A preserved frame must wait for the replacement snapshot and its
+        /// live tail to render before the next present. Without this bit,
+        /// `displayVisible == true` would make `schedulePresent` skip the
+        /// output-boundary wait and draw the old grid once more.
+        var waitsForRecoveryBoundary = false
         /// The presentation token that last completed successfully. Native
         /// surface identity matters because a coordinator can rebuild the
         /// underlying Ghostty surface without replacing this entry.
@@ -177,6 +194,15 @@ public final class TerminalSurfaceManager {
     private var onBlurred: (TerminalSessionID) -> Void = { _ in }
     private var resizeDebounceTask: Task<Void, Never>?
     private var resizingUntil: ContinuousClock.Instant?
+    /// Test-only observation point for the one-shot redraw. The production
+    /// path leaves this nil and performs the native draw directly.
+    var postRevealRedrawObserver: ((TerminalSessionID) -> Void)?
+    /// Test-only hook fired after the one-shot task is installed. It lets
+    /// lifecycle tests invalidate the task before its display interval elapses.
+    var postRevealRedrawScheduledObserver: ((TerminalSessionID) -> Void)?
+    /// Keep the production retry tied to the next display interval. Tests can
+    /// extend it to make cancellation races deterministic.
+    var postRevealRedrawDelay: Duration = .milliseconds(16)
     /// Invoked when a retained surface is disposed (warm eviction, tab close,
     /// or shutdown). Owners use this to invalidate recovery anchors that are
     /// only valid while the exact surface instance is still alive.
@@ -434,35 +460,99 @@ public final class TerminalSurfaceManager {
     /// Prevents automatic presentation while a remote recovery is staged.
     /// The surface remains mounted but hidden until `endRecovery` confirms
     /// that the target sequence has rendered.
-    public func beginRecovery(for sessionID: TerminalSessionID) {
+    public func beginRecovery(
+        for sessionID: TerminalSessionID,
+        preservingDisplay: Bool = false
+    ) {
         guard let entry = entries[sessionID] else { return }
         entry.recoveryPhase = .recovering
+        entry.waitsForRecoveryBoundary = false
+        entry.warmPromotionPending = false
+        entry.skipNextWarmPromotionRedraw = preservingDisplay
+        entry.preserveDisplayDuringRecovery = preservingDisplay
+            && entry.displayVisible
+            && !entry.view.isHidden
+            && entry.view.alphaValue > 0
         cancelPresentation(for: entry)
-        setDisplayVisible(false, for: entry)
-        // Keep the native renderer alive while the recovery stream is being
-        // staged, but hide its pixels until the matching `synced` boundary.
-        // `setDisplayVisible(false)` intentionally stops the coordinator's
-        // wakeups; enabling it again here lets Ghostty consume queued output
-        // without exposing a partially restored frame.
-        prepareHiddenRendering(for: entry)
+        if entry.preserveDisplayDuringRecovery {
+            // Keep the last completed frame on screen. The native renderer is
+            // already alive, and the recovery snapshot replaces its grid
+            // atomically; presentation remains gated until `synced`.
+            entry.view.isHidden = false
+            entry.view.alphaValue = 1
+            setDisplayVisible(true, for: entry)
+        } else {
+            setDisplayVisible(false, for: entry)
+            // Keep the native renderer alive while the recovery stream is
+            // being staged, but hide its pixels until the matching `synced`
+            // boundary. `setDisplayVisible(false)` intentionally stops the
+            // coordinator's wakeups; enabling it again here lets Ghostty
+            // consume queued output without exposing a partially restored
+            // frame.
+            prepareHiddenRendering(for: entry)
+        }
     }
 
     public func endRecovery(for sessionID: TerminalSessionID) {
         guard let entry = entries[sessionID] else { return }
+        let preservingDisplay = entry.preserveDisplayDuringRecovery
+        entry.preserveDisplayDuringRecovery = false
+        entry.skipNextWarmPromotionRedraw = false
         entry.recoveryPhase = .ready
         if policy.activeSessionID == sessionID {
-            // Keep the pixels hidden until schedulePresent has observed that
-            // the restored state and the target live bytes have reached the
-            // native surface. The renderer itself stays enabled so a hidden
-            // promotion cannot wait on its own display wakeup.
-            setDisplayVisible(false, for: entry)
-            prepareHiddenRendering(for: entry)
+            if preservingDisplay {
+                // Do not blank the frame that was kept visible during the
+                // transport gap. Schedule a boundary-aware present so the
+                // replacement snapshot becomes visible as soon as its live
+                // tail has rendered.
+                entry.waitsForRecoveryBoundary = true
+                entry.view.isHidden = false
+                entry.view.alphaValue = 1
+                setDisplayVisible(true, for: entry)
+            } else {
+                // Keep the pixels hidden until schedulePresent has observed
+                // that the restored state and the target live bytes have
+                // reached the native surface. The renderer itself stays
+                // enabled so a hidden promotion cannot wait on its own
+                // display wakeup.
+                setDisplayVisible(false, for: entry)
+                prepareHiddenRendering(for: entry)
+            }
             schedulePresent(entry, generation: entry.transitionGeneration)
         } else {
             // The remote marker can arrive before the AppKit reconciliation
             // that activates this surface. Reconcile the ready phase into the
             // mounted host rather than requiring a second tab switch.
             scheduleReconciliation()
+        }
+    }
+
+    /// Aborts a staged recovery without disposing the native surface. This is
+    /// used when the transport drops again before a replacement snapshot can
+    /// arrive; a retained frame must remain usable for the next reconnect.
+    public func cancelRecovery(
+        for sessionID: TerminalSessionID,
+        preservingDisplay: Bool = false
+    ) {
+        guard let entry = entries[sessionID] else { return }
+        let keepVisible = preservingDisplay
+            && entry.displayVisible
+            && !entry.view.isHidden
+        entry.recoveryPhase = .ready
+        entry.preserveDisplayDuringRecovery = false
+        entry.skipNextWarmPromotionRedraw = preservingDisplay && keepVisible
+        if !entry.skipNextWarmPromotionRedraw {
+            entry.warmPromotionPending = false
+        }
+        entry.waitsForRecoveryBoundary = false
+        cancelPresentation(for: entry)
+        if keepVisible {
+            entry.view.isHidden = false
+            entry.view.alphaValue = 1
+            setDisplayVisible(true, for: entry)
+        } else {
+            setDisplayVisible(false, for: entry)
+            prepareHiddenRendering(for: entry)
         }
     }
 
@@ -692,6 +782,13 @@ public final class TerminalSurfaceManager {
         guard let entry = entries[sessionID] else { return }
         entry.transitionGeneration &+= 1
         cancelPresentation(for: entry)
+        entry.waitsForRecoveryBoundary = false
+        let wasDisplayedWarmSurface = entry.displayVisible
+            && !entry.view.isHidden
+            && entry.view.alphaValue > 0
+        let skipPostRevealRedraw = entry.skipNextWarmPromotionRedraw
+        entry.skipNextWarmPromotionRedraw = false
+        entry.warmPromotionPending = wasDisplayedWarmSurface && !skipPostRevealRedraw
         // Do not capture viewport text synchronously on MainActor: `captureReattachAnchor`
         // previously called `ghostty_surface_read_text` under `terminalCallLock`,
         // which blocks if the background drain is inside `ghostty_surface_write_buffer`.
@@ -796,7 +893,9 @@ public final class TerminalSurfaceManager {
         // wait (the Zeno case).
         let targetEpoch = currentEpoch
         let targetSequence = currentSequence
-        let waitsForOutput = !entry.displayVisible
+        let waitsForOutput = !entry.displayVisible || entry.waitsForRecoveryBoundary
+        let schedulePostRevealRedraw = entry.warmPromotionPending
+            && !entry.waitsForRecoveryBoundary
         let stallDeadline = ContinuousClock.now.advanced(by: .seconds(2))
         if !entry.displayVisible {
             prepareHiddenRendering(for: entry)
@@ -855,6 +954,18 @@ public final class TerminalSurfaceManager {
                         let presentedBoundary = entry.surface.outputWriter.enqueuedBoundary
                         entry.lastPresentedEpoch = presentedBoundary.epoch
                         entry.lastPresentedSequence = presentedBoundary.sequence
+                        entry.waitsForRecoveryBoundary = false
+                        entry.warmPromotionPending = false
+                        if schedulePostRevealRedraw,
+                           let presentedSurface
+                        {
+                            self.schedulePostRevealRedraw(
+                                entry,
+                                host: self.host,
+                                generation: generation,
+                                nativeSurfaceID: ObjectIdentifier(presentedSurface)
+                            )
+                        }
                         TerminalDiagnostics.log("present_complete", [
                             "session": sessionID.description,
                             "targetEpoch": targetEpoch.map(String.init) ?? "nil",
@@ -879,10 +990,70 @@ public final class TerminalSurfaceManager {
         }
     }
 
+    /// Gives a successfully promoted warm surface one additional native draw
+    /// after the first visible frame has crossed a display interval. The first
+    /// frame remains immediate; this bounded retry only repairs a compositor
+    /// backing store that was purged between the draw and its first composite.
+    private func schedulePostRevealRedraw(
+        _ entry: Entry,
+        host: TerminalHostContainerView?,
+        generation: UInt64,
+        nativeSurfaceID: ObjectIdentifier
+    ) {
+        guard entry.postRevealRedrawTask == nil,
+              let host,
+              entry.recoveryPhase == .ready else { return }
+        let sessionID = entry.surface.id
+        entry.postRevealRedrawGeneration &+= 1
+        let redrawGeneration = entry.postRevealRedrawGeneration
+        entry.postRevealRedrawTask = Task { @MainActor [weak self, weak entry, weak host] in
+            guard let self, let entry else { return }
+            defer {
+                if entry.postRevealRedrawGeneration == redrawGeneration {
+                    entry.postRevealRedrawTask = nil
+                }
+            }
+
+            do {
+                try await Task.sleep(for: self.postRevealRedrawDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  isCurrent(
+                      sessionID,
+                      entry: entry,
+                      host: host,
+                      generation: generation
+                  ),
+                  policy.activeSessionID == sessionID,
+                  entry.recoveryPhase == .ready,
+                  entry.displayVisible,
+                  !entry.view.isHidden,
+                  entry.view.alphaValue > 0,
+                  entry.surface.terminalViewIsPresentable,
+                  entry.surface.terminalSurfaceIsReady,
+                  let currentSurface = entry.surface.state.surface,
+                  ObjectIdentifier(currentSurface) == nativeSurfaceID
+            else { return }
+
+            let redrawn = entry.surface.presentNow()
+            TerminalDiagnostics.log("post_reveal_redraw", [
+                "session": sessionID.description,
+                "result": redrawn ? "true" : "false",
+            ])
+            postRevealRedrawObserver?(sessionID)
+        }
+        postRevealRedrawScheduledObserver?(sessionID)
+    }
+
     private func cancelPresentation(for entry: Entry) {
         entry.presentationGeneration &+= 1
         entry.presentationTask?.cancel()
         entry.presentationTask = nil
+        entry.postRevealRedrawGeneration &+= 1
+        entry.postRevealRedrawTask?.cancel()
+        entry.postRevealRedrawTask = nil
     }
 
     private func setDisplayVisible(_ visible: Bool, for entry: Entry) {

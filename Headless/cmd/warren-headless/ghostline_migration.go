@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,13 +21,11 @@ import (
 )
 
 const (
-	ghostlineV0CompatibilityProtocol = "0.8.0"
-	ghostlineV0ToV1Handoff           = "ghostline-v0-to-v1-1"
-	ghostlineMigrationTimeout        = 20 * time.Second
+	ghostlineMigrationTimeout = 20 * time.Second
 )
 
-// ghostlineServerVersion is kept separate from the v1 client type because a
-// legacy socket can only answer its v0 version request.
+// ghostlineServerVersion is kept separate from the v1 client type so the
+// migration coordinator can persist the source version in its journal.
 type ghostlineServerVersion struct {
 	ProtocolVersion string
 	TagVersion      string
@@ -40,23 +36,20 @@ type ghostlineMigrationConfig struct {
 	outputDir       string
 	probeForeground bool
 	expectedTag     string
-	warrenVersion   string
 	state           *store.Store
 	logger          *slog.Logger
 }
 
 // ensureGhostlineClientWithStore starts a v1 daemon when no daemon exists.
-// For an existing v0 daemon it performs the one-off bridge upgrade:
-// legacy v0 -> v0.8 compatibility daemon -> v1. Each handoff gets a fresh
-// socket; the stable socket is switched only after Ghostline transfers
-// ownership and the source has stopped serving.
+// Every Warren package upgrade performs a direct v1 rolling handoff. Each
+// handoff gets a fresh socket; the stable socket is switched only after
+// Ghostline transfers ownership and the source has stopped serving.
 func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForeground bool, expectedTag string, warrenVersion string, state *store.Store, logger *slog.Logger) (*ghostline.Client, error) {
 	config := ghostlineMigrationConfig{
 		stableSocket:    socketPath,
 		outputDir:       outputDir,
 		probeForeground: probeForeground,
 		expectedTag:     expectedTag,
-		warrenVersion:   warrenVersion,
 		state:           state,
 		logger:          logger,
 	}
@@ -72,61 +65,72 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 	if err := resumeGhostlineMigration(config); err != nil {
 		return nil, err
 	}
-	// Upgrade handoff for warren version change (app update) even when
-	// ghostline protocol/tag is unchanged. Only canonical tags (v0.10.1)
-	// trigger version-matched handoff; non-canonical (dev/dirty) require
-	// explicit force via WARREN_GHOSTLINE_FORCE_HANDOFF for `mise run install`
-	// or the menubar Restart. A forced handoff also covers same-version
-	// rebuilds (e.g., a rebuilt binary with same hash) so operator fixes
-	// like COLORTERM are picked up.
+	storedVersion := ""
+	versionHandoffRequired := false
 	if warrenVersion != "" && state != nil {
-		storedVersion := state.Snapshot().WarrenVersion
-		canVersionMatch := isCanonicalWarrenVersion(storedVersion) && isCanonicalWarrenVersion(warrenVersion)
-		// Forced path: explicit operator request triggers a handoff regardless
-		// of version equality or canonical status, as long as an existing
-		// ghostline is reachable. This makes `mise run install` and menubar
-		// Restart reliably pick up a rebuilt daemon with the same version
-		// string.
-		if force && ghostlineSocketReady(socketPath) {
-			sourceSocket := currentGhostlineRoute(socketPath)
-			if ghostlineSocketReady(sourceSocket) && ghostlineSocketReady(sourceSocket+".admin") {
-				handoffVersion := "warren-" + warrenVersion
-				if storedVersion == warrenVersion {
-					handoffVersion += "-forced"
-				}
-				config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
-				version, _ := probeGhostlineVersion(context.Background(), sourceSocket)
-				if err := handoffGhostline(config, sourceSocket, version, handoffVersion, v1GhostlineSpawn(config)); err != nil {
-					return nil, err
-				}
-				if storedVersion != warrenVersion {
-					_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
-				}
-				return checkedGhostlineClient(socketPath, "after forced handoff")
-			}
-		}
-		if storedVersion != "" && storedVersion != warrenVersion && (canVersionMatch || force) {
-			config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
-			sourceSocket := currentGhostlineRoute(socketPath)
-			version, _ := probeGhostlineVersion(context.Background(), sourceSocket)
-			if err := handoffGhostline(config, sourceSocket, version, "warren-"+warrenVersion, v1GhostlineSpawn(config)); err != nil {
-				return nil, err
-			}
-			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
-			return checkedGhostlineClient(socketPath, "after version handoff")
-		}
-		if storedVersion != warrenVersion && (canVersionMatch || force || storedVersion == "") {
-			_ = state.Update(func(v *api.State) error { v.WarrenVersion = warrenVersion; return nil })
-		}
+		storedVersion = state.Snapshot().WarrenVersion
+		// An empty stored version is the expected value when a schema-2 state
+		// file is opened for the first time after the migration journal returns.
+		// Do not gate this on semver formatting: dev, dirty, and CI package
+		// builds still represent a new Warren runtime and must hand off PTYs.
+		versionHandoffRequired = force || storedVersion != warrenVersion
 	}
 	if !ghostlineSocketReady(socketPath) {
-		return startGhostline(config, socketPath, v1GhostlineSpawn(config))
+		client, err := startGhostline(config, socketPath, v1GhostlineSpawn(config))
+		if err != nil {
+			return nil, err
+		}
+		if versionHandoffRequired {
+			if err := recordWarrenVersion(state, warrenVersion); err != nil {
+				return nil, fmt.Errorf("record Warren version: %w", err)
+			}
+		}
+		return client, nil
 	}
 
-	// A normal installation needs no handoff. The only multi-step case is the
-	// temporary v0 compatibility bridge, so three probes are sufficient and
-	// keep this deliberately small coordinator bounded.
-	for attempt := 0; attempt < 3; attempt++ {
+	// A package version change (including an empty value from a schema-2 state)
+	// always takes the direct v1 handoff path before the normal protocol check.
+	// This also handles the stable socket being a symlink to the currently
+	// serving per-migration socket.
+	if versionHandoffRequired {
+		sourceSocket := currentGhostlineRoute(socketPath)
+		if !ghostlineSocketReady(sourceSocket) {
+			return nil, fmt.Errorf("ghostline source is not ready: %s", sourceSocket)
+		}
+		if !ghostlineSocketReady(sourceSocket + ".admin") {
+			return nil, fmt.Errorf("ghostline source has no admin socket: %s", sourceSocket+".admin")
+		}
+		sourceVersion, err := probeGhostlineVersion(context.Background(), sourceSocket)
+		if err != nil {
+			return nil, fmt.Errorf("read ghostline server version for handoff: %w", err)
+		}
+		if sourceVersion.ProtocolVersion != ghostline.ProtocolVersion {
+			return nil, fmt.Errorf("unsupported ghostline source protocol %q; current runtime requires %q", sourceVersion.ProtocolVersion, ghostline.ProtocolVersion)
+		}
+		handoffVersion := "warren-" + warrenVersion
+		if force && storedVersion == warrenVersion {
+			handoffVersion += "-forced"
+		}
+		config.logger.Info("warren version changed, handing off ghostline", "from", storedVersion, "to", warrenVersion, "force", force)
+		if err := handoffGhostline(config, sourceSocket, sourceVersion, handoffVersion, v1GhostlineSpawn(config)); err != nil {
+			return nil, err
+		}
+		// AdoptWithReport keeps the source authoritative when any session cannot
+		// be recovered. Leave WarrenVersion unchanged so a later package start
+		// retries the handoff instead of permanently accepting the old owner.
+		if ghostlineMigrationSkipped(state) {
+			return checkedGhostlineClient(socketPath, "after retained source")
+		}
+		if err := recordWarrenVersion(state, warrenVersion); err != nil {
+			return nil, fmt.Errorf("record Warren version after handoff: %w", err)
+		}
+		return checkedGhostlineClient(socketPath, "after version handoff")
+	}
+
+	// The normal path still upgrades a mismatched Ghostline protocol/tag. A
+	// pre-v1 source is rejected explicitly because this package intentionally
+	// ships no historical compatibility bridge.
+	for attempt := 0; attempt < 2; attempt++ {
 		sourceSocket := currentGhostlineRoute(socketPath)
 		version, err := probeGhostlineVersion(context.Background(), sourceSocket)
 		if err != nil {
@@ -156,21 +160,12 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 			if err := handoffGhostline(config, sourceSocket, version, "", v1GhostlineSpawn(config)); err != nil {
 				return nil, err
 			}
-
-		case ghostlineV0CompatibilityProtocol:
-			config.logger.Info("migrating ghostline v0.8 compatibility daemon to v1",
-				"source", sourceSocket)
-			if err := handoffGhostline(config, sourceSocket, version, ghostlineV0ToV1Handoff, v1GhostlineSpawn(config)); err != nil {
-				return nil, err
+			if ghostlineMigrationSkipped(config.state) {
+				return checkedGhostlineClient(socketPath, "after retained source")
 			}
 
 		default:
-			config.logger.Info("migrating legacy ghostline through v0.8 compatibility daemon",
-				"source", sourceSocket,
-				"source_protocol", version.ProtocolVersion)
-			if err := handoffGhostline(config, sourceSocket, version, "", compatibilityGhostlineSpawn(config)); err != nil {
-				return nil, err
-			}
+			return nil, fmt.Errorf("unsupported ghostline source protocol %q; current runtime requires %q", version.ProtocolVersion, ghostline.ProtocolVersion)
 		}
 	}
 	return nil, errors.New("ghostline migration did not reach v1")
@@ -208,7 +203,7 @@ func resumeGhostlineMigration(config ghostlineMigrationConfig) error {
 
 // handoffGhostline delegates session ownership to Ghostline. Warren only
 // records the small lifecycle journal, launches the target, and swaps its
-// local route; it never reads v0 output files or translates a cursor.
+// local route; Ghostline owns the PTY and terminal-state transfer.
 func handoffGhostline(config ghostlineMigrationConfig, sourceSocket string, sourceVersion ghostlineServerVersion, handoffVersion string, spawn []string) error {
 	if config.state == nil {
 		return fmt.Errorf("ghostline migration requires persistent Warren state")
@@ -384,20 +379,6 @@ func v1GhostlineSpawn(config ghostlineMigrationConfig) []string {
 	}
 }
 
-func compatibilityGhostlineSpawn(config ghostlineMigrationConfig) []string {
-	compatibility := bundledGhostlineV0CompatPath()
-	if compatibility == "" {
-		return nil
-	}
-	return []string{
-		compatibility,
-		"serve",
-		"--socket", "{socket}",
-		"--output-dir", config.outputDir,
-		"--probe-foreground=" + strconv.FormatBool(config.probeForeground),
-	}
-}
-
 func createGhostlineMigration(state *store.Store, sourceSocket, targetSocket, sourceProtocol, handoffVersion string) (api.GhostlineMigration, error) {
 	now := time.Now().UTC()
 	record := api.GhostlineMigration{
@@ -471,25 +452,6 @@ func ghostlinePhaseAtLeast(phase, minimum string) bool {
 	return exists && minimumExists && value >= threshold
 }
 
-func isCanonicalWarrenVersion(v string) bool {
-	if v == "" || v == "dev" || v == "unknown" || strings.Contains(v, "dirty") {
-		return false
-	}
-	if !strings.HasPrefix(v, "v") {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
-	if len(parts) < 3 {
-		return false
-	}
-	for i := 0; i < 3; i++ {
-		if _, err := strconv.Atoi(strings.Split(parts[i], "-")[0]); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
 func forceGhostlineHandoffRequested() bool {
 	if v := strings.TrimSpace(os.Getenv("WARREN_GHOSTLINE_FORCE_HANDOFF")); v != "" && v != "0" && !strings.EqualFold(v, "false") {
 		return true
@@ -538,6 +500,27 @@ func ghostlineVersionNeedsUpgrade(serverVersion ghostline.VersionInfo, expectedT
 	return false, ""
 }
 
+func recordWarrenVersion(state *store.Store, version string) error {
+	if state == nil || version == "" {
+		return nil
+	}
+	if state.Snapshot().WarrenVersion == version {
+		return nil
+	}
+	return state.Update(func(value *api.State) error {
+		value.WarrenVersion = version
+		return nil
+	})
+}
+
+func ghostlineMigrationSkipped(state *store.Store) bool {
+	if state == nil {
+		return false
+	}
+	migration := state.Snapshot().GhostlineMigration
+	return migration != nil && len(migration.SkippedSessions) > 0
+}
+
 func nextGhostlineSocket(stableSocket string) string {
 	return filepath.Join(filepath.Dir(stableSocket), "ghostline-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
 }
@@ -571,65 +554,11 @@ func probeGhostlineVersion(ctx context.Context, socketPath string) (ghostlineSer
 	if err == nil {
 		return ghostlineServerVersion{ProtocolVersion: info.ProtocolVersion, TagVersion: info.TagVersion}, nil
 	}
-	legacy, legacyErr := probeLegacyGhostlineVersion(ctx, socketPath)
-	if legacyErr == nil {
-		return legacy, nil
-	}
-	return ghostlineServerVersion{}, fmt.Errorf("v1 probe: %v; legacy probe: %w", err, legacyErr)
+	return ghostlineServerVersion{}, fmt.Errorf("ghostline v1 version probe: %w", err)
 }
 
-func probeLegacyGhostlineVersion(ctx context.Context, socketPath string) (ghostlineServerVersion, error) {
-	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-	if err != nil {
-		return ghostlineServerVersion{}, err
-	}
-	defer connection.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = connection.SetDeadline(deadline)
-	} else {
-		_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	}
-	request := struct {
-		ID     int64  `json:"id"`
-		Method string `json:"method"`
-	}{ID: 1, Method: "version"}
-	writer := bufio.NewWriter(connection)
-	if err := json.NewEncoder(writer).Encode(request); err != nil {
-		return ghostlineServerVersion{}, err
-	}
-	if err := writer.Flush(); err != nil {
-		return ghostlineServerVersion{}, err
-	}
-	var response struct {
-		ID     int64           `json:"id"`
-		Result json.RawMessage `json:"result"`
-		Error  json.RawMessage `json:"error"`
-	}
-	if err := json.NewDecoder(bufio.NewReader(connection)).Decode(&response); err != nil {
-		return ghostlineServerVersion{}, err
-	}
-	if response.ID != request.ID {
-		return ghostlineServerVersion{}, fmt.Errorf("legacy version response id %d, want %d", response.ID, request.ID)
-	}
-	if len(response.Error) > 0 && string(response.Error) != "null" {
-		return ghostlineServerVersion{}, fmt.Errorf("legacy version error: %s", response.Error)
-	}
-	var result struct {
-		Version    string `json:"version"`
-		TagVersion string `json:"tagVersion"`
-	}
-	if err := json.Unmarshal(response.Result, &result); err != nil {
-		return ghostlineServerVersion{}, err
-	}
-	if strings.TrimSpace(result.Version) == "" {
-		return ghostlineServerVersion{}, fmt.Errorf("legacy version response is empty")
-	}
-	return ghostlineServerVersion{ProtocolVersion: result.Version, TagVersion: result.TagVersion}, nil
-}
-
-// ghostlineSocketReady only checks local Unix reachability. It works for the
-// legacy, compatibility, and v1 public/admin sockets without exposing admin
-// RPCs to terminal clients.
+// ghostlineSocketReady only checks local Unix reachability. It works for v1
+// public/admin sockets without exposing admin RPCs to terminal clients.
 func ghostlineSocketReady(socketPath string) bool {
 	if strings.TrimSpace(socketPath) == "" {
 		return false
@@ -691,34 +620,4 @@ func stopGhostlineServer(socketPath string) error {
 		return fmt.Errorf("stop ghostline source: %w", err)
 	}
 	return waitForGhostlineExit(socketPath, 5*time.Second)
-}
-
-func bundledGhostlineV0CompatPath() string {
-	if override := strings.TrimSpace(os.Getenv("WARREN_GHOSTLINE_V0_COMPAT")); override != "" {
-		if info, err := os.Stat(override); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return override
-		}
-		return ""
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return bundledGhostlineV0CompatPathFor(executable)
-}
-
-func bundledGhostlineV0CompatPathFor(executable string) string {
-	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
-		executable = resolved
-	}
-	macOSDirectory := filepath.Dir(executable)
-	if filepath.Base(macOSDirectory) != "MacOS" || filepath.Base(filepath.Dir(macOSDirectory)) != "Contents" {
-		return ""
-	}
-	candidate := filepath.Join(macOSDirectory, "..", "Resources", "ghostline-v0-compat")
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return ""
-	}
-	return candidate
 }

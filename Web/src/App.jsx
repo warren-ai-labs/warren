@@ -62,6 +62,7 @@ import {
   terminalSize,
   waitForTerminalFont,
 } from "./terminal.js";
+import { encodeInput } from "./wire.js";
 import {
   AgentMessageQueue,
   agentAttachmentReference,
@@ -318,6 +319,7 @@ export default function App() {
     generation: 0,
     requestID: null,
     cancelRequestID: null,
+    attachmentID: null,
   });
   const subscriptionCleanupRef = useRef(() => {});
   const snapshotPendingRef = useRef(false);
@@ -393,9 +395,9 @@ export default function App() {
   const worktreeImportInFlightRef = useRef(false);
   const worktreeLoadRequestRef = useRef(null);
   const worktreeImportRequestRef = useRef(null);
-  const connectionOnlineRef = useRef(false);
   const appStateRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
+  const inputSequenceRef = useRef(0);
   const rosterRef = useRef(null);
   const rosterRefreshInFlightRef = useRef(false);
   const relayRefreshInFlightRef = useRef(false);
@@ -460,10 +462,27 @@ export default function App() {
       }
     });
   }, []);
+  const sendEncodedInput = useCallback(data => {
+    const state = appStateRef.current;
+    const subscription = subscriptionRef.current;
+    const sessionID = state.activeSession;
+    const attachmentID = subscription.attachmentID;
+    if (!sessionID || subscription.sessionID !== sessionID || !attachmentID) return false;
+    const payload = typeof data === "string"
+      ? new TextEncoder().encode(data)
+      : (data instanceof Uint8Array ? data : new Uint8Array(data || []));
+    const frame = encodeInput(payload, {
+      sessionID,
+      attachmentID,
+      sequence: inputSequenceRef.current++,
+    });
+    return Boolean(frame && connectionRef.current?.sendFrame(frame));
+  }, []);
+
   if (inputQueueRef.current === null) {
     inputQueueRef.current = new InputQueue({
       limit: pendingInputLimit,
-      send: data => Boolean(connectionRef.current?.sendBinary(data)),
+      send: sendEncodedInput,
       onSendFailure: () => connectionRef.current?.reconnectNow(),
     });
   }
@@ -1206,6 +1225,7 @@ export default function App() {
       generation: previous.generation + 1,
       requestID: null,
       cancelRequestID: null,
+      attachmentID: null,
     };
     clearRecoveryState();
     if (sendUnsubscribe && previousSessionID) {
@@ -1232,6 +1252,7 @@ export default function App() {
       generation,
       requestID: null,
       cancelRequestID: null,
+      attachmentID: null,
     };
     subscriptionRef.current = state;
     if (previous.requestID) clearPendingRequest(pendingRequestsRef.current, previous.requestID);
@@ -1249,9 +1270,16 @@ export default function App() {
         null,
         !document.hidden && document.hasFocus(),
       );
-      const sent = request(message.method, message.params, () => {
+      const sent = request(message.method, message.params, result => {
         if (subscriptionRef.current !== state
           || appStateRef.current.activeSession !== sessionID) return;
+        state.attachmentID = String(result?.attachmentId || "").trim() || null;
+        if (!state.attachmentID) {
+          state.status = "failed";
+          setConnectionStatus({ message: "Host did not return a terminal attachment", online: false });
+          connectionRef.current?.reset();
+          return;
+        }
         state.status = "acknowledged";
         // The Host registers the output subscription before acknowledging the
         // request. Accepting input here keeps the PTY responsive while the
@@ -1319,13 +1347,13 @@ export default function App() {
   const sendInput = useCallback(data => {
     const state = appStateRef.current;
     if (!data || !state.activeSession) return false;
-    if (state.attachedSession !== state.activeSession) {
+    if (state.attachedSession !== state.activeSession || !subscriptionRef.current.attachmentID) {
       if (!inputQueueRef.current.enqueue(state.activeSession, data)) {
         announceFeedback("Input buffer is full; reconnect before typing more.", "error");
       }
       return false;
     }
-    if (!connectionRef.current?.sendBinary(data)) {
+    if (!sendEncodedInput(data)) {
       if (!inputQueueRef.current.enqueue(state.activeSession, data)) {
         announceFeedback("Input buffer is full; reconnect before typing more.", "error");
       }
@@ -1333,7 +1361,7 @@ export default function App() {
       return false;
     }
     return true;
-  }, [announceFeedback]);
+  }, [announceFeedback, sendEncodedInput]);
 
   const publishAgentQueue = useCallback((sessionID, queue) => {
     const items = queue.items.map(item => ({ ...item, attachments: [...(item.attachments || [])] }));
@@ -2019,7 +2047,6 @@ export default function App() {
     if (previousWorkspaceID && previousWorkspaceID !== workspaceID) {
       persistCurrentGitUI(previousWorkspaceID);
     }
-    const wasAttached = Boolean(state.activeSession || state.attachedSession);
     const sessionID = resolveWorkspaceSession(
       state.catalog,
       workspaceID,
@@ -2060,7 +2087,6 @@ export default function App() {
     else if (nextTabs.length) attachSession(nextTabs[0].id, true);
     else {
       cancelSubscription();
-      if (wasAttached) request("session.detach");
       const automaticKind = automaticSessionKind({
         tabs: nextTabs,
         pending: creatingSessionWorkspaceIDsRef.current.has(workspaceID),
@@ -2070,7 +2096,7 @@ export default function App() {
       });
       if (automaticKind) createSession(automaticKind, workspaceID);
     }
-  }, [attachSession, autoStartAI, cancelSubscription, clearPendingSession, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace, visiblePresets]);
+  }, [attachSession, autoStartAI, cancelSubscription, clearPendingSession, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, restoreGitUIForWorkspace, visiblePresets]);
 
   const chooseSessionPreset = useCallback((kind, settings) => {
     createSession(kind, null, settings);
@@ -2159,8 +2185,6 @@ export default function App() {
     if (!isDelta) rosterRefreshInFlightRef.current = false;
     clearMaintenanceTimeout();
     connectionRef.current?.markStable();
-    if (!connectionOnlineRef.current) announceFeedback("Connected", "success");
-    connectionOnlineRef.current = true;
     loadRemoteSettings();
     const nextCatalog = buildCatalog(nextRoster);
     const state = appStateRef.current;
@@ -2244,12 +2268,11 @@ export default function App() {
     }
     else if (activeTabWasRemoved) {
       cancelSubscription();
-      request("session.detach");
     }
     for (const sessionID of completedSessions) {
       agentCompletionEventsRef.current.emit({ sessionID });
     }
-  }, [announceFeedback, applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -2283,7 +2306,7 @@ export default function App() {
         }
         if (current) {
           if (decoded.header.epoch !== current.epoch || decoded.header.sequence !== current.sequence) {
-            // Protocol 3 recovery always starts from a fresh atomic state;
+            // Protocol 4 recovery always starts from a fresh atomic state;
             // never render an out-of-order frame into the visible surface.
             connectionRef.current?.reset();
             return;
@@ -2295,7 +2318,7 @@ export default function App() {
         }
         batcherRef.current?.enqueue(decoded.payload);
       } else if (isBinaryEnvelope(bytes)) {
-        // Every protocol-3 binary message is a DENB frame. Raw PTY bytes and
+        // Every protocol-4 binary message is a DENB frame. Raw PTY bytes and
         // malformed envelopes are rejected instead of being fed to xterm.
         connectionRef.current?.reset();
       } else {
@@ -2398,9 +2421,11 @@ export default function App() {
           sequence: message.sequence,
         };
       } else {
-        // Legacy relay: no recovery metadata, raw payloads only. Keep the
-        // anchor null so frame validation stays disabled.
-        recoveryAnchorRef.current = null;
+        // A v4 Host always pairs the attached marker with an atomic recovery
+        // boundary; missing metadata is a protocol error, never a raw-stream
+        // fallback.
+        connectionRef.current?.reset();
+        break;
       }
       break;
     }
@@ -2612,7 +2637,6 @@ export default function App() {
         const detail = connectionErrorDetail(message);
         setConnectionStatus({ message: detail, online: false });
         setEmptyOverride({ loading: false, message: detail });
-        connectionOnlineRef.current = false;
         clearPendingSession();
         announceFeedback(detail || "Connection failed", "error");
         if (detail === "unauthorized") {
@@ -2680,8 +2704,6 @@ export default function App() {
       agentCapabilitiesRef.current = new Set();
       setConnectionStatus({ message: "Connecting…", online: false });
       clearPendingSession();
-      if (connectionOnlineRef.current) announceFeedback("Reconnecting…", "pending");
-      connectionOnlineRef.current = false;
       return;
     }
     if (state === "open") {
@@ -2713,9 +2735,7 @@ export default function App() {
     stagedRecoveryOutputRef.current = [];
     recoveryAnchorRef.current = null;
     setConnectionStatus({ message: "Reconnecting…", online: false });
-    if (connectionOnlineRef.current) announceFeedback("Reconnecting…", "pending");
-    connectionOnlineRef.current = false;
-  }, [announceFeedback, cancelSubscription, clearMaintenanceTimeout, clearPendingSession]);
+  }, [cancelSubscription, clearMaintenanceTimeout, clearPendingSession]);
 
   messageHandlerRef.current = acceptMessage;
   connectionStateHandlerRef.current = acceptConnectionState;

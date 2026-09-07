@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,9 +13,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
 
-// Canonical event persistence is intentionally separate from the old
-// projection table. The latter is kept only for source-level migration of
-// existing tests/embedders; all new Host code uses this journal.
+// Canonical event persistence is the only Host-owned Agent journal.
 
 var (
 	ErrCanonicalSequenceConflict = errors.New("canonical agent event sequence conflict")
@@ -636,7 +635,27 @@ func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool 
 	incoming.RecordedAt = time.Time{}
 	encodedExisting, errExisting := json.Marshal(existing)
 	encodedIncoming, errIncoming := json.Marshal(incoming)
-	return errExisting == nil && errIncoming == nil && string(encodedExisting) == string(encodedIncoming)
+	if errExisting != nil || errIncoming != nil {
+		return false
+	}
+	normalizedExisting, errExisting := normalizeCanonicalJSON(encodedExisting)
+	normalizedIncoming, errIncoming := normalizeCanonicalJSON(encodedIncoming)
+	return errExisting == nil && errIncoming == nil && bytes.Equal(normalizedExisting, normalizedIncoming)
+}
+
+// normalizeCanonicalJSON removes representation-only differences such as
+// object key order and typed-vs-generic payload objects. The journal stores
+// JSON and replays it into map[string]any, while a live provider event may
+// still carry a typed payload struct; both representations must remain
+// idempotent.
+func normalizeCanonicalJSON(encoded []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }
 
 func decodeCheckpoint(raw string) map[string]any {

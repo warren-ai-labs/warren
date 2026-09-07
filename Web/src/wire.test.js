@@ -140,9 +140,9 @@ test("enforces distinct output and atomic-state payload limits", () => {
   assert.equal(decodeAtomicStateFrame(oversizedAtomic), null);
 
   const inputPayload = new Uint8Array(binaryPayloadLimits.input);
-  assert.ok(encodeInput(inputPayload, { sessionID: "s" }));
+  assert.ok(encodeInput(inputPayload, { sessionID: "s", attachmentID: "a" }));
   assert.equal(
-    encodeInput(new Uint8Array(binaryPayloadLimits.input + 1), { sessionID: "s" }),
+    encodeInput(new Uint8Array(binaryPayloadLimits.input + 1), { sessionID: "s", attachmentID: "a" }),
     null,
   );
 });

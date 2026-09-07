@@ -1,13 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,11 +61,7 @@ const (
 	// operationAuditLimit keeps the durable safety log bounded. Only entries
 	// with a compare-and-swap undo representation are retained.
 	operationAuditLimit = 256
-	// defaultWorktreeRoot is also the compatibility fallback used when an
-	// embedded Service does not provide an explicit worktree root.
-	defaultWorktreeRoot   = "~/.warren/worktrees"
-	defaultAgentStorePath = "~/.warren/agent-events.db"
-	setupScriptTimeout    = 5 * time.Minute
+	setupScriptTimeout  = 5 * time.Minute
 )
 
 type Service struct {
@@ -171,9 +167,13 @@ type Service struct {
 	// subscription. Independent readers let a cold peer start exactly at its
 	// snapshot cursor; the shared reader is paused only for the short checkpoint
 	// boundary so existing subscribers never receive a partial recovery.
-	peerOutputs    map[*wsPeer]map[string]*peerOutputStream
-	agentPeers     map[string]map[*wsPeer]struct{}
-	focusedPeers   map[string]*wsPeer
+	peerOutputs  map[*wsPeer]map[string]*peerOutputStream
+	agentPeers   map[string]map[*wsPeer]struct{}
+	focusedPeers map[string]*wsPeer
+	// controlPeers is the authoritative per-session mutation lease. Terminal
+	// focus normally owns the same lease, but Agent-only actions may claim it
+	// before a terminal output subscription exists.
+	controlPeers   map[string]*wsPeer
 	runtimeSizes   map[string]ghostline.Size
 	broadcastLocks map[string]*sessionLock
 	agentsMu       sync.Mutex
@@ -426,6 +426,9 @@ func (s *Service) lazyInitLocked() {
 	if s.focusedPeers == nil {
 		s.focusedPeers = map[string]*wsPeer{}
 	}
+	if s.controlPeers == nil {
+		s.controlPeers = map[string]*wsPeer{}
+	}
 	if s.runtimeSizes == nil {
 		s.runtimeSizes = map[string]ghostline.Size{}
 	}
@@ -477,7 +480,6 @@ func (s *Service) initMergeState() {
 func (s *Service) Start(parent context.Context) {
 	s.lifecycleOnce.Do(func() {
 		s.lazyInit()
-		s.migrateLegacyWorktreeOwnership()
 		s.initMergeState()
 		if installAgentHooks := s.AgentHooks; installAgentHooks != nil {
 			// Best-effort: the managed hook makes Codex binding precise, but
@@ -499,65 +501,6 @@ func (s *Service) Start(parent context.Context) {
 			go s.metadataLoop(ctx)
 		}
 	})
-}
-
-// migrateLegacyWorktreeOwnership upgrades workspace records written before
-// ManagedWorktree was persisted. Only paths below Warren's configured
-// worktree root are adopted; imported checkouts elsewhere remain user-owned.
-// The marker makes the migration idempotent and prevents a later restart from
-// reclassifying a newly imported checkout that happens to live below that
-// root.
-func (s *Service) migrateLegacyWorktreeOwnership() {
-	if s.Store == nil {
-		return
-	}
-	state := s.Store.Snapshot()
-	if state.WorktreeOwnershipMigrated {
-		return
-	}
-	root := strings.TrimSpace(s.WorktreeRoot)
-	if root == "" {
-		root = defaultWorktreeRoot
-	}
-	root = resolvePath(expandHome(root))
-	if root == "" || root == "." {
-		return
-	}
-
-	legacyCandidates := make(map[string]struct{})
-	for _, workspace := range state.Workspaces {
-		if workspace.Kind == "worktree" && !workspace.ManagedWorktree &&
-			!samePath(root, workspace.Path) && pathWithin(root, workspace.Path) {
-			legacyCandidates[workspace.ID] = struct{}{}
-		}
-	}
-	migrated := 0
-	err := s.Store.Update(func(value *api.State) error {
-		if value.WorktreeOwnershipMigrated {
-			return nil
-		}
-		for index := range value.Workspaces {
-			workspace := &value.Workspaces[index]
-			if _, ok := legacyCandidates[workspace.ID]; !ok {
-				continue
-			}
-			workspace.ManagedWorktree = true
-			migrated++
-		}
-		value.WorktreeOwnershipMigrated = true
-		return nil
-	})
-	if err != nil {
-		s.logWarn("migrate legacy worktree ownership", "error", err)
-		return
-	}
-	if migrated > 0 {
-		logger := s.Logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.Info("migrated legacy Warren worktree ownership", "count", migrated, "root", root)
-	}
 }
 
 func (s *Service) Shutdown() {
@@ -926,9 +869,54 @@ func (s *Service) Roster(ctx context.Context) api.State {
 	return state
 }
 
+// agentProviderForRoster resolves only durable/binding metadata. It must not
+// wait for the lifecycle reconciler: roster consumers need a stable provider
+// identity during the short window after a Host restart or execution rebind.
+func (s *Service) agentProviderForRoster(session api.Session) string {
+	// Shell/custom Sessions can change provider without changing their Warren
+	// kind. Resolve the live binding first so a stale persisted provider from a
+	// previous CLI cannot win when the binding is available. The persisted
+	// provider remains a short-lived startup fallback: binding files are written
+	// atomically by hooks and can be briefly unreadable while the Host is
+	// rehydrating after restart.
+	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
+	if shellOverlay && strings.TrimSpace(session.ID) != "" {
+		if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
+			if provider := agentProviderForKind(binding.Provider); provider != "" {
+				return provider
+			}
+		}
+		if provider := agentProviderForKind(session.AgentProvider); provider != "" {
+			return provider
+		}
+	}
+	if !shellOverlay {
+		if provider := agentProviderForKind(session.AgentProvider); provider != "" {
+			return provider
+		}
+	}
+	if provider := agentProviderForKind(session.Kind); provider != "" {
+		return provider
+	}
+	if s != nil {
+		s.lazyInit()
+		s.agentsMu.Lock()
+		entry := s.agents[session.ID]
+		s.agentsMu.Unlock()
+		if entry != nil {
+			entry.mu.Lock()
+			provider := agentProviderForKind(entry.providerKind)
+			entry.mu.Unlock()
+			if provider != "" {
+				return provider
+			}
+		}
+	}
+	return ""
+}
+
 func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	startedAt := time.Now()
-	s.migrateLegacyWorktreeOwnership()
 	// Roster projection is observer-facing and may run independently for every
 	// connected client. Keep runtime probes and Session lifecycle mutations in
 	// the single lifecycle loop so additional observers cannot multiply process
@@ -941,24 +929,6 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	for index := range state.Workspaces {
 		state.Workspaces[index].CreationRequestID = ""
 		state.Workspaces[index].CreationRequestHash = ""
-	}
-	// The store also carries Ghostline's local recovery data. Expose only the
-	// logical skipped-session report; daemon socket paths and output cursors are
-	// local control-plane details and must never leave the headless process.
-	if migration := state.GhostlineMigration; migration != nil {
-		if len(migration.SkippedSessions) == 0 {
-			state.GhostlineMigration = nil
-		} else {
-			state.GhostlineMigration = &api.GhostlineMigration{
-				SessionID:       migration.SessionID,
-				HandoffVersion:  migration.HandoffVersion,
-				Phase:           migration.Phase,
-				SkippedSessions: append([]string(nil), migration.SkippedSessions...),
-				SkipReasons:     maps.Clone(migration.SkipReasons),
-				CreatedAt:       migration.CreatedAt,
-				UpdatedAt:       migration.UpdatedAt,
-			}
-		}
 	}
 	// Store revisions begin at zero, while an omitted JSON field means an old
 	// server did not support revisioned roster snapshots. Offset the opaque
@@ -997,6 +967,17 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
 		session.OutputCursor = ""
+		if session.Kind == "shell" || session.Kind == "custom" {
+			// Shell overlays are binding-driven. Clear a stale persisted provider
+			// from the public projection when its binding has disappeared; the
+			// lifecycle loop will perform the durable cleanup as well.
+			session.AgentProvider = s.agentProviderForRoster(*session)
+		} else if provider := s.agentProviderForRoster(*session); provider != "" {
+			// Project the binding directly in the roster. The lifecycle loop may
+			// still be rehydrating the provider handle, but the client can bind
+			// the Session to its correct icon and Agent surface immediately.
+			session.AgentProvider = provider
+		}
 		session.AgentCapabilities = s.agentCapabilitiesForSession(session.ID, *session)
 		if handler := s.agentHandlerForSession(session.ID); handler != "" {
 			session.AgentHandler = handler
@@ -2891,6 +2872,7 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 		Title:           defaultTitle,
 		CustomTitle:     customTitle,
 		Kind:            kind,
+		AgentProvider:   agentProviderForKind(kind),
 		AgentHandler:    selectedAgentHandler,
 		Command:         command,
 		Runtime:         runtimeName,
@@ -3708,13 +3690,13 @@ func (s *Service) readPeerCursorOutput(
 			// stream cannot leave the client connected to a silent subscription.
 			if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrClosedPipe) && readerContext.Err() == nil {
 				s.logWarn("read peer ghostline output", "session", sessionID, "error", readErr)
-				peer.close()
+				peer.closeWithReason("runtime_output_error")
 			}
 			return
 		}
 		if count == 0 {
 			s.logWarn("read peer ghostline output", "session", sessionID, "error", io.ErrNoProgress)
-			peer.close()
+			peer.closeWithReason("runtime_output_no_progress")
 			return
 		}
 	}
@@ -3813,6 +3795,13 @@ func (s *Service) ensureAgent(ctx context.Context, session api.Session) (*agentS
 func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session, state *api.State) (*agentSession, error) {
 	if registry := s.agentProviderRegistry(); registry != nil {
 		return s.ensureAgentWithRegistry(ctx, session, state, registry)
+	}
+	if provider := agentProviderForKind(session.Kind); provider != "" {
+		s.persistAgentProviderWithState(state, session.ID, provider)
+	} else if session.Kind == "shell" || session.Kind == "custom" {
+		if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
+			s.persistAgentProviderWithState(state, session.ID, binding.Provider)
+		}
 	}
 	dedicated := session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" || session.Kind == "antigravity"
 	shellOverlay := session.Kind == "shell" || session.Kind == "custom"
@@ -4293,7 +4282,7 @@ func (s *Service) clearShellAgentWithState(session api.Session, state *api.State
 	entry := s.agents[session.ID]
 	s.agentsMu.Unlock()
 	hasWatcher := entry != nil && entry.watcher != nil
-	if !hasWatcher && session.AgentSessionID == "" && session.TranscriptPath == "" {
+	if !hasWatcher && session.AgentSessionID == "" && session.TranscriptPath == "" && session.AgentProvider == "" {
 		return
 	}
 	s.stopAgent(session.ID)
@@ -4302,6 +4291,7 @@ func (s *Service) clearShellAgentWithState(session api.Session, state *api.State
 			if value.Sessions[index].ID == session.ID {
 				value.Sessions[index].AgentSessionID = ""
 				value.Sessions[index].TranscriptPath = ""
+				value.Sessions[index].AgentProvider = ""
 			}
 		}
 		return nil
@@ -4312,6 +4302,7 @@ func (s *Service) clearShellAgentWithState(session api.Session, state *api.State
 		if state.Sessions[index].ID == session.ID {
 			state.Sessions[index].AgentSessionID = ""
 			state.Sessions[index].TranscriptPath = ""
+			state.Sessions[index].AgentProvider = ""
 			return
 		}
 	}
@@ -4438,6 +4429,37 @@ func (s *Service) persistAgentMetaWithState(state *api.State, sessionID, agentSe
 		}
 		session.AgentSessionID = agentSessionID
 		session.TranscriptPath = transcriptPath
+		return
+	}
+}
+
+// persistAgentProviderWithState stores the provider family as soon as a
+// binding is observed. This keeps the next roster snapshot self-describing
+// even when the provider handle has not finished starting yet.
+func (s *Service) persistAgentProviderWithState(state *api.State, sessionID, provider string) {
+	provider = agentProviderForKind(provider)
+	if s == nil || s.Store == nil || state == nil || provider == "" || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	for index := range state.Sessions {
+		session := &state.Sessions[index]
+		if session.ID != sessionID {
+			continue
+		}
+		if agentProviderForKind(session.AgentProvider) == provider {
+			return
+		}
+		if err := s.Store.Update(func(value *api.State) error {
+			for index := range value.Sessions {
+				if value.Sessions[index].ID == sessionID {
+					value.Sessions[index].AgentProvider = provider
+				}
+			}
+			return nil
+		}); err != nil {
+			return
+		}
+		session.AgentProvider = provider
 		return
 	}
 }
@@ -4702,7 +4724,7 @@ func canonicalStatusEvent(status api.AgentStatus, streamID, executionID string) 
 func canonicalProviderEvent(source api.AgentEvent, streamID, executionID string) api.CanonicalAgentEvent {
 	providerID := source.ID
 	eventID := api.StableAgentEventID(source)
-	canonical := api.CanonicalAgentEventFromLegacy(source, streamID, executionID, 0, time.Now().UTC())
+	canonical := api.CanonicalAgentEventFromObservation(source, streamID, executionID, 0, time.Now().UTC())
 	canonical.EventID = eventID
 	canonical.Sequence = 0
 	if providerID != "" {
@@ -4818,7 +4840,22 @@ func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool 
 	incoming.RecordedAt = time.Time{}
 	left, leftErr := json.Marshal(existing)
 	right, rightErr := json.Marshal(incoming)
-	return leftErr == nil && rightErr == nil && string(left) == string(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	left, leftErr = normalizeCanonicalJSON(left)
+	right, rightErr = normalizeCanonicalJSON(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
+}
+
+func normalizeCanonicalJSON(encoded []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }
 
 // recordAgentEvents stores a bounded event history and forwards the batch to
@@ -4873,7 +4910,6 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		filteredEvents = append(filteredEvents, source)
 	}
 	events = filteredEvents
-	epoch := s.currentAgentEpoch()
 	streamID := strings.TrimSpace(entry.executionID)
 	if streamID == "" {
 		// recordAgentEventsForHandle already owns agentsMu and entry.mu. Calling
@@ -4886,11 +4922,6 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 			streamID = store.NewID()
 		}
 		entry.executionID = streamID
-	}
-	if s.AgentStore != nil {
-		if assigned, err := s.AgentStore.AppendEvents(context.Background(), sessionID, epoch, events, status); err == nil && len(assigned) == len(events) {
-			events = assigned
-		}
 	}
 	effectiveStatus = entry.status
 	if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
@@ -5566,6 +5597,7 @@ func (s *Service) canonicalInteraction(sessionID, interactionID string) (canonic
 			}
 			collectCanonicalInteractionOptionIDs(event.Payload["options"], projection.optionIDs, 0)
 			collectCanonicalInteractionOptionIDs(event.Payload["schema"], projection.optionIDs, 0)
+			collectCanonicalQuestionOptionIDs(event.Payload["questions"], projection.optionIDs, 0)
 		}
 		if version := canonicalInteractionVersion(event.Payload["version"]); version > 0 {
 			projection.version = version
@@ -5627,6 +5659,37 @@ func collectCanonicalInteractionOptionIDs(value any, ids map[string]struct{}, de
 				}
 			case "options", "enum", "items", "properties":
 				collectCanonicalInteractionOptionIDs(item, ids, depth+1)
+			}
+			if len(ids) >= 128 {
+				return
+			}
+		}
+	}
+}
+
+// Question payloads keep their selectable values one level below a
+// `questions` array. Do not feed the whole object into the generic collector:
+// a question's own `id` is not an answer option and must not become accepted
+// merely because it happens to use the same field name.
+func collectCanonicalQuestionOptionIDs(value any, ids map[string]struct{}, depth int) {
+	if depth > canonicalInteractionMaxDepth || len(ids) >= 128 {
+		return
+	}
+	switch value := value.(type) {
+	case []any:
+		for _, item := range value {
+			collectCanonicalQuestionOptionIDs(item, ids, depth+1)
+			if len(ids) >= 128 {
+				return
+			}
+		}
+	case map[string]any:
+		for key, item := range value {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "options", "enum":
+				collectCanonicalInteractionOptionIDs(item, ids, depth+1)
+			case "questions", "schema", "items":
+				collectCanonicalQuestionOptionIDs(item, ids, depth+1)
 			}
 			if len(ids) >= 128 {
 				return
@@ -5988,6 +6051,29 @@ func splitCanonicalAgentEvents(events []api.CanonicalAgentEvent, maxBytes int) [
 	return batches
 }
 
+func encodeCanonicalAgentBatches(
+	streamID, executionID string,
+	batches [][]api.CanonicalAgentEvent,
+) ([][]byte, error) {
+	if len(batches) == 0 {
+		return nil, nil
+	}
+	encoded := make([][]byte, 0, len(batches))
+	for _, batch := range batches {
+		data, err := json.Marshal(api.CanonicalAgentEventsMessage{
+			Type:        "agent.events",
+			StreamID:    streamID,
+			ExecutionID: executionID,
+			Events:      batch,
+		})
+		if err != nil {
+			return nil, err
+		}
+		encoded = append(encoded, data)
+	}
+	return encoded, nil
+}
+
 func (s *Service) broadcastCanonicalAgentIncrements(sessionID string, events []api.CanonicalAgentEvent, streamID, executionID string) {
 	lock := s.broadcastLock(sessionID)
 	lock.Lock()
@@ -5999,12 +6085,38 @@ func (s *Service) broadcastCanonicalAgentIncrementsLocked(sessionID string, even
 	if len(events) == 0 {
 		return
 	}
+	var (
+		prepared  bool
+		batches   [][]api.CanonicalAgentEvent
+		encoded   [][]byte
+		encodeErr error
+	)
 	s.broadcastAgentLocked(func(peer *wsPeer) error {
 		if !peer.hasCanonicalAgentStream(streamID) {
 			return nil
 		}
-		for _, batch := range splitCanonicalAgentEvents(events, agentMessageMaxBytes) {
-			if err := peer.enqueueCanonicalAgentEvents(streamID, executionID, batch); err != nil {
+		if !prepared {
+			batches = splitCanonicalAgentEvents(events, agentMessageMaxBytes)
+			encoded, encodeErr = encodeCanonicalAgentBatches(streamID, executionID, batches)
+			prepared = true
+			if encodeErr != nil {
+				// Keep the old per-peer path for malformed payloads so one bad event
+				// retains the existing peer error and detach behavior.
+				s.logWarn("encode canonical agent events", "session", sessionID, "error", encodeErr)
+			}
+		}
+		if encodeErr != nil {
+			for _, batch := range batches {
+				if err := peer.enqueueCanonicalAgentEvents(streamID, executionID, batch); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, data := range encoded {
+			// data is immutable after encoding and is intentionally shared by
+			// every peer queue; the queue and writer retain the slice safely.
+			if err := peer.writeText(data); err != nil {
 				return err
 			}
 		}
@@ -6311,22 +6423,8 @@ func (s *Service) forceSessionReanchor(sessionID string) {
 		return
 	}
 	for _, peer := range peers {
-		peer.close()
+		peer.closeWithReason("force_reanchor")
 	}
-}
-
-// attachOutput prepares a peer's subscription under the session broadcast
-// lock, so recovery replay can never interleave with newer live output.
-func (s *Service) attachOutput(ctx context.Context, peer *wsPeer, session api.Session, anchor *output.Anchor) error {
-	lock, resume, err := s.prepareAttach(ctx, session)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		lock.Unlock()
-		resume()
-	}()
-	return s.attachOutputLocked(ctx, peer, session, anchor, "session.attach")
 }
 
 // prepareAttach serializes recovery and holds the shared broadcast boundary.
@@ -6384,6 +6482,7 @@ func (s *Service) attachOutputLocked(ctx context.Context, peer *wsPeer, session 
 	s.outputMu.Unlock()
 
 	s.registerPeer(session.ID, peer)
+	peer.ensureAttachment(session.ID)
 
 	if peer.terminalStateFormat == "" {
 		return errors.New("atomic terminal state format is not negotiated")
@@ -6572,6 +6671,9 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	if s.focusedPeers[sessionID] == peer {
 		delete(s.focusedPeers, sessionID)
 	}
+	if s.controlPeers[sessionID] == peer {
+		delete(s.controlPeers, sessionID)
+	}
 	s.outputMu.Unlock()
 }
 
@@ -6646,6 +6748,9 @@ func (s *Service) focusPeerLocked(
 			if s.focusedPeers[session.ID] == peer {
 				delete(s.focusedPeers, session.ID)
 			}
+			if s.controlPeers[session.ID] == peer {
+				delete(s.controlPeers, session.ID)
+			}
 			s.outputMu.Unlock()
 		}
 		return false, nil
@@ -6664,6 +6769,7 @@ func (s *Service) focusPeerLocked(
 		return false, nil
 	}
 	s.focusedPeers[session.ID] = peer
+	s.controlPeers[session.ID] = peer
 	s.outputMu.Unlock()
 	return resized, nil
 }
@@ -6760,6 +6866,32 @@ func (s *Service) isFocused(peer *wsPeer, sessionID string) bool {
 	return s.focusedPeers[sessionID] == peer
 }
 
+// claimControlPeer transfers the mutation lease without requiring a terminal
+// output subscription. This is used by Agent-only Stop/interaction actions;
+// terminal focus still remains separately gated by the output roster.
+func (s *Service) claimControlPeer(peer *wsPeer, sessionID string) bool {
+	s.lazyInit()
+	s.outputMu.Lock()
+	s.controlPeers[sessionID] = peer
+	s.outputMu.Unlock()
+	return true
+}
+
+func (s *Service) releaseControlPeer(peer *wsPeer, sessionID string) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	if s.controlPeers[sessionID] == peer {
+		delete(s.controlPeers, sessionID)
+	}
+	s.outputMu.Unlock()
+}
+
+func (s *Service) hasControlPeer(peer *wsPeer, sessionID string) bool {
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	return s.controlPeers[sessionID] == peer
+}
+
 func (s *Service) hasFocusedPeer(sessionID string) bool {
 	s.outputMu.Lock()
 	defer s.outputMu.Unlock()
@@ -6786,6 +6918,7 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	delete(s.peers, sessionID)
 	delete(s.agentPeers, sessionID)
 	delete(s.focusedPeers, sessionID)
+	delete(s.controlPeers, sessionID)
 	delete(s.runtimeSizes, sessionID)
 	s.outputMu.Unlock()
 	for _, peer := range peers {

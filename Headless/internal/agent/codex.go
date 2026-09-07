@@ -15,6 +15,7 @@ type codexParser struct {
 	codexModel           string
 	codexEffort          string
 	codexCallTool        map[string]string
+	codexGoalCalls       map[string]string
 	codexInteractions    map[string]string
 	codexTurnFailed      bool
 	lastUserContent      string
@@ -32,6 +33,7 @@ func newCodexParser(contentLimit int) *codexParser {
 	return &codexParser{
 		baseParser:             newBaseParser(contentLimit),
 		codexCallTool:          make(map[string]string),
+		codexGoalCalls:         make(map[string]string),
 		codexInteractions:      make(map[string]string),
 		lastQueuedItemIDs:      make(map[string]struct{}),
 		lastQueuedFingerprints: make(map[string]string),
@@ -409,11 +411,33 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Files = codexFiles(payload.Arguments, event.ToolName)
 			if event.CallID != "" {
 				p.codexCallTool[event.CallID] = event.ToolName
+				if operation := codexGoalOperation(payload.Name, payload.Arguments, nil); operation != "" {
+					p.codexGoalCalls[event.CallID] = operation
+				}
 			}
 			p.lastEventType = "tool_call"
 			return []api.AgentEvent{event}
 		case "function_call_output", "custom_tool_call_output":
 			if kind := p.codexInteractions[payload.CallID]; kind != "" {
+				output, _, outputError := codexOutputDetails(payload.Output, p.contentLimit)
+				if kind == "question" && codexUnavailableUserInput(output, outputError) {
+					// The CLI can record a request_user_input call even when this
+					// execution mode has no request_user_input tool. Do not turn the
+					// resulting diagnostic into a false “Question · Answered” card.
+					delete(p.codexInteractions, payload.CallID)
+					p.tracker.MarkAttention("", "", "", time.Time{})
+					event.ID = payload.ID
+					event.Type = "tool_output"
+					event.CallID = payload.CallID
+					event.ToolName = "ask_user_question"
+					event.Output = p.clip(output)
+					event.Error = p.clip(firstNonEmpty(outputError, output))
+					event.ToolStatus = "error"
+					if event.Output == "" && event.Error == "" {
+						return nil
+					}
+					return []api.AgentEvent{event}
+				}
 				delete(p.codexInteractions, payload.CallID)
 				p.tracker.MarkAttention("", "", "", time.Time{})
 				title := "Question"
@@ -428,6 +452,13 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					"state":     "resolved",
 				}
 				return []api.AgentEvent{event}
+			}
+			if codexGoalToolName(p.codexCallTool[payload.CallID]) || p.codexGoalCalls[payload.CallID] != "" {
+				if goal := parseCodexGoalOutput(payload.Output, event, p.threadID, p.contentLimit); goal != nil {
+					delete(p.codexGoalCalls, payload.CallID)
+					return []api.AgentEvent{*goal}
+				}
+				delete(p.codexGoalCalls, payload.CallID)
 			}
 			event.ID = payload.ID
 			event.Type = "tool_output"
@@ -484,6 +515,9 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Files = codexFilesFromRaw(payload.Input, event.ToolName)
 			if event.CallID != "" {
 				p.codexCallTool[event.CallID] = event.ToolName
+				if operation := codexGoalOperation(payload.Name, "", payload.Input); operation != "" {
+					p.codexGoalCalls[event.CallID] = operation
+				}
 			}
 			p.lastEventType = "tool_call"
 			return []api.AgentEvent{event}
@@ -519,6 +553,28 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			return []api.AgentEvent{event}
 		}
 		switch payload.Type {
+		case "thread_goal_updated":
+			return p.parseCodexGoalUpdated(record.Payload, event)
+		case "thread_goal_cleared":
+			var cleared struct {
+				ThreadID      string `json:"thread_id"`
+				ThreadIDCamel string `json:"threadId"`
+			}
+			if json.Unmarshal(record.Payload, &cleared) != nil {
+				return nil
+			}
+			threadID := firstNonEmpty(cleared.ThreadID, cleared.ThreadIDCamel, p.threadID)
+			if threadID == "" {
+				return nil
+			}
+			event.ID = threadID
+			event.Type = "goal"
+			event.Payload = map[string]any{
+				"goalId":   threadID,
+				"threadId": threadID,
+				"state":    "cleared",
+			}
+			return []api.AgentEvent{event}
 		case "token_count":
 			event.Type = "usage"
 			event.Model = payload.Info.Model
@@ -654,6 +710,260 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 	default:
 		return nil
 	}
+}
+
+func (p *codexParser) parseCodexGoalUpdated(raw json.RawMessage, event api.AgentEvent) []api.AgentEvent {
+	var value codexGoalEnvelope
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	goal := codexGoalValuesFromEnvelope(value)
+	threadID := firstNonEmpty(goal.threadID, p.threadID)
+	if threadID == "" || strings.TrimSpace(goal.objective) == "" {
+		return nil
+	}
+	status := normalizeCodexGoalStatus(goal.status)
+	if status == "" {
+		status = "active"
+	}
+	event.ID = threadID
+	event.Type = "goal"
+	event.Content = p.clip(goal.objective)
+	event.Payload = map[string]any{
+		"goalId":          threadID,
+		"threadId":        threadID,
+		"objective":       p.clip(goal.objective),
+		"state":           status,
+		"status":          status,
+		"tokensUsed":      goal.tokensUsed,
+		"timeUsedSeconds": goal.timeUsedSeconds,
+	}
+	if tokenBudget := goal.tokenBudget; tokenBudget != nil {
+		event.Payload["tokenBudget"] = *tokenBudget
+	}
+	if goal.createdAt != 0 {
+		event.Payload["createdAt"] = goal.createdAt
+	}
+	if goal.updatedAt != 0 {
+		event.Payload["updatedAt"] = goal.updatedAt
+	}
+	if value.turnID() != "" {
+		event.Payload["turnId"] = value.turnID()
+	}
+	return []api.AgentEvent{event}
+}
+
+// codexGoalEnvelope accepts both the rollout event shape (`goal: {...}`) and
+// the compact object returned by a tool/controller (`{objective, status, ...}`)
+// so the same projection works across Codex TUI and app-server generations.
+type codexGoalEnvelope struct {
+	ThreadID      string             `json:"thread_id"`
+	ThreadIDCamel string             `json:"threadId"`
+	TurnID        string             `json:"turn_id"`
+	TurnIDCamel   string             `json:"turnId"`
+	Objective     string             `json:"objective"`
+	Status        string             `json:"status"`
+	TokenBudget   *int64             `json:"token_budget"`
+	TokenBudgetC  *int64             `json:"tokenBudget"`
+	TokensUsed    int64              `json:"tokens_used"`
+	TokensUsedC   int64              `json:"tokensUsed"`
+	TimeUsed      int64              `json:"time_used_seconds"`
+	TimeUsedC     int64              `json:"timeUsedSeconds"`
+	CreatedAt     int64              `json:"created_at"`
+	CreatedAtC    int64              `json:"createdAt"`
+	UpdatedAt     int64              `json:"updated_at"`
+	UpdatedAtC    int64              `json:"updatedAt"`
+	Goal          *codexGoalEnvelope `json:"goal"`
+}
+
+type codexGoalValues struct {
+	threadID        string
+	objective       string
+	status          string
+	tokenBudget     *int64
+	tokensUsed      int64
+	timeUsedSeconds int64
+	createdAt       int64
+	updatedAt       int64
+}
+
+func codexGoalValuesFromEnvelope(value codexGoalEnvelope) codexGoalValues {
+	if value.Goal != nil {
+		goal := codexGoalValuesFromEnvelope(*value.Goal)
+		if goal.threadID == "" {
+			goal.threadID = firstNonEmpty(value.ThreadID, value.ThreadIDCamel)
+		}
+		if goal.objective == "" {
+			goal.objective = value.Objective
+		}
+		if goal.status == "" {
+			goal.status = value.Status
+		}
+		if goal.tokenBudget == nil {
+			goal.tokenBudget = firstNonNilInt64(value.TokenBudgetC, value.TokenBudget)
+		}
+		if goal.tokensUsed == 0 {
+			goal.tokensUsed = firstNonZeroInt64(value.TokensUsedC, value.TokensUsed)
+		}
+		if goal.timeUsedSeconds == 0 {
+			goal.timeUsedSeconds = firstNonZeroInt64(value.TimeUsedC, value.TimeUsed)
+		}
+		if goal.createdAt == 0 {
+			goal.createdAt = firstNonZeroInt64(value.CreatedAtC, value.CreatedAt)
+		}
+		if goal.updatedAt == 0 {
+			goal.updatedAt = firstNonZeroInt64(value.UpdatedAtC, value.UpdatedAt)
+		}
+		return goal
+	}
+	return codexGoalValues{
+		threadID:        firstNonEmpty(value.ThreadIDCamel, value.ThreadID),
+		objective:       strings.TrimSpace(value.Objective),
+		status:          value.Status,
+		tokenBudget:     firstNonNilInt64(value.TokenBudgetC, value.TokenBudget),
+		tokensUsed:      firstNonZeroInt64(value.TokensUsedC, value.TokensUsed),
+		timeUsedSeconds: firstNonZeroInt64(value.TimeUsedC, value.TimeUsed),
+		createdAt:       firstNonZeroInt64(value.CreatedAtC, value.CreatedAt),
+		updatedAt:       firstNonZeroInt64(value.UpdatedAtC, value.UpdatedAt),
+	}
+}
+
+func (value codexGoalEnvelope) turnID() string {
+	return firstNonEmpty(value.TurnIDCamel, value.TurnID)
+}
+
+func normalizeCodexGoalStatus(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "usagelimited", "usage_limited":
+		return "usage_limited"
+	case "budgetlimited", "budget_limited":
+		return "budget_limited"
+	case "inprogress", "in_progress":
+		return "in_progress"
+	case "completed":
+		return "complete"
+	default:
+		return normalized
+	}
+}
+
+func parseCodexGoalOutput(raw json.RawMessage, event api.AgentEvent, fallbackThreadID string, limit int) *api.AgentEvent {
+	output, _, _ := codexOutputDetails(raw, limit)
+	if strings.TrimSpace(output) == "" {
+		return nil
+	}
+	for offset := 0; offset < len(output); {
+		index := strings.IndexByte(output[offset:], '{')
+		if index < 0 {
+			break
+		}
+		index += offset
+		var envelope codexGoalEnvelope
+		decoder := json.NewDecoder(strings.NewReader(output[index:]))
+		if err := decoder.Decode(&envelope); err != nil {
+			offset = index + 1
+			continue
+		}
+		goal := codexGoalValuesFromEnvelope(envelope)
+		threadID := firstNonEmpty(goal.threadID, fallbackThreadID)
+		if threadID == "" || goal.objective == "" {
+			offset = index + 1
+			continue
+		}
+		status := normalizeCodexGoalStatus(goal.status)
+		if status == "" {
+			status = "active"
+		}
+		projected := event
+		projected.ID = threadID
+		projected.Type = "goal"
+		projected.Content = truncate(goal.objective, limit)
+		projected.Payload = map[string]any{
+			"goalId":          threadID,
+			"threadId":        threadID,
+			"objective":       truncate(goal.objective, limit),
+			"state":           status,
+			"status":          status,
+			"tokensUsed":      goal.tokensUsed,
+			"timeUsedSeconds": goal.timeUsedSeconds,
+		}
+		if goal.tokenBudget != nil {
+			projected.Payload["tokenBudget"] = *goal.tokenBudget
+		}
+		if goal.createdAt != 0 {
+			projected.Payload["createdAt"] = goal.createdAt
+		}
+		if goal.updatedAt != 0 {
+			projected.Payload["updatedAt"] = goal.updatedAt
+		}
+		return &projected
+	}
+	return nil
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonNilInt64(values ...*int64) *int64 {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func codexUnavailableUserInput(output, outputError string) bool {
+	value := strings.ToLower(strings.TrimSpace(firstNonEmpty(outputError, output)))
+	return strings.Contains(value, "request_user_input is unavailable")
+}
+
+func codexGoalToolName(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "-", "_")))
+	switch normalized {
+	case "create_goal", "get_goal", "update_goal", "set_goal", "goal",
+		"thread_goal_get", "thread_goal_set", "thread_goal_clear":
+		return true
+	default:
+		return false
+	}
+}
+
+// Codex's local TUI exposes Goal operations as ordinary `exec` custom tool
+// calls that invoke the host-side tools.get_goal/create_goal/update_goal
+// helpers. Track that intent from the call input so the structured Goal JSON
+// returned by the wrapper is projected instead of being shown as raw tool
+// output. The check is deliberately limited to an explicit tools.<operation>
+// invocation; arbitrary shell JSON is not enough to become a Goal card.
+func codexGoalOperation(toolName, arguments string, input json.RawMessage) string {
+	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(toolName, "-", "_")))
+	if codexGoalToolName(normalized) {
+		return normalized
+	}
+	if normalized != "exec" && normalized != "shell" && normalized != "local_shell_call" {
+		return ""
+	}
+	var inputText string
+	if len(input) > 0 {
+		if json.Unmarshal(input, &inputText) != nil {
+			inputText = string(input)
+		}
+	}
+	text := strings.ToLower(arguments + "\n" + inputText)
+	for _, operation := range []string{"create_goal", "get_goal", "update_goal", "set_goal"} {
+		if strings.Contains(text, "tools."+operation+"(") {
+			return operation
+		}
+	}
+	return ""
 }
 
 func codexErrorMessage(payload codexPayload, limit int) string {

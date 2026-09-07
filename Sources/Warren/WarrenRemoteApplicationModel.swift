@@ -6,6 +6,7 @@ import GhosttyAdapter
 import WarrenClientCore
 import WarrenDesktop
 import WarrenDomain
+import WarrenProtocol
 import WarrenStateStore
 import WarrenTransport
 
@@ -40,24 +41,10 @@ private struct WarrenEndpointConfigurationFile: Codable {
         self.current = current
         self.endpoints = endpoints
     }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        current = try container.decodeIfPresent(String.self, forKey: .current)
-        // Older or hand-created catalogs may omit `endpoints` (or set it to
-        // null). Treat that as an empty catalog so the Desktop can still
-        // connect to its synthetic Local endpoint and the next write repairs
-        // the shape.
-        endpoints = try container.decodeIfPresent(
-            [String: WarrenRemoteEndpointConfiguration].self,
-            forKey: .endpoints
-        ) ?? [:]
-    }
 }
 
 private struct WarrenLoadedEndpointConfiguration {
     let catalog: (current: String?, endpoints: [WarrenRemoteEndpointConfiguration])
-    let needsRewrite: Bool
 }
 
 enum WarrenEndpointCatalog {
@@ -91,15 +78,6 @@ enum WarrenEndpointCatalog {
     ) throws -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
         try withLock(configURL) {
             let loaded = try loadUnlocked(from: configURL)
-            if loaded.needsRewrite {
-                try writeUnlocked(
-                    WarrenEndpointConfigurationFile(
-                        current: loaded.catalog.current,
-                        endpoints: endpointDictionary(loaded.catalog.endpoints)
-                    ),
-                    to: configURL
-                )
-            }
             return loaded.catalog
         }
     }
@@ -162,7 +140,7 @@ enum WarrenEndpointCatalog {
         } catch {
             let nsError = error as NSError
             if nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError {
-                return WarrenLoadedEndpointConfiguration(catalog: (nil, []), needsRewrite: false)
+                return WarrenLoadedEndpointConfiguration(catalog: (nil, []))
             }
             throw error
         }
@@ -179,31 +157,20 @@ enum WarrenEndpointCatalog {
                 ]
             )
         }
-        var needsRewrite = false
-        let endpoints = file.endpoints.values.map { endpoint in
-            guard endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-                  !endpoint.url.isEmpty || !endpoint.token.isEmpty else {
-                return endpoint
+        for endpoint in file.endpoints.values {
+            if endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+               !endpoint.url.isEmpty || !endpoint.token.isEmpty {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "state_reset_required: SSH endpoint \(endpoint.name) contains removed runtime fields"
+                    ]
+                )
             }
-            needsRewrite = true
-            // Older catalogs stored the helper's ephemeral URL/token beside
-            // SSH metadata. SSH is now the durable identity; never expose a
-            // stale bearer token through the UI or a subsequent write.
-            return WarrenRemoteEndpointConfiguration(
-                name: endpoint.name,
-                url: "",
-                token: "",
-                ssh: endpoint.ssh,
-                sshRemote: endpoint.sshRemote,
-                type: endpoint.type,
-                hostID: endpoint.hostID,
-                routeID: endpoint.routeID,
-                clientID: endpoint.clientID
-            )
         }
         return WarrenLoadedEndpointConfiguration(
-            catalog: (file.current, endpoints.sorted { $0.name < $1.name }),
-            needsRewrite: needsRewrite
+            catalog: (file.current, file.endpoints.values.sorted { $0.name < $1.name })
         )
     }
 
@@ -314,30 +281,6 @@ enum WarrenEndpointCatalog {
 }
 
 struct RemoteRoster: Decodable, Sendable, Equatable {
-    struct GhostlineMigration: Decodable, Sendable, Equatable {
-        let sessionID: String
-        let phase: String
-        let skippedSessions: [String]
-        let skipReasons: [String: String]
-        let updatedAt: String?
-
-        private enum CodingKeys: String, CodingKey {
-            case sessionID = "sessionId"
-            case phase
-            case skippedSessions
-            case skipReasons
-            case updatedAt
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            sessionID = try container.decode(String.self, forKey: .sessionID)
-            phase = try container.decodeIfPresent(String.self, forKey: .phase) ?? ""
-            skippedSessions = try container.decodeIfPresent([String].self, forKey: .skippedSessions) ?? []
-            skipReasons = try container.decodeIfPresent([String: String].self, forKey: .skipReasons) ?? [:]
-            updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
-        }
-    }
     struct Host: Decodable, Sendable, Equatable { let id: String; let name: String }
     struct Task: Decodable, Sendable, Equatable {
         let id: String
@@ -453,7 +396,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let workspaces: EntityChanges<Workspace>?
         let terminalGroups: EntityChanges<TerminalGroup>?
         let sessions: EntityChanges<Session>?
-        let ghostlineMigration: GhostlineMigration?
     }
 
     struct StreamMessage: Decodable, Sendable {
@@ -481,7 +423,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     let workspaces: [Workspace]
     let terminalGroups: [TerminalGroup]
     let sessions: [Session]
-    let ghostlineMigration: GhostlineMigration?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -492,7 +433,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
-        ghostlineMigration = try container.decodeIfPresent(GhostlineMigration.self, forKey: .ghostlineMigration)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -503,7 +443,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         case workspaces
         case terminalGroups
         case sessions
-        case ghostlineMigration
     }
 
     private init(
@@ -513,8 +452,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         projects: [Project],
         workspaces: [Workspace],
         terminalGroups: [TerminalGroup],
-        sessions: [Session],
-        ghostlineMigration: GhostlineMigration?
+        sessions: [Session]
     ) {
         self.revision = revision
         self.host = host
@@ -523,7 +461,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
         self.sessions = sessions
-        self.ghostlineMigration = ghostlineMigration
     }
 
     func applying(_ delta: Delta) -> RemoteRoster? {
@@ -539,8 +476,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
-            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id),
-            ghostlineMigration: delta.ghostlineMigration ?? ghostlineMigration
+            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id)
         )
     }
 
@@ -684,29 +620,6 @@ struct WarrenResizeRequestBuffer: Sendable {
     }
 }
 
-private enum RemoteWireEvent: Sendable {
-    case roster
-    case rosterDelta(RemoteRoster.Delta)
-    case agentProjection(sessionID: TerminalSessionID, status: AgentStatus)
-    case agentStreamError(String)
-    case framedOutput(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, payload: Data)
-    case atomicState(
-        sessionID: TerminalSessionID,
-        epoch: UInt64,
-        sequence: UInt64,
-        format: String,
-        payload: Data
-    )
-    case anchor(sessionID: TerminalSessionID, epoch: UInt64, sequence: UInt64, reanchor: Bool, synced: Bool)
-    case maintenance(message: String?)
-    case disconnected(String)
-}
-
-private struct WarrenRemoteRequestContext {
-    let method: String
-    let params: [String: String]
-    let startedAt: Date
-}
 
 private enum WarrenRemoteErrorInfoKey {
     static let method = "WarrenRemoteMethod"
@@ -868,679 +781,6 @@ enum WarrenRemoteWorkspaceProtocol {
     }
 }
 
-private actor WarrenRemoteWire {
-    private static let outputChunkBytes = 128 * 1024
-    /// URLSession's default maximumMessageSize (1 MiB) rejects the daemon's
-    /// largest legal frames (terminal output up to 8 MiB plus agent batches);
-    /// raising it is required for those messages to survive the transport.
-    private static let maximumWebSocketMessageBytes = 128 * 1024 * 1024
-    private static let connectTimeout: Duration = .seconds(10)
-    private static let requestTimeout: Duration = .seconds(15)
-    private let configuration: WarrenRemoteEndpointConfiguration
-    private var accessToken: String
-    private var refreshToken: String?
-    private let tokenUpdateHandler: (@Sendable (String, String?) -> Void)?
-    private var task: URLSessionWebSocketTask?
-    private var receiveTask: Task<Void, Never>?
-    private var continuations: [String: CheckedContinuation<Data, Error>] = [:]
-    private var requestContexts: [String: WarrenRemoteRequestContext] = [:]
-    private var requestTimeoutTasks: [String: Task<Void, Never>] = [:]
-    private var daemonProtocolVersion: String?
-    private var agentNamespace: WarrenAgentEventStore.Namespace?
-    private var agentSessions: [String: TerminalSessionID] = [:]
-    private var agentSubscriptions: Set<String> = []
-    private var agentQuarantined: Set<String> = []
-    private var agentProjectionSequence: [String: UInt64] = [:]
-    private var agentPendingProjection: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
-    private var pendingInput = Data()
-    private var inputTask: Task<Void, Never>?
-    // Rosters are snapshots, so intermediate states have no value once a
-    // newer snapshot has arrived. Keep one wake-up in the lossless event
-    // stream and let the consumer take the newest snapshot.
-    private var latestRosterSignal = WarrenLatestValueSignal<RemoteRoster>()
-    private let eventBuffer = WarrenLosslessAsyncBuffer<RemoteWireEvent>(capacity: 64)
-
-    private static func relayHostIDPathSegment(_ raw: String) -> String? {
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let bytes = Array(value.utf8)
-        guard bytes.count == 36,
-              [8, 13, 18, 23].allSatisfy({ bytes[$0] == 45 }),
-              bytes[14] >= 49, bytes[14] <= 53,
-              [56, 57, 97, 98].contains(bytes[19]) else {
-            return nil
-        }
-        for (index, byte) in bytes.enumerated() where ![8, 13, 18, 23].contains(index) {
-            guard (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102) else {
-                return nil
-            }
-        }
-        return value
-    }
-
-    init(
-        configuration: WarrenRemoteEndpointConfiguration,
-        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
-    ) {
-        self.configuration = configuration
-        self.accessToken = configuration.token
-        self.refreshToken = configuration.refreshToken
-        self.tokenUpdateHandler = tokenUpdateHandler
-    }
-
-    nonisolated func events() -> AsyncStream<RemoteWireEvent> { eventBuffer.stream }
-
-    func connect() async throws {
-        if configuration.isRelay, accessToken.isEmpty {
-            guard await refreshRelayAccessToken() else {
-                throw NSError(domain: "WarrenRemote", code: 3, userInfo: [
-                    NSLocalizedDescriptionKey: "Relay authentication failed.",
-                ])
-            }
-        }
-        do {
-            try await connectOnce()
-        } catch let error as NSError
-            where configuration.isRelay && error.domain == "WarrenRemote" && error.code == 3 {
-            guard await refreshRelayAccessToken() else { throw error }
-            try await connectOnce()
-        }
-    }
-
-    private func connectOnce() async throws {
-        guard task == nil else { return }
-        guard var components = URLComponents(string: configuration.url) else {
-            throw URLError(.badURL)
-        }
-        guard let scheme = components.scheme?.lowercased() else {
-            throw URLError(.badURL)
-        }
-        switch scheme {
-        case "https", "wss":
-            components.scheme = "wss"
-        case "http", "ws":
-            components.scheme = "ws"
-        default:
-            throw URLError(.unsupportedURL)
-        }
-        // Endpoint URLs are transport roots. Query strings/fragments are not
-        // part of the Warren protocol and can otherwise carry credentials into
-        // URLSession request metadata or browser history.
-        components.user = nil
-        components.password = nil
-        components.query = nil
-        components.fragment = nil
-        let isRelay = configuration.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "relay"
-        if isRelay {
-            guard let configuredHostID = configuration.hostID,
-                  let hostID = Self.relayHostIDPathSegment(configuredHostID)
-            else { throw URLError(.badURL) }
-            if components.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) {
-                throw URLError(.badURL)
-            }
-            let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let suffix = "/h/\(hostID)/v1/client/connect"
-            let normalizedPath = prefix.isEmpty ? "/" : "/\(prefix)"
-            if normalizedPath.hasSuffix(suffix) {
-                components.path = normalizedPath
-            } else {
-                components.path = prefix.isEmpty ? suffix : "\(normalizedPath)\(suffix)"
-            }
-        } else {
-            components.path = "/v1/ws"
-        }
-        guard let url = components.url else { throw URLError(.badURL) }
-        let socket = URLSession.shared.webSocketTask(with: url)
-        socket.maximumMessageSize = Self.maximumWebSocketMessageBytes
-        let token = accessToken
-        let configuredClientID = configuration.clientID
-        task = socket
-        socket.resume()
-        do {
-            // A daemon that accepts TCP but never completes the WebSocket
-            // handshake or answers auth would otherwise hang the desktop on
-            // a "Connecting…" spinner forever. Bound both send and receive;
-            // the timeout task cancels the socket so URLSession's receive can
-            // leave the task group instead of being stranded indefinitely.
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    var auth: [String: Any] = [
-                        "t": "auth",
-                        "version": "3.0",
-                        "capabilities": ["roster-delta", "agent-timeline-v1"],
-                        "terminalStateFormats": ["ghostty-vt-snapshot-v1"],
-                    ]
-                    auth[isRelay ? "access_token" : "token"] = token
-                    if isRelay, let clientID = configuredClientID,
-                       !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        auth["client_id"] = clientID
-                    }
-                    try await socket.send(.string(Self.json(auth)))
-                }
-                group.addTask {
-                    try await Task.sleep(for: Self.connectTimeout)
-                    socket.cancel(with: .goingAway, reason: nil)
-                    throw URLError(.timedOut)
-                }
-                guard try await group.next() != nil else {
-                    throw URLError(.cancelled)
-                }
-                group.cancelAll()
-            }
-            let message = try await withThrowingTaskGroup(
-                of: URLSessionWebSocketTask.Message.self
-            ) { group in
-                group.addTask { try await socket.receive() }
-                group.addTask {
-                    try await Task.sleep(for: Self.connectTimeout)
-                    socket.cancel(with: .goingAway, reason: nil)
-                    throw URLError(.timedOut)
-                }
-                guard let message = try await group.next() else {
-                    throw URLError(.cancelled)
-                }
-                group.cancelAll()
-                return message
-            }
-            try acceptWelcome(message)
-        } catch {
-            socket.cancel(with: .goingAway, reason: nil)
-            task = nil
-            throw error
-        }
-        receiveTask = Task { [weak self] in await self?.receiveLoop(socket) }
-    }
-
-    private func refreshRelayAccessToken() async -> Bool {
-        guard configuration.isRelay,
-              let url = configuration.relaySessionRefreshURL else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let refreshToken, !refreshToken.isEmpty {
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken])
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode),
-                  let value = try? JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data),
-                  value.hostID == configuration.hostID,
-                  !value.accessToken.isEmpty else { return false }
-            accessToken = value.accessToken
-            if let next = value.refreshToken, !next.isEmpty { refreshToken = next }
-            tokenUpdateHandler?(accessToken, refreshToken)
-            return true
-        } catch { return false }
-    }
-
-    private func acceptWelcome(_ message: URLSessionWebSocketTask.Message) throws {
-        guard case .string(let text) = message,
-              let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
-              let type = object["t"] as? String else {
-            throw NSError(
-                domain: "WarrenRemote",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "The daemon did not return a valid welcome message."]
-            )
-        }
-        if type == "error" {
-            throw NSError(
-                domain: "WarrenRemote",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: object["error"] as? String ?? "Remote authentication failed"]
-            )
-        }
-        guard type == "welcome" else {
-            throw NSError(
-                domain: "WarrenRemote",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "The daemon returned an unexpected handshake message."]
-            )
-        }
-        guard let host = object["host"] as? [String: Any],
-              let hostID = host["id"] as? String, !hostID.isEmpty,
-              let scopeID = object["accessScopeId"] as? String, !scopeID.isEmpty else {
-            throw NSError(domain: "WarrenRemote", code: 5, userInfo: [NSLocalizedDescriptionKey: "The Host omitted the Agent replica namespace."])
-        }
-        agentNamespace = .init(hostID: hostID, accessScopeID: scopeID)
-        let version = object["version"] as? String ?? "unknown"
-        daemonProtocolVersion = version
-        guard Self.compatibleProtocolVersion(version, with: "3.0") else {
-            throw NSError(
-                domain: "WarrenRemote",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Warren Desktop is incompatible with the daemon protocol (desktop=3.0, daemon=\(version)); update both together."]
-            )
-        }
-    }
-
-    func close() {
-        receiveTask?.cancel()
-        receiveTask = nil
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        inputTask?.cancel()
-        inputTask = nil
-        pendingInput.removeAll(keepingCapacity: true)
-        latestRosterSignal.reset()
-        eventBuffer.finish()
-        for continuation in continuations.values {
-            continuation.resume(throwing: URLError(.cancelled))
-        }
-        continuations.removeAll()
-        requestContexts.removeAll()
-        for timeoutTask in requestTimeoutTasks.values {
-            timeoutTask.cancel()
-        }
-        requestTimeoutTasks.removeAll()
-        daemonProtocolVersion = nil
-    }
-
-    func request(_ method: String, params: [String: String] = [:]) async throws -> Data {
-        try await requestJSON(
-            method,
-            params: params,
-            contextParams: params
-        )
-    }
-
-    func requestRelayReset() async throws -> Data {
-        try await requestJSON(
-            "relay.reset",
-            params: [:],
-            contextParams: ["operation": "reset"]
-        )
-    }
-
-    private func requestJSON(
-        _ method: String,
-        params: [String: Any],
-        contextParams: [String: String]
-    ) async throws -> Data {
-        guard let task else { throw URLError(.notConnectedToInternet) }
-        let id = UUID().uuidString.lowercased()
-        let text = Self.json(["t": "request", "id": id, "method": method, "params": params])
-        return try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { continuation in
-                continuations[id] = continuation
-                requestContexts[id] = WarrenRemoteRequestContext(
-                    method: method,
-                    params: contextParams,
-                    startedAt: Date()
-                )
-                Task {
-                    do { try await task.send(.string(text)) }
-                    catch { self.failRequest(id, error: error) }
-                }
-                // A daemon can accept the WebSocket and then stall on a request
-                // (for example a wedged attach). Fail the request instead of
-                // leaving the terminal pane on its "Connecting…" spinner forever.
-                requestTimeoutTasks[id] = Task { [weak self] in
-                    do {
-                        try await Task.sleep(for: Self.requestTimeout)
-                    } catch {
-                        return
-                    }
-                    await self?.failRequest(id, error: URLError(.timedOut))
-                }
-                if Task.isCancelled {
-                    self.failRequest(id, error: URLError(.cancelled))
-                }
-            }
-        }, onCancel: {
-            Task { await self.cancelRequest(id) }
-        })
-    }
-
-    func sendInput(_ data: Data) {
-        guard !data.isEmpty else { return }
-        pendingInput.append(data)
-        guard inputTask == nil else { return }
-        inputTask = Task { [weak self] in await self?.drainInput() }
-    }
-
-    func takeLatestRoster() -> RemoteRoster? {
-        latestRosterSignal.take()
-    }
-
-    private func drainInput() async {
-        defer { inputTask = nil }
-        while !Task.isCancelled, !pendingInput.isEmpty {
-            let data = pendingInput
-            pendingInput.removeAll(keepingCapacity: true)
-            guard let task else { return }
-            do {
-                try await task.send(.data(data))
-            } catch {
-                _ = await eventBuffer.send(.disconnected(String(describing: error)))
-                return
-            }
-        }
-    }
-
-    private func failRequest(_ id: String, error: Error) {
-        requestTimeoutTasks.removeValue(forKey: id)?.cancel()
-        let context = requestContexts.removeValue(forKey: id)
-        continuations.removeValue(forKey: id)?.resume(
-            throwing: makeRequestError(error: error, context: context)
-        )
-    }
-
-    private func cancelRequest(_ id: String) {
-        failRequest(id, error: URLError(.cancelled))
-    }
-
-    private func makeRequestError(
-        message: String,
-        context: WarrenRemoteRequestContext?
-    ) -> NSError {
-        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
-        userInfo[WarrenRemoteErrorInfoKey.endpoint] = configuration.url
-        userInfo[WarrenRemoteErrorInfoKey.daemonProtocol] = daemonProtocolVersion ?? "unknown"
-        if let context {
-            userInfo[WarrenRemoteErrorInfoKey.method] = context.method
-            userInfo[WarrenRemoteErrorInfoKey.params] = context.params
-            userInfo[WarrenRemoteErrorInfoKey.startedAt] = context.startedAt
-        }
-        return NSError(domain: "WarrenRemote", code: 1, userInfo: userInfo)
-    }
-
-    private func makeRequestError(
-        error: Error,
-        context: WarrenRemoteRequestContext?
-    ) -> NSError {
-        let wrapped = makeRequestError(message: error.localizedDescription, context: context)
-        var userInfo = wrapped.userInfo
-        userInfo[NSUnderlyingErrorKey] = error
-        return NSError(domain: wrapped.domain, code: wrapped.code, userInfo: userInfo)
-    }
-
-    private func receiveLoop(_ socket: URLSessionWebSocketTask) async {
-        // Every exit path ends the event stream so the connection loop's
-        // `for await` can never stay suspended after a switch or a dropped
-        // socket. `finish` is idempotent; the normal disconnect path calls it
-        // again through `close()`.
-        defer { eventBuffer.finish() }
-        do {
-            while !Task.isCancelled {
-                switch try await socket.receive() {
-                case .data(let data):
-                    guard await emitOutput(data) else { return }
-                case .string(let text):
-                    guard await handleText(Data(text.utf8)) else { return }
-                @unknown default:
-                    break
-                }
-            }
-        } catch {
-            guard !Task.isCancelled else { return }
-            _ = await eventBuffer.send(.disconnected(String(describing: error)))
-        }
-    }
-
-    private func emitOutput(_ data: Data) async -> Bool {
-        let bytes = [UInt8](data)
-        if let frame = try? WarrenWireCodec().decodeFrame(bytes) {
-            switch frame {
-            case .output(let output):
-                return await emitChunks(output)
-            case .atomicState(let state):
-                return await eventBuffer.send(.atomicState(
-                    sessionID: state.header.sessionID,
-                    epoch: state.header.epoch,
-                    sequence: state.header.sequence,
-                    format: state.header.format,
-                    payload: state.payload
-                ))
-            case .input:
-                return await eventBuffer.send(.disconnected(
-                    "The daemon sent a client-input frame; reconnecting."
-                ))
-            }
-        }
-        return await eventBuffer.send(.disconnected(
-            "The daemon sent an undecodable terminal frame; reconnecting."
-        ))
-    }
-
-    private func emitChunks(_ frame: WarrenDecodedOutputFrame) async -> Bool {
-        let payload = frame.payload
-        var offset = 0
-        while offset < payload.count {
-            let end = min(offset + Self.outputChunkBytes, payload.count)
-            let chunk = offset == 0 && end == payload.count
-                ? payload
-                : Data(payload[offset..<end])
-            guard await eventBuffer.send(.framedOutput(
-                sessionID: frame.header.sessionID,
-                epoch: frame.header.epoch,
-                sequence: frame.header.sequence + UInt64(offset),
-                payload: chunk
-            )) else { return false }
-            offset = end
-        }
-        return true
-    }
-
-    private func handleText(_ data: Data) async -> Bool {
-        if let message = try? JSONDecoder().decode(RemoteRoster.StreamMessage.self, from: data) {
-            if message.type == "roster", let roster = message.state {
-                guard latestRosterSignal.offer(roster) else { return true }
-                return await eventBuffer.send(.roster)
-            }
-            if message.type == "roster.delta", let delta = message.delta {
-                return await eventBuffer.send(.rosterDelta(delta))
-            }
-        }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = object["t"] as? String else { return true }
-        if type == "response" {
-            if let id = object["id"] as? String,
-               let continuation = continuations.removeValue(forKey: id) {
-                requestTimeoutTasks.removeValue(forKey: id)?.cancel()
-                let context = requestContexts.removeValue(forKey: id)
-                if object["ok"] as? Bool == true {
-                    let result = object["result"] ?? NSNull()
-                    let encoded = (try? JSONSerialization.data(withJSONObject: result)) ?? Data("null".utf8)
-                    continuation.resume(returning: encoded)
-                } else {
-                    continuation.resume(throwing: makeRequestError(
-                        message: object["error"] as? String ?? "Remote request failed",
-                        context: context
-                    ))
-                }
-            } else if object["ok"] as? Bool == false {
-                // Responses without a matching request id (for example the
-                // daemon rejecting a binary input frame sent before attach)
-                // must not tear down a healthy connection. Ignore them the
-                // same way the Web client does.
-            }
-        } else if type == "welcome" {
-            let version = object["version"] as? String ?? "unknown"
-            daemonProtocolVersion = version
-            guard version == "3.0" else {
-                return await eventBuffer.send(.disconnected(
-                    "Warren Desktop is incompatible with the daemon protocol "
-                        + "(desktop=3.0, daemon=\(version)); update both together."
-                ))
-            }
-        } else if type == "agent.events" {
-            struct Batch: Decodable {
-                let streamId: String
-                let events: [WarrenRemoteAgentEvent]
-            }
-            guard let batch = try? JSONDecoder().decode(Batch.self, from: data) else {
-                return await eventBuffer.send(.disconnected("Invalid canonical Agent event envelope."))
-            }
-            await receiveAgentEvents(batch.events, streamID: batch.streamId)
-        } else if type == "maintenance" {
-            return await eventBuffer.send(.maintenance(message: object["message"] as? String))
-        } else if type == "attached" || type == "synced" {
-            guard let sessionIDString = object["session"] as? String,
-                  let sessionID = TerminalSessionID(uuidString: sessionIDString),
-                  let epoch = (object["epoch"] as? NSNumber)?.uint64Value,
-                  let sequence = (object["sequence"] as? NSNumber)?.uint64Value else {
-                return true
-            }
-            // The daemon distinguishes snapshot resets (reanchor=true) from
-            // incremental recovery prefixes (reanchor=false) on every
-            // attached message. Only a true reset may divert frames into the
-            // staging buffer that shields the visible surface.
-            let reanchor = (object["reanchor"] as? Bool) ?? (type == "attached")
-            return await eventBuffer.send(.anchor(
-                sessionID: sessionID,
-                epoch: epoch,
-                sequence: sequence,
-                reanchor: type == "synced" ? false : reanchor,
-                synced: type == "synced"
-            ))
-        } else if type == "error" {
-            return await eventBuffer.send(.disconnected(
-                object["error"] as? String ?? "Remote authentication failed"
-            ))
-        }
-        return true
-    }
-
-    func syncAgentSubscriptions(_ roster: RemoteRoster) {
-        agentSessions = Dictionary(uniqueKeysWithValues: roster.sessions.compactMap { session in
-            guard let streamID = session.agentExecutionId, !streamID.isEmpty,
-                  let sessionID = TerminalSessionID(uuidString: session.id) else { return nil }
-            return (streamID, sessionID)
-        })
-        guard let namespace = agentNamespace else { return }
-        for streamID in agentSessions.keys where !agentSubscriptions.contains(streamID) && !agentQuarantined.contains(streamID) {
-            agentSubscriptions.insert(streamID)
-            Task {
-                do {
-                    let state = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
-                    let cached = await WarrenAgentEventStore.shared.loadRecentEvents(namespace: namespace, streamID: streamID)
-                    await projectAgentEvents(cached, streamID: streamID)
-                    let data = try await requestJSON("agent.events.subscribe", params: ["streamId": streamID, "afterSequence": state?.contiguousThrough ?? 0, "limit": 500], contextParams: ["streamId": streamID])
-                    let result = try JSONDecoder().decode(WarrenRemoteAgentEventsSubscriptionResult.self, from: data)
-                    _ = try await WarrenAgentEventStore.shared.saveEvents(result.events, namespace: namespace, streamID: streamID, checkpointSequence: result.checkpoint.sequence, checkpoint: result.checkpoint.state)
-                    await projectAgentEvents(result.events, streamID: streamID)
-                    if result.checkpoint.sequence >= (agentProjectionSequence[streamID] ?? 0) {
-                        agentProjectionSequence[streamID] = result.checkpoint.sequence
-                        agentPendingProjection[streamID] = agentPendingProjection[streamID]?.filter { $0.key > result.checkpoint.sequence }
-                        if let sessionID = agentSessions[streamID],
-                           let statusValue = result.checkpoint.state["status"],
-                           let encoded = try? JSONEncoder().encode(statusValue),
-                           let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: encoded),
-                           let status = Self.agentStatus(from: remote) {
-                            _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
-                        }
-                        await projectAgentEvents([], streamID: streamID)
-                    }
-                } catch {
-                    agentQuarantined.insert(streamID)
-                    _ = await eventBuffer.send(.agentStreamError("Agent stream integrity or subscription failure: \(error.localizedDescription)"))
-                }
-            }
-        }
-    }
-
-    private func receiveAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
-        guard let namespace = agentNamespace, agentSessions[streamID] != nil,
-              !agentQuarantined.contains(streamID) else { return }
-        do {
-            _ = try await WarrenAgentEventStore.shared.saveEvents(events, namespace: namespace, streamID: streamID)
-            await projectAgentEvents(events, streamID: streamID)
-            let state = await WarrenAgentEventStore.shared.syncState(namespace: namespace, streamID: streamID)
-            if let state, state.contiguousThrough < state.headSequence {
-                // Request outside the receive loop so its response can be read.
-                Task {
-                    do {
-                        let data = try await requestJSON("agent.events.history", params: ["streamId": streamID, "afterSequence": state.contiguousThrough, "beforeSequence": state.contiguousThrough == 0 ? state.retainedFromSequence : 0, "limit": 500], contextParams: ["streamId": streamID])
-                        let page = try JSONDecoder().decode(WarrenRemoteAgentEventsHistoryResult.self, from: data)
-                        guard !page.events.isEmpty else { throw WarrenRemoteClientError.requestFailed("Host did not return the missing Agent events.") }
-                        await receiveAgentEvents(page.events, streamID: streamID)
-                    } catch {
-                        agentQuarantined.insert(streamID)
-                        _ = await eventBuffer.send(.agentStreamError("Unable to recover Agent event gap: \(error.localizedDescription)"))
-                    }
-                }
-            }
-        } catch {
-            agentQuarantined.insert(streamID)
-            _ = await eventBuffer.send(.agentStreamError("Agent stream integrity failure: \(error.localizedDescription)"))
-        }
-    }
-
-    /// Projects agent events to the UI projection. Only sends the latest activity state
-    /// to avoid flickering through intermediate states during event replay.
-    private func projectAgentEvents(_ events: [WarrenRemoteAgentEvent], streamID: String) async {
-        guard let sessionID = agentSessions[streamID] else { return }
-        
-        // Collect all status.changed events that are newer than what we've already projected
-        var statusEvents: [(sequence: UInt64, event: WarrenRemoteAgentEvent)] = []
-        for event in events 
-            where event.type == "status.changed" 
-                  && event.sequence > (agentProjectionSequence[streamID] ?? 0) {
-            statusEvents.append((event.sequence, event))
-        }
-        
-        // If no new status events, still update pending queue for ordering purposes
-        if !statusEvents.isEmpty {
-            // Add non-status events to pending queue for sequencing
-            for event in events where event.type != "status.changed"
-                && event.sequence > (agentProjectionSequence[streamID] ?? 0) {
-                agentPendingProjection[streamID, default: [:]][event.sequence] = event
-            }
-            
-            // Only send the FINAL status change, not intermediate transitions
-            // This prevents UI flickering when replaying history
-            let finalSequence = max(agentProjectionSequence[streamID] ?? 0, 
-                                   statusEvents.map(\.sequence).max() ?? 0)
-            agentProjectionSequence[streamID] = finalSequence
-            
-            // Clear all pending projections since we're only sending the latest status
-            agentPendingProjection[streamID]?.removeAll()
-            
-            if let lastStatusEvent = statusEvents.max(by: { $0.sequence < $1.sequence }),
-               let payload = lastStatusEvent.event.payload {
-                let statusPayload: WarrenRemoteJSONValue = payload["status"] ?? .object(payload)
-                guard let data = try? JSONEncoder().encode(statusPayload),
-                      let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
-                      let status = Self.agentStatus(from: remote) else { return }
-                _ = await eventBuffer.send(.agentProjection(sessionID: sessionID, status: status))
-            }
-        } else {
-            // No new status events - just process any other events for sequencing
-            for event in events where event.sequence > (agentProjectionSequence[streamID] ?? 0) {
-                agentPendingProjection[streamID, default: [:]][event.sequence] = event
-            }
-            while let event = agentPendingProjection[streamID]?.removeValue(
-                forKey: (agentProjectionSequence[streamID] ?? 0) + 1) {
-                agentProjectionSequence[streamID] = event.sequence
-            }
-        }
-    }
-
-    private nonisolated static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
-        lhs.split(separator: ".", maxSplits: 1).first == rhs.split(separator: ".", maxSplits: 1).first
-    }
-
-    private nonisolated static func json(_ value: [String: Any]) -> String {
-        let data = try! JSONSerialization.data(withJSONObject: value)
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private nonisolated static func agentStatus(from value: RemoteRoster.AgentStatus) -> AgentStatus? {
-        guard let activity = AgentActivityState(rawValue: value.activity) else { return nil }
-        let attention = value.attention.flatMap { raw -> AgentAttention? in
-            guard let kind = AgentAttentionKind(rawValue: raw.kind) else { return nil }
-            return AgentAttention(
-                kind: kind,
-                reason: raw.reason,
-                requestID: raw.requestID,
-                since: raw.since
-            )
-        }
-        return AgentStatus(activity: activity, attention: attention)
-    }
-}
 
 private enum WarrenRemoteDiagnostics {
     private static let sensitiveParameterNames = [
@@ -1574,7 +814,7 @@ private enum WarrenRemoteDiagnostics {
             "selectedSession: \(selectedSessionID?.description ?? "none")",
             "attachedSession: \(attachedSessionID?.description ?? "none")",
             "focusedSession: \(focusedSessionID?.description ?? "none")",
-            "clientProtocol: 3.0",
+            "clientProtocol: 4.0",
             "daemonProtocol: \(daemonProtocol)",
             "appVersion: \(appVersion())",
             "os: \(ProcessInfo.processInfo.operatingSystemVersionString)",
@@ -1683,7 +923,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published private(set) var deletingWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var attachingSessionID: TerminalSessionID?
 
-    private var wire: WarrenRemoteWire?
+    private var wire: WarrenRemoteClient?
     private var embeddedSSHTunnel: WarrenEmbeddedSSHTunnel?
     /// The endpoint currently backed by the live transport. SSH endpoints
     /// keep a durable alias in `endpointConfiguration`, while the helper
@@ -1704,13 +944,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private let inputRouter = WarrenTerminalInputRouter()
     private var initialRefreshPending = false
     private var currentRoster: RemoteRoster?
-    private var lastGhostlineMigrationNoticeID: String?
     private var rosterApplicationGeneration: UInt64 = 0
     private var resizeTask: Task<Void, Never>?
     private var resizeBuffer = WarrenResizeRequestBuffer()
     private var focusTask: Task<Void, Never>?
     private var deletionReconciliationTask: Task<Void, Never>?
-    private var deletionReconciliationWire: WarrenRemoteWire?
+    private var deletionReconciliationWire: WarrenRemoteClient?
     private var attachGeneration: UInt64 = 0
     private var terminalFont = TerminalFontPreference()
     private var pendingTerminalOpenRequest: WarrenTerminalOpenRequest?
@@ -1718,6 +957,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var connectionIssueTask: Task<Void, Never>?
     private var outputAnchors: [TerminalSessionID: TerminalOutputAnchor] = [:]
     private var agentStatusBySessionID: [TerminalSessionID: AgentStatus] = [:]
+    /// Canonical Agent event replication is a desktop concern. The shared
+    /// transport only delivers typed batches; this state tracks which roster
+    /// streams are projected into the local append-only replica.
+    private var agentNamespace: WarrenAgentEventStore.Namespace?
+    private var agentSessionByStreamID: [String: TerminalSessionID] = [:]
+    private var agentSubscribedStreamIDs: Set<String> = []
+    private var agentQuarantinedStreamIDs: Set<String> = []
+    private var agentProjectionSequenceByStreamID: [String: UInt64] = [:]
+    private var agentPendingProjectionByStreamID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
+    private var agentSubscriptionTasks: [String: Task<Void, Never>] = [:]
     /// Client-observed activity history used by the desktop switcher to
     /// prioritize sessions that have just become ready. The daemon status
     /// payload has no transition timestamp, so this is intentionally kept
@@ -1745,10 +994,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var recoveryRetryTasks: [TerminalSessionID: Task<Void, Never>] = [:]
     private var recoveryRetryGenerations: [TerminalSessionID: UInt64] = [:]
     private var failedAtomicRecoverySessions: Set<TerminalSessionID> = []
+    /// Surfaces retained across a transient transport drop and waiting for a
+    /// fresh daemon-side output subscription.
+    private var pendingRetainedSurfaceRebinds: Set<TerminalSessionID> = []
+    /// Active surfaces in the above set keep their last presented frame while
+    /// the replacement atomic state is installed.
+    private var reconnectPreservedSessions: Set<TerminalSessionID> = []
+    private var retainedSurfaceRebindTask: Task<Void, Never>?
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
     let surfaceManager: TerminalSurfaceManager
+    public var onOpenTerminalURL: ((TerminalSessionID, String, TerminalOpenURLKind, String?) -> Bool)?
     private(set) var projectionPublicationCount: UInt64 = 0
 
     /// Events emitted after a roster confirms a newly completed Agent turn.
@@ -1858,6 +1115,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             self.installedAtomicStateAnchors.removeValue(forKey: sessionID)
             self.clearAtomicRecoveryState(for: sessionID)
             self.failedAtomicRecoverySessions.remove(sessionID)
+            self.pendingRetainedSurfaceRebinds.remove(sessionID)
+            self.reconnectPreservedSessions.remove(sessionID)
             self.unsubscribeFromOutput(sessionID)
         }
         let resolvedConfiguration = resolvedConnectionConfiguration(configuration)
@@ -1937,11 +1196,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         clearMaintenance()
         embeddedSSHTunnel?.stop()
         embeddedSSHTunnel = nil
-        if let wire { Task { await wire.close() } }
+        if let wire { Task { await wire.stop() } }
         wire = nil
         currentRoster = nil
         appliedLiveTabSessionIDs.removeAll()
         agentStatusBySessionID.removeAll()
+        resetAgentReplicationState()
         lastObservedActivityBySessionID.removeAll()
         activityUpdatedAtBySessionID.removeAll()
         agentCompletionTracker = WarrenAgentCompletionTracker()
@@ -2034,7 +1294,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         return
                     }
                     if attempt == 0, maintenanceMessage == nil { present(error) }
-                    resetAttachmentState()
+                    resetAttachmentState(preserveMountedSurfaces: true)
                     publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
                     let delay = Self.reconnectDelay(attempt: attempt)
                     attempt += 1
@@ -2047,8 +1307,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
             activeEndpointConfiguration = wireConfiguration
             let persistedConfiguration = wireConfiguration
-            let wire = WarrenRemoteWire(
+            let wire = WarrenRemoteClient(
                 configuration: wireConfiguration,
+                terminalStateFormats: [WarrenRemoteClient.snapshotTerminalStateFormat],
                 tokenUpdateHandler: { accessToken, refreshToken in
                     let updated = persistedConfiguration.withTokens(
                         token: accessToken,
@@ -2062,37 +1323,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
             self.wire = wire
             let events = wire.events()
-            do {
-                try await wire.connect()
-                // A daemon restart clears its tunnel state, so refresh the
-                // projection on every (re)connect to keep the top-bar tunnel
-                // indicator truthful. Do not hold the initial roster behind
-                // this optional five-second request.
-                let tunnelStatusTask = Task { @MainActor [weak self] in
-                    await self?.refreshTunnelStatus()
+            var disconnectReason: String?
+            await wire.start()
+            // A daemon restart clears its tunnel state, so refresh the
+            // projection on every (re)connect to keep the top-bar tunnel
+            // indicator truthful. Do not hold the initial roster behind
+            // this optional five-second request.
+            let tunnelStatusTask = Task { @MainActor [weak self] in
+                await self?.refreshTunnelStatus()
+            }
+            defer { tunnelStatusTask.cancel() }
+            for await event in events {
+                guard !Task.isCancelled else { return }
+                if case .connection(.connected) = event {
+                    attempt = 0
                 }
-                defer { tunnelStatusTask.cancel() }
-                for await event in events {
-                    guard !Task.isCancelled else { return }
-                    if case .roster = event {
-                        attempt = 0
-                    }
-                    if case .rosterDelta = event {
-                        attempt = 0
-                    }
-                    if case .disconnected = event {
-                        break
-                    }
-                    await consume(event)
+                if case .disconnected(let reason) = event {
+                    disconnectReason = reason
                 }
-            } catch {
-                guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
-                if Self.isPermanentConnectionError(error)
-                    || attempt >= Self.maxReconnectAttempts - 1 {
-                    failConnection(error)
-                    return
-                }
-                if attempt == 0, maintenanceMessage == nil { present(error) }
+                await consume(event)
             }
             // Invalidate request tasks before closing the old wire. Otherwise
             // a late cancellation can report an error against a new
@@ -2103,12 +1352,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self.wire = nil
                 stopDeletionReconciliation()
             }
-            await wire.close()
+            await wire.stop()
             if activeEndpointConfiguration == wireConfiguration {
                 activeEndpointConfiguration = nil
             }
             guard !Task.isCancelled, isCurrentConnection(configuration, generation: generation) else { return }
-            resetAttachmentState()
+            TerminalDiagnostics.log("remote_transport_disconnected", [
+                "endpoint": configuration.name,
+                "reason": disconnectReason ?? "event_stream_ended",
+                "surfaces": String(surfaceManager.retainedSurfaceCount),
+            ])
+            resetAttachmentState(preserveMountedSurfaces: true)
             publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
             if attempt >= Self.maxReconnectAttempts - 1 {
                 failConnection(NSError(
@@ -2150,9 +1404,30 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     /// Drops client-side attachment state so the next roster re-attaches the
-    /// selected tab on a fresh transport. The projection and navigation are
-    /// intentionally kept: the old tab remains visible while reconnecting.
-    private func resetAttachmentState() {
+    /// selected tab on a fresh transport. A transient reconnect keeps the
+    /// native surfaces and their last completed frame; an explicit endpoint
+    /// teardown still disposes every surface.
+    private func resetAttachmentState(preserveMountedSurfaces: Bool = false) {
+        resetAgentReplicationState()
+        retainedSurfaceRebindTask?.cancel()
+        retainedSurfaceRebindTask = nil
+        let retainedSurfaceIDs: Set<TerminalSessionID>
+        if preserveMountedSurfaces {
+            let snapshot = surfaceManager.snapshot()
+            var ids = snapshot.warmSessionIDs
+            if let active = snapshot.activeSessionID {
+                ids.append(active)
+            }
+            retainedSurfaceIDs = Set(ids)
+        } else {
+            retainedSurfaceIDs = []
+        }
+        TerminalDiagnostics.log("remote_attachment_reset", [
+            "preserveSurfaces": preserveMountedSurfaces ? "true" : "false",
+            "surfaces": String(retainedSurfaceIDs.count),
+        ])
+        pendingRetainedSurfaceRebinds = retainedSurfaceIDs
+        reconnectPreservedSessions = preserveMountedSurfaces ? retainedSurfaceIDs : []
         let previousSessionID = selectedSessionID
         attachingSessionID = nil
         selectedSessionID = nil
@@ -2168,7 +1443,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         initialRefreshPending = false
         attachGeneration &+= 1
-        outputAnchors.removeAll()
+        outputAnchors = outputAnchors.filter { retainedSurfaceIDs.contains($0.key) }
         suppressFramedAnchorUpdates.removeAll()
         outputSubscriptions.removeAll()
         installedAtomicStateAnchors.removeAll()
@@ -2179,7 +1454,29 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         cancelResizeRequests()
         focusTask?.cancel()
         focusTask = nil
-        shutdownAllMountedSurfaces()
+        if !preserveMountedSurfaces {
+            shutdownAllMountedSurfaces()
+        } else {
+            for sessionID in retainedSurfaceIDs {
+                surfaceManager.cancelRecovery(
+                    for: sessionID,
+                    preservingDisplay: reconnectPreservedSessions.contains(sessionID)
+                )
+            }
+        }
+    }
+
+    private func resetAgentReplicationState() {
+        for task in agentSubscriptionTasks.values {
+            task.cancel()
+        }
+        agentSubscriptionTasks.removeAll()
+        agentNamespace = nil
+        agentSessionByStreamID.removeAll()
+        agentSubscribedStreamIDs.removeAll()
+        agentQuarantinedStreamIDs.removeAll()
+        agentProjectionSequenceByStreamID.removeAll()
+        agentPendingProjectionByStreamID.removeAll()
     }
 
     private func shutdownAllMountedSurfaces() {
@@ -2202,6 +1499,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         installedAtomicStateAnchors.removeValue(forKey: sessionID)
         clearAtomicRecoveryState(for: sessionID)
         failedAtomicRecoverySessions.remove(sessionID)
+        pendingRetainedSurfaceRebinds.remove(sessionID)
+        reconnectPreservedSessions.remove(sessionID)
         outputSubscriptions.remove(sessionID)
     }
 
@@ -2283,9 +1582,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func failConnection(_ error: Error) {
         presentDiagnostic(error)
         cancelTransientConnectionIssue()
+        // A permanent/authentication failure is no longer a reconnect window;
+        // release retained native surfaces so a later endpoint selection starts
+        // from a clean attachment generation.
+        resetAttachmentState()
         if let wire {
             self.wire = nil
-            Task { await wire.close() }
+            Task { await wire.stop() }
         }
         activeEndpointConfiguration = nil
         eventTask = nil
@@ -2479,7 +1782,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         Task { @MainActor [weak self] in
             do {
-                let data = try await wire.requestRelayReset()
+                let data = try await wire.request("relay.reset")
                 self?.settingsLoaded = true
                 self?.applySettingsResponse(data)
                 self?.relaySettings = WarrenDesktopRelaySettings()
@@ -3473,7 +2776,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private func refreshRoster(using wire: WarrenRemoteWire) async throws {
+    private func refreshRoster(using wire: WarrenRemoteClient) async throws {
         let generation = rosterApplicationGeneration
         let data = try await wire.request("roster")
         let roster = try JSONDecoder().decode(RemoteRoster.self, from: data)
@@ -3494,7 +2797,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         apply(roster)
     }
 
-    private func refreshRosterAfterDeltaMismatch(using wire: WarrenRemoteWire) async {
+    private func refreshRosterAfterDeltaMismatch(using wire: WarrenRemoteClient) async {
         do {
             try await refreshRoster(using: wire)
         } catch {
@@ -4040,7 +3343,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         !deletingProjectIDs.isEmpty || !deletingWorkspaceIDs.isEmpty
     }
 
-    private func ensureDeletionReconciliation(using wire: WarrenRemoteWire) {
+    private func ensureDeletionReconciliation(using wire: WarrenRemoteClient) {
         guard self.wire === wire, hasPendingDeletion else { return }
         if deletionReconciliationWire === wire, deletionReconciliationTask != nil {
             return
@@ -4056,7 +3359,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private func reconcilePendingDeletions(using wire: WarrenRemoteWire) async {
+    private func reconcilePendingDeletions(using wire: WarrenRemoteClient) async {
         let deadline = ContinuousClock.now.advanced(by: Self.deletionReconciliationTimeout)
         var delayMilliseconds = 500
         while !Task.isCancelled,
@@ -4200,8 +3503,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         clearAtomicRecoveryState(for: sessionID)
         installedAtomicStateAnchors.removeValue(forKey: sessionID)
         failedAtomicRecoverySessions.insert(sessionID)
+        reconnectPreservedSessions.remove(sessionID)
         guard closeWire else { return }
-        Task { [wire] in await wire?.close() }
+        Task { [wire] in await wire?.stop() }
     }
 
     private func scheduleAtomicRecoveryRetry(for sessionID: TerminalSessionID) {
@@ -4351,7 +3655,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 payload: payload
             )
             if surfaceManager.surface(for: sessionID) != nil {
-                surfaceManager.beginRecovery(for: sessionID)
+                surfaceManager.beginRecovery(
+                    for: sessionID,
+                    preservingDisplay: reconnectPreservedSessions.contains(sessionID)
+                )
             }
             TerminalDiagnostics.log("atomic_recovery_deferred", [
                 "session": sessionID.description,
@@ -4393,6 +3700,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         installedAtomicStateAnchors.removeValue(forKey: sessionID)
         surfaceManager.endRecovery(for: sessionID)
+        reconnectPreservedSessions.remove(sessionID)
         if selectedSessionID == sessionID {
             initialRefreshPending = false
         }
@@ -4400,27 +3708,48 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     @MainActor
-    private func consume(_ event: RemoteWireEvent) async {
+    private func consume(_ event: WarrenRemoteEvent) async {
         switch event {
-        case .roster:
-            guard let wire, let roster = await wire.takeLatestRoster() else { return }
+        case .connection(let state):
+            switch state {
+            case .connected:
+                cancelTransientConnectionIssue()
+                clearMaintenance()
+                publishProjectionIfChanged(projection.withConnectionState(.attached))
+            case .reconnecting, .connecting:
+                publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
+            case .disconnected:
+                publishProjectionIfChanged(projection.withConnectionState(.disconnected))
+            case .stopped:
+                break
+            }
+        case .welcome:
+            break
+        case .roster(let remoteRoster):
+            guard let roster = decodeApplicationRoster(remoteRoster) else { return }
+            guard let wire else { return }
             cancelTransientConnectionIssue()
             clearMaintenance()
             guard Self.shouldApplyRoster(roster, after: currentRoster) else {
                 ensureDeletionReconciliation(using: wire)
+                publishProjectionIfChanged(projection.withConnectionState(.attached))
+                scheduleRetainedSurfaceRebind()
                 return
             }
             currentRoster = roster
-            await wire.syncAgentSubscriptions(roster)
+            await syncAgentSubscriptions(using: wire, roster: roster)
             apply(roster)
             ensureDeletionReconciliation(using: wire)
-        case .rosterDelta(let delta):
+            scheduleRetainedSurfaceRebind()
+        case .rosterDelta(let remoteDelta):
+            guard let delta = decodeApplicationRosterDelta(remoteDelta) else { return }
             guard let wire else { return }
             guard let current = currentRoster else {
                 await refreshRosterAfterDeltaMismatch(using: wire)
                 return
             }
             if let revision = current.revision, delta.baseRevision < revision {
+                scheduleRetainedSurfaceRebind()
                 return
             }
             guard let roster = current.applying(delta) else {
@@ -4431,12 +3760,50 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             clearMaintenance()
             guard Self.shouldApplyRoster(roster, after: currentRoster) else { return }
             currentRoster = roster
-            await wire.syncAgentSubscriptions(roster)
+            await syncAgentSubscriptions(using: wire, roster: roster)
             apply(roster)
             ensureDeletionReconciliation(using: wire)
-        case .agentStreamError(let message):
-            addNotice(title: "Agent stream paused", message: message)
-        case .agentProjection(let sessionID, let status):
+            scheduleRetainedSurfaceRebind()
+        case .agentEvents(let streamID, _, let events):
+            await receiveAgentEvents(events, streamID: streamID, using: wire)
+        case .output(let frame):
+            guard let sessionID = TerminalSessionID(uuidString: frame.sessionID) else { return }
+            await consumeOutput(
+                sessionID: sessionID,
+                epoch: frame.epoch,
+                sequence: frame.sequence,
+                payload: frame.payload
+            )
+        case .atomicState(let state):
+            guard let sessionID = TerminalSessionID(uuidString: state.sessionID) else { return }
+            consumeAtomicState(
+                sessionID: sessionID,
+                epoch: state.epoch,
+                sequence: state.sequence,
+                format: state.format,
+                payload: state.payload
+            )
+        case .anchor(let anchor):
+            guard let sessionID = TerminalSessionID(uuidString: anchor.sessionID) else { return }
+            consumeAnchor(
+                sessionID: sessionID,
+                epoch: anchor.epoch,
+                sequence: anchor.sequence,
+                reanchor: anchor.reanchor,
+                synced: anchor.synced
+            )
+        case .maintenance(let message):
+            consumeMaintenance(message)
+        case .disconnected(let reason):
+            scheduleTransientConnectionIssue(NSError(
+                domain: "WarrenRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: reason]
+            ))
+        }
+    }
+
+    private func applyAgentProjection(_ status: AgentStatus, for sessionID: TerminalSessionID) {
             let previousActivity = lastObservedActivityBySessionID[sessionID]
             lastObservedActivityBySessionID[sessionID] = status.activity
             if status.activity == .ready, previousActivity != .ready {
@@ -4463,7 +3830,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     for: sessionID
                 )
             )
-        case .maintenance(let message):
+    }
+
+    private func consumeMaintenance(_ message: String?) {
             maintenanceMessage = message?.isEmpty == false ? message : "Warren is updating"
             maintenanceResetTask?.cancel()
             // Safety net for an announcement without a restart: the banner
@@ -4474,7 +3843,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.clearMaintenance()
             }
-        case .framedOutput(let sessionID, let epoch, let sequence, let payload):
+    }
+
+    private func consumeOutput(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        payload: Data
+    ) async {
             if !suppressFramedAnchorUpdates.contains(sessionID) {
                 let endSequence = sequence + UInt64(payload.count)
                 if let current = outputAnchors[sessionID] {
@@ -4498,15 +3874,31 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 epoch: epoch,
                 sequence: sequence
             )
-        case .atomicState(let sessionID, let epoch, let sequence, let format, let payload):
-            _ = installAtomicRecovery(
+    }
+
+    private func consumeAtomicState(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        format: String,
+        payload: Data
+    ) {
+        _ = installAtomicRecovery(
                 sessionID: sessionID,
                 epoch: epoch,
                 sequence: sequence,
                 format: format,
                 payload: payload
             )
-        case .anchor(let sessionID, let epoch, let sequence, let reanchor, let synced):
+    }
+
+    private func consumeAnchor(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        reanchor: Bool,
+        synced: Bool
+    ) {
             TerminalDiagnostics.log("recovery_anchor", [
                 "session": sessionID.description,
                 "reanchor": reanchor ? "true" : "false",
@@ -4520,7 +3912,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 installedAtomicStateAnchors.removeValue(forKey: sessionID)
                 suppressFramedAnchorUpdates.insert(sessionID)
                 if surfaceManager.surface(for: sessionID) != nil {
-                    surfaceManager.beginRecovery(for: sessionID)
+                    surfaceManager.beginRecovery(
+                        for: sessionID,
+                        preservingDisplay: reconnectPreservedSessions.contains(sessionID)
+                    )
                     TerminalDiagnostics.log("recovery_stage_start", [
                         "session": sessionID.description,
                         "mode": "atomic",
@@ -4570,6 +3965,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     return
                 }
                 surfaceManager.endRecovery(for: sessionID)
+                reconnectPreservedSessions.remove(sessionID)
                 if selectedSessionID == sessionID { initialRefreshPending = false }
             }
             if let current = outputAnchors[sessionID] {
@@ -4586,11 +3982,333 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     sequence: sequence
                 )
             }
-        case .disconnected:
-            // The connection loop observes this event before consume and
-            // drives the reconnect; it is unreachable here.
-            break
+    }
+
+    private func syncAgentSubscriptions(using wire: WarrenRemoteClient, roster: RemoteRoster) async {
+        guard let identity = await wire.replicaNamespace() else { return }
+        let namespace = WarrenAgentEventStore.Namespace(
+            hostID: identity.hostID,
+            accessScopeID: identity.accessScopeID
+        )
+        agentNamespace = namespace
+        agentSessionByStreamID = Dictionary(uniqueKeysWithValues: roster.sessions.compactMap { session in
+            guard let streamID = session.agentExecutionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !streamID.isEmpty,
+                  let sessionID = TerminalSessionID(uuidString: session.id) else { return nil }
+            return (streamID, sessionID)
+        })
+        let activeStreamIDs = Set(agentSessionByStreamID.keys)
+        await WarrenAgentEventStore.shared.purgeOrphanStreams(
+            namespace: namespace,
+            activeStreamIDs: activeStreamIDs
+        )
+        for streamID in activeStreamIDs
+            where !agentSubscribedStreamIDs.contains(streamID)
+                && !agentQuarantinedStreamIDs.contains(streamID) {
+            agentSubscribedStreamIDs.insert(streamID)
+            let task = Task { @MainActor [weak self] in
+                defer { self?.agentSubscriptionTasks.removeValue(forKey: streamID) }
+                await self?.bootstrapAgentStream(
+                    streamID: streamID,
+                    namespace: namespace,
+                    wire: wire
+                )
+            }
+            agentSubscriptionTasks[streamID] = task
         }
+    }
+
+    private func decodeApplicationRoster(_ roster: WarrenRemoteRoster) -> RemoteRoster? {
+        guard let data = try? JSONEncoder().encode(roster) else { return nil }
+        return try? JSONDecoder().decode(RemoteRoster.self, from: data)
+    }
+
+    private func decodeApplicationRosterDelta(_ delta: WarrenRemoteRoster.Delta) -> RemoteRoster.Delta? {
+        guard let data = try? JSONEncoder().encode(delta) else { return nil }
+        return try? JSONDecoder().decode(RemoteRoster.Delta.self, from: data)
+    }
+
+    private nonisolated static func agentStatus(from value: RemoteRoster.AgentStatus) -> AgentStatus? {
+        guard let activity = AgentActivityState(rawValue: value.activity) else { return nil }
+        let attention = value.attention.flatMap { raw -> AgentAttention? in
+            guard let kind = AgentAttentionKind(rawValue: raw.kind) else { return nil }
+            return AgentAttention(
+                kind: kind,
+                reason: raw.reason,
+                requestID: raw.requestID,
+                since: raw.since
+            )
+        }
+        return AgentStatus(activity: activity, attention: attention)
+    }
+
+    private func receiveAgentEvents(
+        _ events: [WarrenRemoteAgentEvent],
+        streamID: String,
+        using wire: WarrenRemoteClient?
+    ) async {
+        guard let namespace = agentNamespace,
+              let wire,
+              agentSessionByStreamID[streamID] != nil,
+              !agentQuarantinedStreamIDs.contains(streamID) else { return }
+        do {
+            _ = try await WarrenAgentEventStore.shared.saveEvents(
+                events,
+                namespace: namespace,
+                streamID: streamID
+            )
+            await projectAgentEvents(events, streamID: streamID)
+            await recoverAgentGapIfNeeded(streamID: streamID, namespace: namespace, wire: wire)
+        } catch {
+            quarantineAgentStream(streamID: streamID, error: error)
+        }
+    }
+
+    private func bootstrapAgentStream(
+        streamID: String,
+        namespace: WarrenAgentEventStore.Namespace,
+        wire: WarrenRemoteClient
+    ) async {
+        guard agentNamespace == namespace,
+              agentSessionByStreamID[streamID] != nil else { return }
+        do {
+            var state = await WarrenAgentEventStore.shared.syncState(
+                namespace: namespace,
+                streamID: streamID
+            )
+            let cached = await WarrenAgentEventStore.shared.loadRecentEvents(
+                namespace: namespace,
+                streamID: streamID,
+                limit: 100
+            )
+            if let retained = state?.retainedFromSequence {
+                seedAgentProjectionBoundary(streamID: streamID, retainedFromSequence: retained)
+            }
+            await projectAgentEvents(cached, streamID: streamID)
+            if let checkpoint = state?.checkpoint {
+                applyAgentCheckpoint(
+                    sequence: state?.checkpointSequence ?? 0,
+                    state: checkpoint,
+                    streamID: streamID
+                )
+            }
+
+            var result: WarrenRemoteAgentEventsSubscriptionResult
+            do {
+                result = try await wire.subscribeAgentEvents(
+                    streamID: streamID,
+                    afterSequence: state?.contiguousThrough ?? 0,
+                    limit: 500
+                )
+            } catch {
+                guard let boundary = agentHistoryBoundary(from: error) else { throw error }
+                state = try await installAgentHistoryBoundary(
+                    boundary,
+                    namespace: namespace,
+                    streamID: streamID
+                )
+                applyAgentCheckpoint(
+                    sequence: boundary.checkpoint,
+                    state: boundary.state,
+                    streamID: streamID
+                )
+                result = try await wire.subscribeAgentEvents(
+                    streamID: streamID,
+                    afterSequence: state?.contiguousThrough ?? 0,
+                    limit: 500
+                )
+            }
+            _ = try await WarrenAgentEventStore.shared.saveEvents(
+                result.events,
+                namespace: namespace,
+                streamID: streamID,
+                checkpointSequence: result.checkpoint.sequence,
+                checkpoint: result.checkpoint.state,
+                retainedFromSequence: result.retainedFromSequence
+            )
+            await projectAgentEvents(result.events, streamID: streamID)
+            applyAgentCheckpoint(
+                sequence: result.checkpoint.sequence,
+                state: result.checkpoint.state,
+                streamID: streamID
+            )
+            await recoverAgentGapIfNeeded(streamID: streamID, namespace: namespace, wire: wire)
+        } catch {
+            quarantineAgentStream(streamID: streamID, error: error)
+        }
+    }
+
+    private func recoverAgentGapIfNeeded(
+        streamID: String,
+        namespace: WarrenAgentEventStore.Namespace,
+        wire: WarrenRemoteClient
+    ) async {
+        guard let state = await WarrenAgentEventStore.shared.syncState(
+            namespace: namespace,
+            streamID: streamID
+        ), state.contiguousThrough < state.headSequence else { return }
+        var after = state.contiguousThrough
+        var boundaryBefore: UInt64 = 0
+        while !Task.isCancelled {
+            do {
+                let page = try await wire.agentEventsHistory(
+                    streamID: streamID,
+                    afterSequence: after,
+                    beforeSequence: boundaryBefore == 0 ? nil : boundaryBefore,
+                    limit: 500
+                )
+                guard !page.events.isEmpty else {
+                    throw WarrenRemoteClientError.requestFailed("Host returned an empty Agent history page while a gap remained.")
+                }
+                _ = try await WarrenAgentEventStore.shared.saveEvents(
+                    page.events,
+                    namespace: namespace,
+                    streamID: streamID,
+                    retainedFromSequence: page.retainedFromSequence
+                )
+                await projectAgentEvents(page.events, streamID: streamID)
+                guard let last = page.events.map(\.sequence).max(), last > after else { break }
+                after = last
+                if !page.hasMore { break }
+                boundaryBefore = 0
+            } catch {
+                if let boundary = agentHistoryBoundary(from: error) {
+                    do {
+                        _ = try await installAgentHistoryBoundary(
+                            boundary,
+                            namespace: namespace,
+                            streamID: streamID
+                        )
+                        applyAgentCheckpoint(
+                            sequence: boundary.checkpoint,
+                            state: boundary.state,
+                            streamID: streamID
+                        )
+                        after = boundary.retainedFrom > 0
+                            ? boundary.retainedFrom - 1
+                            : boundary.checkpoint
+                        boundaryBefore = 0
+                        continue
+                    } catch {
+                        quarantineAgentStream(streamID: streamID, error: error)
+                    }
+                } else {
+                    quarantineAgentStream(streamID: streamID, error: error)
+                }
+                return
+            }
+        }
+    }
+
+    private func projectAgentEvents(
+        _ events: [WarrenRemoteAgentEvent],
+        streamID: String
+    ) async {
+        guard agentSessionByStreamID[streamID] != nil else { return }
+        let baseline = agentProjectionSequenceByStreamID[streamID] ?? 0
+        let statusEvents = events.filter {
+            $0.type == "status.changed" && $0.sequence > baseline
+        }
+        for event in events where event.sequence > baseline && event.type != "status.changed" {
+            agentPendingProjectionByStreamID[streamID, default: [:]][event.sequence] = event
+        }
+        if let latest = statusEvents.max(by: { $0.sequence < $1.sequence }) {
+            agentProjectionSequenceByStreamID[streamID] = latest.sequence
+            agentPendingProjectionByStreamID[streamID]?.removeAll()
+            let payload = latest.payload?["status"] ?? .object(latest.payload ?? [:])
+            if let data = try? JSONEncoder().encode(payload),
+               let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+               let sessionID = agentSessionByStreamID[streamID],
+               let status = Self.agentStatus(from: remote) {
+                applyAgentProjection(status, for: sessionID)
+            }
+        } else {
+            var cursor = agentProjectionSequenceByStreamID[streamID] ?? 0
+            while let event = agentPendingProjectionByStreamID[streamID]?.removeValue(forKey: cursor + 1) {
+                cursor = event.sequence
+            }
+            agentProjectionSequenceByStreamID[streamID] = cursor
+        }
+    }
+
+    private func applyAgentCheckpoint(
+        sequence: UInt64,
+        state: [String: WarrenRemoteJSONValue],
+        streamID: String
+    ) {
+        guard sequence >= (agentProjectionSequenceByStreamID[streamID] ?? 0) else { return }
+        agentProjectionSequenceByStreamID[streamID] = sequence
+        agentPendingProjectionByStreamID[streamID] = agentPendingProjectionByStreamID[streamID]?.filter {
+            $0.key > sequence
+        }
+        guard let rawStatus = state["status"],
+              let data = try? JSONEncoder().encode(rawStatus),
+              let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+              let sessionID = agentSessionByStreamID[streamID],
+              let status = Self.agentStatus(from: remote) else { return }
+        applyAgentProjection(status, for: sessionID)
+    }
+
+    private func seedAgentProjectionBoundary(streamID: String, retainedFromSequence: UInt64) {
+        guard retainedFromSequence > 0 else { return }
+        let baseline = retainedFromSequence - 1
+        guard baseline > (agentProjectionSequenceByStreamID[streamID] ?? 0) else { return }
+        agentProjectionSequenceByStreamID[streamID] = baseline
+        agentPendingProjectionByStreamID[streamID] = agentPendingProjectionByStreamID[streamID]?.filter {
+            $0.key > baseline
+        }
+    }
+
+    private func quarantineAgentStream(streamID: String, error: Error) {
+        agentQuarantinedStreamIDs.insert(streamID)
+        agentSubscribedStreamIDs.remove(streamID)
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        addNotice(
+            title: "Agent stream paused",
+            message: detail.isEmpty ? "Agent stream (streamID) failed its integrity check." : detail
+        )
+    }
+
+    private func agentHistoryBoundary(from error: Error) -> (
+        retainedFrom: UInt64,
+        head: UInt64,
+        checkpoint: UInt64,
+        state: [String: WarrenRemoteJSONValue]
+    )? {
+        guard case let WarrenRemoteClientError.requestFailedWithCode(code, _, details) = error,
+              code == "history_boundary",
+              let details else { return nil }
+        func number(_ value: WarrenRemoteJSONValue?) -> UInt64 {
+            switch value {
+            case .number(let value) where value >= 0: return UInt64(value)
+            case .string(let value): return UInt64(value) ?? 0
+            default: return 0
+            }
+        }
+        let checkpoint: [String: WarrenRemoteJSONValue] = {
+            guard case let .object(value) = details["checkpoint"] else { return [:] }
+            return value
+        }()
+        let retained = number(details["retainedFromSequence"])
+        let head = number(details["headSequence"])
+        let sequence = number(details["checkpointSequence"])
+        guard retained > 0 || head > 0 || sequence > 0 else { return nil }
+        return (retained, head, sequence, checkpoint)
+    }
+
+    private func installAgentHistoryBoundary(
+        _ boundary: (retainedFrom: UInt64, head: UInt64, checkpoint: UInt64, state: [String: WarrenRemoteJSONValue]),
+        namespace: WarrenAgentEventStore.Namespace,
+        streamID: String
+    ) async throws -> WarrenAgentEventStore.SyncState {
+        try await WarrenAgentEventStore.shared.installHistoryBoundary(
+            namespace: namespace,
+            streamID: streamID,
+            retainedFromSequence: boundary.retainedFrom,
+            headSequence: boundary.head,
+            checkpointSequence: boundary.checkpoint,
+            checkpoint: boundary.state
+        )
     }
 
     private func feedOutput(
@@ -4641,7 +4359,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         loadSettings()
         clearMaintenance()
-        presentGhostlineMigrationNotice(roster.ghostlineMigration)
         guard let hostID = HostID(uuidString: roster.host.id) else { return }
         let host = WarrenDomain.Host(id: hostID, name: roster.host.name)
         let tasks = roster.tasks.enumerated().compactMap { index, value -> WarrenDomain.WarrenTask? in
@@ -4898,20 +4615,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private func presentGhostlineMigrationNotice(_ migration: RemoteRoster.GhostlineMigration?) {
-        guard let migration, !migration.skippedSessions.isEmpty,
-              migration.sessionID != lastGhostlineMigrationNoticeID else { return }
-        lastGhostlineMigrationNoticeID = migration.sessionID
-        let count = migration.skippedSessions.count
-        let names = migration.skippedSessions.sorted().joined(separator: ", ")
-        addNotice(
-            title: "adopt runtime failed",
-            message: "\(count) session\(count == 1 ? "" : "s") skipped during Ghostline handoff.",
-            detail: names,
-            kind: .error
-        )
-    }
-
     /// Entry point for every navigation that makes a session visible.
     ///
     /// A retained surface with a live output subscription is promoted
@@ -4921,6 +4624,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        if !isLocalEndpoint,
+           surfaceManager.surface(for: sessionID) != nil,
+           reconnectPreservedSessions.contains(sessionID) {
+            await attachSelectedSession(preservingExistingSurface: true)
+            return
+        }
         if !isLocalEndpoint,
            surfaceManager.surface(for: sessionID) != nil,
            outputSubscriptions.contains(sessionID) {
@@ -4946,20 +4655,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         TerminalDiagnostics.log("tab_promote_local", [
             "session": sessionID.description,
         ])
-        do {
-            _ = try await wire.request(
-                "session.attach",
-                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
-            )
-        } catch {
-            // The control swap can fail when the session exited between the
-            // last roster and this switch. Re-seed through the cold path so
-            // the pane converges instead of silently losing input.
-            if selectedSessionID == sessionID {
-                await attachSelectedSession()
-            }
-            return
-        }
         guard selectedSessionID == sessionID else { return }
         attachedSessionID = sessionID
         TerminalDiagnostics.log("promote_complete", [
@@ -4967,11 +4662,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ])
         surfaceManager.requestPresent(sessionID)
         inputRouter.activate(for: sessionID) { [wire] data in
-            await wire.sendInput(data)
+            try? await wire.sendInput(sessionID: sessionID.description, payload: data)
         }
         let measuredSize = surfaceManager.surface(for: sessionID)?.terminalSize
         guard pendingFocusSessionID == sessionID else { return }
-        // Mirror the legacy attach flow: focus ownership is claimed only when
+        // Focus ownership is claimed only when
         // the surface actually gained keyboard focus (the manager reports it
         // through onFocused, which parks the request here while the control
         // swap was still in flight). An unfocused window switching tabs must
@@ -4983,7 +4678,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
     }
 
-    private func attachSelectedSession() async {
+    private func attachSelectedSession(
+        preservingExistingSurface: Bool = false
+    ) async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID,
               let session = projection.sessions.first(where: { $0.id == sessionID }),
@@ -5023,6 +4720,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let surface: GhosttySurface
         if let existingSurface {
             surface = existingSurface
+            surface.onOpenURL = { [weak self] url, kind, workingDirectory in
+                guard let self else { return false }
+                return self.onOpenTerminalURL?(sessionID, url, kind, workingDirectory ?? session.workingDirectory) ?? false
+            }
         } else {
             // Defensive fallback: the authoritative cleanup runs in
             // TerminalSurfaceManager.dispose, but never attach a brand-new
@@ -5039,14 +4740,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 workingDirectory: session.workingDirectory,
                 font: terminalFont,
                 onInput: { data in inputBridge.send(data) },
-                onResize: { [weak self] columns, rows in Task { @MainActor in self?.resize(columns: columns, rows: rows) } }
+                onResize: { [weak self] columns, rows in Task { @MainActor in self?.resize(columns: columns, rows: rows) } },
+                onOpenURL: { [weak self] url, kind, workingDirectory in
+                    guard let self else { return false }
+                    return self.onOpenTerminalURL?(sessionID, url, kind, workingDirectory ?? session.workingDirectory) ?? false
+                }
             )
             surfaceManager.insert(surface, recoveryGated: true)
         }
         selectedSessionID = sessionID
-        // Keep the newly mounted surface in a neutral placeholder state until
-        // the daemon's recovery stream reaches its synced marker.
-        surfaceManager.beginRecovery(for: sessionID)
+        // Keep a retained surface's last completed frame visible during a
+        // transient reconnect. A cold attach still uses the neutral
+        // placeholder gate so an empty native surface can never flash.
+        surfaceManager.beginRecovery(
+            for: sessionID,
+            preservingDisplay: preservingExistingSurface
+                && reconnectPreservedSessions.contains(sessionID)
+        )
 
         // The roster can select a tab before SwiftUI has committed the
         // terminal host (notably after a daemon/app restart). Do not ask the
@@ -5082,22 +4792,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
             guard generation == attachGeneration,
                   selectedSessionID == sessionID else { return }
-            // The subscription carries no input authority. Swap the control
-            // lease separately so typing and focus ownership follow the
-            // visible tab.
-            _ = try await wire.request(
-                "session.attach",
-                params: WarrenRemoteTerminalProtocol.controlClaimParameters(sessionID: sessionID)
-            )
-            guard generation == attachGeneration,
-                  selectedSessionID == sessionID else { return }
             outputSubscriptions.insert(sessionID)
             attachedSessionID = sessionID
             TerminalDiagnostics.log("attach_complete", [
                 "session": sessionID.description,
             ])
             inputRouter.activate(for: sessionID) { [wire] data in
-                await wire.sendInput(data)
+                try? await wire.sendInput(sessionID: sessionID.description, payload: data)
             }
             if pendingFocusSessionID == sessionID {
                 let pendingSize = pendingFocusSize ?? size
@@ -5107,6 +4808,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         } catch {
             if generation == attachGeneration, selectedSessionID == sessionID {
+                if preservingExistingSurface, Self.isTransportFailure(error as NSError) {
+                    selectedSessionID = nil
+                    attachedSessionID = nil
+                    focusedSessionID = nil
+                    inputRouter.discard(for: sessionID)
+                    outputSubscriptions.remove(sessionID)
+                    surfaceManager.cancelRecovery(
+                        for: sessionID,
+                        preservingDisplay: true
+                    )
+                    pendingRetainedSurfaceRebinds.insert(sessionID)
+                    TerminalDiagnostics.log("reconnect_surface_rebind_deferred", [
+                        "session": sessionID.description,
+                        "error": error.localizedDescription,
+                    ])
+                    return
+                }
                 TerminalDiagnostics.log("attach_failed", [
                     "session": sessionID.description,
                     "error": String(describing: error),
@@ -5165,24 +4883,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    /// Subscribes the daemon-side output stream for one session without
-    /// claiming focus or input authority. Protocol 3 has no attach fallback:
-    /// an older daemon is an explicit connection error.
+    /// Subscribes the daemon-side output stream and records the attachment
+    /// identity required for every subsequent DENB input frame.
     private func seedSessionSubscription(
         sessionID: TerminalSessionID,
         size: TerminalSize?,
         claimControl: Bool
     ) async throws {
         guard let wire else { throw URLError(.networkConnectionLost) }
-        _ = try await wire.request(
-            "session.subscribe",
-            params: WarrenRemoteTerminalProtocol.subscribeParameters(
-                sessionID: sessionID,
-                size: size,
-                anchor: outputAnchors[sessionID],
-                claimControl: claimControl
-            )
+        let anchor = outputAnchors[sessionID].map {
+            WarrenRemoteRecoveryAnchor(epoch: $0.epoch, sequence: $0.sequence)
+        }
+        let result = try await wire.subscribe(
+            sessionID: sessionID.description,
+            size: size,
+            anchor: anchor,
+            claimControl: claimControl
         )
+        guard result.subscribed, !result.attachmentID.isEmpty else {
+            throw WarrenRemoteClientError.requestFailed("Host did not return a terminal attachment")
+        }
     }
 
     private func selectSession(_ id: TerminalSessionID) {
@@ -5295,6 +5015,82 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         }
         return result
+    }
+
+    /// Schedules the explicit rebind required after a transient transport
+    /// reconnect. Roster contents can be byte-for-byte identical to the
+    /// previous connection, so the normal tab-change heuristic is not enough
+    /// to restore daemon-side subscriptions.
+    private func scheduleRetainedSurfaceRebind() {
+        guard !pendingRetainedSurfaceRebinds.isEmpty,
+              retainedSurfaceRebindTask == nil else { return }
+        retainedSurfaceRebindTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.rebindRetainedSurfaces()
+        }
+    }
+
+    private func rebindRetainedSurfaces() async {
+        defer { retainedSurfaceRebindTask = nil }
+        guard let wire else { return }
+        let candidates = pendingRetainedSurfaceRebinds
+        pendingRetainedSurfaceRebinds.removeAll()
+        let liveSessionIDs = Set(projection.tabs.compactMap(\.sessionID))
+        let eligible = candidates.filter { sessionID in
+            liveSessionIDs.contains(sessionID)
+                && surfaceManager.surface(for: sessionID) != nil
+        }
+        guard !eligible.isEmpty else {
+            reconnectPreservedSessions.subtract(candidates)
+            return
+        }
+
+        let selectedID = navigation.selectedTabID.flatMap { tabID in
+            projection.tabs.first(where: { $0.id == tabID })?.sessionID
+        }
+        if let selectedID, eligible.contains(selectedID) {
+            await attachSelectedSession(preservingExistingSurface: true)
+        }
+
+        for sessionID in eligible where sessionID != selectedID {
+            guard !Task.isCancelled, self.wire === wire else {
+                pendingRetainedSurfaceRebinds.insert(sessionID)
+                return
+            }
+            guard !outputSubscriptions.contains(sessionID) else {
+                continue
+            }
+            do {
+                try await seedSessionSubscription(
+                    sessionID: sessionID,
+                    size: nil,
+                    claimControl: false
+                )
+                guard self.wire === wire else {
+                    pendingRetainedSurfaceRebinds.insert(sessionID)
+                    return
+                }
+                outputSubscriptions.insert(sessionID)
+                TerminalDiagnostics.log("reconnect_surface_rebound", [
+                    "session": sessionID.description,
+                    "selected": "false",
+                ])
+            } catch {
+                if Self.isTransportFailure(error as NSError) {
+                    pendingRetainedSurfaceRebinds.insert(sessionID)
+                    TerminalDiagnostics.log("reconnect_surface_rebind_deferred", [
+                        "session": sessionID.description,
+                        "error": error.localizedDescription,
+                    ])
+                } else {
+                    reconnectPreservedSessions.remove(sessionID)
+                    TerminalDiagnostics.log("reconnect_surface_rebind_failed", [
+                        "session": sessionID.description,
+                        "error": error.localizedDescription,
+                    ])
+                }
+            }
+        }
     }
 
     private var selectedWorkspaceID: WorkspaceID? {

@@ -20,11 +20,6 @@ type rosterDeltaMessage struct {
 	Workspaces   *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
 	Groups       *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
 	Sessions     *rosterEntityDelta[api.Session]       `json:"sessions,omitempty"`
-	// A pointer to a pointer lets the delta distinguish "unchanged" (outer
-	// pointer nil) from "cleared" (outer pointer non-nil, inner pointer nil).
-	// The latter must be encoded as an explicit JSON null so clients can retire
-	// a migration report without waiting for a reconnect.
-	GhostlineMigration **api.GhostlineMigration `json:"ghostlineMigration,omitempty"`
 }
 
 type rosterEntityDelta[T any] struct {
@@ -58,15 +53,11 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 	if delta := rosterEntries(before.Sessions, after.Sessions, func(value api.Session) string { return value.ID }); delta.hasChanges() {
 		result.Sessions = &delta
 	}
-	if !reflect.DeepEqual(before.GhostlineMigration, after.GhostlineMigration) {
-		migration := after.GhostlineMigration
-		result.GhostlineMigration = &migration
-	}
 	return result
 }
 
 func (m rosterDeltaMessage) hasChanges() bool {
-	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil || m.GhostlineMigration != nil
+	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil
 }
 
 func (d rosterEntityDelta[T]) hasChanges() bool {
