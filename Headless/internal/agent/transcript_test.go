@@ -1280,6 +1280,119 @@ func TestCodexQuestionAttentionAndResolution(t *testing.T) {
 	}
 }
 
+func TestCodexUnavailableRequestUserInputIsToolFailure(t *testing.T) {
+	p := newParser("codex")
+	qLine := []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","call_id":"call-unavailable","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"q1\",\"question\":\"Continue?\",\"options\":[{\"label\":\"yes\"}]}]}"}}`)
+	if events := p.Parse(qLine); len(events) != 1 || events[0].Type != "question" {
+		t.Fatalf("expected pending question event, got %#v", events)
+	}
+	outputLine := []byte(`{"timestamp":"2026-08-16T10:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-unavailable","output":"request_user_input is unavailable in Default mode"}}`)
+	events := p.Parse(outputLine)
+	if len(events) != 1 || events[0].Type != "tool_output" {
+		t.Fatalf("expected diagnostic tool output, got %#v", events)
+	}
+	if events[0].ToolStatus != "error" || !strings.Contains(events[0].Error, "request_user_input is unavailable") {
+		t.Fatalf("unexpected diagnostic event: %#v", events[0])
+	}
+	status := p.Status()
+	if status.Attention != nil {
+		t.Fatalf("expected unavailable interaction attention to be cleared, got %#v", status.Attention)
+	}
+}
+
+func TestCodexThreadGoalUpdatedIsProjected(t *testing.T) {
+	p := newParser("codex")
+	events := p.Parse([]byte(`{"timestamp":"2026-08-29T17:42:02.437Z","type":"event_msg","payload":{"type":"thread_goal_updated","threadId":"thread-1","turnId":"turn-1","goal":{"threadId":"thread-1","objective":"Ship the mobile polish","status":"active","tokenBudget":12000,"tokensUsed":42,"timeUsedSeconds":9}}}`))
+	if len(events) != 1 {
+		t.Fatalf("goal events = %#v", events)
+	}
+	event := events[0]
+	if event.Type != "goal" || event.ID != "thread-1" {
+		t.Fatalf("goal event identity = %#v", event)
+	}
+	if event.Payload["objective"] != "Ship the mobile polish" || event.Payload["state"] != "active" {
+		t.Fatalf("goal payload = %#v", event.Payload)
+	}
+	if event.Payload["tokenBudget"] != int64(12000) || event.Payload["tokensUsed"] != int64(42) {
+		t.Fatalf("goal accounting = %#v", event.Payload)
+	}
+}
+
+func TestCodexThreadGoalClearedIsProjected(t *testing.T) {
+	p := newParser("codex")
+	events := p.Parse([]byte(`{"timestamp":"2026-08-29T17:42:02.437Z","type":"event_msg","payload":{"type":"thread_goal_cleared","threadId":"thread-1"}}`))
+	if len(events) != 1 || events[0].Type != "goal" || events[0].Payload["state"] != "cleared" {
+		t.Fatalf("cleared goal events = %#v", events)
+	}
+}
+
+func TestCodexGoalOutputFromCustomToolCallSupportsCamelCaseAndNestedShape(t *testing.T) {
+	p := newParser("codex")
+	call := []byte(`{"timestamp":"2026-08-29T17:42:02.437Z","type":"response_item","payload":{"type":"custom_tool_call","id":"item-goal","call_id":"call-goal","name":"create_goal","input":"{}"}}`)
+	if events := p.Parse(call); len(events) != 1 || events[0].Type != "tool_call" {
+		t.Fatalf("goal tool call = %#v", events)
+	}
+	output := []byte(`{"timestamp":"2026-08-29T17:42:02.438Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-goal","output":"{\"goal\":{\"threadId\":\"thread-2\",\"objective\":\"Review the iOS capsule\",\"status\":\"usageLimited\",\"tokenBudget\":8000,\"tokensUsed\":120,\"timeUsedSeconds\":7}}"}}`)
+	events := p.Parse(output)
+	if len(events) != 1 || events[0].Type != "goal" || events[0].ID != "thread-2" {
+		t.Fatalf("goal output = %#v", events)
+	}
+	event := events[0]
+	if event.Payload["state"] != "usage_limited" || event.Payload["status"] != "usage_limited" {
+		t.Fatalf("goal status = %#v", event.Payload)
+	}
+	if event.Payload["tokenBudget"] != int64(8000) || event.Payload["tokensUsed"] != int64(120) {
+		t.Fatalf("goal accounting = %#v", event.Payload)
+	}
+}
+
+func TestCodexGoalOutputUsesFallbackThreadAndTopLevelCamelCase(t *testing.T) {
+	p := newParser("codex")
+	p.Parse([]byte(`{"timestamp":"2026-08-29T17:42:02.437Z","type":"session_meta","payload":{"id":"thread-fallback"}}`))
+	call := []byte(`{"timestamp":"2026-08-29T17:42:02.438Z","type":"response_item","payload":{"type":"function_call","call_id":"call-goal","name":"get_goal","arguments":"{}"}}`)
+	if events := p.Parse(call); len(events) != 1 || events[0].Type != "tool_call" {
+		t.Fatalf("goal tool call = %#v", events)
+	}
+	output := []byte(`{"timestamp":"2026-08-29T17:42:02.439Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-goal","output":"{\"objective\":\"Keep the release green\",\"status\":\"budgetLimited\",\"tokensUsed\":300,\"timeUsedSeconds\":12}"}}`)
+	events := p.Parse(output)
+	if len(events) != 1 || events[0].Type != "goal" || events[0].ID != "thread-fallback" {
+		t.Fatalf("fallback goal output = %#v", events)
+	}
+	if events[0].Payload["state"] != "budget_limited" {
+		t.Fatalf("fallback goal status = %#v", events[0].Payload)
+	}
+}
+
+func TestCodexGoalOutputFromExecWrapperIsProjected(t *testing.T) {
+	p := newParser("codex")
+	p.Parse([]byte(`{"timestamp":"2026-09-06T17:34:38.794Z","type":"session_meta","payload":{"id":"thread-exec"}}`))
+	call := []byte(`{"timestamp":"2026-09-06T17:34:38.795Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-exec-goal","name":"exec","input":"const r = await tools.get_goal({});\ntext(r);\n"}}`)
+	if events := p.Parse(call); len(events) != 1 || events[0].Type != "tool_call" {
+		t.Fatalf("exec goal tool call = %#v", events)
+	}
+	output := []byte(`{"timestamp":"2026-09-06T17:34:38.796Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-exec-goal","output":[{"type":"input_text","text":"Script completed\n"},{"type":"input_text","text":"{\"goal\":{\"threadId\":\"thread-exec\",\"objective\":\"Inspect the Goal capsule\",\"status\":\"active\",\"tokensUsed\":12}}"}]}}`)
+	events := p.Parse(output)
+	if len(events) != 1 || events[0].Type != "goal" || events[0].ID != "thread-exec" {
+		t.Fatalf("exec goal output = %#v", events)
+	}
+	if events[0].Payload["objective"] != "Inspect the Goal capsule" {
+		t.Fatalf("exec goal payload = %#v", events[0].Payload)
+	}
+}
+
+func TestCodexArbitraryToolOutputIsNotProjectedAsGoal(t *testing.T) {
+	p := newParser("codex")
+	call := []byte(`{"timestamp":"2026-08-29T17:42:02.437Z","type":"response_item","payload":{"type":"function_call","call_id":"call-json","name":"run_report","arguments":"{}"}}`)
+	if events := p.Parse(call); len(events) != 1 || events[0].Type != "tool_call" {
+		t.Fatalf("report tool call = %#v", events)
+	}
+	output := []byte(`{"timestamp":"2026-08-29T17:42:02.438Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-json","output":"{\"objective\":\"not a goal\",\"status\":\"active\"}"}}`)
+	events := p.Parse(output)
+	if len(events) != 1 || events[0].Type != "tool_output" {
+		t.Fatalf("arbitrary object output = %#v", events)
+	}
+}
+
 func TestCodexPlanStateCalculation(t *testing.T) {
 	p := newParser("codex")
 	inProgLine := []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Step 1\",\"status\":\"completed\"},{\"step\":\"Step 2\",\"status\":\"in_progress\"}]}"}}`)
@@ -1433,7 +1546,7 @@ func TestCanonicalProtocolProjectionForNewEvents(t *testing.T) {
 		Payload:   map[string]any{"requestId": "q-1", "title": "Question"},
 		Timestamp: now,
 	}
-	canonQ := api.CanonicalAgentEventFromLegacy(qEvt, "stream-1", "exec-1", 1, now)
+	canonQ := api.CanonicalAgentEventFromObservation(qEvt, "stream-1", "exec-1", 1, now)
 	if canonQ.Type != "interaction.requested" {
 		t.Fatalf("expected interaction.requested, got %s", canonQ.Type)
 	}
@@ -1446,7 +1559,7 @@ func TestCanonicalProtocolProjectionForNewEvents(t *testing.T) {
 		Payload:   map[string]any{"model": "gpt-5", "reasoningEffort": "high"},
 		Timestamp: now,
 	}
-	canonCfg := api.CanonicalAgentEventFromLegacy(cfgEvt, "stream-1", "exec-1", 2, now)
+	canonCfg := api.CanonicalAgentEventFromObservation(cfgEvt, "stream-1", "exec-1", 2, now)
 	if canonCfg.Type != "config.updated" {
 		t.Fatalf("expected config.updated, got %s", canonCfg.Type)
 	}
@@ -1462,7 +1575,7 @@ func TestCanonicalProtocolProjectionForNewEvents(t *testing.T) {
 		Payload:   map[string]any{"summary": "History compacted"},
 		Timestamp: now,
 	}
-	canonCmp := api.CanonicalAgentEventFromLegacy(cmpEvt, "stream-1", "exec-1", 3, now)
+	canonCmp := api.CanonicalAgentEventFromObservation(cmpEvt, "stream-1", "exec-1", 3, now)
 	if canonCmp.Type != "compaction.updated" {
 		t.Fatalf("expected compaction.updated, got %s", canonCmp.Type)
 	}
@@ -1503,7 +1616,7 @@ func TestRealDataCodexPlayback(t *testing.T) {
 		for _, e := range events {
 			totalEvents++
 			typeCounts[e.Type]++
-			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
 			if canon.Type == "" {
 				t.Fatalf("empty canonical type for event: %#v", e)
 			}
@@ -1553,7 +1666,7 @@ func TestRealDataQoderPlayback(t *testing.T) {
 		for _, e := range events {
 			totalEvents++
 			typeCounts[e.Type]++
-			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
 			if canon.Type == "" {
 				t.Fatalf("empty canonical type for event: %#v", e)
 			}
@@ -1603,7 +1716,7 @@ func TestRealDataPiPlayback(t *testing.T) {
 		for _, e := range events {
 			totalEvents++
 			typeCounts[e.Type]++
-			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
 			if canon.Type == "" {
 				t.Fatalf("empty canonical type for event: %#v", e)
 			}
@@ -1656,7 +1769,7 @@ func TestRealDataOpenCodePlayback(t *testing.T) {
 		for _, e := range events {
 			totalEvents++
 			typeCounts[e.Type]++
-			canon := api.CanonicalAgentEventFromLegacy(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "test-stream", "test-exec", uint64(totalEvents), time.Now())
 			if canon.Type == "" {
 				t.Fatalf("empty canonical type for event: %#v", e)
 			}
@@ -1683,7 +1796,7 @@ func TestDiffAndDiagnosticsNormalization_Claude(t *testing.T) {
 			if e.Payload["file"] != "/test/app.go" || e.Payload["additions"] != 5 || e.Payload["deletions"] != 2 {
 				t.Fatalf("unexpected diff payload: %+v", e.Payload)
 			}
-			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 1, time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "stream-1", "exec-1", 1, time.Now())
 			if canon.Type != "diff.updated" {
 				t.Fatalf("canonical diff type = %q, want diff.updated", canon.Type)
 			}
@@ -1697,7 +1810,7 @@ func TestDiffAndDiagnosticsNormalization_Claude(t *testing.T) {
 			if diags[0].Severity != "error" || diags[0].Line != 10 || diags[0].Message != "syntax error" {
 				t.Fatalf("unexpected diagnostic item: %+v", diags[0])
 			}
-			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 2, time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "stream-1", "exec-1", 2, time.Now())
 			if canon.Type != "diagnostics.updated" {
 				t.Fatalf("canonical diagnostics type = %q, want diagnostics.updated", canon.Type)
 			}
@@ -1722,7 +1835,7 @@ func TestDiffNormalization_Codex(t *testing.T) {
 	if diffEvent.Payload["additions"] != 2 || diffEvent.Payload["deletions"] != 1 {
 		t.Fatalf("unexpected adds/dels: %+v", diffEvent.Payload)
 	}
-	canon := api.CanonicalAgentEventFromLegacy(diffEvent, "stream-1", "exec-1", 1, time.Now())
+	canon := api.CanonicalAgentEventFromObservation(diffEvent, "stream-1", "exec-1", 1, time.Now())
 	if canon.Type != "diff.updated" {
 		t.Fatalf("canonical type = %q, want diff.updated", canon.Type)
 	}
@@ -1742,7 +1855,7 @@ func TestDiffNormalization_Pi(t *testing.T) {
 			if e.Payload["additions"] != 1 || e.Payload["deletions"] != 1 {
 				t.Fatalf("unexpected diff payload: %+v", e.Payload)
 			}
-			canon := api.CanonicalAgentEventFromLegacy(e, "stream-1", "exec-1", 1, time.Now())
+			canon := api.CanonicalAgentEventFromObservation(e, "stream-1", "exec-1", 1, time.Now())
 			if canon.Type != "diff.updated" {
 				t.Fatalf("canonical type = %q, want diff.updated", canon.Type)
 			}
@@ -1763,7 +1876,7 @@ func TestQueueNormalization_Claude(t *testing.T) {
 	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Please check line 10" || events[0].Payload["state"] != "queued" {
 		t.Fatalf("unexpected enqueue payload: %+v", events[0].Payload)
 	}
-	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	canon := api.CanonicalAgentEventFromObservation(events[0], "stream-1", "exec-1", 1, time.Now())
 	if canon.Type != "queue.updated" {
 		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
 	}
@@ -1806,7 +1919,7 @@ func TestQueueNormalization_Qoder(t *testing.T) {
 	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Qoder buffered command" {
 		t.Fatalf("unexpected qoder queue payload: %+v", events[0].Payload)
 	}
-	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	canon := api.CanonicalAgentEventFromObservation(events[0], "stream-1", "exec-1", 1, time.Now())
 	if canon.Type != "queue.updated" {
 		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
 	}
@@ -1862,7 +1975,7 @@ func TestQueuePolling_Codex(t *testing.T) {
 		t.Fatalf("queue timestamp = %d, want created_at_ms", got)
 	}
 
-	canon := api.CanonicalAgentEventFromLegacy(events[0], "stream-1", "exec-1", 1, time.Now())
+	canon := api.CanonicalAgentEventFromObservation(events[0], "stream-1", "exec-1", 1, time.Now())
 	if canon.Type != "queue.updated" {
 		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
 	}

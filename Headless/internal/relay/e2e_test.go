@@ -295,7 +295,7 @@ func TestRelayE2E(t *testing.T) {
 	}
 	defer publicSocket.Close()
 	if err := publicSocket.WriteJSON(map[string]any{
-		"t": "auth", "version": "3.0",
+		"t": "auth", "version": "4.0",
 		"terminalStateFormats": []string{"ghostline-vt-replay-v1"},
 	}); err != nil {
 		t.Fatalf("authenticate public WebSocket: %v", err)
@@ -304,7 +304,7 @@ func TestRelayE2E(t *testing.T) {
 	if err := publicSocket.ReadJSON(&welcome); err != nil {
 		t.Fatalf("read public WebSocket welcome: %v", err)
 	}
-	if welcome["t"] != "welcome" || welcome["version"] != "3.0" {
+	if welcome["t"] != "welcome" || welcome["version"] != "4.0" {
 		t.Fatalf("public WebSocket welcome = %#v", welcome)
 	}
 }

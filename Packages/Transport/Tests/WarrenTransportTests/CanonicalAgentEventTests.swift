@@ -54,9 +54,56 @@ final class CanonicalAgentEventTests: XCTestCase {
             checkpoint: [:]
         )
         XCTAssertEqual(state.retainedFromSequence, 3)
-        XCTAssertEqual(state.contiguousThrough, 5)
+        XCTAssertEqual(state.contiguousThrough, 2)
         XCTAssertEqual(state.headSequence, 5)
         let cached = await store.loadRecentEvents(namespace: scope, streamID: "exec")
         XCTAssertTrue(cached.isEmpty)
+    }
+
+    func testRetentionBoundaryStopsEarlierHistoryAtHostPrefix() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WarrenAgentEventStore(databasePath: url.path)
+        let scope = WarrenAgentEventStore.Namespace(hostID: "host", accessScopeID: "owner")
+        func event(_ sequence: UInt64) -> WarrenRemoteAgentEvent {
+            .init(sequence: sequence, eventID: "evt-\(sequence)", streamID: "exec", executionID: "exec", type: "future.event", payload: [:])
+        }
+
+        var state = try await store.saveEvents(
+            [event(558)],
+            namespace: scope,
+            streamID: "exec",
+            retainedFromSequence: 557
+        )
+        XCTAssertTrue(state.hasMoreBefore)
+
+        state = try await store.saveEvents(
+            [event(557)],
+            namespace: scope,
+            streamID: "exec",
+            retainedFromSequence: 557
+        )
+        XCTAssertEqual(state.retainedFromSequence, 557)
+        XCTAssertFalse(state.hasMoreBefore)
+    }
+
+    func testAuthoritativeRetentionBoundaryIsNotLoweredByStaleLocalRows() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WarrenAgentEventStore(databasePath: url.path)
+        let scope = WarrenAgentEventStore.Namespace(hostID: "host", accessScopeID: "owner")
+        func event(_ sequence: UInt64) -> WarrenRemoteAgentEvent {
+            .init(sequence: sequence, eventID: "evt-\(sequence)", streamID: "exec", executionID: "exec", type: "future.event", payload: [:])
+        }
+
+        _ = try await store.saveEvents(
+            [event(3)],
+            namespace: scope,
+            streamID: "exec",
+            retainedFromSequence: 3
+        )
+        let state = try await store.saveEvents([event(1)], namespace: scope, streamID: "exec")
+        XCTAssertEqual(state.retainedFromSequence, 3)
+        XCTAssertFalse(state.hasMoreBefore)
     }
 }

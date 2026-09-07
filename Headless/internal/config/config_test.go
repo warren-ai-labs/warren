@@ -32,26 +32,14 @@ func TestUpdateCreatesAndPreservesEndpointCatalog(t *testing.T) {
 	}
 }
 
-func TestLoadScrubsLegacySSHRuntimeCredentials(t *testing.T) {
+func TestLoadRejectsRemovedSSHRuntimeCredentials(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	data := []byte(`{"current":"vps","endpoints":{"vps":{"name":"vps","url":"http://127.0.0.1:12345","token":"secret","ssh":"vps"}}}`)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	value, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoint := value.Endpoints["vps"]
-	if endpoint.URL != "" || endpoint.Token != "" || endpoint.SSH != "vps" {
-		t.Fatalf("legacy runtime values were not scrubbed: %+v", endpoint)
-	}
-	rewritten, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(rewritten), "12345") || strings.Contains(string(rewritten), "secret") {
-		t.Fatalf("legacy SSH credentials remain on disk: %s", rewritten)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "state_reset_required") {
+		t.Fatalf("Load error = %v, want state_reset_required", err)
 	}
 }
 

@@ -24,7 +24,7 @@ type Store struct {
 	changed  chan struct{}
 }
 
-const currentSchema = 2
+const currentSchema = 3
 
 var alreadyChanged = func() <-chan struct{} {
 	value := make(chan struct{})
@@ -41,12 +41,14 @@ func Open(path, hostName string) (*Store, error) {
 		}
 		migrated := false
 		switch s.state.Schema {
-		case 1:
+		case 1, 2:
+			// The state shape remains compatible across these releases. Bump the
+			// marker and preserve every known field instead of forcing a reset.
 			s.state.Schema = currentSchema
 			migrated = true
 		case currentSchema:
 		default:
-			return nil, fmt.Errorf("unsupported state schema %d", s.state.Schema)
+			return nil, &StateResetError{Path: path, FoundSchema: s.state.Schema, RequiredSchema: currentSchema}
 		}
 		if len(s.state.TerminalGroups) == 0 {
 			if err := ensureTerminalGroups(&s.state); err != nil {
@@ -79,6 +81,21 @@ func Open(path, hostName string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// StateResetError is returned for unknown or future state files. Known older
+// schemas are upgraded in place because their fields remain compatible.
+type StateResetError struct {
+	Path           string
+	FoundSchema    int
+	RequiredSchema int
+}
+
+func (e *StateResetError) Error() string {
+	if e == nil {
+		return "state_reset_required"
+	}
+	return fmt.Sprintf("state_reset_required: %s has schema %d; create a fresh state file with schema %d", e.Path, e.FoundSchema, e.RequiredSchema)
 }
 
 func userName(value *user.User) string {
@@ -165,6 +182,13 @@ func clone(value api.State) api.State {
 	result.Sessions = append([]api.Session(nil), value.Sessions...)
 	if value.GhostlineMigration != nil {
 		migration := *value.GhostlineMigration
+		migration.SkippedSessions = append([]string(nil), value.GhostlineMigration.SkippedSessions...)
+		if value.GhostlineMigration.SkipReasons != nil {
+			migration.SkipReasons = make(map[string]string, len(value.GhostlineMigration.SkipReasons))
+			for key, reason := range value.GhostlineMigration.SkipReasons {
+				migration.SkipReasons[key] = reason
+			}
+		}
 		result.GhostlineMigration = &migration
 	}
 	result.Operations = append([]api.OperationAudit(nil), value.Operations...)

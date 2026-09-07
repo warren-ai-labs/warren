@@ -64,13 +64,49 @@ struct WarrenEmbeddedEditorConfiguration: Equatable, Sendable {
         return arguments
     }
 
-    func workspaceURL(path: String) -> URL {
-        Self.workspaceURL(serverURL: serverURL, path: path)
+    func workspaceURL(
+        path: String,
+        filePath: String? = nil,
+        line: Int? = nil,
+        column: Int? = nil
+    ) -> URL {
+        Self.workspaceURL(
+            serverURL: serverURL,
+            path: path,
+            filePath: filePath,
+            line: line,
+            column: column
+        )
     }
 
-    static func workspaceURL(serverURL: URL, path: String) -> URL {
+    static func workspaceURL(
+        serverURL: URL,
+        path: String,
+        filePath: String? = nil,
+        line: Int? = nil,
+        column: Int? = nil
+    ) -> URL {
         var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "folder", value: path)]
+        var queryItems = [URLQueryItem(name: "folder", value: path)]
+        if let filePath {
+            let host = serverURL.host.flatMap { $0.isEmpty ? nil : $0 } ?? "127.0.0.1"
+            let port = serverURL.port.map { ":\($0)" } ?? ""
+            var fileURIString = "vscode-remote://\(host)\(port)\(filePath)"
+            var payloadItems: [[String]] = []
+            if let line {
+                payloadItems.append(["gotoLineMode", "true"])
+                fileURIString += ":\(line)"
+                if let column {
+                    fileURIString += ":\(column)"
+                }
+            }
+            payloadItems.append(["openFile", fileURIString])
+            if let data = try? JSONSerialization.data(withJSONObject: payloadItems),
+               let payloadString = String(data: data, encoding: .utf8) {
+                queryItems.append(URLQueryItem(name: "payload", value: payloadString))
+            }
+        }
+        components.queryItems = queryItems
         return components.url!
     }
 
@@ -1484,6 +1520,13 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     private var process: Process?
     private var processGroupID: pid_t?
     private var sessionSocketURL: URL?
+    private struct PendingOpenFile {
+        let workspacePath: String
+        let filePath: String
+        let line: Int?
+        let column: Int?
+    }
+    private var pendingOpenFile: PendingOpenFile?
     private var launchTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var extensionTask: Task<Void, Never>?
@@ -1517,6 +1560,31 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             Self.terminate(process: process, groupID: processGroupID)
         }
         Self.removeSessionSocket(at: sessionSocketURL)
+    }
+
+    func openFile(
+        workspacePath: String,
+        filePath: String,
+        line: Int? = nil,
+        column: Int? = nil
+    ) {
+        pendingOpenFile = PendingOpenFile(
+            workspacePath: workspacePath,
+            filePath: filePath,
+            line: line,
+            column: column
+        )
+        activate(workspacePath: workspacePath)
+        if case .ready(let serverURL) = phase {
+            ensureWebView(
+                workspacePath: workspacePath,
+                serverURL: serverURL,
+                filePath: filePath,
+                line: line,
+                column: column
+            )
+            pendingOpenFile = nil
+        }
     }
 
     func activate(workspacePath: String, force: Bool = false) {
@@ -1676,7 +1744,18 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                 return
             }
             for path in requestedWorkspacePaths.sorted() {
-                ensureWebView(workspacePath: path, serverURL: configuration.serverURL)
+                if let pending = pendingOpenFile, pending.workspacePath == path {
+                    ensureWebView(
+                        workspacePath: path,
+                        serverURL: configuration.serverURL,
+                        filePath: pending.filePath,
+                        line: pending.line,
+                        column: pending.column
+                    )
+                    pendingOpenFile = nil
+                } else {
+                    ensureWebView(workspacePath: path, serverURL: configuration.serverURL)
+                }
             }
             phase = .ready(configuration.serverURL)
             installManagedExtensions(configuration: configuration)
@@ -1754,20 +1833,87 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
     }
 
-    private func ensureWebView(workspacePath: String, serverURL: URL) {
-        if webViews[workspacePath] != nil {
+    private func ensureWebView(
+        workspacePath: String,
+        serverURL: URL,
+        filePath: String? = nil,
+        line: Int? = nil,
+        column: Int? = nil
+    ) {
+        if let existingWebView = webViews[workspacePath] {
             touchWebView(workspacePath)
+            if let filePath {
+                let cliLaunched = openFileWithCLI(filePath: filePath, line: line, column: column)
+                if !cliLaunched {
+                    let targetURL = WarrenEmbeddedEditorConfiguration.workspaceURL(
+                        serverURL: serverURL,
+                        path: workspacePath,
+                        filePath: filePath,
+                        line: line,
+                        column: column
+                    )
+                    existingWebView.load(URLRequest(url: targetURL))
+                }
+            }
             return
         }
         objectWillChange.send()
         webViews[workspacePath] = makeWebView(
             url: WarrenEmbeddedEditorConfiguration.workspaceURL(
                 serverURL: serverURL,
-                path: workspacePath
+                path: workspacePath,
+                filePath: filePath,
+                line: line,
+                column: column
             )
         )
         touchWebView(workspacePath)
         evictExcessWebViews()
+    }
+
+    @discardableResult
+    private func openFileWithCLI(
+        filePath: String,
+        line: Int? = nil,
+        column: Int? = nil
+    ) -> Bool {
+        guard let executableURL = executableResolver(environment) else { return false }
+        let process = Process()
+        process.executableURL = executableURL
+        var arguments = [
+            "--user-data-dir", supportDirectory.appendingPathComponent("user-data", isDirectory: true).path,
+        ]
+        if let sessionSocketURL {
+            arguments += ["--session-socket", sessionSocketURL.path]
+        }
+        arguments += ["-r"]
+        var target = filePath
+        if let line {
+            target += ":\(line)"
+            if let column {
+                target += ":\(column)"
+            }
+        }
+        arguments += [target]
+        process.arguments = arguments
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let deadline = DispatchTime.now() + .milliseconds(1500)
+            let semaphore = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in
+                semaphore.signal()
+            }
+            if semaphore.wait(timeout: deadline) == .timedOut {
+                process.terminate()
+                return false
+            }
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private func touchWebView(_ workspacePath: String) {

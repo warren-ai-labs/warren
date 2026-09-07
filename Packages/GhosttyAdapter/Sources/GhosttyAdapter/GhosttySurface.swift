@@ -35,6 +35,7 @@ public final class GhosttySurface: Identifiable {
     /// a recreated view is reflected on the next lookup. Used by diagnostics
     /// to distinguish "draw was called" from "draw could reach the screen".
     public weak var mountedTerminalView: TerminalView?
+    public var onOpenURL: (@MainActor (String, TerminalOpenURLKind, String?) -> Bool)?
 
     public init(
         id: TerminalSessionID,
@@ -44,11 +45,13 @@ public final class GhosttySurface: Identifiable {
         outputRenderBudgetBytes: Int = 64 * 1024,
         outputRenderYield: Duration = .milliseconds(1),
         onInput: @escaping @Sendable (Data) -> Void,
-        onResize: @escaping @Sendable (Int, Int) -> Void
+        onResize: @escaping @Sendable (Int, Int) -> Void,
+        onOpenURL: (@MainActor (String, TerminalOpenURLKind, String?) -> Bool)? = nil
     ) {
         self.id = id
         self.attachmentID = attachmentID
         self.onViewportResize = onResize
+        self.onOpenURL = onOpenURL
 
         let inMemory = InMemoryTerminalSession(
             write: onInput,
@@ -120,6 +123,9 @@ public final class GhosttySurface: Identifiable {
         // clickable-but-missing path (see docs/lessons.md #002).
         state.openURLHandler = { [weak self] url, kind in
             Task { @MainActor in
+                if let self, let onOpenURL = self.onOpenURL, onOpenURL(url, kind, self.state.workingDirectory) {
+                    return
+                }
                 self?.handleOpenURL(url, kind: kind)
             }
         }
@@ -452,11 +458,27 @@ public final class GhosttySurface: Identifiable {
         if let components = URLComponents(string: trimmed),
            let scheme = components.scheme?.lowercased(),
            let target = components.url,
-           ["http", "https", "mailto", "tel", "file"].contains(scheme) {
+           ["http", "https", "mailto", "tel"].contains(scheme) {
             NSWorkspace.shared.open(target)
             return
         }
-        let path = (trimmed as NSString).expandingTildeInPath
+        let cleanURLString: String
+        if trimmed.lowercased().hasPrefix("file://"),
+           let fileURL = URL(string: trimmed) {
+            cleanURLString = fileURL.path
+        } else {
+            cleanURLString = trimmed
+        }
+        let pathWithoutLine: String
+        if let colonIndex = cleanURLString.firstIndex(of: ":") {
+            let candidate = String(cleanURLString[..<colonIndex])
+            pathWithoutLine = FileManager.default.fileExists(atPath: (candidate as NSString).expandingTildeInPath)
+                ? candidate
+                : cleanURLString
+        } else {
+            pathWithoutLine = cleanURLString
+        }
+        let path = (pathWithoutLine as NSString).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: path) else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }

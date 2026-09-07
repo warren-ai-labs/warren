@@ -4,6 +4,11 @@
 - Owner: Warren desktop client
 - Created: 2026-08-15
 
+This RFC is historical. Its `session.attach`/`session.detach` examples belong
+to the pre-4.0 protocol and are not supported by the current contract; use
+`session.subscribe`/`session.focus`/`session.unsubscribe` as documented by the
+current architecture and RFC 0016.
+
 ## Motivation
 
 Switching back to a previously visited tab replays buffered terminal output at

@@ -77,7 +77,7 @@ func TestAgentTranscriptStreamsToWeb(t *testing.T) {
 	defer connection.Close()
 	subscription := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
 		"streamId": execution.StreamID,
-		"limit":    1,
+		"limit":    2,
 	})
 	if len(subscription.Events) == 0 {
 		t.Fatal("canonical subscription returned no initial events")
@@ -970,7 +970,7 @@ func TestAgentSubscribeWithGapEvents(t *testing.T) {
 	subResult := requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{
 		"streamId":      execution.StreamID,
 		"afterSequence": 1,
-		"limit":         1,
+		"limit":         2,
 	})
 	if len(subResult.Events) < 2 {
 		t.Fatalf("subscription events = %#v, want the suffix after sequence 1", subResult.Events)

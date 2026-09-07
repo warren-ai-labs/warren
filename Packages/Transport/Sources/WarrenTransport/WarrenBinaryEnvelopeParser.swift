@@ -19,7 +19,7 @@ extension WarrenWireCodec {
     }
 
     struct RawInputHeader: Decodable {
-        let version: ProtocolVersion
+        let version: String
         let sessionID: TerminalSessionID
         let attachmentID: TerminalAttachmentID
         let payloadLength: Int

@@ -18,13 +18,6 @@ type HealthSubsystems struct {
 	// Store is "ready" when the durable state is loaded and queryable,
 	// "unavailable" when the Service or its Store have not finished wiring.
 	Store string `json:"store"`
-	// Migrations is "cleared" when no Ghostline migration is in flight,
-	// "pending" when an in-flight migration has skipped sessions.
-	Migrations string `json:"migrations"`
-	// GhostlineSkippedSessions is the count of sessions the latest
-	// migration left on the legacy socket. Zero means the migration is
-	// fully drained or never started.
-	GhostlineSkippedSessions int `json:"ghostlineSkippedSessions"`
 	// Relay is the supervised outbound connector state. Configured is
 	// independent of Connected: a host can be configured but disconnected
 	// while the daemon retries.
@@ -34,8 +27,6 @@ type HealthSubsystems struct {
 const (
 	HealthReady        = "ready"
 	HealthUnavailable  = "unavailable"
-	HealthCleared      = "cleared"
-	HealthPending      = "pending"
 	HealthUnconfigured = "unconfigured"
 	HealthDisconnected = "disconnected"
 	HealthConnected    = "connected"

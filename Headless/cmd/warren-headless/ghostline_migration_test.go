@@ -1,10 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -22,7 +18,7 @@ func TestGhostlineMigrationJournalPersistsPhases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open state: %v", err)
 	}
-	record, err := createGhostlineMigration(state, "/tmp/source.sock", "/tmp/target.sock", "0.8.0", ghostlineV0ToV1Handoff)
+	record, err := createGhostlineMigration(state, "/tmp/source.sock", "/tmp/target.sock", "1.0.0", "warren-v1")
 	if err != nil {
 		t.Fatalf("create migration: %v", err)
 	}
@@ -49,61 +45,6 @@ func TestGhostlineMigrationJournalPersistsPhases(t *testing.T) {
 	}
 }
 
-func TestProbeLegacyGhostlineVersion(t *testing.T) {
-	socketPath := filepath.Join(shortGhostlineTempDir(t), "legacy.sock")
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer listener.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		connection, err := listener.Accept()
-		if err != nil {
-			done <- err
-			return
-		}
-		defer connection.Close()
-		var request struct {
-			ID     int64  `json:"id"`
-			Method string `json:"method"`
-		}
-		if err := json.NewDecoder(bufio.NewReader(connection)).Decode(&request); err != nil {
-			done <- err
-			return
-		}
-		if request.Method != "version" {
-			done <- fmt.Errorf("legacy request method = %q, want version", request.Method)
-			return
-		}
-		done <- json.NewEncoder(connection).Encode(struct {
-			ID     int64 `json:"id"`
-			Result struct {
-				Version    string `json:"version"`
-				TagVersion string `json:"tagVersion"`
-			} `json:"result"`
-		}{
-			ID: request.ID,
-			Result: struct {
-				Version    string `json:"version"`
-				TagVersion string `json:"tagVersion"`
-			}{Version: "0.7.0", TagVersion: "v0.7.0"},
-		})
-	}()
-
-	version, err := probeLegacyGhostlineVersion(context.Background(), socketPath)
-	if err != nil {
-		t.Fatalf("probe legacy version: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("serve legacy version: %v", err)
-	}
-	if version.ProtocolVersion != "0.7.0" || version.TagVersion != "v0.7.0" {
-		t.Fatalf("legacy version = %#v", version)
-	}
-}
-
 func TestResumeCommittedMigrationRoutesTargetBeforeFreshStart(t *testing.T) {
 	directory := shortGhostlineTempDir(t)
 	state, err := store.Open(filepath.Join(directory, "state.json"), "test-host")
@@ -117,7 +58,7 @@ func TestResumeCommittedMigrationRoutesTargetBeforeFreshStart(t *testing.T) {
 		t.Fatalf("listen on target: %v", err)
 	}
 	defer listener.Close()
-	record, err := createGhostlineMigration(state, filepath.Join(directory, "ghostline-old.sock"), target, "0.8.0", ghostlineV0ToV1Handoff)
+	record, err := createGhostlineMigration(state, filepath.Join(directory, "ghostline-old.sock"), target, "1.0.0", "warren-v1")
 	if err != nil {
 		t.Fatalf("create migration: %v", err)
 	}
@@ -201,6 +142,34 @@ func TestConsumeForceGhostlineHandoffClearsEnvironment(t *testing.T) {
 	}
 	if forceGhostlineHandoffRequestedFor(config) {
 		t.Fatal("environment force signal leaked after consumption")
+	}
+}
+
+func TestGhostlineMigrationSkippedReportsUnrecoveredSessions(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test-host")
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.GhostlineMigration = &api.GhostlineMigration{
+			Phase:           api.GhostlineMigrationRetired,
+			SkippedSessions: []string{"session-1"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed migration: %v", err)
+	}
+	if !ghostlineMigrationSkipped(state) {
+		t.Fatal("skipped migration was not detected")
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.GhostlineMigration.SkippedSessions = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("clear migration skips: %v", err)
+	}
+	if ghostlineMigrationSkipped(state) {
+		t.Fatal("cleared migration still reports skipped sessions")
 	}
 }
 

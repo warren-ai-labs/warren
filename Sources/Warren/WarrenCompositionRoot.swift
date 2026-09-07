@@ -75,20 +75,50 @@ struct WarrenCompositionRoot: View {
     init() {
         let surfaceManager = TerminalSurfaceManager()
         _surfaceManager = State(initialValue: surfaceManager)
-        _remoteModel = StateObject(wrappedValue: WarrenRemoteApplicationModel(
+        let remoteModel = WarrenRemoteApplicationModel(
             surfaceManager: surfaceManager
-        ))
-        _embeddedEditorModel = StateObject(wrappedValue: WarrenEmbeddedEditorModel())
+        )
+        let embeddedEditorModel = WarrenEmbeddedEditorModel()
+
+        remoteModel.onOpenTerminalURL = { [weak remoteModel, weak embeddedEditorModel] sessionID, urlString, kind, workingDirectory in
+            guard UserDefaults.standard.bool(forKey: WarrenPreferenceKey.embeddedEditorOpenLinks) else {
+                return false
+            }
+            guard let remoteModel, let embeddedEditorModel else { return false }
+            guard let workspaceID = remoteModel.projection.sessionWorkspaceIDs[sessionID],
+                  let workspace = remoteModel.projection.groups.flatMap(\.workspaces).first(where: { $0.id == workspaceID }) else {
+                return false
+            }
+            guard let target = WarrenTerminalLinkParser.parse(
+                urlString,
+                workingDirectory: workingDirectory,
+                workspacePath: workspace.path
+            ) else {
+                return false
+            }
+
+            NotificationCenter.default.post(
+                name: WarrenDesktopCommand.openEmbeddedEditor,
+                object: workspace.id
+            )
+            embeddedEditorModel.openFile(
+                workspacePath: workspace.path,
+                filePath: target.path,
+                line: target.line,
+                column: target.column
+            )
+            return true
+        }
+
+        _remoteModel = StateObject(wrappedValue: remoteModel)
+        _embeddedEditorModel = StateObject(wrappedValue: embeddedEditorModel)
         // Endpoint configuration is user input, not frame state. Seed the
         // catalog once and refresh it from disk in the background so CLI
         // changes appear without restarting Warren. The catalog's `current`
-        // value is authoritative; the legacy UserDefaults value is only a
-        // migration fallback for catalogs created before endpoint storage.
+        // value is authoritative.
         let catalog = WarrenEndpointCatalog.load()
         _endpointCatalog = State(initialValue: catalog.endpoints)
-        _selectedEndpointID = State(initialValue: catalog.current
-            ?? UserDefaults.standard.string(forKey: "executionEndpoint")
-            ?? "local")
+        _selectedEndpointID = State(initialValue: catalog.current ?? "local")
         _endpointCatalogError = State(initialValue: nil)
     }
 
@@ -685,10 +715,7 @@ struct WarrenCompositionRoot: View {
             }
             endpointCatalogError = nil
             let loaded = loadedCatalog.endpoints
-            // A missing `current` is the normal fresh-checkout state. Treat
-            // it as stable while the selected legacy endpoint still exists;
-            // otherwise the poller would wake and reassign state every
-            // second even though no catalog change occurred.
+            // A missing `current` is the normal fresh-checkout state.
             let currentChanged: Bool
             if let current = loadedCatalog.current {
                 currentChanged = current != selectedEndpointID

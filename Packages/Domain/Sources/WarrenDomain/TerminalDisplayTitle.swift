@@ -180,6 +180,7 @@ public enum WarrenPreferenceKey {
     public static let hiddenSessionPresets = "terminal.hiddenPresets"
     public static let noticeMuted = "notifications.muted"
     public static let embeddedEditorDefaultIDE = "editor.openByDefault"
+    public static let embeddedEditorOpenLinks = "editor.openLinksByDefault"
     public static let agentCompletionSoundEnabled = "notifications.agentCompletionSoundEnabled"
     public static let sidebarShowActiveSessions = "sidebar.showActiveSessions"
     public static let sidebarShowTasks = "sidebar.showTasks"

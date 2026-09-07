@@ -44,12 +44,28 @@ type agentUpload struct {
 }
 
 // AgentViewController is an optional provider-native bridge. Hosts that have
-// a provider API can install one; ordinary text still has a legacy PTY path,
-// but structured interaction and interrupt semantics require this bridge.
+// a provider API can install one; known TUI providers may use the bounded PTY
+// fallback below for interaction and interrupt semantics.
 type AgentViewController interface {
 	RespondInteraction(context.Context, api.AgentInteractionResponse) error
 	InterruptTurn(context.Context, api.AgentTurnInterruptRequest) error
 	SendMessage(context.Context, api.AgentMessageSendRequest) error
+}
+
+// AgentViewGoalController is an optional provider-native bridge for Codex
+// thread goals. It is separate from AgentViewController so existing Hosts can
+// adopt the goal command without breaking their interaction implementation.
+type AgentViewGoalController interface {
+	SetGoal(context.Context, api.AgentGoalSetRequest) error
+	ClearGoal(context.Context, api.AgentGoalClearRequest) error
+}
+
+// AgentViewGoalHandle is the per-provider equivalent used by lifecycle
+// handles. A handle may implement this without changing the AgentHandle
+// contract consumed by existing providers.
+type AgentViewGoalHandle interface {
+	SetGoal(context.Context, api.AgentGoalSetRequest) error
+	ClearGoal(context.Context, api.AgentGoalClearRequest) error
 }
 
 // AgentViewAtomicController is an optional stronger bridge for Hosts that can
@@ -63,8 +79,8 @@ type AgentViewAtomicController interface {
 
 // AgentViewCapabilities reports the capabilities this Service can actually
 // execute. The protocol-level list describes the implementation's vocabulary,
-// while this instance-level projection prevents a Host without a transcript
-// finder or provider bridge from advertising controls it cannot honour.
+// while the per-session projection prevents an unsupported provider from
+// receiving the Codex-specific PTY interaction controls.
 func (s *Service) AgentViewCapabilities() []string {
 	capabilities := []string{api.CapabilityAppHeartbeat, api.CapabilityRosterDelta}
 	if s == nil {
@@ -74,17 +90,19 @@ func (s *Service) AgentViewCapabilities() []string {
 	if nonNilInterface(s.AgentFinder) || (registry != nil && len(registry.Kinds()) > 0) {
 		capabilities = append(capabilities, api.CapabilityAgentTimeline)
 	}
-	if nonNilInterface(s.AgentController) {
+	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
 		capabilities = append(capabilities,
 			api.CapabilityAgentInteractions,
 			api.CapabilityAgentInterrupt,
 		)
-	} else if s.hasRuntimeAdapter() {
-		// Ctrl-C is a protocol-defined PTY signal and is safe to execute
-		// without guessing provider UI state. Interaction answers are not: a
-		// TUI prompt may have changed between projection and input, so only a
-		// provider-native controller may advertise that capability.
-		capabilities = append(capabilities, api.CapabilityAgentInterrupt)
+	}
+	if (nonNilInterface(s.AgentController) && func() bool {
+		_, ok := s.AgentController.(AgentViewGoalController)
+		return ok
+	}()) || s.hasRuntimeAdapter() {
+		// The built-in TUI bridge supports Codex's `/goal` command. Session-level
+		// projection narrows this broad Host capability to Codex sessions.
+		capabilities = append(capabilities, api.CapabilityAgentGoals)
 	}
 	// Attachments can use a provider-native controller when one is installed,
 	// or the built-in PTY bridge below, which materializes each upload as a
@@ -1087,46 +1105,44 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 		}
 		switch strings.ToLower(decision) {
 		case "allow", "yes", "approve", "confirm", "proceed", "y":
-			return runtime.Input(ctx, sessionID, []byte("y\r"))
+			return sendTerminalSubmission(ctx, runtime, sessionID, "y")
 		case "deny", "no", "reject", "n":
-			return runtime.Input(ctx, sessionID, []byte("n\r"))
+			return sendTerminalSubmission(ctx, runtime, sessionID, "n")
 		default:
 			if decision != "" {
-				return runtime.Input(ctx, sessionID, encodeTerminalSubmission(decision))
+				return sendTerminalSubmission(ctx, runtime, sessionID, decision)
 			}
-			return runtime.Input(ctx, sessionID, []byte("y\r"))
+			// An omitted decision is not permission to guess. Let the caller
+			// retry with an explicit option instead of approving a request by
+			// accident.
+			return errors.New("permission response requires an explicit decision")
 		}
 
 	case "question":
 		var answers []string
-		if customAnswers, ok := request.Response["customAnswers"].(map[string]any); ok && len(customAnswers) > 0 {
-			for _, val := range customAnswers {
-				if s := strings.TrimSpace(agentStringValue(val)); s != "" {
-					answers = append(answers, s)
+		answerOrder := request.Response["answerOrder"]
+		customAnswers, _ := request.Response["customAnswers"].(map[string]any)
+		answerLabels, _ := request.Response["answerLabels"].(map[string]any)
+		selectedAnswers, _ := request.Response["answers"].(map[string]any)
+		// Codex and a few other interactive TUIs display choices by label rather
+		// than by the provider-neutral option ID. iOS keeps IDs in `answers` for
+		// canonical validation and supplies labels as an explicit PTY fallback.
+		// Resolve one question at a time so a custom answer for q1 cannot hide a
+		// selected option for q2. A custom value wins for its own question because
+		// it represents the user's explicit free-form replacement for a choice.
+		for _, key := range responseKeysInOrder(answerOrder, customAnswers, answerLabels, selectedAnswers) {
+			before := len(answers)
+			if value, ok := customAnswers[key]; ok {
+				appendAgentInteractionAnswers(&answers, value)
+			}
+			if len(answers) == before {
+				if value, ok := answerLabels[key]; ok {
+					appendAgentInteractionAnswers(&answers, value)
 				}
 			}
-		}
-		if len(answers) == 0 {
-			if selectedAnswers, ok := request.Response["answers"].(map[string]any); ok {
-				for _, val := range selectedAnswers {
-					switch v := val.(type) {
-					case []any:
-						for _, opt := range v {
-							if s := strings.TrimSpace(agentStringValue(opt)); s != "" {
-								answers = append(answers, s)
-							}
-						}
-					case []string:
-						for _, s := range v {
-							if s := strings.TrimSpace(s); s != "" {
-								answers = append(answers, s)
-							}
-						}
-					default:
-						if s := strings.TrimSpace(agentStringValue(val)); s != "" {
-							answers = append(answers, s)
-						}
-					}
+			if len(answers) == before {
+				if value, ok := selectedAnswers[key]; ok {
+					appendAgentInteractionAnswers(&answers, value)
 				}
 			}
 		}
@@ -1137,7 +1153,7 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 		}
 		if len(answers) > 0 {
 			for _, ans := range answers {
-				if err := runtime.Input(ctx, sessionID, encodeTerminalSubmission(ans)); err != nil {
+				if err := sendTerminalSubmission(ctx, runtime, sessionID, ans); err != nil {
 					return err
 				}
 			}
@@ -1150,7 +1166,155 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 	}
 }
 
-func encodeTerminalSubmission(text string) []byte {
+func sortedStringKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func responseKeysInOrder(rawOrder any, maps ...map[string]any) []string {
+	ordered := make([]string, 0)
+	seen := make(map[string]struct{})
+	contains := func(key string) bool {
+		for _, values := range maps {
+			if _, ok := values[key]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	appendKey := func(value any) {
+		key := strings.TrimSpace(agentStringValue(value))
+		if key == "" || !contains(key) {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, key)
+	}
+	switch values := rawOrder.(type) {
+	case []any:
+		for _, value := range values {
+			appendKey(value)
+		}
+	case []string:
+		for _, value := range values {
+			appendKey(value)
+		}
+	}
+	allKeys := make(map[string]any)
+	for _, values := range maps {
+		for key := range values {
+			allKeys[key] = nil
+		}
+	}
+	for _, key := range sortedStringKeys(allKeys) {
+		if _, ok := seen[key]; !ok {
+			ordered = append(ordered, key)
+		}
+	}
+	return ordered
+}
+
+func appendAgentInteractionAnswers(destination *[]string, value any) {
+	if destination == nil {
+		return
+	}
+	switch value := value.(type) {
+	case []any:
+		for _, item := range value {
+			if text := strings.TrimSpace(agentStringValue(item)); text != "" {
+				*destination = append(*destination, text)
+			}
+		}
+	case []string:
+		for _, item := range value {
+			if text := strings.TrimSpace(item); text != "" {
+				*destination = append(*destination, text)
+			}
+		}
+	default:
+		if text := strings.TrimSpace(agentStringValue(value)); text != "" {
+			*destination = append(*destination, text)
+		}
+	}
+}
+
+const agentInteractionSubmitDelay = 300 * time.Millisecond
+
+// sendTerminalSubmission mirrors Herdr's PTY contract: write the text first,
+// let the TUI consume and redraw it, then send Enter as a separate write.
+func sendTerminalSubmission(ctx context.Context, runtime Runtime, sessionID, text string) error {
+	if err := runtime.Input(ctx, sessionID, encodeTerminalText(text)); err != nil {
+		return err
+	}
+	if err := waitAgentTerminalInput(ctx); err != nil {
+		return err
+	}
+	return runtime.Input(ctx, sessionID, []byte{'\r'})
+}
+
+func waitAgentTerminalInput(ctx context.Context) error {
+	timer := time.NewTimer(agentInteractionSubmitDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// sendAgentGoalInput uses Codex's documented TUI command as a compatibility
+// fallback when no app-server controller is installed. The legacy signature is
+// kept for embedders and tests that submit a new goal. iOS's editor calls the
+// mode-aware helper below so an existing goal enters Codex's edit prompt rather
+// than the replace confirmation dialog.
+func sendAgentGoalInput(ctx context.Context, runtime Runtime, sessionID, value string) error {
+	return sendAgentGoalInputMode(ctx, runtime, sessionID, value, false)
+}
+
+// sendAgentGoalInputMode submits one Codex goal mutation through its TUI. When
+// replacing an existing goal, `/goal edit` opens a prefilled CustomPromptView;
+// Ctrl-U is repeated enough times to clear every possible line before the new
+// objective is pasted. This preserves the edit flow (including Codex's status
+// and budget handling) instead of appending to the old objective or stopping at
+// the "Replace goal?" confirmation.
+func sendAgentGoalInputMode(
+	ctx context.Context,
+	runtime Runtime,
+	sessionID string,
+	value string,
+	replaceExisting bool,
+) error {
+	trimmed := strings.TrimSpace(value)
+	if strings.EqualFold(trimmed, "clear") {
+		return sendTerminalSubmission(ctx, runtime, sessionID, "/goal clear")
+	}
+	if !replaceExisting {
+		return sendTerminalSubmission(ctx, runtime, sessionID, "/goal "+trimmed)
+	}
+	if err := sendTerminalSubmission(ctx, runtime, sessionID, "/goal edit"); err != nil {
+		return err
+	}
+	// Codex's editor places the cursor at the end of the existing objective.
+	// Ctrl-U kills to the beginning of the current line and, at column zero,
+	// removes the preceding newline, so a bounded burst clears multiline text.
+	if err := runtime.Input(ctx, sessionID, bytes.Repeat([]byte{0x15}, agentGoalMaxObjective+1)); err != nil {
+		return err
+	}
+	if err := waitAgentTerminalInput(ctx); err != nil {
+		return err
+	}
+	return sendTerminalSubmission(ctx, runtime, sessionID, trimmed)
+}
+
+func encodeTerminalText(text string) []byte {
 	var buf bytes.Buffer
 	if strings.Contains(text, "\n") {
 		buf.WriteString("\x1b[200~")
@@ -1159,7 +1323,6 @@ func encodeTerminalSubmission(text string) []byte {
 	} else {
 		buf.WriteString(text)
 	}
-	buf.WriteByte('\r')
 	return buf.Bytes()
 }
 
@@ -1237,10 +1400,17 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 		s.finishAgentAction(actionKey, call, nil, err)
 		return api.AgentInteractionResult{}, err
 	}
+	shouldRecordResolved := true
 	if handle := s.currentAgentHandle(request.Session); handle != nil {
 		if err := handle.RespondInteraction(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentInteractionResult{}, err
+		}
+		// A TUI write only proves that bytes reached the PTY. Wait for the
+		// provider parser to emit its terminal interaction event before changing
+		// the projection to Answered; otherwise a dropped key is shown as success.
+		if _, isTUI := handle.(*tuiAgentHandle); isTUI && !nonNilInterface(s.AgentController) {
+			shouldRecordResolved = false
 		}
 	} else if controller := s.AgentController; nonNilInterface(controller) {
 		if err := controller.RespondInteraction(ctx, request); err != nil {
@@ -1248,11 +1418,37 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 			return api.AgentInteractionResult{}, err
 		}
 	} else {
-		err := errors.New("agent interaction transport is unavailable")
-		s.finishAgentAction(actionKey, call, nil, err)
-		return api.AgentInteractionResult{}, err
+		// Legacy transcript watchers do not have a lifecycle handle, but Codex
+		// still has a bounded PTY interaction adapter. Keep other providers
+		// read-only until their prompt protocol is explicitly implemented.
+		session, _ := s.Session(request.Session)
+		family := normalizeProviderKind(session.AgentProvider)
+		if family == "" {
+			family = normalizeProviderKind(session.Kind)
+		}
+		if !tuiSupportsAgentInteractions(family) {
+			err := errors.New("agent interaction transport is unavailable")
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
+		runtime := s.runtimeFor(session)
+		if runtime == nil {
+			err := errors.New("agent interaction transport is unavailable")
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
+		unlock := s.lockAgentSessionAction(request.Session)
+		err := sendAgentInteractionInput(ctx, runtime, session.Runtime, request)
+		unlock()
+		if err != nil {
+			s.finishAgentAction(actionKey, call, nil, err)
+			return api.AgentInteractionResult{}, err
+		}
+		shouldRecordResolved = false
 	}
-	s.recordAgentInteractionResolved(request)
+	if shouldRecordResolved {
+		s.recordAgentInteractionResolved(request)
+	}
 	result := api.AgentInteractionResult{Accepted: true, Session: request.Session, RequestID: request.RequestID, Kind: request.Kind}
 	s.agentViewMu.Lock()
 	s.agentInteractionResults[cacheKey] = result
@@ -1260,6 +1456,121 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 	s.agentViewMu.Unlock()
 	s.finishAgentAction(actionKey, call, result, nil)
 	return result, nil
+}
+
+const agentGoalMaxObjective = 16 * 1024
+
+func validateAgentGoalSetRequest(request api.AgentGoalSetRequest) (api.AgentGoalSetRequest, error) {
+	request.Session = strings.TrimSpace(request.Session)
+	request.Objective = strings.TrimSpace(request.Objective)
+	request.Status = strings.ToLower(strings.TrimSpace(request.Status))
+	if request.Session == "" || request.Objective == "" {
+		return request, errors.New("session and a non-empty objective are required")
+	}
+	if len(request.Objective) > agentGoalMaxObjective {
+		return request, fmt.Errorf("goal objective is too large (max %d bytes)", agentGoalMaxObjective)
+	}
+	if request.Status != "" {
+		switch request.Status {
+		case "active", "paused", "blocked", "usage_limited", "budget_limited", "complete":
+		default:
+			return request, fmt.Errorf("unsupported goal status %q", request.Status)
+		}
+	}
+	if request.TokenBudget != nil && *request.TokenBudget < 0 {
+		return request, errors.New("goal token budget must not be negative")
+	}
+	return request, nil
+}
+
+func (s *Service) setAgentGoal(ctx context.Context, request api.AgentGoalSetRequest) (api.AgentGoalResult, error) {
+	if err := ctx.Err(); err != nil {
+		return api.AgentGoalResult{}, err
+	}
+	request, err := validateAgentGoalSetRequest(request)
+	if err != nil {
+		return api.AgentGoalResult{}, err
+	}
+	if _, ok := s.Session(request.Session); !ok {
+		return api.AgentGoalResult{}, fmt.Errorf("session not found: %s", request.Session)
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityGoals) {
+		return api.AgentGoalResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentGoals, request.Session)
+	}
+	if handle := s.currentAgentHandle(request.Session); handle != nil {
+		goalHandle, ok := handle.(AgentViewGoalHandle)
+		if !ok || !nonNilInterface(goalHandle) {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
+		}
+		if err := goalHandle.SetGoal(ctx, request); err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	} else if controller, ok := s.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
+		if err := controller.SetGoal(ctx, request); err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	} else {
+		session, _ := s.Session(request.Session)
+		if !tuiSupportsAgentInteractions(session.AgentProvider) && !tuiSupportsAgentInteractions(session.Kind) {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable for this provider")
+		}
+		runtime := s.runtimeFor(session)
+		if runtime == nil {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
+		}
+		unlock := s.lockAgentSessionAction(request.Session)
+		err := sendAgentGoalInputMode(ctx, runtime, session.Runtime, request.Objective, request.ReplaceExisting)
+		unlock()
+		if err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	}
+	return api.AgentGoalResult{Accepted: true, Session: request.Session, Objective: request.Objective}, nil
+}
+
+func (s *Service) clearAgentGoal(ctx context.Context, request api.AgentGoalClearRequest) (api.AgentGoalResult, error) {
+	if err := ctx.Err(); err != nil {
+		return api.AgentGoalResult{}, err
+	}
+	request.Session = strings.TrimSpace(request.Session)
+	if request.Session == "" {
+		return api.AgentGoalResult{}, errors.New("session is required")
+	}
+	if _, ok := s.Session(request.Session); !ok {
+		return api.AgentGoalResult{}, fmt.Errorf("session not found: %s", request.Session)
+	}
+	if !s.sessionSupportsCapability(request.Session, CapabilityGoals) {
+		return api.AgentGoalResult{}, fmt.Errorf("capability %s is not available for session %s", api.CapabilityAgentGoals, request.Session)
+	}
+	if handle := s.currentAgentHandle(request.Session); handle != nil {
+		goalHandle, ok := handle.(AgentViewGoalHandle)
+		if !ok || !nonNilInterface(goalHandle) {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
+		}
+		if err := goalHandle.ClearGoal(ctx, request); err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	} else if controller, ok := s.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
+		if err := controller.ClearGoal(ctx, request); err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	} else {
+		session, _ := s.Session(request.Session)
+		if !tuiSupportsAgentInteractions(session.AgentProvider) && !tuiSupportsAgentInteractions(session.Kind) {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable for this provider")
+		}
+		runtime := s.runtimeFor(session)
+		if runtime == nil {
+			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
+		}
+		unlock := s.lockAgentSessionAction(request.Session)
+		err := sendAgentGoalInput(ctx, runtime, session.Runtime, "clear")
+		unlock()
+		if err != nil {
+			return api.AgentGoalResult{}, err
+		}
+	}
+	return api.AgentGoalResult{Accepted: true, Session: request.Session}, nil
 }
 
 func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionResponse) {

@@ -137,7 +137,11 @@ type Session struct {
 	// family (for example tui or acp). It is optional so legacy Sessions keep
 	// the provider's default handler.
 	AgentHandler string `json:"agentHandler,omitempty"`
-	Command      string `json:"command,omitempty"`
+	// AgentProvider is the stable provider family bound to this Session. It is
+	// separate from AgentHandler so clients can render the provider before a
+	// live handler has been rehydrated after a Host restart.
+	AgentProvider string `json:"agentProvider,omitempty"`
+	Command       string `json:"command,omitempty"`
 	// Process and Directory are live runtime metadata overlaid on roster
 	// snapshots only; they are never persisted with the session record.
 	Process     string `json:"process,omitempty"`
@@ -383,10 +387,8 @@ type State struct {
 	Workspaces     []Workspace     `json:"workspaces"`
 	TerminalGroups []TerminalGroup `json:"terminalGroups"`
 	Sessions       []Session       `json:"sessions"`
-	// GhostlineMigration is the one in-flight (or most recently completed)
-	// ownership journal. It is separate from terminal Sessions because
-	// Ghostline transfers the complete PTY batch atomically while Warren owns
-	// only the route and process lifecycle around that transfer.
+	// GhostlineMigration records the durable handoff journal used while a new
+	// Ghostline server adopts sessions from the previous server.
 	GhostlineMigration *GhostlineMigration `json:"ghostlineMigration,omitempty"`
 	// Operations is the bounded mutation audit trail. Entries are only added
 	// for operations that have a safe, compare-and-swap undo representation.
@@ -407,7 +409,7 @@ const (
 
 // GhostlineMigration records one rolling handoff. SessionID identifies this
 // migration transaction, not a terminal session. Socket paths are local-only
-// control-plane data; clients always attach through Warren's current route.
+// control-plane data; clients attach through Warren's current route.
 type GhostlineMigration struct {
 	SessionID       string            `json:"sessionId"`
 	SourceSocket    string            `json:"sourceSocket"`
@@ -460,7 +462,7 @@ type Envelope struct {
 	Version      string   `json:"version,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 	// TerminalStateFormats lists opaque terminal-state encodings the client
-	// can install atomically. Protocol 3 requires at least one format shared
+	// can install atomically. Protocol 4 requires at least one format shared
 	// with the Host; protocol 1 clients are rejected during authentication.
 	TerminalStateFormats []string       `json:"terminalStateFormats,omitempty"`
 	Method               string         `json:"method,omitempty"`

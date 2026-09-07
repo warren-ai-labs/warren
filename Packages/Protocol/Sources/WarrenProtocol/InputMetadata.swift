@@ -5,10 +5,9 @@ import WarrenDomain
 ///
 /// `InputMetadata` describes bytes; it never owns them. The payload is carried
 /// by the binary envelope and `payloadLength` must equal that envelope's payload
-/// length. `sequence` is an optional client emission ordinal only. Protocol
-/// 1.0 has no input acknowledgement or deduplication message, so Hosts must
-/// not treat it as an idempotency key; it is intentionally advisory until a
-/// future protocol version defines acknowledgement semantics.
+/// length. `sequence` is an optional client emission ordinal only. Protocol 4
+/// encodes `version` as the same string used by the JSON control handshake so
+/// Go, Swift, and Web DENB decoders share one header shape.
 public struct InputMetadata: Codable, Hashable, Sendable {
     public let version: ProtocolVersion
     public let sessionID: TerminalSessionID
@@ -16,7 +15,7 @@ public struct InputMetadata: Codable, Hashable, Sendable {
     public let payloadLength: Int
     public let sequence: UInt64?
 
-    /// Protocol 1.0 does not provide input ACK/deduplication semantics.
+    /// Protocol 4.0 does not provide input ACK/deduplication semantics.
     public static let supportsIdempotentSequence = false
 
     public init?(
@@ -42,9 +41,29 @@ public struct InputMetadata: Codable, Hashable, Sendable {
         case sequence
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("\(version.major).\(version.minor)", forKey: .version)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encode(attachmentID, forKey: .attachmentID)
+        try container.encode(payloadLength, forKey: .payloadLength)
+        try container.encodeIfPresent(sequence, forKey: .sequence)
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let version = try container.decode(ProtocolVersion.self, forKey: .version)
+        let rawVersion = try container.decode(String.self, forKey: .version)
+        let parts = rawVersion.split(separator: ".", omittingEmptySubsequences: true)
+        guard parts.count == 2,
+              let major = UInt16(parts[0]),
+              let minor = UInt16(parts[1]) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version,
+                in: container,
+                debugDescription: "version must be a major.minor string."
+            )
+        }
+        let version = ProtocolVersion(major: major, minor: minor)
         let sessionID = try container.decode(TerminalSessionID.self, forKey: .sessionID)
         let attachmentID = try container.decode(TerminalAttachmentID.self, forKey: .attachmentID)
         let payloadLength = try container.decode(Int.self, forKey: .payloadLength)

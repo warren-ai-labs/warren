@@ -218,12 +218,21 @@ public actor WarrenAgentEventStore {
         let rows = loadAll(db, namespace: namespace, streamID: streamID)
         let explicitBoundary = retainedFromSequence.map { min($0, UInt64(Int64.max)) }
         if let maxSequence = rows.map(\.sequence).max() {
-            let retained = rows.map(\.sequence).min() ?? maxSequence
+            let localRetained = rows.map(\.sequence).min() ?? maxSequence
+            // A page returned by a modern Host carries its authoritative
+            // retention boundary. When that metadata is absent (older Host
+            // or a live batch), keep the smallest locally observed sequence
+            // only until a boundary has been established. Once a boundary is
+            // known, never replace it with a local cache minimum: the cache
+            // may be evicted independently of Host history.
+            let boundaryIsAuthoritative = explicitBoundary != nil || state.retainedFromSequence > 0
+            let retained = explicitBoundary
+                ?? (state.retainedFromSequence > 0 ? state.retainedFromSequence : localRetained)
             let baseline = explicitBoundary.map { max(0, $0 - 1) } ?? state.contiguousThrough
             state = SyncState(
                 namespace: namespace,
                 streamID: streamID,
-                retainedFromSequence: min(retained, explicitBoundary ?? retained),
+                retainedFromSequence: retained,
                 headSequence: max(state.headSequence, maxSequence),
                 contiguousThrough: contiguousThrough(
                     after: baseline,
@@ -231,7 +240,9 @@ public actor WarrenAgentEventStore {
                 ),
                 checkpointSequence: state.checkpointSequence,
                 checkpoint: state.checkpoint,
-                hasMoreBefore: retained > 1
+                hasMoreBefore: boundaryIsAuthoritative
+                    ? localRetained > retained
+                    : localRetained > 1
             )
         } else if let explicitBoundary {
             state = SyncState(
@@ -268,7 +279,10 @@ public actor WarrenAgentEventStore {
             for sequence in cutoff {
                 deleteEvent(db, namespace: namespace, streamID: streamID, sequence: sequence)
             }
-            let retained = loadAll(db, namespace: namespace, streamID: streamID).map(\.sequence).min() ?? 0
+            let localRetained = loadAll(db, namespace: namespace, streamID: streamID).map(\.sequence).min() ?? 0
+            let retained = state.retainedFromSequence > 0
+                ? state.retainedFromSequence
+                : localRetained
             state = SyncState(
                 namespace: namespace,
                 streamID: streamID,
@@ -280,7 +294,7 @@ public actor WarrenAgentEventStore {
                 ),
                 checkpointSequence: state.checkpointSequence,
                 checkpoint: state.checkpoint,
-                hasMoreBefore: retained > 1
+                hasMoreBefore: localRetained > retained
             )
         }
         try writeState(db, state)
@@ -333,7 +347,11 @@ public actor WarrenAgentEventStore {
             streamID: streamID,
             retainedFromSequence: retained,
             headSequence: max(head, checkpointSequence),
-            contiguousThrough: min(max(checkpointSequence, max(0, retained - 1)), max(head, checkpointSequence)),
+            // A projection checkpoint describes replaceable status only; it
+            // does not prove that journal rows up to that sequence exist on
+            // this device. Resume from the retained prefix and fetch the
+            // immutable rows explicitly.
+            contiguousThrough: min(max(0, retained - 1), max(head, checkpointSequence)),
             checkpointSequence: checkpointSequence,
             checkpoint: checkpoint,
             hasMoreBefore: false

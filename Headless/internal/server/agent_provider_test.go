@@ -435,6 +435,48 @@ func TestAgentHandleReadyAdvancesRosterRevision(t *testing.T) {
 	service.stopAgent(session.ID)
 }
 
+func TestClearShellAgentClearsDurableProvider(t *testing.T) {
+	state, session := testSession(t)
+	session.AgentProvider = "codex"
+	session.AgentSessionID = "thread-shell"
+	session.TranscriptPath = "/tmp/thread-shell.jsonl"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions[0] = session
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{Store: state}
+	snapshot := state.Snapshot()
+	service.clearShellAgentWithState(session, &snapshot)
+
+	got := state.Snapshot().Sessions[0]
+	if got.AgentProvider != "" || got.AgentSessionID != "" || got.TranscriptPath != "" {
+		t.Fatalf("cleared shell agent = %#v, want provider and binding metadata removed", got)
+	}
+}
+
+func TestRosterUsesPersistedShellProviderWhileBindingWarms(t *testing.T) {
+	state, session := testSession(t)
+	session.AgentProvider = "codex"
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions[0] = session
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{Store: state}
+	roster := service.Roster(context.Background())
+	if len(roster.Sessions) != 1 {
+		t.Fatalf("roster sessions = %d, want 1", len(roster.Sessions))
+	}
+	if got := roster.Sessions[0].AgentProvider; got != "codex" {
+		t.Fatalf("persisted shell provider = %q, want codex", got)
+	}
+}
+
 func TestAgentHandleCloseOnDeleteAndShutdown(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		state := newStateWithSession(t, "provider-delete", "runtime-provider-delete")

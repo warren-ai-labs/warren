@@ -43,6 +43,37 @@ func TestCanonicalAgentEventStoreAssignsImmutableSequences(t *testing.T) {
 	}
 }
 
+func TestCanonicalAgentEventStoreReplaysTypedUsagePayload(t *testing.T) {
+	s, err := OpenAgentEventStore(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	event := api.CanonicalAgentEvent{
+		EventID:     "evt-usage-replay",
+		StreamID:    "exec-usage",
+		ExecutionID: "exec-usage",
+		Type:        "usage",
+		Origin:      api.AgentEventOrigin{Kind: "provider", Provider: "codex", Confidence: "observed"},
+		Payload: map[string]any{
+			"content": "Token usage",
+			"model":   "gpt-5.6-luna",
+			"usage":   &api.AgentUsage{InputTokens: 12736, CacheReadInputTokens: 11008, OutputTokens: 92, ReasoningOutputTokens: 11, TotalTokens: 12828},
+		},
+	}
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-usage", "exec-usage", []api.CanonicalAgentEvent{event}); err != nil {
+		t.Fatalf("initial append: %v", err)
+	}
+	replay, err := s.AppendCanonicalEvents(ctx, "exec-usage", "exec-usage", []api.CanonicalAgentEvent{event})
+	if err != nil {
+		t.Fatalf("typed usage replay: %v", err)
+	}
+	if len(replay) != 1 || replay[0].Sequence != 1 {
+		t.Fatalf("replay = %#v, want original sequence 1", replay)
+	}
+}
+
 func TestCanonicalAgentEventStoreHistoryBounds(t *testing.T) {
 	s, err := OpenAgentEventStore(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {

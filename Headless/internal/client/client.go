@@ -20,16 +20,19 @@ import (
 )
 
 type Client struct {
-	hostID        string
-	accessScopeID string
-	replica       *agentReplica
-	connection    *websocket.Conn
-	mu            sync.Mutex
-	pendingMu     sync.Mutex
-	pending       []inboundMessage
-	closeOnce     sync.Once
-	closeErr      error
-	closeHook     func()
+	hostID         string
+	accessScopeID  string
+	replica        *agentReplica
+	connection     *websocket.Conn
+	inputSessionID string
+	attachmentID   string
+	inputSequence  uint64
+	mu             sync.Mutex
+	pendingMu      sync.Mutex
+	pending        []inboundMessage
+	closeOnce      sync.Once
+	closeErr       error
+	closeHook      func()
 }
 
 type inboundMessage struct {
@@ -178,7 +181,7 @@ func dial(ctx context.Context, endpoint string, auth map[string]any) (*Client, e
 	client.accessScopeID, _ = welcome["accessScopeId"].(string)
 	if welcome["version"] != api.Version || client.hostID == "" || client.accessScopeID == "" {
 		connection.Close()
-		return nil, errors.New("incompatible welcome: protocol 3.0 and replica namespace are required")
+		return nil, errors.New("incompatible welcome: protocol 4.0 and replica namespace are required")
 	}
 	return client, nil
 }
@@ -298,10 +301,36 @@ func (c *Client) Roster(ctx context.Context) (api.State, error) {
 	return value, err
 }
 
-func (c *Client) Attach(ctx context.Context, sessionID string) (api.Session, error) {
-	var value api.Session
-	err := c.Request(ctx, "session.attach", map[string]any{"id": sessionID}, &value)
-	return value, err
+func (c *Client) Subscribe(ctx context.Context, sessionID string) (api.Session, error) {
+	var result struct {
+		Subscribed   bool   `json:"subscribed"`
+		AttachmentID string `json:"attachmentId"`
+	}
+	if err := c.Request(ctx, "session.subscribe", map[string]any{
+		"id":    sessionID,
+		"claim": true,
+	}, &result); err != nil {
+		return api.Session{}, err
+	}
+	if !result.Subscribed || strings.TrimSpace(result.AttachmentID) == "" {
+		return api.Session{}, errors.New("Host did not return a terminal attachment")
+	}
+	state, err := c.Roster(ctx)
+	if err != nil {
+		return api.Session{}, err
+	}
+	for _, session := range state.Sessions {
+		if session.ID != sessionID {
+			continue
+		}
+		c.mu.Lock()
+		c.inputSessionID = sessionID
+		c.attachmentID = result.AttachmentID
+		c.inputSequence = 0
+		c.mu.Unlock()
+		return session, nil
+	}
+	return api.Session{}, fmt.Errorf("session not found: %s", sessionID)
 }
 
 func (c *Client) Input(ctx context.Context, data []byte) error {
@@ -311,7 +340,20 @@ func (c *Client) Input(ctx context.Context, data []byte) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		return c.connection.WriteMessage(websocket.BinaryMessage, data)
+		if c.inputSessionID == "" || c.attachmentID == "" {
+			return errors.New("terminal subscription is required before input")
+		}
+		frame, err := output.EncodeInput(output.InputMetadata{
+			Version:      api.Version,
+			SessionID:    c.inputSessionID,
+			AttachmentID: c.attachmentID,
+			Sequence:     c.inputSequence,
+		}, data)
+		if err != nil {
+			return err
+		}
+		c.inputSequence++
+		return c.connection.WriteMessage(websocket.BinaryMessage, frame)
 	}
 }
 
@@ -402,6 +444,18 @@ func (c *Client) CancelAgentTurn(ctx context.Context, command api.AgentTurnCance
 func (c *Client) ResolveAgentInteraction(ctx context.Context, command api.AgentInteractionResolveCommand) (api.AgentCommandReceipt, error) {
 	var value api.AgentCommandReceipt
 	err := c.Request(ctx, "agent.interaction.resolve", command, &value)
+	return value, err
+}
+
+func (c *Client) SetAgentGoal(ctx context.Context, command api.AgentGoalSetCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.goal.set", command, &value)
+	return value, err
+}
+
+func (c *Client) ClearAgentGoal(ctx context.Context, command api.AgentGoalClearCommand) (api.AgentCommandReceipt, error) {
+	var value api.AgentCommandReceipt
+	err := c.Request(ctx, "agent.goal.clear", command, &value)
 	return value, err
 }
 

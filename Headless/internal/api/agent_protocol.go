@@ -123,6 +123,22 @@ type AgentInteractionResolveCommand struct {
 	Resolution    map[string]any `json:"resolution"`
 }
 
+// AgentGoalSetCommand updates the provider-owned goal associated with an
+// execution. Status and token budget are optional so editing an objective does
+// not accidentally reset Codex's live accounting state. ReplaceExisting asks
+// a PTY fallback to use Codex's dedicated edit prompt.
+type AgentGoalSetCommand struct {
+	AgentCommand
+	Objective       string `json:"objective"`
+	Status          string `json:"status,omitempty"`
+	TokenBudget     *int64 `json:"tokenBudget,omitempty"`
+	ReplaceExisting bool   `json:"replaceExisting,omitempty"`
+}
+
+type AgentGoalClearCommand struct {
+	AgentCommand
+}
+
 type AgentAttachmentPrepareCommand struct {
 	AgentCommand
 	Name   string `json:"name"`
@@ -224,12 +240,19 @@ type AgentEventsSubscriptionResult struct {
 	Checkpoint  AgentProjectionCheckpoint `json:"checkpoint"`
 	Events      []CanonicalAgentEvent     `json:"events"`
 	Live        bool                      `json:"live"`
+	// Subscription delivery is deliberately paged. These fields let a client
+	// continue the catch-up without treating the first response as a complete
+	// transcript. They are additive so older clients can keep using `live`.
+	NextAfterSequence uint64 `json:"nextAfterSequence,omitempty"`
+	HeadSequence      uint64 `json:"headSequence"`
+	HasMore           bool   `json:"hasMore"`
+	RetainedFrom      uint64 `json:"retainedFromSequence,omitempty"`
 }
 
-// CanonicalAgentEventFromLegacy is the sole adapter from the current parser
-// projection to the v3 wire envelope. It keeps Provider-specific parsing out
-// of clients while allowing the parser rewrite to land independently.
-func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID string, sequence uint64, recordedAt time.Time) CanonicalAgentEvent {
+// CanonicalAgentEventFromObservation is the sole adapter from a provider
+// observation to the canonical event envelope. Provider-specific parsing stays
+// outside clients and the journal only receives canonical events.
+func CanonicalAgentEventFromObservation(event AgentEvent, streamID, executionID string, sequence uint64, recordedAt time.Time) CanonicalAgentEvent {
 	if sequence == 0 {
 		sequence = event.Sequence
 	}
@@ -245,7 +268,27 @@ func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID strin
 		eventID = fmt.Sprintf("%s:%d", streamID, sequence)
 	}
 	payload := make(map[string]any)
-	putAgentPayload(payload, "role", event.Role)
+	// A few provider parsers identify conversation rows with Type (for
+	// example, Type == "user") and intentionally leave Role empty. Canonical
+	// clients only see the envelope payload, so preserve that semantic role
+	// before the legacy projection is discarded.
+	role := strings.TrimSpace(event.Role)
+	if role == "" {
+		if value, ok := event.Payload["role"].(string); ok {
+			role = strings.TrimSpace(value)
+		}
+	}
+	if role == "" {
+		switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(event.Type, "-", "_"))) {
+		case "user":
+			role = "user"
+		case "assistant":
+			role = "assistant"
+		case "system":
+			role = "system"
+		}
+	}
+	putAgentPayload(payload, "role", role)
 	putAgentPayload(payload, "content", event.Content)
 	putAgentPayload(payload, "contentDelta", event.ContentDelta)
 	putAgentPayload(payload, "model", event.Model)
@@ -281,6 +324,26 @@ func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID strin
 	for key, value := range event.Payload {
 		payload[key] = value
 	}
+	// Legacy provider parsers identify interactions with their projected type
+	// (`question`, `permission`, or `confirmation`) but predate the canonical
+	// discriminator. Preserve that semantic at the wire boundary so clients do
+	// not have to infer a Question from an arbitrary payload.
+	if canonicalType := canonicalAgentEventType(event.Type, event.ContentDelta, role); canonicalType == "interaction.requested" {
+		if _, exists := payload["kind"]; !exists {
+			switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(event.Type, "-", "_"))) {
+			case "question":
+				payload["kind"] = "question"
+			case "permission", "approval":
+				payload["kind"] = "permission"
+			case "confirmation", "confirm":
+				payload["kind"] = "confirmation"
+			}
+		}
+	}
+	// The inferred role is authoritative over a stale/empty legacy payload
+	// value. This also keeps explicit AgentEvent.Role intact when parsers carry
+	// both fields.
+	putAgentPayload(payload, "role", role)
 
 	turnID := ""
 	if event.Turn > 0 {
@@ -292,7 +355,7 @@ func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID strin
 		ExecutionID: executionID,
 		Sequence:    sequence,
 		TurnID:      turnID,
-		Type:        canonicalAgentEventType(event.Type, event.ContentDelta),
+		Type:        canonicalAgentEventType(event.Type, event.ContentDelta, role),
 		OccurredAt:  occurredAt.UTC(),
 		RecordedAt:  recordedAt.UTC(),
 		Origin: AgentEventOrigin{
@@ -307,26 +370,38 @@ func CanonicalAgentEventFromLegacy(event AgentEvent, streamID, executionID strin
 // StableAgentEventID derives an idempotency identity for provider observations
 // that do not carry a native message/call ID. The provider-local sequence is
 // included as a tie breaker; the Host still owns the canonical stream sequence.
+// Keep the input aligned with CanonicalAgentEventFromObservation: every provider
+// field that can change the canonical payload must change this identity too.
 func StableAgentEventID(event AgentEvent) string {
 	value := struct {
-		Sequence uint64         `json:"sequence"`
-		Turn     uint64         `json:"turn"`
-		Provider string         `json:"provider"`
-		Type     string         `json:"type"`
-		ID       string         `json:"id"`
-		Role     string         `json:"role"`
-		Content  string         `json:"content"`
-		Delta    bool           `json:"delta"`
-		Tool     string         `json:"tool"`
-		ToolKind string         `json:"toolKind"`
-		Detail   string         `json:"toolDetail"`
-		CallID   string         `json:"callId"`
-		Output   string         `json:"output"`
-		Error    string         `json:"error"`
-		When     time.Time      `json:"when"`
-		Payload  map[string]any `json:"payload,omitempty"`
+		Sequence   uint64         `json:"sequence"`
+		Turn       uint64         `json:"turn"`
+		Provider   string         `json:"provider"`
+		Type       string         `json:"type"`
+		ID         string         `json:"id"`
+		Role       string         `json:"role"`
+		Content    string         `json:"content"`
+		Delta      bool           `json:"delta"`
+		Model      string         `json:"model"`
+		StopReason string         `json:"stopReason"`
+		Tool       string         `json:"tool"`
+		ToolKind   string         `json:"toolKind"`
+		Detail     string         `json:"toolDetail"`
+		ToolInput  any            `json:"toolInput,omitempty"`
+		ToolStatus string         `json:"toolStatus"`
+		CallID     string         `json:"callId"`
+		Output     string         `json:"output"`
+		Files      []string       `json:"files,omitempty"`
+		Error      string         `json:"error"`
+		Usage      *AgentUsage    `json:"usage,omitempty"`
+		DurationMs int64          `json:"durationMs"`
+		Sidechain  bool           `json:"sidechain"`
+		When       time.Time      `json:"when"`
+		Payload    map[string]any `json:"payload,omitempty"`
 	}{event.Sequence, event.Turn, event.Provider, event.Type, event.ID, event.Role, event.Content,
-		event.ContentDelta, event.ToolName, event.ToolKind, event.ToolDetail, event.CallID, event.Output, event.Error, event.Timestamp.UTC(), event.Payload}
+		event.ContentDelta, event.Model, event.StopReason, event.ToolName, event.ToolKind, event.ToolDetail,
+		event.ToolInput, event.ToolStatus, event.CallID, event.Output, event.Files, event.Error, event.Usage,
+		event.DurationMs, event.Sidechain, event.Timestamp.UTC(), event.Payload}
 	encoded, _ := json.Marshal(value)
 	digest := sha256.Sum256(encoded)
 	return "evt-" + hex.EncodeToString(digest[:16])
@@ -352,7 +427,7 @@ func putAgentPayload(payload map[string]any, key string, value any) {
 	payload[key] = value
 }
 
-func canonicalAgentEventType(value string, delta bool) string {
+func canonicalAgentEventType(value string, delta bool, roles ...string) string {
 	value = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "-", "_")))
 	switch value {
 	case "user", "assistant", "system":
@@ -360,6 +435,23 @@ func canonicalAgentEventType(value string, delta bool) string {
 			return "message.delta"
 		}
 		return "message.created"
+	case "message":
+		// A few providers expose a generic message type and carry the actual
+		// conversation role in the envelope. Preserve that role at the
+		// canonical boundary so a user prompt cannot fall through to the iOS
+		// assistant compatibility default.
+		role := ""
+		if len(roles) > 0 {
+			role = strings.ToLower(strings.TrimSpace(roles[0]))
+		}
+		switch role {
+		case "user", "assistant", "system":
+			if delta {
+				return "message.delta"
+			}
+			return "message.created"
+		}
+		return value
 	case "reasoning":
 		return "reasoning.delta"
 	case "tool_call", "tool_use", "tool":
@@ -376,7 +468,7 @@ func canonicalAgentEventType(value string, delta bool) string {
 		return "tool.failed"
 	case "question", "permission", "confirmation":
 		return "interaction.requested"
-	case "plan", "todo", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue":
+	case "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue":
 		return value + ".updated"
 	case "queue_operation":
 		return "queue.updated"

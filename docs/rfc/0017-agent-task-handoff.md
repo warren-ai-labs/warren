@@ -1,10 +1,10 @@
 # RFC 0017: Agent Task Handoff and Structured Context Synthesis
 
-- Status: Proposed
+- Status: Accepted and implemented
 - Owner: Warren Desktop, iOS, and Headless
 - Created: 2026-09-06
 - Scope: Cross-agent task handoff, context distillation, physical ground truth extraction, negative context tracking, native Desktop/iOS review sheets, and client surface hierarchy
-- Protocol baseline: Warren protocol 3.0
+- Protocol baseline: Warren protocol 4.0
 - Depends on: [RFC 0006](0006-agent-activity-attention.md) (Agent activity and attention), [RFC 0014](0014-autonomous-engineering-pipeline.md) (Autonomous software engineering pipeline), [RFC 0016](0016-canonical-agent-execution-protocol.md) (Canonical agent execution protocol)
 
 ---
@@ -160,7 +160,7 @@ A concise, unambiguous instruction tailored to the handoff mode:
 
 ---
 
-## 6. Protocol Extensions (Warren Protocol 3.0)
+## 6. Protocol Extensions (Warren Protocol 4.0)
 
 Headless exposes two RPC methods under the canonical Agent API:
 

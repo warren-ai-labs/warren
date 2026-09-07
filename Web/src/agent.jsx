@@ -258,7 +258,7 @@ export function AgentView({
   const showWorking = shouldShowWorking(agentStatus, events);
   const latestAction = useMemo(() => latestAgentAction(events), [events]);
   const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
-  const showInputMeta = Boolean(disabledReason || queueItems.length > 0 || canInterrupt);
+  const showInputMeta = Boolean(disabledReason || queueItems.length > 0);
   const lastUserEvent = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i -= 1) {
       if (isUserAgentEvent(events[i])) return events[i];
@@ -707,7 +707,6 @@ export function AgentView({
         <div className="agent-working" role="status" aria-live="polite">
           <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
           {latestAction && <span className="agent-working-action">{latestAction}</span>}
-          <span className="agent-working-provider">{displayTitle}</span>
         </div>
       )}
       {(actionError || submitError) && (
@@ -967,9 +966,34 @@ export function AgentView({
                   </div>
                 )}
               </div>
-              <button type="submit" className="agent-send" disabled={(!draft.trim() && attachments.length === 0) || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
-                <SendIcon />
-              </button>
+              <div className="agent-submit-controls">
+                {canInterrupt && (draft.trim() || attachments.length > 0) && (
+                  <button
+                    type="button"
+                    className="agent-send-now-button"
+                    disabled={uploadingAttachments || submitStatus === "sending"}
+                    onClick={() => { void submit(true); }}
+                  >
+                    Send now
+                  </button>
+                )}
+                {canInterrupt && (
+                  <button
+                    type="button"
+                    className="agent-stop-button"
+                    disabled={cancelPending}
+                    onClick={cancelTurn}
+                    aria-label={cancelPending ? "Stopping Agent" : "Stop Agent"}
+                    title={cancelPending ? "Stopping Agent" : "Stop Agent"}
+                  >
+                    <StopIcon />
+                    <span>{cancelPending ? "Stopping…" : "Stop"}</span>
+                  </button>
+                )}
+                <button type="submit" className="agent-send" disabled={(!draft.trim() && attachments.length === 0) || !canCompose || uploadingAttachments || submitStatus === "sending"} aria-label="Send">
+                  <SendIcon />
+                </button>
+              </div>
             </div>
           </div>
           {showInputMeta && (
@@ -984,12 +1008,6 @@ export function AgentView({
                 <button type="button" className="agent-queue-button" onClick={() => setShowQueue(previous => !previous)}>
                   Queue {queueItems.length}
                 </button>
-              )}
-              {canInterrupt && (
-                <>
-                  <button type="button" className="agent-cancel-button" disabled={cancelPending} onClick={cancelTurn}>{cancelPending ? "Cancelling…" : "Cancel"}</button>
-                  {(draft.trim() || attachments.length > 0) && <button type="button" className="agent-send-now-button" disabled={uploadingAttachments || submitStatus === "sending"} onClick={() => { void submit(true); }}>Send now</button>}
-                </>
               )}
             </div>
           )}
@@ -1386,6 +1404,11 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   useEffect(() => {
     if (state !== "pending") setSubmitting(false);
   }, [state]);
+
+  if (["config", "config_updated", "compaction", "compaction_updated"].includes(type)) {
+    const markerLabel = type.startsWith("config") ? "Config" : "Compaction";
+    return <div className="agent-metadata-marker" role="note">--- {markerLabel} ---</div>;
+  }
 
   const interactionPending = pending && state === "pending";
   const isSelected = (questionID, id) => (answers[questionID] || []).includes(id);
@@ -1881,6 +1904,40 @@ function statusText(status) {
 // the same shape.
 function isInterrupted(event) {
   return Boolean(event) && event.stopReason === "interrupted";
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m4 16.5-.8 4.3 4.3-.8L19 8.5a2.1 2.1 0 0 0-3-3z" />
+      <path d="m14.5 7.5 2 2" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M4 20.5 21 12 4 3.5l1.8 6.9 8.5 1.6-8.5 1.6z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+    </svg>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg className="agent-lock-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="3.5" y="7" width="9" height="6" rx="1.2" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
 }
 
 function ChevronRightIcon() {

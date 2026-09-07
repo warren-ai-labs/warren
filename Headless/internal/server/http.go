@@ -78,8 +78,6 @@ type HTTPServer struct {
 	BuildVersion  string
 	BuildRevision string
 	BuildDirty    bool
-	// GhostlineVersion is the legacy health field and aliases the RPC version.
-	GhostlineVersion string
 	// GhostlineRPCVersion is the protocol version reported by the running
 	// Ghostline server.
 	GhostlineRPCVersion string
@@ -96,8 +94,7 @@ type HTTPServer struct {
 	// connector owns the transport; this map only carries lifecycle state.
 	relayPeersMu sync.Mutex
 	relayPeers   map[relay.ConnectionID]*relayControlPeer
-	// routeMu serializes route configuration persistence with lifecycle calls.
-	routeMu sync.Mutex
+	publicAccess *PublicAccessService
 }
 
 type rosterMessage struct {
@@ -134,6 +131,16 @@ func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPSer
 	if service != nil {
 		service.ClientsActive = func() bool { return server.peerCount() > 0 }
 	}
+	server.publicAccess = newPublicAccessService(
+		service,
+		func() (*relay.RouteClient, error) { return server.routeClient() },
+		func() error {
+			if server.RelayStart == nil {
+				return nil
+			}
+			return server.RelayStart()
+		},
+	)
 	return server
 }
 
@@ -198,31 +205,15 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		rpcVersion := s.GhostlineRPCVersion
-		if rpcVersion == "" {
-			rpcVersion = s.GhostlineVersion
-		}
-		skippedSessions := 0
-		migrationPhase := ""
-		if s.Service != nil && s.Service.Store != nil {
-			if migration := s.Service.Store.Snapshot().GhostlineMigration; migration != nil {
-				skippedSessions = len(migration.SkippedSessions)
-				migrationPhase = migration.Phase
-			}
-		}
 		storeStatus := api.HealthUnavailable
 		if s.Service != nil && s.Service.Store != nil {
 			storeStatus = api.HealthReady
-		}
-		migrationsStatus := api.HealthCleared
-		if migrationPhase != "" && migrationPhase != api.GhostlineMigrationRetired {
-			migrationsStatus = api.HealthPending
 		}
 		relayHealth := api.RelayHealth{State: api.HealthUnconfigured}
 		if s.RelayState != nil {
 			relayHealth = s.RelayState()
 		}
 		ready := storeStatus == api.HealthReady &&
-			migrationsStatus == api.HealthCleared &&
 			(relayHealth.State == api.HealthUnconfigured ||
 				relayHealth.State == api.HealthConnected ||
 				relayHealth.State == api.HealthDisconnected)
@@ -234,23 +225,19 @@ func (s *HTTPServer) Handler() http.Handler {
 			hostName = snap.Host.Name
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"ok":                       true,
-			"ready":                    ready,
-			"version":                  api.Version,
-			"host_id":                  hostID,
-			"host_name":                hostName,
-			"build":                    s.BuildVersion,
-			"revision":                 s.BuildRevision,
-			"dirty":                    s.BuildDirty,
-			"ghostlineVersion":         rpcVersion,
-			"ghostlineRPCVersion":      rpcVersion,
-			"ghostlineTagVersion":      s.GhostlineTagVersion,
-			"ghostlineSkippedSessions": skippedSessions,
+			"ok":                  true,
+			"ready":               ready,
+			"version":             api.Version,
+			"host_id":             hostID,
+			"host_name":           hostName,
+			"build":               s.BuildVersion,
+			"revision":            s.BuildRevision,
+			"dirty":               s.BuildDirty,
+			"ghostlineRPCVersion": rpcVersion,
+			"ghostlineTagVersion": s.GhostlineTagVersion,
 			"status": api.HealthSubsystems{
-				Store:                    storeStatus,
-				Migrations:               migrationsStatus,
-				GhostlineSkippedSessions: skippedSessions,
-				Relay:                    relayHealth,
+				Store: storeStatus,
+				Relay: relayHealth,
 			},
 		})
 	})
@@ -691,15 +678,11 @@ func (s *HTTPServer) syncRelayLifecycle() error {
 // the Relay is reachable; the Host record itself is deliberately retained and
 // can only be revoked with an explicit Relay administrator operation.
 func (s *HTTPServer) resetRelayEnrollment(ctx context.Context) error {
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-
-	if client, err := s.routeClient(); err == nil {
-		if disableErr := client.Disable(ctx); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
-			return disableErr
+	if s.publicAccess != nil {
+		if _, err := s.publicAccess.Reset(ctx); err != nil {
+			return err
 		}
-	}
-	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
+	} else if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
 		return err
 	}
 	if s.RelayStop != nil {
@@ -748,50 +731,12 @@ func (s *HTTPServer) handlePublicAccessEnable(writer http.ResponseWriter, reques
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access request"))
 		return
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-	client, err := s.routeClient()
+	status, err := s.publicAccess.Enable(request.Context(), body)
 	if err != nil {
-		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		s.writePublicAccessError(writer, publicAccessHTTPStatus(err), err)
 		return
 	}
-	if s.RelayStart != nil {
-		if err := s.RelayStart(); err != nil {
-			s.writePublicAccessError(writer, http.StatusBadGateway, err)
-			return
-		}
-	}
-	current := s.Service.PublicTunnelSettingsSnapshot()
-	route := relay.Route{
-		ID:             current.RouteID,
-		PublicHostname: current.PublicHostname,
-		PathPrefix:     current.PathPrefix,
-		AuthMode:       "public",
-		Enabled:        true,
-	}
-	if body.PublicHostname != nil {
-		route.PublicHostname = strings.TrimSpace(*body.PublicHostname)
-	}
-	if body.PathPrefix != nil {
-		route.PathPrefix = strings.TrimSpace(*body.PathPrefix)
-	}
-	configured, err := client.Configure(request.Context(), route)
-	if err != nil {
-		s.writePublicAccessError(writer, http.StatusBadGateway, err)
-		return
-	}
-	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-		Enabled:        true,
-		RouteID:        configured.ID,
-		Owner:          configured.HostID,
-		PublicHostname: configured.PublicHostname,
-		PathPrefix:     configured.PathPrefix,
-		AuthMode:       configured.AuthMode,
-	}); err != nil {
-		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
-		return
-	}
-	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+	s.writePublicAccessStatus(writer, http.StatusOK, status)
 }
 
 // handlePublicAccessTest validates the Relay route configuration without
@@ -808,57 +753,12 @@ func (s *HTTPServer) handlePublicAccessTest(writer http.ResponseWriter, request 
 		s.writePublicAccessError(writer, http.StatusBadRequest, errors.New("invalid public access test request"))
 		return
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-	client, err := s.routeClient()
+	status, err := s.publicAccess.Test(request.Context(), body)
 	if err != nil {
-		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		s.writePublicAccessError(writer, publicAccessHTTPStatus(err), err)
 		return
 	}
-	current := s.Service.PublicTunnelSettingsSnapshot()
-	route := relay.Route{
-		ID:             current.RouteID,
-		PublicHostname: current.PublicHostname,
-		PathPrefix:     current.PathPrefix,
-		AuthMode:       "public",
-		Enabled:        current.Enabled,
-	}
-	if body.PublicHostname != nil {
-		route.PublicHostname = strings.TrimSpace(*body.PublicHostname)
-	}
-	if body.PathPrefix != nil {
-		route.PathPrefix = strings.TrimSpace(*body.PathPrefix)
-	}
-	// A test only reads the current route. If the caller supplied a new
-	// hostname/prefix, validate it by asking Relay to configure it disabled;
-	// the user's enabled intent remains unchanged.
-	if body.PublicHostname != nil || body.PathPrefix != nil {
-		route.Enabled = false
-		configured, configureErr := client.Configure(request.Context(), route)
-		if configureErr != nil {
-			s.writePublicAccessError(writer, http.StatusBadGateway, configureErr)
-			return
-		}
-		route = configured
-	} else {
-		route, err = client.Get(request.Context())
-		if err != nil {
-			s.writePublicAccessError(writer, http.StatusBadGateway, err)
-			return
-		}
-	}
-	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-		Enabled:        current.Enabled,
-		RouteID:        route.ID,
-		Owner:          route.HostID,
-		PublicHostname: route.PublicHostname,
-		PathPrefix:     route.PathPrefix,
-		AuthMode:       route.AuthMode,
-	}); err != nil {
-		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
-		return
-	}
-	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+	s.writePublicAccessStatus(writer, http.StatusOK, status)
 }
 
 func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, request *http.Request) {
@@ -866,24 +766,12 @@ func (s *HTTPServer) handlePublicAccessDisable(writer http.ResponseWriter, reque
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-	client, err := s.routeClient()
+	status, err := s.publicAccess.Disable(request.Context())
 	if err != nil {
-		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		s.writePublicAccessError(writer, publicAccessHTTPStatus(err), err)
 		return
 	}
-	if err := client.Disable(request.Context()); err != nil && !errors.Is(err, relay.ErrRouteNotFound) {
-		s.writePublicAccessError(writer, http.StatusBadGateway, err)
-		return
-	}
-	current := s.Service.PublicTunnelSettingsSnapshot()
-	current.Enabled = false
-	if err := s.Service.UpdatePublicTunnelSettings(current); err != nil {
-		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
-		return
-	}
-	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+	s.writePublicAccessStatus(writer, http.StatusOK, status)
 }
 
 // handlePublicAccessReset disables the Relay route and clears Warren's local
@@ -893,19 +781,12 @@ func (s *HTTPServer) handlePublicAccessReset(writer http.ResponseWriter, request
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-	if client, err := s.routeClient(); err == nil {
-		if disableErr := client.Disable(request.Context()); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
-			s.writePublicAccessError(writer, http.StatusBadGateway, disableErr)
-			return
-		}
-	}
-	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
-		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
+	status, err := s.publicAccess.Reset(request.Context())
+	if err != nil {
+		s.writePublicAccessError(writer, publicAccessHTTPStatus(err), err)
 		return
 	}
-	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+	s.writePublicAccessStatus(writer, http.StatusOK, status)
 }
 
 func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, request *http.Request) {
@@ -913,29 +794,12 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-	client, err := s.routeClient()
+	status, err := s.publicAccess.Restart(request.Context())
 	if err != nil {
-		s.writePublicAccessError(writer, http.StatusServiceUnavailable, err)
+		s.writePublicAccessError(writer, publicAccessHTTPStatus(err), err)
 		return
 	}
-	current := s.Service.PublicTunnelSettingsSnapshot()
-	route := relay.Route{ID: current.RouteID, PublicHostname: current.PublicHostname, PathPrefix: current.PathPrefix, AuthMode: "public", Enabled: true}
-	configured, err := client.Configure(request.Context(), route)
-	if err != nil {
-		s.writePublicAccessError(writer, http.StatusBadGateway, err)
-		return
-	}
-	if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-		Enabled: true, RouteID: configured.ID, Owner: configured.HostID,
-		PublicHostname: configured.PublicHostname, PathPrefix: configured.PathPrefix,
-		AuthMode: configured.AuthMode,
-	}); err != nil {
-		s.writePublicAccessError(writer, http.StatusInternalServerError, err)
-		return
-	}
-	s.writePublicAccessStatus(writer, http.StatusOK, s.publicAccessStatus())
+	s.writePublicAccessStatus(writer, http.StatusOK, status)
 }
 
 // publicAccessRPC exposes the same Relay-owned route lifecycle to clients
@@ -943,179 +807,35 @@ func (s *HTTPServer) handlePublicAccessRestart(writer http.ResponseWriter, reque
 // mutations with its locally held Host Secret; neither that secret nor the
 // Relay route capability is placed on the control stream.
 func (s *HTTPServer) publicAccessRPC(ctx context.Context, action, publicHostname, pathPrefix string) (api.PublicAccessStatus, error) {
-	if action == "status" {
-		return s.publicAccessStatus(), nil
+	var publicHostnameValue, pathPrefixValue *string
+	if strings.TrimSpace(publicHostname) != "" {
+		value := publicHostname
+		publicHostnameValue = &value
 	}
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-
-	current := s.Service.PublicTunnelSettingsSnapshot()
+	if strings.TrimSpace(pathPrefix) != "" {
+		value := pathPrefix
+		pathPrefixValue = &value
+	}
 	switch action {
+	case "status":
+		return s.publicAccess.Status(ctx), nil
 	case "enable":
-		client, err := s.routeClient()
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		if s.RelayStart != nil {
-			if err := s.RelayStart(); err != nil {
-				return api.PublicAccessStatus{}, err
-			}
-		}
-		route := relay.Route{
-			ID:             current.RouteID,
-			PublicHostname: current.PublicHostname,
-			PathPrefix:     current.PathPrefix,
-			AuthMode:       "public",
-			Enabled:        true,
-		}
-		if strings.TrimSpace(publicHostname) != "" {
-			route.PublicHostname = strings.TrimSpace(publicHostname)
-		}
-		if strings.TrimSpace(pathPrefix) != "" {
-			route.PathPrefix = strings.TrimSpace(pathPrefix)
-		}
-		configured, err := client.Configure(ctx, route)
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-			Enabled:        true,
-			RouteID:        configured.ID,
-			Owner:          configured.HostID,
-			PublicHostname: configured.PublicHostname,
-			PathPrefix:     configured.PathPrefix,
-			AuthMode:       configured.AuthMode,
-		}); err != nil {
-			return api.PublicAccessStatus{}, err
-		}
+		return s.publicAccess.Enable(ctx, api.PublicAccessEnableRequest{PublicHostname: publicHostnameValue, PathPrefix: pathPrefixValue})
 	case "test":
-		client, err := s.routeClient()
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		route := relay.Route{
-			ID:             current.RouteID,
-			PublicHostname: current.PublicHostname,
-			PathPrefix:     current.PathPrefix,
-			AuthMode:       "public",
-			Enabled:        current.Enabled,
-		}
-		provided := strings.TrimSpace(publicHostname) != "" || strings.TrimSpace(pathPrefix) != ""
-		if strings.TrimSpace(publicHostname) != "" {
-			route.PublicHostname = strings.TrimSpace(publicHostname)
-		}
-		if strings.TrimSpace(pathPrefix) != "" {
-			route.PathPrefix = strings.TrimSpace(pathPrefix)
-		}
-		if provided {
-			route.Enabled = false
-			route, err = client.Configure(ctx, route)
-		} else {
-			route, err = client.Get(ctx)
-		}
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-			Enabled:        current.Enabled,
-			RouteID:        route.ID,
-			Owner:          route.HostID,
-			PublicHostname: route.PublicHostname,
-			PathPrefix:     route.PathPrefix,
-			AuthMode:       route.AuthMode,
-		}); err != nil {
-			return api.PublicAccessStatus{}, err
-		}
+		return s.publicAccess.Test(ctx, api.PublicAccessTestRequest{PublicHostname: publicHostnameValue, PathPrefix: pathPrefixValue})
 	case "disable":
-		client, err := s.routeClient()
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		if err := client.Disable(ctx); err != nil && !errors.Is(err, relay.ErrRouteNotFound) {
-			return api.PublicAccessStatus{}, err
-		}
-		current.Enabled = false
-		if err := s.Service.UpdatePublicTunnelSettings(current); err != nil {
-			return api.PublicAccessStatus{}, err
-		}
+		return s.publicAccess.Disable(ctx)
 	case "reset":
-		if client, err := s.routeClient(); err == nil {
-			if disableErr := client.Disable(ctx); disableErr != nil && !errors.Is(disableErr, relay.ErrRouteNotFound) {
-				return api.PublicAccessStatus{}, disableErr
-			}
-		}
-		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{}); err != nil {
-			return api.PublicAccessStatus{}, err
-		}
+		return s.publicAccess.Reset(ctx)
 	case "restart":
-		client, err := s.routeClient()
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		route := relay.Route{ID: current.RouteID, PublicHostname: current.PublicHostname, PathPrefix: current.PathPrefix, AuthMode: "public", Enabled: true}
-		configured, err := client.Configure(ctx, route)
-		if err != nil {
-			return api.PublicAccessStatus{}, err
-		}
-		if err := s.Service.UpdatePublicTunnelSettings(settings.PublicTunnelSettings{
-			Enabled:        true,
-			RouteID:        configured.ID,
-			Owner:          configured.HostID,
-			PublicHostname: configured.PublicHostname,
-			PathPrefix:     configured.PathPrefix,
-			AuthMode:       configured.AuthMode,
-		}); err != nil {
-			return api.PublicAccessStatus{}, err
-		}
+		return s.publicAccess.Restart(ctx)
 	default:
 		return api.PublicAccessStatus{}, fmt.Errorf("unknown public access action: %s", action)
 	}
-	return s.publicAccessStatus(), nil
 }
 
 func (s *HTTPServer) publicAccessStatus() api.PublicAccessStatus {
-	current := s.Service.SettingsSnapshot()
-	status := api.PublicAccessStatus{
-		RelayURL:       current.Relay.URL,
-		HostID:         current.Relay.HostID,
-		RouteID:        current.PublicTunnel.RouteID,
-		PublicHostname: current.PublicTunnel.PublicHostname,
-		PathPrefix:     current.PublicTunnel.PathPrefix,
-		AuthMode:       current.PublicTunnel.AuthMode,
-		Enabled:        current.PublicTunnel.Enabled,
-	}
-	if s.RelayRouteClient == nil {
-		return status
-	}
-	client, err := s.RelayRouteClient()
-	if err != nil {
-		if status.Enabled {
-			status.Error = err.Error()
-		}
-		return status
-	}
-	route, err := client.Get(context.Background())
-	if err != nil {
-		if !errors.Is(err, relay.ErrRouteNotFound) {
-			status.Error = err.Error()
-		}
-		return status
-	}
-	status.Authenticated = true
-	status.RouteID = route.ID
-	status.PublicHostname = route.PublicHostname
-	status.PathPrefix = route.PathPrefix
-	status.AuthMode = route.AuthMode
-	status.Running = route.Enabled
-	if route.Enabled {
-		if endpoint, endpointErr := route.PublicURL(current.Relay.URL); endpointErr == nil {
-			status.PublicEndpoint = endpoint
-		} else {
-			status.Error = endpointErr.Error()
-			status.Running = false
-		}
-	}
-	return status
+	return s.publicAccess.Status(context.Background())
 }
 
 func (s *HTTPServer) routeClient() (*relay.RouteClient, error) {
@@ -1123,6 +843,20 @@ func (s *HTTPServer) routeClient() (*relay.RouteClient, error) {
 		return nil, errors.New("Relay route is not configured")
 	}
 	return s.RelayRouteClient()
+}
+
+func publicAccessHTTPStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "not configured") || strings.Contains(message, "unavailable") {
+		return http.StatusServiceUnavailable
+	}
+	if strings.Contains(message, "settings") || strings.Contains(message, "state") {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadGateway
 }
 
 func (s *HTTPServer) writePublicAccessStatus(writer http.ResponseWriter, code int, status api.PublicAccessStatus) {
@@ -1143,24 +877,27 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	peer := newWSPeer(s, connection)
+	closeReason := "client_disconnect"
 	defer func() {
 		s.unregisterPeer(peer)
-		peer.close()
+		peer.closeWithReason(closeReason)
 	}()
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var envelope api.Envelope
 	publicRelayWebSocket := relay.IsPublicRoute(request.Context()) && request.URL.Path == "/v1/ws"
 	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" ||
 		(!s.authorized(envelope.Token) && !(publicRelayWebSocket && strings.TrimSpace(envelope.Token) == "")) {
+		closeReason = "auth_rejected"
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
 		return
 	}
 	s.registerPeer(peer)
-	// Protocol 3 changes terminal recovery from a replayable byte stream to an
+	// Protocol 4 changes terminal recovery from a replayable byte stream to an
 	// atomically installable terminal state.  A missing version is therefore not
 	// an older-but-compatible client: it is an unauthenticated protocol shape
 	// that must be rejected before any roster or session data is exposed.
 	if envelope.Version != api.Version {
+		closeReason = "protocol_rejected"
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: fmt.Sprintf(
 			"incompatible protocol version: client=%s server=%s", envelope.Version, api.Version,
 		)})
@@ -1168,6 +905,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	}
 	peer.terminalStateFormat = selectTerminalStateFormat(envelope.TerminalStateFormats)
 	if peer.terminalStateFormat == "" {
+		closeReason = "terminal_format_rejected"
 		_ = peer.writeJSON(api.Response{
 			Type:  "error",
 			OK:    false,
@@ -1191,6 +929,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	for {
 		messageType, data, err := connection.ReadMessage()
 		if err != nil {
+			closeReason = "read_error"
 			return
 		}
 		if messageType == websocket.BinaryMessage {
@@ -1404,7 +1143,7 @@ func (s *HTTPServer) removeRelayControl(id relay.ConnectionID, entry *relayContr
 	if authenticated {
 		s.unregisterPeer(entry.peer)
 	}
-	entry.peer.close()
+	entry.peer.closeWithReason("relay_disconnect")
 }
 
 func isSlowMutation(method string) bool {
@@ -1448,11 +1187,9 @@ func (s *HTTPServer) handleRuntimeRefresh(writer http.ResponseWriter, request *h
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Manual Refresh Runtime from the menu bar. For now it acknowledges the
-	// request so the UI can refresh versions; new sessions already inherit
-	// truecolor via sessionEnv. A full ghostline handoff for existing
-	// sessions will be added here and will return a JSON error on failure
-	// so the menu bar can show the reason (handoffFailed).
+	// Manual runtime refresh from the menu bar acknowledges the request so the
+	// helper can refresh the reported daemon and Ghostline versions. Existing
+	// sessions are intentionally left untouched.
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(map[string]any{"refreshed": true})
 }
@@ -1566,16 +1303,21 @@ type wsPeer struct {
 	// same bounded queue and service lifecycle.
 	transport func(outboundMessage) bool
 
-	enqueueMu sync.Mutex
-	closed    chan struct{}
-	closeFlag bool
-	attached  *api.Session
+	enqueueMu   sync.Mutex
+	closed      chan struct{}
+	closeFlag   bool
+	closeReason string
+	attached    *api.Session
 	// outputs tracks every terminal session this peer subscribed to for
 	// output. A desktop client keeps one subscription per retained warm
 	// surface so background sessions keep consuming output; legacy web and
 	// mobile clients keep exactly the one implicit subscription created by
 	// their attach. Guarded by enqueueMu.
-	outputs               map[string]struct{}
+	outputs map[string]struct{}
+	// attachments binds every output subscription to the DENB input identity
+	// returned by session.subscribe. Input is never accepted without this
+	// per-connection, per-session binding.
+	attachments           map[string]string
 	controlSession        string
 	agentSession          string
 	canonicalAgentStreams map[string]struct{}
@@ -1706,8 +1448,12 @@ func (p *wsPeer) cancelAllPendingSubscriptions() {
 }
 
 func (p *wsPeer) close() {
+	p.closeWithReason("shutdown")
+}
+
+func (p *wsPeer) closeWithReason(reason string) {
 	p.enqueueMu.Lock()
-	sessionIDs, agentSessionID := p.closeLocked()
+	sessionIDs, agentSessionID := p.closeLocked(reason)
 	p.enqueueMu.Unlock()
 	p.cancelAllPendingSubscriptions()
 	for _, sessionID := range sessionIDs {
@@ -1734,14 +1480,14 @@ func (p *wsPeer) writeLoop() {
 				// transport send closes only this peer and lets the normal detach
 				// path release subscriptions; enqueue callers never wait on the
 				// network while holding enqueueMu.
-				p.close()
+				p.closeWithReason("relay_write_error")
 				return
 			}
 			continue
 		}
 		_ = p.connection.SetWriteDeadline(time.Now().Add(outboundWriteTimeout))
 		if err := p.connection.WriteMessage(item.kind, item.data); err != nil {
-			p.close()
+			p.closeWithReason("write_error")
 			return
 		}
 	}
@@ -1841,7 +1587,7 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		// Queue overflow is a per-client failure: close only this peer. The
 		// client reconnects with its Recovery Anchor and Host re-serves the
 		// retained tail from the ring.
-		sessionIDs, agentSessionID := p.closeLocked()
+		sessionIDs, agentSessionID := p.closeLocked("queue_overflow")
 		p.enqueueMu.Unlock()
 		p.cancelAllPendingSubscriptions()
 		for _, sessionID := range sessionIDs {
@@ -1860,7 +1606,7 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 // agent-only subscription ID so the caller can unregister after releasing
 // the lock, keeping registry lock ordering acyclic.
 
-func (p *wsPeer) closeLocked() ([]string, string) {
+func (p *wsPeer) closeLocked(reason string) ([]string, string) {
 	if p.closeFlag {
 		agentSessionID := p.agentSession
 		sessionIDs := make([]string, 0, len(p.outputs)+1)
@@ -1882,6 +1628,7 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 		return sessionIDs, agentSessionID
 	}
 	p.closeFlag = true
+	p.closeReason = reason
 	if p.rosterCancel != nil {
 		p.rosterCancel()
 		p.rosterCancel = nil
@@ -1890,8 +1637,17 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 	for sessionID := range p.outputs {
 		sessionIDs = append(sessionIDs, sessionID)
 	}
-	if p.attached != nil && p.outputs[p.attached.ID] == struct{}{} {
-		sessionIDs = append(sessionIDs, p.attached.ID)
+	if p.attached != nil {
+		alreadyTracked := false
+		for _, sessionID := range sessionIDs {
+			if sessionID == p.attached.ID {
+				alreadyTracked = true
+				break
+			}
+		}
+		if !alreadyTracked {
+			sessionIDs = append(sessionIDs, p.attached.ID)
+		}
 	}
 	close(p.closed)
 	if p.controlOutbound != nil {
@@ -1900,7 +1656,32 @@ func (p *wsPeer) closeLocked() ([]string, string) {
 	if p.outbound != nil {
 		close(p.outbound)
 	}
+	attachedID := ""
+	if p.attached != nil {
+		attachedID = p.attached.ID
+	}
+	p.logInfo("peer closed",
+		"reason", reason,
+		"queue", p.outboundLengthLocked(),
+		"controlQueue", p.controlOutboundLengthLocked(),
+		"outputs", len(p.outputs),
+		"attached", attachedID,
+	)
 	return sessionIDs, p.agentSession
+}
+
+func (p *wsPeer) outboundLengthLocked() int {
+	if p.outbound == nil {
+		return 0
+	}
+	return len(p.outbound)
+}
+
+func (p *wsPeer) controlOutboundLengthLocked() int {
+	if p.controlOutbound == nil {
+		return 0
+	}
+	return len(p.controlOutbound)
 }
 
 func (p *wsPeer) writeJSON(value any) error {
@@ -1953,10 +1734,14 @@ func (p *wsPeer) enqueueAtomicState(
 }
 
 func (p *wsPeer) enqueueAttached(sessionID string, epoch, sequence uint64, reanchor bool) error {
+	attachmentID := p.attachmentID(sessionID)
+	if attachmentID == "" {
+		return fmt.Errorf("terminal attachment is not registered: %s", sessionID)
+	}
 	return p.writeJSON(map[string]any{
 		"t": "attached", "session": sessionID,
 		"epoch": epoch, "sequence": sequence,
-		"reanchor": reanchor,
+		"reanchor": reanchor, "attachmentId": attachmentID,
 	})
 }
 
@@ -2233,36 +2018,21 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			lock.Unlock()
 			return p.writeCanonicalError(command.ID, queryErr)
 		}
-		// The delivery limit is a page hint, never a checkpoint cursor. Hold
-		// the broadcast lock until every pre-live event has been collected.
-		for result.HasMore && len(result.Events) > 0 {
-			after, before := result.NextAfterSequence, uint64(0)
-			if request.AfterSequence == 0 {
-				after, before = 0, result.Events[0].Sequence
-			}
-			page, err := p.server.Service.canonicalHistoryPage(ctx, request.StreamID, after, before, int(request.Limit))
-			if err != nil {
-				lock.Unlock()
-				return p.writeCanonicalError(command.ID, err)
-			}
-			if request.AfterSequence == 0 {
-				result.Events = append(page.Events, result.Events...)
-			} else {
-				result.Events = append(result.Events, page.Events...)
-			}
-			result.HasMore, result.NextAfterSequence = page.HasMore, page.NextAfterSequence
-			if len(page.Events) == 0 {
-				break
-			}
-		}
 		checkpoint := p.server.Service.canonicalProjectionCheckpoint(session.ID, result.HeadSequence)
 		if err := p.subscribeCanonicalAgent(session.ID, request.StreamID); err != nil {
 			lock.Unlock()
 			return p.writeCanonicalError(command.ID, err)
 		}
 		value := api.AgentEventsSubscriptionResult{
-			StreamID: request.StreamID, ExecutionID: result.ExecutionID,
-			Checkpoint: checkpoint, Events: result.Events, Live: true,
+			StreamID:          request.StreamID,
+			ExecutionID:       result.ExecutionID,
+			Checkpoint:        checkpoint,
+			Events:            result.Events,
+			Live:              true,
+			NextAfterSequence: result.NextAfterSequence,
+			HeadSequence:      result.HeadSequence,
+			HasMore:           result.HasMore,
+			RetainedFrom:      result.RetainedFrom,
 		}
 		writeErr := p.writeResult(command.ID, value)
 		lock.Unlock()
@@ -2280,6 +2050,10 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.handleCanonicalTurnCancel(ctx, command)
 	case "agent.interaction.resolve":
 		return p.handleCanonicalInteractionResolve(ctx, command)
+	case "agent.goal.set":
+		return p.handleCanonicalGoalSet(ctx, command)
+	case "agent.goal.clear":
+		return p.handleCanonicalGoalClear(ctx, command)
 	case "agent.attachment.prepare":
 		return p.handleCanonicalAttachmentPrepare(ctx, command)
 	case "agent.attachment.chunk":
@@ -2729,90 +2503,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, publicSession(value))
-	case "session.attach":
-		id := stringParam(params, "id")
-		session, ok := p.server.Service.Session(id)
-		if !ok {
-			return fmt.Errorf("session not found: %s", id)
-		}
-		if session.Lifecycle != "running" {
-			return fmt.Errorf("session is not running: %s", id)
-		}
-		// Control-only claims carry no output intent: the desktop promotes a
-		// retained warm surface by swapping its control lease without any
-		// replay, snapshot, or runtime I/O. Legacy clients omit the flag and
-		// get the historical attach behavior below.
-		if outputOnly, outputSpecified, err := optionalBoolParam(params, "output"); err == nil && outputSpecified && !outputOnly {
-			p.claimControl(session)
-			return p.writeResult(command.ID, publicSession(session))
-		}
-		columns, rows, specified, err := attachSizeFromParams(params)
-		if err != nil {
-			return err
-		}
-		focused, focusSpecified, err := optionalBoolParam(params, "focused")
-		if err != nil {
-			return err
-		}
-		p.logInfo("attach: begin", "session", id, "size", fmt.Sprintf("%dx%d", columns, rows), "specified", specified, "focused", focused, "focusSpecified", focusSpecified)
-		p.attach(session)
-		lock, resume, err := p.server.Service.prepareAttach(ctx, session)
-		if err != nil {
-			p.detach()
-			return err
-		}
-		p.logInfo("attach: prepared", "session", id)
-		if p.server.Service.cursorOutputRuntimeFor(session) != nil {
-			p.server.Service.reservePeerCursorOutput(p, session.ID)
-		}
-		// Register before claiming focus so a disconnect cannot leave a stale
-		// focus owner behind while the initial snapshot is being prepared.
-		p.server.Service.registerPeer(session.ID, p)
-		p.logInfo("attach: registered", "session", id)
-		// Older clients did not send a focus flag. Let the first such attach
-		// claim the empty focus slot for compatibility, while every updated
-		// client explicitly sends focused=false until its terminal is focused.
-		if !focusSpecified {
-			focused = !p.server.Service.hasFocusedPeer(session.ID)
-		}
-		if focused || focusSpecified {
-			_, err := p.server.Service.focusPeerLocked(ctx, p, session, focused, columns, rows, specified && focused)
-			if err != nil {
-				lock.Unlock()
-				resume()
-				p.detach()
-				return err
-			}
-		}
-		p.logInfo("attach: focus done", "session", id)
-		// A passive attach deliberately ignores the carried viewport and
-		// never resizes: resizing here would SIGWINCH the child program and
-		// its redraw bytes would race the checkpoint below, so the client would
-		// never receive them and full-screen TUIs (Codex composer, vim
-		// statusline) keep repainting regions the terminal never saw.
-		// Viewport ownership belongs to the focus handoff, which resizes
-		// only after the snapshot has been delivered.
-		if err := p.writeResult(command.ID, publicSession(session)); err != nil {
-			lock.Unlock()
-			resume()
-			p.detach()
-			return err
-		}
-		p.logInfo("attach: result sent", "session", id)
-		anchor := anchorFromParams(params)
-		if err := p.server.Service.attachOutputLocked(ctx, p, session, anchor, "session.attach"); err != nil {
-			lock.Unlock()
-			resume()
-			p.detach()
-			return err
-		}
-		p.logInfo("attach: output attached", "session", id)
-		lock.Unlock()
-		resume()
-		return nil
-	case "session.detach":
-		p.detach()
-		return p.writeResult(command.ID, map[string]bool{"detached": true})
 	case "session.subscribe":
 		// Output-only subscription for one session. A peer may hold many at
 		// once; focus, resize, and input ownership are untouched so several
@@ -2868,6 +2558,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		p.server.Service.registerPeer(session.ID, p)
+		attachmentID := p.ensureAttachment(session.ID)
 		if claimControl {
 			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified); focusErr != nil {
 				lock.Unlock()
@@ -2891,7 +2582,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		// the recovery payload. Desktop can claim the control lease and keep
 		// input responsive while the staged terminal output drains in the
 		// background; the `synced` marker remains the presentation boundary.
-		if err := p.writeResult(command.ID, map[string]bool{"subscribed": true}); err != nil {
+		if err := p.writeResult(command.ID, map[string]any{"subscribed": true, "attachmentId": attachmentID}); err != nil {
 			lock.Unlock()
 			resume()
 			p.server.Service.detachPeer(p, session.ID)
@@ -2975,16 +2666,6 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"focused": isFocused,
 			"resized": resized,
 		})
-	case "session.input":
-		encoded := stringParam(params, "data")
-		value, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return err
-		}
-		if err := p.input(ctx, value); err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, map[string]bool{"sent": true})
 	case "session.resize":
 		attached, ok := p.attachedSession()
 		if !ok {
@@ -3261,6 +2942,65 @@ func (p *wsPeer) handleCanonicalInteractionResolve(ctx context.Context, command 
 	return p.writeResult(command.ID, result)
 }
 
+func (p *wsPeer) handleCanonicalGoalSet(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentGoalSetCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			goal, err := p.server.Service.setAgentGoal(ctx, api.AgentGoalSetRequest{
+				CommandID:       request.CommandID,
+				Session:         session.ID,
+				Objective:       request.Objective,
+				Status:          request.Status,
+				TokenBudget:     request.TokenBudget,
+				ReplaceExisting: request.ReplaceExisting,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: goal.Accepted}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
+
+func (p *wsPeer) handleCanonicalGoalClear(ctx context.Context, command api.Envelope) error {
+	request, err := decodeAgentParams[api.AgentGoalClearCommand](command.Params)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	session, _, err := p.canonicalCommandSession(ctx, request.AgentCommand)
+	if err != nil {
+		return p.writeCanonicalError(command.ID, err)
+	}
+	result, runErr := p.server.Service.runCanonicalCommand(
+		ctx, request.ExecutionID, request.CommandID, request,
+		func() (any, error) {
+			goal, err := p.server.Service.clearAgentGoal(ctx, api.AgentGoalClearRequest{
+				CommandID: request.CommandID,
+				Session:   session.ID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return api.AgentCommandReceipt{CommandID: request.CommandID, Accepted: goal.Accepted}, nil
+		},
+	)
+	if runErr != nil {
+		return p.writeCanonicalError(command.ID, runErr)
+	}
+	return p.writeResult(command.ID, result)
+}
 func (p *wsPeer) canonicalAttachmentSession(ctx context.Context, command api.AgentCommand) (api.Session, error) {
 	session, _, err := p.canonicalCommandSession(ctx, command)
 	if err != nil {
@@ -3384,16 +3124,22 @@ func (p *wsPeer) input(ctx context.Context, data []byte) error {
 	if err != nil {
 		return err
 	}
-	payload := data
-	if len(data) >= len(output.BinaryMagic) && bytes.Equal(data[:len(output.BinaryMagic)], output.BinaryMagic) {
-		metadata, decoded, err := output.DecodeInput(data)
-		if err != nil {
-			return err
-		}
-		if metadata.SessionID != "" && metadata.SessionID != attached.ID {
-			return fmt.Errorf("input session mismatch")
-		}
-		payload = decoded
+	if !p.server.Service.isFocused(p, attached.ID) {
+		return fmt.Errorf("focused control lease required")
+	}
+	metadata, payload, err := output.DecodeInput(data)
+	if err != nil {
+		return fmt.Errorf("DENB input required: %w", err)
+	}
+	if metadata.Version != api.Version {
+		return fmt.Errorf("input protocol version mismatch: got %s, want %s", metadata.Version, api.Version)
+	}
+	if metadata.SessionID != attached.ID {
+		return fmt.Errorf("input session mismatch")
+	}
+	attachmentID := p.attachmentID(attached.ID)
+	if attachmentID == "" || metadata.AttachmentID == "" || metadata.AttachmentID != attachmentID {
+		return fmt.Errorf("input attachment mismatch")
 	}
 	if err := p.server.Service.runtimeFor(attached).Input(ctx, attached.Runtime, payload); err != nil {
 		return err
@@ -3421,9 +3167,19 @@ func (p *wsPeer) attach(session api.Session) {
 // pointer.
 func (p *wsPeer) claimControl(session api.Session) {
 	p.enqueueMu.Lock()
+	previousSessionID := ""
+	if p.attached != nil {
+		previousSessionID = p.attached.ID
+	}
 	p.attached = &session
 	p.controlSession = session.ID
 	p.enqueueMu.Unlock()
+	if p.server != nil && p.server.Service != nil {
+		if previousSessionID != "" && previousSessionID != session.ID {
+			p.server.Service.releaseControlPeer(p, previousSessionID)
+		}
+		p.server.Service.claimControlPeer(p, session.ID)
+	}
 }
 
 func (p *wsPeer) subscribeCanonicalAgent(sessionID, streamID string) error {
@@ -3506,14 +3262,20 @@ func (p *wsPeer) attachedSessionID() string {
 
 func (p *wsPeer) controlledSession() (api.Session, error) {
 	p.enqueueMu.Lock()
-	defer p.enqueueMu.Unlock()
 	if p.attached == nil {
+		p.enqueueMu.Unlock()
 		return api.Session{}, fmt.Errorf("no attached session")
 	}
 	if p.controlSession != p.attached.ID {
+		p.enqueueMu.Unlock()
 		return api.Session{}, fmt.Errorf("control lease required")
 	}
-	return *p.attached, nil
+	attached := *p.attached
+	p.enqueueMu.Unlock()
+	if p.server != nil && p.server.Service != nil && !p.server.Service.hasControlPeer(p, attached.ID) {
+		return api.Session{}, fmt.Errorf("control lease required")
+	}
+	return attached, nil
 }
 
 // requireAgentControl keeps all mutating Agent View requests behind the same
@@ -3534,11 +3296,13 @@ func (p *wsPeer) requireAgentControl(sessionID string) error {
 	if attached.ID != sessionID {
 		return fmt.Errorf("control lease required for session: %s", sessionID)
 	}
-	// A focus handoff can replace the service-level owner while the previous
-	// peer still has its local attached pointer. Consult the authoritative
-	// owner map as well so a stale socket cannot mutate Agent state after the
-	// lease moved to another client.
-	if p.server != nil && p.server.Service != nil && !p.server.Service.isFocused(p, attached.ID) {
+	// A focus/control handoff can replace the service-level owner while the
+	// previous peer still has its local attached pointer. Consult the
+	// authoritative owner map so a stale socket cannot mutate Agent state after
+	// the lease moved to another client. Agent-only claims do not need a
+	// terminal output subscription and therefore are not represented by the
+	// focused-peer map.
+	if p.server != nil && p.server.Service != nil && !p.server.Service.hasControlPeer(p, attached.ID) {
 		return fmt.Errorf("control lease required for session: %s", sessionID)
 	}
 	return nil
@@ -3553,9 +3317,32 @@ func (p *wsPeer) addOutput(sessionID string) {
 	p.enqueueMu.Unlock()
 }
 
+// ensureAttachment returns the stable identity for the current output
+// subscription. It is generated only after authentication and never persisted.
+func (p *wsPeer) ensureAttachment(sessionID string) string {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	if p.attachments == nil {
+		p.attachments = make(map[string]string)
+	}
+	if value := p.attachments[sessionID]; value != "" {
+		return value
+	}
+	value := store.NewID()
+	p.attachments[sessionID] = value
+	return value
+}
+
+func (p *wsPeer) attachmentID(sessionID string) string {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	return p.attachments[sessionID]
+}
+
 func (p *wsPeer) removeOutput(sessionID string) {
 	p.enqueueMu.Lock()
 	delete(p.outputs, sessionID)
+	delete(p.attachments, sessionID)
 	p.enqueueMu.Unlock()
 }
 
@@ -3570,6 +3357,9 @@ func (p *wsPeer) hasOutput(sessionID string) bool {
 // control lease. A later explicit session.focus can promote the same target
 // again without replaying the terminal state.
 func (p *wsPeer) releaseControl(sessionID string) {
+	if p.server != nil && p.server.Service != nil {
+		p.server.Service.releaseControlPeer(p, sessionID)
+	}
 	p.enqueueMu.Lock()
 	if p.attached != nil && p.attached.ID == sessionID {
 		p.controlSession = ""

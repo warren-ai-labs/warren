@@ -357,12 +357,20 @@ func waitForRingUpper(t *testing.T, service *Service, sessionID string, want uin
 	t.Fatalf("ring upper never reached %d", want)
 }
 
-func attachBrowser(t *testing.T, c *websocket.Conn, sessionID string, anchor *output.Anchor) {
-	attachBrowserWithSize(t, c, sessionID, anchor, 0, 0)
+type terminalSubscriptionResult struct {
+	Subscribed   bool   `json:"subscribed"`
+	AttachmentID string `json:"attachmentId"`
 }
-func attachBrowserWithSize(t *testing.T, c *websocket.Conn, sessionID string, anchor *output.Anchor, columns, rows int) {
+
+func subscribeBrowser(t *testing.T, c *websocket.Conn, sessionID string, anchor *output.Anchor) {
+	subscribeBrowserWithSize(t, c, sessionID, anchor, 0, 0)
+}
+
+func subscribeBrowserWithSize(t *testing.T, c *websocket.Conn, sessionID string, anchor *output.Anchor, columns, rows int) {
 	t.Helper()
 	params := map[string]any{"id": sessionID}
+	// A visible browser surface owns the control lease while it is subscribed.
+	params["claim"] = true
 	if columns != 0 || rows != 0 {
 		params["cols"] = columns
 		params["rows"] = rows
@@ -371,7 +379,7 @@ func attachBrowserWithSize(t *testing.T, c *websocket.Conn, sessionID string, an
 		params["epoch"] = anchor.Epoch
 		params["sequence"] = anchor.Sequence
 	}
-	if err := c.WriteJSON(api.Envelope{Type: "request", ID: store.NewID(), Method: "session.attach", Params: params}); err != nil {
+	if err := c.WriteJSON(api.Envelope{Type: "request", ID: store.NewID(), Method: "session.subscribe", Params: params}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -412,15 +420,18 @@ func anchorFromMessage(t *testing.T, m map[string]any) output.Anchor {
 	}
 	return output.Anchor{Epoch: uint64(e), Sequence: uint64(s)}
 }
-func sendDetach(t *testing.T, c *websocket.Conn) {
+func writeInputFrame(t *testing.T, c *websocket.Conn, sessionID, attachmentID string, sequence uint64, d []byte) {
 	t.Helper()
-	if err := c.WriteJSON(api.Envelope{Type: "request", ID: store.NewID(), Method: "session.detach"}); err != nil {
+	frame, err := output.EncodeInput(output.InputMetadata{
+		Version:      api.Version,
+		SessionID:    sessionID,
+		AttachmentID: attachmentID,
+		Sequence:     sequence,
+	}, d)
+	if err != nil {
 		t.Fatal(err)
 	}
-}
-func writeRawInput(t *testing.T, c *websocket.Conn, d []byte) {
-	t.Helper()
-	if err := c.WriteMessage(websocket.BinaryMessage, d); err != nil {
+	if err := c.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 		t.Fatal(err)
 	}
 }

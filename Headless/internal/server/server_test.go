@@ -278,10 +278,13 @@ func TestWebSocketAuthenticationAndResourceLifecycle(t *testing.T) {
 	if !runtime.Exists(context.Background(), session.Runtime) {
 		t.Fatal("runtime was not created")
 	}
-	_ = requestResultBeforeBinary[api.Session](t, connection, "session.attach", map[string]any{"id": session.ID})
-	if err := connection.WriteMessage(websocket.BinaryMessage, []byte("binary-input")); err != nil {
-		t.Fatal(err)
+	subscription := requestResultBeforeBinary[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": true,
+	})
+	if !subscription.Subscribed || subscription.AttachmentID == "" {
+		t.Fatalf("invalid terminal subscription: %#v", subscription)
 	}
+	writeInputFrame(t, connection, session.ID, subscription.AttachmentID, 0, []byte("binary-input"))
 	deadline := time.Now().Add(time.Second)
 	for {
 		runtime.mu.Lock()
@@ -1032,7 +1035,7 @@ func TestBrowserAttachResizesBeforeFirstSnapshot(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	attachBrowserWithSize(t, connection, session.ID, nil, 101, 33)
+	subscribeBrowserWithSize(t, connection, session.ID, nil, 101, 33)
 	readBrowserMessage(t, connection, "attached")
 	waitForCapture(t, runtime.captureSeen)
 	assertResizePrecedesCapture(t, runtime, 101, 33)
@@ -1063,8 +1066,8 @@ func TestDesktopAttachResizesBeforeFirstSnapshot(t *testing.T) {
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer connection.Close()
 
-	_ = requestResultBeforeBinary[api.Session](t, connection, "session.attach", map[string]any{
-		"id": session.ID, "cols": "88", "rows": "27",
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": true, "cols": "88", "rows": "27",
 	})
 	waitForCapture(t, runtime.captureSeen)
 	assertResizePrecedesCapture(t, runtime, 88, 27)
@@ -1085,8 +1088,8 @@ func TestPassiveAttachSeedsSnapshotWithoutResizingSharedRuntime(t *testing.T) {
 	// the shared runtime: a pre-snapshot resize would SIGWINCH the child and
 	// its redraw bytes would race (and be skipped by) the snapshot capture,
 	// leaving full-screen TUIs repainting regions no client ever received.
-	_ = requestResultBeforeBinary[api.Session](t, connection, "session.attach", map[string]any{
-		"id": session.ID, "focused": false, "cols": "88", "rows": "27",
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, connection, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": false, "cols": "88", "rows": "27",
 	})
 	waitForCapture(t, runtime.captureSeen)
 	if _, resizes := runtime.snapshotOrder(); len(resizes) != 0 {
@@ -1108,15 +1111,15 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	second := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
 	defer second.Close()
 
-	_ = requestResultBeforeBinary[api.Session](t, first, "session.attach", map[string]any{
-		"id": session.ID, "focused": true, "cols": 101, "rows": 33,
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, first, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": true, "cols": 101, "rows": 33,
 	})
 	readBrowserMessage(t, first, "attached")
 	readBinaryFrame(t, first)
 	readBrowserMessage(t, first, "synced")
 
-	_ = requestResultBeforeBinary[api.Session](t, second, "session.attach", map[string]any{
-		"id": session.ID, "focused": false, "cols": 77, "rows": 27,
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, second, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": false, "cols": 77, "rows": 27,
 	})
 	readBrowserMessage(t, second, "attached")
 	readBinaryFrame(t, second)
@@ -1127,15 +1130,12 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 		t.Fatalf("passive attach changed runtime size: %#v", resizes)
 	}
 
-	background := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
+	requestError(t, second, "session.resize", map[string]any{
 		"cols": 77, "rows": 27,
 	})
-	if background["resized"] {
-		t.Fatal("background resize unexpectedly changed the runtime")
-	}
 
 	focused := requestResult[map[string]bool](t, second, "session.focus", map[string]any{
-		"focused": true, "cols": 77, "rows": 27,
+		"id": session.ID, "focused": true, "cols": 77, "rows": 27,
 	})
 	if !focused["focused"] || !focused["resized"] {
 		t.Fatalf("focus handoff result = %#v", focused)
@@ -1442,14 +1442,11 @@ func TestHealthEndpoint(t *testing.T) {
 		Build               string `json:"build"`
 		Revision            string `json:"revision"`
 		Dirty               bool   `json:"dirty"`
-		GhostlineVersion    string `json:"ghostlineVersion"`
 		GhostlineRPCVersion string `json:"ghostlineRPCVersion"`
 		GhostlineTagVersion string `json:"ghostlineTagVersion"`
 		Status              struct {
-			Store                    string          `json:"store"`
-			Migrations               string          `json:"migrations"`
-			GhostlineSkippedSessions int             `json:"ghostlineSkippedSessions"`
-			Relay                    api.RelayHealth `json:"relay"`
+			Store string          `json:"store"`
+			Relay api.RelayHealth `json:"relay"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
@@ -1461,14 +1458,11 @@ func TestHealthEndpoint(t *testing.T) {
 	if !body.Ready {
 		t.Fatalf("expected ready=true with healthy subsystems, got %+v", body)
 	}
-	if body.Version != api.Version || body.Build != "abc1234" || body.Revision != "abc1234def5678" || !body.Dirty || body.GhostlineVersion != "0.6.0" || body.GhostlineRPCVersion != "0.6.0" || body.GhostlineTagVersion != "v0.6.1" {
+	if body.Version != api.Version || body.Build != "abc1234" || body.Revision != "abc1234def5678" || !body.Dirty || body.GhostlineRPCVersion != "0.6.0" || body.GhostlineTagVersion != "v0.6.1" {
 		t.Fatalf("health body = %+v", body)
 	}
 	if body.Status.Store != api.HealthReady {
 		t.Fatalf("expected status.store=ready, got %q", body.Status.Store)
-	}
-	if body.Status.Migrations != api.HealthCleared {
-		t.Fatalf("expected status.migrations=cleared, got %q", body.Status.Migrations)
 	}
 	if body.Status.Relay.State != api.HealthUnconfigured {
 		t.Fatalf("expected status.relay.state=unconfigured, got %+v", body.Status.Relay)

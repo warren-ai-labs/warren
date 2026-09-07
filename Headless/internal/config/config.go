@@ -42,16 +42,7 @@ func Load(path string) (Config, error) {
 		return Config{Endpoints: map[string]Endpoint{}}, err
 	}
 	defer unlock()
-	value, migrated, err := loadUnlockedWithMigration(path)
-	if err != nil {
-		return value, err
-	}
-	if migrated {
-		if err := saveUnlocked(path, value); err != nil {
-			return value, fmt.Errorf("migrate config: %w", err)
-		}
-	}
-	return value, nil
+	return loadUnlocked(path)
 }
 func Save(path string, value Config) error {
 	unlock, err := lock(path)
@@ -94,8 +85,7 @@ func saveUnlocked(path string, value Config) error {
 		for name, endpoint := range value.Endpoints {
 			if strings.TrimSpace(endpoint.SSH) != "" {
 				// SSH endpoints own only durable route metadata. Never allow a
-				// stale runtime URL/token supplied by a legacy caller to be
-				// written back.
+				// runtime URL or token to be written alongside that route.
 				endpoint.URL = ""
 				endpoint.Token = ""
 			}
@@ -133,40 +123,30 @@ func saveUnlocked(path string, value Config) error {
 }
 
 func loadUnlocked(path string) (Config, error) {
-	value, _, err := loadUnlockedWithMigration(path)
-	return value, err
-}
-
-func loadUnlockedWithMigration(path string) (Config, bool, error) {
 	value := Config{Endpoints: map[string]Endpoint{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return value, false, nil
+		return value, nil
 	}
 	if err != nil {
-		return value, false, err
+		return value, err
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
-		return value, false, fmt.Errorf("decode config: %w", err)
+		return value, fmt.Errorf("decode config: %w", err)
 	}
 	if value.Endpoints == nil {
 		value.Endpoints = map[string]Endpoint{}
 	}
-	// Older versions persisted the helper's loopback URL and bearer token
-	// alongside SSH metadata. Treat SSH as the durable source of truth and
-	// scrub those runtime values on every read so list/current output and the
-	// next write cannot re-expose stale credentials.
-	migrated := false
 	for name, endpoint := range value.Endpoints {
 		if strings.TrimSpace(endpoint.SSH) == "" || (endpoint.URL == "" && endpoint.Token == "") {
 			continue
 		}
-		endpoint.URL = ""
-		endpoint.Token = ""
-		value.Endpoints[name] = endpoint
-		migrated = true
+		return Config{Endpoints: map[string]Endpoint{}}, fmt.Errorf(
+			"state_reset_required: endpoint %q contains removed SSH runtime fields; recreate the Warren config",
+			name,
+		)
 	}
-	return value, migrated, nil
+	return value, nil
 }
 
 func lock(path string) (func(), error) {

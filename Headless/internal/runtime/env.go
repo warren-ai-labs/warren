@@ -43,8 +43,6 @@ var daemonEnvironmentKeys = map[string]struct{}{
 	"WARREN_OPENCODE_DATA_DIR":          {},
 	"WARREN_OPENCODE_PLUGIN_PATH":       {},
 	"WARREN_WEB_ROOT":                   {},
-	"WARREN_GHOSTLINE_FORCE_HANDOFF":    {},
-	"WARREN_FORCE_HANDOFF":              {},
 	"WARREN_LISTEN":                     {},
 	"WARREN_LAN_HTTPS":                  {},
 	"WARREN_TLS_DIR":                    {},

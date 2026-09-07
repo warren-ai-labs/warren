@@ -17,7 +17,7 @@ final class WarrenWireCodecTests: XCTestCase {
         )!
     }
 
-    func testControlAndBinaryRoundTrips() throws {
+    func testInputAndOutputRoundTrips() throws {
         let codec = WarrenWireCodec()
         let inputMetadata = try XCTUnwrap(
             InputMetadata(
@@ -37,9 +37,6 @@ final class WarrenWireCodecTests: XCTestCase {
         } else {
             XCTFail("input envelope must remain distinguishable")
         }
-
-        let server = ServerControlMessage.title(TitleMessage(sessionID: sessionID, title: "shell"))
-        XCTAssertEqual(server, try codec.decodeServerControl(codec.encodeControl(server)))
 
         let wire = try codec.encodeOutput(header: header(payloadLength: 3), payload: Data([0, 1, 255]))
         let decoded = try codec.decodeOutputFrame(wire)
@@ -70,14 +67,9 @@ final class WarrenWireCodecTests: XCTestCase {
         let payload = [UInt8](repeating: 4, count: 8)
         let frameHeader = header(payloadLength: payload.count)
         let baseline = WarrenWireCodec()
-        let control = try baseline.encodeControl(ServerControlMessage.title(
-            TitleMessage(sessionID: sessionID, title: "bounded")
-        ))
         let binary = try baseline.encodeOutput(header: frameHeader, payload: Data(payload))
         let headerLength = readUInt32(binary, at: 7)
 
-        XCTAssertNoThrow(try WarrenWireCodec(maxControl: control.count).decodeServerControl(control))
-        XCTAssertThrowsError(try WarrenWireCodec(maxControl: control.count - 1).decodeServerControl(control))
         XCTAssertNoThrow(try WarrenWireCodec(maxHeader: Int(headerLength)).decodeOutputFrame(binary))
         XCTAssertThrowsError(try WarrenWireCodec(maxHeader: Int(headerLength) - 1).decodeOutputFrame(binary))
         XCTAssertNoThrow(try WarrenWireCodec(maxPayload: payload.count).decodeOutputFrame(binary))
@@ -165,8 +157,6 @@ final class WarrenWireCodecTests: XCTestCase {
         )
         XCTAssertThrowsError(try codec.decodeOutputFrame(negativeWire))
 
-        XCTAssertThrowsError(try codec.decodeServerControl([0xFF]))
-        XCTAssertThrowsError(try codec.decodeServerControl(Array("{} trailing".utf8)))
     }
 
     func testDirectionAndKindAreValidatedBeforeHeaderDecode() throws {

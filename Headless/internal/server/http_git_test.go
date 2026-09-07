@@ -17,7 +17,7 @@ func TestBackgroundRequestClassification(t *testing.T) {
 			t.Errorf("%s is not scheduled as a background request", method)
 		}
 	}
-	for _, method := range []string{"session.attach", "session.input", "git.checkout"} {
+	for _, method := range []string{"session.focus", "session.unsubscribe", "git.checkout"} {
 		if isBackgroundRequest(method) {
 			t.Errorf("%s should stay on the ordered request path", method)
 		}

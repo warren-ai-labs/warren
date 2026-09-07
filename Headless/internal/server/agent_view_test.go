@@ -18,6 +18,16 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
+type inputRecordingRuntime struct {
+	*memoryRuntime
+	writes [][]byte
+}
+
+func (runtime *inputRecordingRuntime) Input(ctx context.Context, name string, data []byte) error {
+	runtime.writes = append(runtime.writes, append([]byte(nil), data...))
+	return runtime.memoryRuntime.Input(ctx, name, data)
+}
+
 type recordingAgentViewController struct {
 	mu           sync.Mutex
 	interactions []api.AgentInteractionResponse
@@ -413,6 +423,31 @@ func TestAgentViewMutationsRequireTheMatchingControlLease(t *testing.T) {
 	}
 }
 
+func TestAgentViewControlOnlyClaimIsAuthoritative(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	httpServer := &HTTPServer{Service: service}
+	first := &wsPeer{server: httpServer}
+	second := &wsPeer{server: httpServer}
+	session := api.Session{ID: "session-control-only"}
+
+	first.claimControl(session)
+	if !service.hasControlPeer(first, session.ID) {
+		t.Fatal("control-only claim was not recorded by the Host")
+	}
+	if err := first.requireAgentControl(session.ID); err != nil {
+		t.Fatalf("control-only claim rejected: %v", err)
+	}
+
+	second.claimControl(session)
+	if err := first.requireAgentControl(session.ID); err == nil {
+		t.Fatal("superseded control-only peer retained Agent mutation access")
+	}
+	if err := second.requireAgentControl(session.ID); err != nil {
+		t.Fatalf("new control-only owner rejected: %v", err)
+	}
+}
+
 func TestSendAgentMessageInputBracketedPasteFraming(t *testing.T) {
 	runtime := newMemoryRuntime(t)
 	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
@@ -613,6 +648,139 @@ func TestSendAgentInteractionInputPTYSemantics(t *testing.T) {
 	captured, _ = runtime.Capture(ctx, "sess-q3")
 	if !bytes.Contains(captured, []byte("option-1\r")) {
 		t.Fatalf("captured = %q, want containing %q", string(captured), "option-1\r")
+	}
+}
+
+func TestSendAgentInteractionInputUsesSchemaOrderAndSeparateEnter(t *testing.T) {
+	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	err := sendAgentInteractionInput(context.Background(), runtime, "sess", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"answerOrder": []any{"q2", "q1"},
+			"answerLabels": map[string]any{
+				"q1": []any{"first"},
+				"q2": []any{"second"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	if len(runtime.writes) != 4 {
+		t.Fatalf("writes = %#v, want two text/enter pairs", runtime.writes)
+	}
+	if got := string(runtime.writes[0]); got != "second" {
+		t.Fatalf("first answer = %q, want schema order q2", got)
+	}
+	if got := string(runtime.writes[1]); got != "\r" {
+		t.Fatalf("first submit = %q, want separate Enter", got)
+	}
+	if got := string(runtime.writes[2]); got != "first" {
+		t.Fatalf("second answer = %q, want schema order q1", got)
+	}
+	if got := string(runtime.writes[3]); got != "\r" {
+		t.Fatalf("second submit = %q, want separate Enter", got)
+	}
+}
+
+func TestSendAgentInteractionInputCombinesCustomAndSelectedAnswers(t *testing.T) {
+	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	if err := runtime.Create(context.Background(), "sess-mixed", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	err := sendAgentInteractionInput(context.Background(), runtime, "sess-mixed", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"answerOrder": []any{"q1", "q2"},
+			"customAnswers": map[string]any{
+				"q1": "free-form",
+			},
+			"answerLabels": map[string]any{
+				"q2": []any{"Visible choice"},
+			},
+			"answers": map[string]any{
+				"q2": []any{"choice-id"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	if len(runtime.writes) != 4 {
+		t.Fatalf("writes = %#v, want two text/enter pairs", runtime.writes)
+	}
+	if got := string(runtime.writes[0]); got != "free-form" {
+		t.Fatalf("custom answer = %q, want free-form", got)
+	}
+	if got := string(runtime.writes[2]); got != "Visible choice" {
+		t.Fatalf("selected label = %q, want Visible choice", got)
+	}
+}
+
+func TestSendAgentGoalInputReplaceUsesCodexEditPrompt(t *testing.T) {
+	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := sendAgentGoalInputMode(
+		context.Background(),
+		runtime,
+		"sess",
+		"new objective\nwith details",
+		true,
+	); err != nil {
+		t.Fatalf("sendAgentGoalInputMode failed: %v", err)
+	}
+	if len(runtime.writes) != 5 {
+		t.Fatalf("writes = %#v, want edit, enter, clear, objective, enter", runtime.writes)
+	}
+	if got := string(runtime.writes[0]); got != "/goal edit" {
+		t.Fatalf("edit command = %q, want /goal edit", got)
+	}
+	if got := string(runtime.writes[1]); got != "\r" {
+		t.Fatalf("edit submit = %q, want separate Enter", got)
+	}
+	if len(runtime.writes[2]) != agentGoalMaxObjective+1 {
+		t.Fatalf("clear key count = %d, want %d", len(runtime.writes[2]), agentGoalMaxObjective+1)
+	}
+	for index, value := range runtime.writes[2] {
+		if value != 0x15 {
+			t.Fatalf("clear key %d = %#x, want Ctrl-U", index, value)
+		}
+	}
+	wantObjective := "\x1b[200~new objective\rwith details\x1b[201~"
+	if got := string(runtime.writes[3]); got != wantObjective {
+		t.Fatalf("objective write = %q, want %q", got, wantObjective)
+	}
+	if got := string(runtime.writes[4]); got != "\r" {
+		t.Fatalf("objective submit = %q, want separate Enter", got)
+	}
+}
+
+func TestSendAgentGoalInputNewGoalAndClearUseSlashCommands(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "new", value: "new objective", want: "/goal new objective"},
+		{name: "clear", value: "clear", want: "/goal clear"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+			if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := sendAgentGoalInput(context.Background(), runtime, "sess", test.value); err != nil {
+				t.Fatalf("sendAgentGoalInput failed: %v", err)
+			}
+			if len(runtime.writes) != 2 || string(runtime.writes[0]) != test.want || string(runtime.writes[1]) != "\r" {
+				t.Fatalf("writes = %#v, want %q followed by Enter", runtime.writes, test.want)
+			}
+		})
 	}
 }
 

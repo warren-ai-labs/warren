@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import socket
+import struct
 import time
 
 token_path = os.environ.get(
@@ -60,6 +61,29 @@ def send_text(text):
     s.sendall(header + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
 
 
+def send_binary(payload):
+    mask = os.urandom(4)
+    length = len(payload)
+    if length < 126:
+        header = bytes([0x82, 0x80 | length])
+    elif length <= 0xFFFF:
+        header = bytes([0x82, 0x80 | 126]) + struct.pack(">H", length)
+    else:
+        header = bytes([0x82, 0x80 | 127]) + struct.pack(">Q", length)
+    s.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+
+def encode_input(session_id, attachment_id, payload, sequence=0):
+    header = json.dumps({
+        "version": "4.0",
+        "sessionID": session_id,
+        "attachmentID": attachment_id,
+        "payloadLength": len(payload),
+        "sequence": sequence,
+    }, separators=(",", ":")).encode()
+    return b"DENB" + bytes([1, 1, 1]) + struct.pack(">II", len(header), len(payload)) + header + payload
+
+
 def read_frame():
     header = s.recv(2)
     while len(header) < 2:
@@ -86,7 +110,7 @@ def read_text_frame():
 send_text(json.dumps({
     "t": "auth",
     "token": token,
-    "version": "3.0",
+    "version": "4.0",
     "capabilities": ["roster-delta"],
     "terminalStateFormats": ["ghostline-vt-replay-v1"],
 }))
@@ -97,7 +121,7 @@ assert roster.get("t") == "roster", roster
 assert isinstance(roster.get("state"), dict), roster
 print("auth/roster ok", flush=True)
 
-attached = False
+subscribed = False
 sessions = [
     session for session in roster["state"].get("sessions", [])
     if session.get("lifecycle") == "running"
@@ -105,12 +129,13 @@ sessions = [
 if sessions:
     session_id = sessions[0]["id"]
     attached_msg = None
-    request_id = "verify-web-attach"
+    subscription = None
+    request_id = "verify-web-subscribe"
     send_text(json.dumps({
         "t": "request",
         "id": request_id,
-        "method": "session.attach",
-        "params": {"id": session_id},
+        "method": "session.subscribe",
+        "params": {"id": session_id, "claim": True},
     }))
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -119,6 +144,7 @@ if sessions:
             candidate = read_text_frame()
             if candidate.get("t") == "response" and candidate.get("id") == request_id:
                 assert candidate.get("ok") is True, candidate
+                subscription = candidate.get("result")
                 continue
             if candidate.get("t") == "attached":
                 attached_msg = candidate
@@ -127,11 +153,12 @@ if sessions:
                 raise AssertionError(candidate)
         except socket.timeout:
             break
-    assert attached_msg is not None, "attach timed out"
+    assert attached_msg is not None, "subscribe timed out"
     assert attached_msg.get("t") == "attached", attached_msg
-    print("attach ok", flush=True)
-    attached = True
-    send_text(json.dumps({"t": "input", "data": base64.b64encode(b"printf web-smoke\n").decode()}))
+    assert subscription and subscription.get("attachmentId"), subscription
+    print("subscribe ok", flush=True)
+    subscribed = True
+    send_binary(encode_input(session_id, subscription["attachmentId"], b"printf web-smoke\n"))
     got_echo = False
     deadline = time.time() + 5
     while time.time() < deadline:
@@ -144,4 +171,4 @@ if sessions:
     print("input/output ok", flush=True)
 
 s.close()
-print("web ok: http page + ws auth + roster" + (" + attach/input/echo" if attached else " (no sessions to attach)"))
+print("web ok: http page + ws auth + roster" + (" + subscribe/input/echo" if subscribed else " (no sessions to subscribe)"))

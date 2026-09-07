@@ -126,25 +126,6 @@ force_terminate_pids() {
 echo "Building Warren.app (release)..."
 bash "$repository_root/scripts/build-app.sh" release
 
-# When a forced Ghostline handoff is requested, persist a marker that survives
-# `open` and the LaunchServices-launched app process.
-force_marker="$HOME/.warren/force-ghostline-handoff"
-should_force="false"
-_force_value="$(printf '%s' "${WARREN_GHOSTLINE_FORCE_HANDOFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-if [[ -n "$_force_value" && "$_force_value" != "0" && "$_force_value" != "false" ]]; then
-    should_force="true"
-else
-    _force_value="$(printf '%s' "${WARREN_FORCE_HANDOFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-    if [[ -n "$_force_value" && "$_force_value" != "0" && "$_force_value" != "false" ]]; then
-        should_force="true"
-    fi
-fi
-if [[ "$should_force" == "true" ]]; then
-    mkdir -p "$(dirname "$force_marker")"
-    : > "$force_marker"
-    chmod 600 "$force_marker" 2>/dev/null || true
-fi
-
 # Tell connected Desktop/Web clients the daemon is about to restart so they
 # show an update state instead of a misleading connection error. Best-effort:
 # old daemons without the endpoint simply restart without the notice.

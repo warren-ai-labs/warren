@@ -46,7 +46,7 @@ func TestGhostlineAdoptionFatalOnlyBeforeCommit(t *testing.T) {
 		fatal   bool
 	}{
 		{name: "pre-commit failure", adopted: 0, err: adoptErr, fatal: true},
-		{name: "all sessions skipped", adopted: 0, skipped: 2, err: adoptErr, fatal: false},
+		{name: "all sessions skipped", adopted: 0, skipped: 2, err: adoptErr, fatal: true},
 		{name: "committed retirement failure", adopted: 1, err: adoptErr, fatal: false},
 		{name: "successful empty adoption", adopted: 0, err: nil, fatal: false},
 	}
@@ -104,39 +104,6 @@ func TestEnsureTokenFileRestoresOwnedTokenAfterReplacement(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(data)); got != "owned-token" {
 		t.Fatalf("restored token = %q, want owned-token", got)
-	}
-}
-
-func TestReplaceWithSymlinkPointsStableAtTarget(t *testing.T) {
-	dir := t.TempDir()
-	stable := filepath.Join(dir, "ghostline.sock")
-	target := filepath.Join(dir, "ghostline-1.sock")
-	if err := os.WriteFile(stable, nil, 0o600); err != nil {
-		t.Fatalf("create old socket path: %v", err)
-	}
-	if err := os.WriteFile(target, nil, 0o600); err != nil {
-		t.Fatalf("create target path: %v", err)
-	}
-	if err := replaceWithSymlink(stable, target); err != nil {
-		t.Fatalf("replaceWithSymlink: %v", err)
-	}
-	info, err := os.Lstat(stable)
-	if err != nil {
-		t.Fatalf("lstat stable: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("stable is not a symlink: %v", info.Mode())
-	}
-	resolved, err := filepath.EvalSymlinks(stable)
-	if err != nil {
-		t.Fatalf("eval symlink: %v", err)
-	}
-	targetResolved, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		t.Fatalf("eval target: %v", err)
-	}
-	if resolved != targetResolved {
-		t.Fatalf("stable resolves to %q, want %q", resolved, targetResolved)
 	}
 }
 

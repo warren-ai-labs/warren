@@ -103,7 +103,7 @@ final class WarrenDesktopTests: XCTestCase {
     func testWorkspaceTabTrailingControlsHaveStableOrder() {
         XCTAssertEqual(
             WarrenDesktopWorkspaceTabTrailingControl.allCases,
-            [.externalIDE, .endpoint, .web, .notifications, .settings]
+            [.externalIDE, .endpoint, .web, .settings]
         )
     }
 
@@ -113,8 +113,8 @@ final class WarrenDesktopTests: XCTestCase {
             availableControls: WarrenDesktopWorkspaceTabTrailingControl.allCases
         )
 
-        XCTAssertEqual(layout.direct, [.externalIDE, .web, .notifications])
-        XCTAssertEqual(layout.overflow, [.endpoint, .settings])
+        XCTAssertEqual(layout.direct, [.externalIDE, .web, .settings])
+        XCTAssertEqual(layout.overflow, [.endpoint])
     }
 
     func testWorkspaceTabTrailingExposesEndpointForMultipleServers() {
@@ -127,9 +127,9 @@ final class WarrenDesktopTests: XCTestCase {
             availableControls: WarrenDesktopWorkspaceTabTrailingControl.allCases
         )
 
-        XCTAssertEqual(controls, [.externalIDE, .endpoint, .web, .notifications])
+        XCTAssertEqual(controls, [.externalIDE, .endpoint, .web, .settings])
         XCTAssertEqual(layout.direct, controls)
-        XCTAssertEqual(layout.overflow, [.settings])
+        XCTAssertEqual(layout.overflow, [])
     }
 
     func testWorkspaceTabTrailingKeepsEndpointInOverflowForSingleServer() {
@@ -205,7 +205,7 @@ final class WarrenDesktopTests: XCTestCase {
 
         let normalized = WarrenDesktopWorkspaceTabTrailingControl.normalizedExternalControls(requested)
 
-        XCTAssertEqual(normalized, [.settings, .externalIDE, .endpoint, .web, .notifications])
+        XCTAssertEqual(normalized, [.settings, .externalIDE, .endpoint, .web])
         XCTAssertLessThanOrEqual(
             normalized.count,
             WarrenDesktopWorkspaceTabTrailingControl.maximumExternalButtonCount

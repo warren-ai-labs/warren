@@ -77,7 +77,7 @@ type Config struct {
 // clientProtocolVersion is the logical Warren control protocol carried inside
 // a Relay client stream. It is independent from BRLY/2, which remains the
 // transport framing between the Relay and an enrolled Host.
-const clientProtocolVersion = "3.0"
+const clientProtocolVersion = "4.0"
 
 type Server struct {
 	config          Config

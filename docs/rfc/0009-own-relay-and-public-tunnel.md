@@ -1,7 +1,7 @@
 # RFC 0009: Relay-owned access and public routes
 
 - Status: Implemented
-- Protocol: BRLY/2 and Warren API 2.0
+- Protocol: BRLY/2 and Warren API 4.0
 
 ## Decision
 
