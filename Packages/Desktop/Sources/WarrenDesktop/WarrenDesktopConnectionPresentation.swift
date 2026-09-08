@@ -10,7 +10,15 @@ struct WarrenDesktopConnectionPresentation: Equatable, Sendable {
     let tone: WarrenDesktopConnectionTone
     let isActive: Bool
 
-    init(_ state: WarrenDesktopConnectionState) {
+    init(
+        _ state: WarrenDesktopConnectionState,
+        migratingRuntimeSessions: Bool = false
+    ) {
+        if migratingRuntimeSessions,
+           state == .connecting || state == .reconnecting {
+            self.init(label: "Migrating runtime sessions…", tone: .info, isActive: true)
+            return
+        }
         switch state {
         case .disconnected:
             self.init(label: "Disconnected", tone: .warning, isActive: false)

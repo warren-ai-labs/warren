@@ -630,7 +630,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			}
 			return nil
 		case "turn_aborted":
-			p.tracker.TurnAborted()
+			p.tracker.TurnInterrupted()
 			p.codexTurnFailed = false
 			return nil
 		case "error":

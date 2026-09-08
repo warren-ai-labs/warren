@@ -130,13 +130,20 @@ func (t *ActivityTracker) TurnFailed() {
 	t.clearAttention()
 }
 
-// TurnAborted marks a turn the user interrupted. An intentional interruption
-// is a normal return to idle, not an outstanding request for attention.
-func (t *ActivityTracker) TurnAborted() {
+// TurnInterrupted marks a provider-observed interruption. The provider does
+// not know whether a Warren cancel command caused it, so Host correlation is
+// deliberately left to the service layer.
+func (t *ActivityTracker) TurnInterrupted() {
 	t.resetPendingTools()
-	t.finishTurn(api.AgentTurnAborted)
+	t.finishTurn(api.AgentTurnInterrupted)
 	t.setActivity(api.AgentActivityReady)
 	t.clearAttention()
+}
+
+// TurnAborted is kept as a source-compatible alias for provider adapters that
+// still use the older name. New adapters should call TurnInterrupted.
+func (t *ActivityTracker) TurnAborted() {
+	t.TurnInterrupted()
 }
 
 // MarkAttention applies a provider-neutral human-facing observation. The

@@ -2657,7 +2657,7 @@ func waitAgentTurnResultMode(
 
 func terminalAgentTurnStatus(status api.AgentTurnStatus) bool {
 	switch status {
-	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnAborted:
+	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnInterrupted, api.AgentTurnCancelled, api.AgentTurnAborted:
 		return true
 	default:
 		return false

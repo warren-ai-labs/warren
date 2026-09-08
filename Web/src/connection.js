@@ -7,6 +7,7 @@ export const agentCapabilities = [
   "agent-interactions-v1",
   "agent-interrupt-v1",
   "agent-attachments-v1",
+  "agent-goals-v1",
 ];
 export const appHeartbeatCapability = "app-heartbeat-v1";
 

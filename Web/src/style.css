@@ -2267,6 +2267,81 @@ button:disabled {
   transform: none;
 }
 
+/* Progress metadata is a quiet capsule until the user asks for its details. */
+.agent-progress-capsule {
+  margin: 4px 0;
+  color: var(--color-agent-primary);
+}
+.agent-progress-capsule-trigger {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px;
+  border: 1px solid var(--color-agent-card-border);
+  border-radius: var(--radius-full);
+  background: var(--fill-agent-card);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out);
+}
+.agent-progress-capsule-trigger:hover,
+.agent-progress-capsule-trigger:focus-visible {
+  border-color: var(--color-border-default);
+  background: var(--fill-agent-hover);
+}
+.agent-progress-capsule.open .agent-progress-capsule-trigger {
+  border-bottom-left-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+  background: var(--fill-agent-hover);
+}
+.agent-progress-icon {
+  width: 1.1em;
+  flex: 0 0 auto;
+  color: var(--color-status-warning);
+  text-align: center;
+}
+.agent-progress-todo .agent-progress-icon { color: var(--color-agent-accent); }
+.agent-progress-goal .agent-progress-icon { color: var(--color-status-info); }
+.agent-progress-capsule-trigger strong {
+  flex: 0 0 auto;
+  font-size: var(--text-2sm);
+  font-weight: var(--weight-semibold);
+}
+.agent-progress-preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-agent-secondary);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-progress-spacer { flex: 1 1 auto; }
+.agent-progress-count {
+  flex: 0 0 auto;
+  color: var(--color-agent-primary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.agent-progress-caret {
+  flex: 0 0 auto;
+  color: var(--color-agent-meta);
+  font-size: 10px;
+}
+.agent-progress-details {
+  margin: -1px 8px 0;
+  padding: 7px 9px 8px;
+  border: 1px solid var(--color-agent-card-border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: var(--color-bg-page);
+}
+.agent-progress-details .agent-structured-description { margin-top: 0; }
+.agent-progress-details .agent-structured-items { margin-top: 6px; }
+
 .agent-stop-button {
   display: inline-flex;
   align-items: center;

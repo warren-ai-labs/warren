@@ -1290,7 +1290,7 @@ public struct WarrenRemoteAgentStatus: Codable, Equatable, Hashable, Sendable {
 }
 
 public enum WarrenRemoteAgentTurnStatus: String, Codable, Sendable {
-    case idle, started, completed, failed, aborted
+    case idle, started, completed, failed, interrupted, cancelled, aborted
     case unknown
 
     public init(rawValue: String) {
@@ -1299,6 +1299,8 @@ public enum WarrenRemoteAgentTurnStatus: String, Codable, Sendable {
         case "started": self = .started
         case "completed": self = .completed
         case "failed": self = .failed
+        case "interrupted": self = .interrupted
+        case "cancelled": self = .cancelled
         case "aborted": self = .aborted
         default: self = .unknown
         }

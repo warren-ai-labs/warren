@@ -125,9 +125,10 @@ type AgentAttachmentRef struct {
 	Size         int64  `json:"size,omitempty"`
 }
 
-// AgentTurnInterruptRequest represents cancel and atomic Send now. When
-// Replacement is present the Host must accept it only as part of the same
-// interrupt transaction.
+// AgentTurnInterruptRequest represents a Host cancel request or an atomic
+// Send now/steer request. A Provider/TUI interruption is an observation, not
+// this request type. When Replacement is present the Host must accept it only
+// as part of the same steer transaction.
 type AgentTurnInterruptRequest struct {
 	CommandID   string                   `json:"commandId,omitempty"`
 	Session     string                   `json:"session"`

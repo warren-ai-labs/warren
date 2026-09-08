@@ -526,6 +526,10 @@ func (c *Client) WaitAgentTurn(ctx context.Context, sessionID, streamID string, 
 			case "turn.failed":
 				status = api.AgentTurnFailed
 			case "turn.cancelled":
+				status = api.AgentTurnCancelled
+			case "turn.interrupted":
+				status = api.AgentTurnInterrupted
+			case "turn.aborted":
 				status = api.AgentTurnAborted
 			default:
 				continue
@@ -565,7 +569,7 @@ func (c *Client) nextMessage() (int, []byte, error) {
 
 func terminalAgentTurn(status api.AgentTurnStatus) bool {
 	switch status {
-	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnAborted:
+	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnInterrupted, api.AgentTurnCancelled, api.AgentTurnAborted:
 		return true
 	default:
 		return false

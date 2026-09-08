@@ -610,7 +610,7 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 	} else if message.StopReason == "aborted" {
 		// An interrupted turn is an intentional return to idle, matching the
 		// explicit abort Codex emits through its own event stream.
-		p.tracker.TurnAborted()
+		p.tracker.TurnInterrupted()
 	}
 	return events
 }
@@ -752,4 +752,3 @@ func parsePiUsage(raw json.RawMessage) *api.AgentUsage {
 		TotalTokens:              value.TotalTokens,
 	}
 }
-

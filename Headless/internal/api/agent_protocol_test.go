@@ -37,6 +37,148 @@ func TestCanonicalAgentEventFromObservation(t *testing.T) {
 	}
 }
 
+func TestCanonicalInteractionLifecycleUsesProviderState(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		state     string
+		want      string
+	}{
+		{name: "question pending", eventType: "question", state: "pending", want: "interaction.requested"},
+		{name: "question resolved", eventType: "question", state: "resolved", want: "interaction.resolved"},
+		{name: "permission answered", eventType: "permission", state: "answered", want: "interaction.resolved"},
+		{name: "confirmation cancelled", eventType: "confirmation", state: "cancelled", want: "interaction.expired"},
+		{name: "canonical resolved", eventType: "interaction.resolved", state: "resolved", want: "interaction.resolved"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := CanonicalAgentEventFromObservation(AgentEvent{
+				ID:       "interaction-1",
+				Provider: "codex",
+				Type:     tt.eventType,
+				Payload: map[string]any{
+					"requestId": "interaction-1",
+					"state":     tt.state,
+				},
+			}, "exec-1", "exec-1", 1, time.Now().UTC())
+			if event.Type != tt.want {
+				t.Fatalf("canonical type = %q, want %q", event.Type, tt.want)
+			}
+			if tt.eventType != "interaction.resolved" && event.Payload["kind"] == nil {
+				t.Fatalf("interaction kind was not retained: %#v", event.Payload)
+			}
+		})
+	}
+}
+
+func TestCanonicalInteractionLifecycleInfersResolutionFromResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response map[string]any
+		want     string
+	}{
+		{name: "answers", response: map[string]any{"answers": map[string]any{"q1": []any{"yes"}}}, want: "interaction.resolved"},
+		{name: "decision", response: map[string]any{"decision": "allow"}, want: "interaction.resolved"},
+		{name: "empty answers remain pending", response: map[string]any{"answers": map[string]any{}}, want: "interaction.requested"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := CanonicalAgentEventFromObservation(AgentEvent{
+				ID:       "interaction-response-1",
+				Provider: "codex",
+				Type:     "question",
+				Payload: map[string]any{
+					"requestId": "interaction-response-1",
+					"response":  tt.response,
+				},
+			}, "exec-1", "exec-1", 1, time.Now().UTC())
+			if event.Type != tt.want {
+				t.Fatalf("canonical type = %q, want %q", event.Type, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalInteractionStateHonorsPendingRequestFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name: "pending value is not an answer",
+			payload: map[string]any{
+				"requestId": "request-1",
+				"state":     "pending",
+				"value":     "visible prompt metadata",
+			},
+			want: "interaction.requested",
+		},
+		{
+			name: "schema wins over flattened answer",
+			payload: map[string]any{
+				"requestId": "request-2",
+				"questions": []any{map[string]any{"prompt": "Choose", "options": []any{"yes"}}},
+				"answer":    "yes",
+			},
+			want: "interaction.requested",
+		},
+		{
+			name: "answer order alone is not a response",
+			payload: map[string]any{
+				"requestId":   "request-ordered",
+				"answerOrder": []string{"q0"},
+			},
+			want: "interaction.requested",
+		},
+		{
+			name: "flattened decision resolves schema-less result",
+			payload: map[string]any{
+				"requestId": "request-3",
+				"decision":  "allow",
+			},
+			want: "interaction.resolved",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := CanonicalAgentEventFromObservation(AgentEvent{
+				ID:       "interaction-state-1",
+				Provider: "codex",
+				Type:     "question",
+				Payload:  tt.payload,
+			}, "exec-1", "exec-1", 1, time.Now().UTC())
+			if event.Type != tt.want {
+				t.Fatalf("canonical type = %q, want %q", event.Type, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalAgentEventPreservesDottedCanonicalTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName string
+		want     string
+	}{
+		{name: "message", typeName: "message.created", want: "message.created"},
+		{name: "goal", typeName: "goal.updated", want: "goal.updated"},
+		{name: "unknown", typeName: "provider.custom", want: "provider.custom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := CanonicalAgentEventFromObservation(AgentEvent{
+				ID:       "dotted-1",
+				Provider: "codex",
+				Type:     tt.typeName,
+			}, "exec-1", "exec-1", 1, time.Now().UTC())
+			if event.Type != tt.want {
+				t.Fatalf("canonical type = %q, want %q", event.Type, tt.want)
+			}
+		})
+	}
+}
+
 func TestAgentGoalSetCommandCarriesReplaceExistingMode(t *testing.T) {
 	encoded, err := json.Marshal(AgentGoalSetCommand{
 		AgentCommand:    AgentCommand{CommandID: "command-1", ExecutionID: "execution-1"},

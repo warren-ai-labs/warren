@@ -34,9 +34,24 @@ func TestActivityTrackerLifecycle(t *testing.T) {
 		t.Fatalf("after turn start = %q, want working", got)
 	}
 
-	tracker.TurnAborted()
+	tracker.TurnInterrupted()
 	if got := tracker.Activity(); got != api.AgentActivityReady {
 		t.Fatalf("after turn abort = %q, want ready", got)
+	}
+}
+
+func TestActivityTrackerEmitsInterruptedBoundarySeparatelyFromCancellation(t *testing.T) {
+	tracker := NewActivityTracker()
+	tracker.TurnStarted()
+	tracker.DrainTurns()
+
+	tracker.TurnInterrupted()
+	turns := tracker.DrainTurns()
+	if len(turns) != 1 || turns[0] != (api.AgentTurn{ID: 1, Status: api.AgentTurnInterrupted}) {
+		t.Fatalf("interrupted turns = %#v, want an interrupted boundary", turns)
+	}
+	if got := tracker.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("interrupted activity = %q, want ready", got)
 	}
 }
 

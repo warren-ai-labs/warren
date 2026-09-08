@@ -160,9 +160,7 @@ struct WarrenDesktopWorkspaceRow: View {
             action: { if !isInteractionDisabled { onSelect() } }
         )
         .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
-        .padding(.leading, semanticScope == "task-list"
-            ? WarrenSpacing.compact + WarrenSpacing.xs + WarrenSpacing.medium
-            : WarrenSpacing.compact + WarrenSpacing.xs)
+        .padding(.leading, WarrenSpacing.compact + WarrenSpacing.xs)
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)

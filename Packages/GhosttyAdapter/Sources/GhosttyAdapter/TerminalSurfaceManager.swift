@@ -190,6 +190,11 @@ public final class TerminalSurfaceManager {
     private var pendingDisposals: [TerminalSessionID: Entry] = [:]
     private var hiddenRenderAttemptCount: UInt64 = 0
     private var windowObservers: [NSObjectProtocol] = []
+    /// Invalidates callbacks queued by an observer that was removed while the
+    /// host moved between windows or while SwiftUI replaced the terminal pane.
+    private var windowObserverGeneration: UInt64 = 0
+    private var windowBlurGeneration: UInt64 = 0
+    private var pendingWindowBlurTask: Task<Void, Never>?
     private var onFocused: (TerminalSessionID, TerminalSize?) -> Void = { _, _ in }
     private var onBlurred: (TerminalSessionID) -> Void = { _ in }
     private var resizeDebounceTask: Task<Void, Never>?
@@ -203,6 +208,10 @@ public final class TerminalSurfaceManager {
     /// Keep the production retry tied to the next display interval. Tests can
     /// extend it to make cancellation races deterministic.
     var postRevealRedrawDelay: Duration = .milliseconds(16)
+    /// A key-window transition can be paired with a become-key notification
+    /// during one AppKit/SwiftUI transaction. Give that pair one display turn
+    /// to settle before releasing the remote control lease.
+    var windowBlurDelay: Duration = .milliseconds(16)
     /// Invoked when a retained surface is disposed (warm eviction, tab close,
     /// or shutdown). Owners use this to invalidate recovery anchors that are
     /// only valid while the exact surface instance is still alive.
@@ -1089,14 +1098,20 @@ public final class TerminalSurfaceManager {
     private func installWindowObservers(for window: NSWindow?) {
         removeWindowObservers()
         guard let window else { return }
+        windowObserverGeneration &+= 1
+        let observerGeneration = windowObserverGeneration
+        let observedSessionID = policy.activeSessionID
         let center = NotificationCenter.default
         windowObservers.append(center.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: window,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+        ) { [weak self, weak window] _ in
+            Task { @MainActor [weak self, weak window] in
+                guard let self, let window,
+                      self.windowObserverGeneration == observerGeneration,
+                      self.host?.window === window else { return }
+                self.cancelPendingWindowBlur()
                 if latestIntent.wantsTerminalFocus {
                     requestFocusForActiveSurface()
                 }
@@ -1127,18 +1142,70 @@ public final class TerminalSurfaceManager {
             forName: NSWindow.didResignKeyNotification,
             object: window,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let sessionID = policy.activeSessionID else { return }
-                onBlurred(sessionID)
+        ) { [weak self, weak window] _ in
+            Task { @MainActor [weak self, weak window] in
+                guard let self, let window, let sessionID = observedSessionID,
+                      self.windowObserverGeneration == observerGeneration,
+                      self.host?.window === window else { return }
+                self.scheduleWindowBlur(
+                    for: sessionID,
+                    window: window,
+                    observerGeneration: observerGeneration
+                )
             }
         })
     }
 
     private func removeWindowObservers() {
+        windowObserverGeneration &+= 1
+        cancelPendingWindowBlur()
         let center = NotificationCenter.default
         windowObservers.forEach(center.removeObserver)
         windowObservers.removeAll()
+    }
+
+    private func scheduleWindowBlur(
+        for sessionID: TerminalSessionID,
+        window: NSWindow,
+        observerGeneration: UInt64
+    ) {
+        pendingWindowBlurTask?.cancel()
+        windowBlurGeneration &+= 1
+        let blurGeneration = windowBlurGeneration
+        pendingWindowBlurTask = Task { @MainActor [weak self, weak window] in
+            guard let self else { return }
+            defer {
+                if self.windowBlurGeneration == blurGeneration {
+                    self.pendingWindowBlurTask = nil
+                }
+            }
+
+            do {
+                try await Task.sleep(for: self.windowBlurDelay)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled,
+                  self.windowBlurGeneration == blurGeneration,
+                  self.windowObserverGeneration == observerGeneration,
+                  let window,
+                  self.host?.window === window,
+                  self.latestIntent.activeSessionID == sessionID,
+                  self.policy.activeSessionID == sessionID,
+                  !window.isKeyWindow else { return }
+
+            TerminalDiagnostics.logVerbose("window_blur_commit", [
+                "session": sessionID.description,
+            ])
+            self.onBlurred(sessionID)
+        }
+    }
+
+    private func cancelPendingWindowBlur() {
+        windowBlurGeneration &+= 1
+        pendingWindowBlurTask?.cancel()
+        pendingWindowBlurTask = nil
     }
 
     private func requestPresentForActiveSurface() {

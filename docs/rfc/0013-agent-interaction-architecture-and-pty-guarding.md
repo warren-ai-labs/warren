@@ -100,6 +100,13 @@ Session execution is separated into two explicit driver categories:
       - attachments: true (filesystem path)            - attachments: true (native bytes/URI)
 ```
 
+The `interrupt` capability describes a transport operation the Host can use to
+request that a turn stop; `SIGINT`/`0x03` and an RPC interrupt are transport
+mechanisms, not terminal Agent semantics. A Provider terminal observation is
+projected as `turn.interrupted` when no matching Host cancel/steer request is
+pending, or as `turn.cancelled` when one is correlated. An accepted transport
+request must not change `working` by itself.
+
 #### 3.1.1 Capability Set Contracts
 
 A Session must advertise only the capabilities its underlying driver can actually execute safely:

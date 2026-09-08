@@ -162,6 +162,22 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 			},
 			want: api.AgentTurn{ID: 3, Status: api.AgentTurnFailed},
 		},
+		{
+			name:  "provider interruption",
+			after: 3,
+			messages: []api.CanonicalAgentEventsMessage{
+				canonicalTurnBatch(4, "interrupted"),
+			},
+			want: api.AgentTurn{ID: 4, Status: api.AgentTurnInterrupted},
+		},
+		{
+			name:  "host cancellation",
+			after: 3,
+			messages: []api.CanonicalAgentEventsMessage{
+				canonicalTurnBatch(4, "cancelled"),
+			},
+			want: api.AgentTurn{ID: 4, Status: api.AgentTurnCancelled},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

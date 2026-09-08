@@ -57,6 +57,101 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertEqual(manager.snapshot().activeSessionID, first.id)
     }
 
+    func testWindowKeyTransitionWaitsForBecomeBeforeBlurring() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        manager.windowBlurDelay = .milliseconds(20)
+        let surface = makeSurface()
+        var blurred: [TerminalSessionID] = []
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        manager.submit(
+            host: host,
+            intent: TerminalPresentationIntent(
+                activeSessionID: surface.id,
+                viewportSize: host.bounds.size,
+                wantsTerminalFocus: false
+            ),
+            onFocused: { _, _ in },
+            onBlurred: { blurred.append($0) }
+        )
+        try await waitUntil { surface.mountedTerminalView?.window === window }
+
+        // AppKit can pair a transient resign with a become during one view
+        // hierarchy transaction. The pending blur must be cancelled by the
+        // matching become before it releases the remote lease.
+        NotificationCenter.default.post(
+            name: NSWindow.didResignKeyNotification,
+            object: window
+        )
+        NotificationCenter.default.post(
+            name: NSWindow.didBecomeKeyNotification,
+            object: window
+        )
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertTrue(blurred.isEmpty)
+    }
+
+    func testWindowResignBlursAfterTransitionSettles() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        manager.windowBlurDelay = .milliseconds(20)
+        let surface = makeSurface()
+        var blurred: [TerminalSessionID] = []
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        manager.submit(
+            host: host,
+            intent: TerminalPresentationIntent(
+                activeSessionID: surface.id,
+                viewportSize: host.bounds.size,
+                wantsTerminalFocus: false
+            ),
+            onFocused: { _, _ in },
+            onBlurred: { blurred.append($0) }
+        )
+        try await waitUntil { surface.mountedTerminalView?.window === window }
+
+        NotificationCenter.default.post(
+            name: NSWindow.didResignKeyNotification,
+            object: window
+        )
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(blurred, [surface.id])
+    }
+
     func testPresentRequestBeforeActivationIsRetainedByLifecycleTransition() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 1)

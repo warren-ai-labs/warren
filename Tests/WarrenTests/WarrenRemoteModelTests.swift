@@ -759,6 +759,25 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertEqual(reordered.tabs.map(\.id), [secondTab.id, firstTab.id])
     }
 
+    @MainActor
+    func testConnectionStateChangePreservesTasksAndUnreadNotices() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [],
+            workspaces: [],
+            unreadNoticeCount: 3
+        )
+
+        let next = projection.withConnectionState(.reconnecting)
+
+        XCTAssertEqual(next.taskGroups.map(\.task), [task])
+        XCTAssertEqual(next.unreadNoticeCount, 3)
+        XCTAssertEqual(next.connectionState, .reconnecting)
+    }
+
     func testRemoteRosterDecodesAgentTurn() throws {
         let roster = try JSONDecoder().decode(
             RemoteRoster.self,

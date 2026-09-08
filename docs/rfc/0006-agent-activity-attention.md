@@ -3,7 +3,7 @@
 - Status: Implemented
 - Owner: Warren Headless, Web, Desktop, and CLI clients
 - Created: 2026-08-22
-- Scope: Codex, Claude, and OpenCode session status projection
+- Scope: Codex, Claude, OpenCode, Pi, Qoder, and Antigravity session status projection
 - Supersedes: the `waitingForInput` activity heuristic described in the first
   agent status implementation
 
@@ -22,6 +22,12 @@ attention: null | input | approval | warning
 human-facing condition. A yellow status dot means that attention is present or
 that the Session is stalled; it does not claim that the Agent is necessarily
 waiting for typed input.
+
+Turn termination is a separate lifecycle projection. `interrupt` describes a
+Provider-observed stop with no matching Host cancellation request. `cancel`
+describes a Host request whose terminal Provider observation can be correlated
+to that request. The two observations may lead to the same `ready` activity,
+but they are different facts and produce different turn events.
 
 This RFC deliberately permits a protocol break. Warren ships the Host, CLI,
 Web, and Desktop as one product release, so the new status contract replaces
@@ -104,9 +110,9 @@ The following invariants are required:
 3. `activity == failed` has no `attention` object; red is already the highest
    severity and carries the failure details through the existing error/event
    channels.
-4. `activity == ready` normally has no `attention`. An unknown or unexpected
-   abort may temporarily use `attention.kind == warning` with
-   `reason == unexpectedAbort`.
+4. `activity == ready` normally has no `attention`. A warning for an unknown
+   or unexpected abort requires separate evidence; a `turn.interrupted` event
+   alone never creates `attention.kind == warning`.
 
 ## Presentation contract
 
@@ -179,6 +185,48 @@ configured grace period, which the reducer can turn into `stalled` plus a
 `warning` attention. A later transcript line, PTY heartbeat, tool result,
 turn boundary, or process exit clears the stalled warning.
 
+### Interrupt and cancellation boundary
+
+Agent interruption has three distinct planes. They must not be collapsed into
+one optimistic status mutation:
+
+1. **Input plane**: a TUI key is a raw PTY byte (`0x03` for Ctrl-C or `0x1b`
+   for Escape). Warren forwards it to the terminal driver. The status reducer
+   does not observe the byte and must not infer an interrupt from it. Escape is
+   provider-defined; Ctrl-C may be translated by the TTY into a process signal.
+2. **Command plane**: `agent.turn.cancel` is a Host command admission. An
+   `accepted` response means that the driver accepted a cancellation attempt;
+   it is not evidence that the Provider stopped the turn. Accepting the command
+   does not change `activity`.
+3. **Observation plane**: the Provider adapter or lifecycle hook emits a
+   normalized terminal observation after the Provider has actually stopped.
+   Only this observation may complete the turn and move `working` to `ready`,
+   `failed`, or `exited`.
+
+The same Provider observation may result from a TUI key, a Warren cancel
+command, or a Provider-side action. Unless the driver can prove the origin,
+the adapter must not claim that a particular key caused it. A Host-originated
+cancel may correlate the resulting turn event with its command ID through the
+canonical event's `causedBy` field; a direct TUI interruption normally has no
+such correlation.
+
+The reducer follows these rules:
+
+| Observation | Result |
+| --- | --- |
+| Raw PTY input only | Keep the current activity; never infer completion or attention. |
+| Cancel command accepted | Keep the current activity; expose completion only through a later lifecycle event. |
+| Confirmed Provider abort with no matching Host cancel/steer request (`turn_aborted`, Claude's interruption marker, Pi `stopReason=aborted`, or an equivalent terminal boundary) | `ready`, emit `turn.interrupted`, and leave `causedBy` absent. |
+| Confirmed Provider abort matching an accepted Host cancel/steer request | `ready`, emit `turn.cancelled`, and set `causedBy` to that command ID. |
+| No terminal observation after an accepted cancel | Keep `working` until normal liveness or process rules apply; do not fabricate `ready`. |
+
+`turn.interrupted` and `turn.cancelled` are **completion events**, not command
+acknowledgements. A client may show a local "cancelling" affordance after the
+command receipt, but it must continue rendering Host `AgentStatus` as the
+authority and must clear that affordance only after a Host event or a fresh
+snapshot. A normal `turn.completed` or `turn.failed` boundary also clears an
+unfulfilled pending cancel request; it must not be relabeled as cancellation.
+
 ## Event mapping
 
 The following table is normative for the first implementation.
@@ -192,8 +240,9 @@ The following table is normative for the first implementation.
 | Assistant `end_turn` or successful `task_complete` | `ready`, no attention |
 | Explicit provider input/elicitation request | `blocked` + `attention=input` |
 | Explicit provider permission request | `blocked` + `attention=approval` |
-| Known user interruption (`turn_aborted`, `[Request interrupted by user]`) | `ready`, no attention |
-| Unknown/provider interruption | `ready` + `attention=warning/unexpectedAbort` |
+| Provider/TUI interruption (`turn_aborted`, `[Request interrupted by user]`, or an equivalent terminal observation) | `ready`, `turn.interrupted`, no attention |
+| Host cancel/steer confirmed by the matching Provider terminal observation | `ready`, `turn.cancelled`, `causedBy=<commandId>` |
+| Raw TUI interrupt byte without a terminal Provider observation | Keep the current state; do not infer a transition |
 | No progress beyond the configured grace period | `stalled` + `attention=warning/stalled` |
 | Provider/API/tool terminal error | `failed`, no attention |
 | `SessionEnd` | `exited`, no attention |
@@ -239,6 +288,13 @@ must not synthesize `approval` from a pending tool call. A future PTY prompt
 detector may emit `warning`, but it must not claim `approval` without a
 provider-confirmed request.
 
+The Codex TUI may produce the same `turn_aborted` observation after a user
+Escape/Ctrl-C as the Host's PTY fallback. The adapter handles the observation;
+it does not inspect the raw key or attempt to distinguish those origins. The
+Host emits `turn.interrupted` unless an accepted cancel/steer request for the
+same turn is still pending, in which case it emits `turn.cancelled` with the
+command correlation.
+
 ### OpenCode
 
 The current OpenCode release stores sessions, messages, and parts in
@@ -248,6 +304,19 @@ boundaries. Mutable text and reasoning parts are emitted as append-only event
 deltas with a stable part ID; clients use the `contentDelta` marker to merge
 those updates for display. Legacy OpenCode storage formats and resume/fork
 flags are outside this contract.
+
+OpenCode's `session.idle` hook is a valid turn boundary for both a TUI
+interrupt and a Host cancellation. An interrupted tool result alone is not a
+turn boundary; the adapter must wait for `session.idle` or another explicit
+terminal observation.
+
+### Other TUI providers
+
+Pi, Qoder, and Antigravity follow the same three-plane contract. Pi's
+`stopReason=aborted` is a confirmed abort. Qoder must not map a missing or
+provider-unknown stop reason to `ready`; without a terminal observation the
+Host keeps the prior state. Antigravity's Stop hook is a valid boundary, but a
+raw PTY key by itself is not.
 
 ### Hooks and privacy
 
@@ -293,21 +362,24 @@ recovered by the next roster or subscription snapshot.
 
 The implementation is complete only when all of the following hold:
 
-1. A known Codex, Claude, or OpenCode user interruption returns to green
-   `ready` and does not emit yellow.
-2. A five-second pending tool remains amber `working`.
-3. A long no-progress operation becomes yellow `stalled` only after the
+1. A known Codex, Claude, OpenCode, or Pi user interruption returns to green
+   `ready` and emits `turn.interrupted` when no Host request is pending.
+2. A Host cancel/steer receipt does not change `working`; only its matching
+   Provider terminal observation emits `turn.cancelled` with `causedBy`.
+3. A five-second pending tool remains amber `working`.
+4. A long no-progress operation becomes yellow `stalled` only after the
    configured grace period and carries the `stalled` reason.
-4. Explicit input and permission events become yellow `blocked` with the
+5. Explicit input and permission events become yellow `blocked` with the
    correct reason and request ID.
-5. Matching resolution, cancellation, a new superseding turn, and
+6. Matching resolution, cancellation, a new superseding turn, and
    `SessionEnd` clear attention deterministically.
-6. Provider errors remain red and are never downgraded to yellow.
-7. Web, Desktop, workspace aggregation, accessibility labels, and CLI output
+7. Provider errors remain red and are never downgraded to yellow.
+8. Web, Desktop, workspace aggregation, accessibility labels, and CLI output
    consume the same status object.
-8. Tests cover out-of-order provider events, duplicate hook delivery, daemon
-   epoch changes, missing transcripts, and concurrent Sessions.
-9. No test depends on assistant punctuation, a hard-coded five-second timeout,
+9. Tests cover TUI raw input versus Host cancel, out-of-order provider events,
+   duplicate hook delivery, daemon epoch changes, missing transcripts, and
+   concurrent Sessions.
+10. No test depends on assistant punctuation, a hard-coded five-second timeout,
    or a provider-specific string outside its adapter.
 
 ## Implementation guide

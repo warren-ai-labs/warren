@@ -1288,6 +1288,7 @@ func resetAgentProjectionLocked(entry *agentSession) {
 	entry.canonicalEvents = nil
 	entry.status = api.AgentStatus{}
 	entry.turn = api.AgentTurn{}
+	entry.pendingTurnRequest = nil
 	entry.titleUser = ""
 	entry.titleUserProvider = ""
 	entry.titleUserID = ""
