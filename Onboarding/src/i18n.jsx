@@ -118,6 +118,32 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.12.1",
+        dateISO: "2026-09-08",
+        date: "September 8, 2026",
+        title: "Warren makes Agent workflows calmer and more predictable.",
+        summary:
+          "A patch release that improves Agent interaction reliability, cross-client control flow, task and workspace navigation, external IDE discovery, and embedded editor typography. Covers macOS, Web, and Headless clients; iOS changes remain outside this release.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Keep canonical Agent View operations independent from the terminal PTY control lease so Web and Headless Agent actions do not contend with terminal focus.",
+              "Keep model and reasoning choices in launch-time/provider configuration instead of issuing in-session switch commands in the Web Agent surface.",
+              "Cache external IDE options, align embedded editor typography with the native editor, and keep task-linked workspaces anchored to Task navigation.",
+              "Avoid unnecessary sidebar recentering, make workspace selection state clearer across Desktop and Web, and keep disabled workspace rows visually quiet.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Resolve structured question responses by option index, including multi-choice keyboard navigation, custom answers, and multi-step interactions.",
+              "Prevent Agent interaction submissions from getting stuck behind terminal control ownership or a stale loading state.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.12.0",
         dateISO: "2026-09-08",
         date: "September 8, 2026",
@@ -931,6 +957,32 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.12.1",
+        dateISO: "2026-09-08",
+        date: "2026 年 9 月 8 日",
+        title: "Warren 让 Agent 工作流更稳定、更可预测。",
+        summary:
+          "修复版本：提升 Agent 交互可靠性、跨客户端控制流、Task 与 Workspace 导航、外部 IDE 发现和 embedded editor 排版。本版本覆盖 macOS、Web 与 Headless，iOS 变化不在发布范围内。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "统一 Agent View 操作不再争抢终端 PTY control lease，Web 与 Headless Agent 操作不会再和终端焦点互相阻塞。",
+              "Web Agent 将模型与推理选项保持在启动时或 provider 配置中，不再发送 session 内切换命令。",
+              "缓存外部 IDE 选项，统一 embedded editor 与原生编辑器的排版，并让关联 Task 的 Workspace 保持在 Task 导航下。",
+              "避免侧边栏无必要的居中滚动，在 Desktop 与 Web 中明确 Workspace 的选择状态，并让禁用的 Workspace 行保持安静的视觉状态。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "按 option index 解析结构化 question 响应，覆盖多选键盘导航、自定义答案与多步骤交互。",
+              "避免 Agent 交互提交被终端控制权或过期 loading 状态卡住。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.12.0",
         dateISO: "2026-09-08",
