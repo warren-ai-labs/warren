@@ -7,11 +7,7 @@ import {
   agentEventLimit,
   agentLaunchCommand,
   defaultAgentLaunchCommand,
-  agentModelSwitchCommand,
   agentQueueKey,
-  agentReasoningResetCommand,
-  agentReasoningSwitchCommand,
-  agentSettingsKey,
   agentComposerAction,
   composerHeightForText,
   deleteAgentQueueItem,
@@ -29,14 +25,12 @@ import {
   latestAgentAction,
   latestPendingAgentInteraction,
   loadAgentDraft,
-  loadAgentSettings,
   mergeAgentEvents,
   normalizeCanonicalAgentEvent,
   moveAgentQueueItem,
   projectAgentEvents,
   projectAgentControlState,
   retryAgentQueueItem,
-  saveAgentSettings,
   toolSummary,
 } from "./agent.js";
 
@@ -586,26 +580,6 @@ test("formatAgentReasoning formats labels correctly", () => {
   assert.equal(formatAgentReasoning("unknown"), "Default");
 });
 
-test("agentModelSwitchCommand generates /model command", () => {
-  assert.equal(agentModelSwitchCommand("gpt-5"), "/model gpt-5");
-  assert.equal(agentModelSwitchCommand("claude-3-7-sonnet"), "/model claude-3-7-sonnet");
-  assert.equal(agentModelSwitchCommand(""), "");
-  assert.equal(agentModelSwitchCommand("   "), "");
-  assert.equal(agentModelSwitchCommand("model\n-id"), "/model model -id");
-});
-
-test("agentReasoningSwitchCommand formats /effort or /thinking commands", () => {
-  assert.equal(agentReasoningSwitchCommand("default", "codex"), "");
-  assert.equal(agentReasoningSwitchCommand("high", "codex"), "/effort high");
-  assert.equal(agentReasoningSwitchCommand("low", "claude"), "/effort low");
-  assert.equal(agentReasoningSwitchCommand("high", "pi"), "/thinking high");
-  assert.equal(agentReasoningSwitchCommand("high", "PI"), "/thinking high");
-  assert.equal(agentReasoningSwitchCommand("off", "pi"), "/thinking off");
-  assert.equal(agentReasoningSwitchCommand("invalid", "codex"), "");
-  assert.equal(agentReasoningResetCommand("pi"), "/thinking default");
-  assert.equal(agentReasoningResetCommand("claude-code"), "/effort default");
-  assert.equal(agentReasoningResetCommand("codex"), "/effort default");
-});
 
 test("agentLaunchCommand leaves defaults unchanged and adds provider flags", () => {
   assert.equal(agentLaunchCommand("codex --dangerously-bypass-hook-trust", "codex"), "codex --dangerously-bypass-hook-trust");
@@ -636,26 +610,6 @@ test("agentLaunchCommand leaves defaults unchanged and adds provider flags", () 
   assert.equal(defaultAgentLaunchCommand("claude-code"), "claude");
 });
 
-test("loadAgentSettings and saveAgentSettings round-trip settings in storage", () => {
-  const mockStorage = {
-    _data: {},
-    getItem(key) { return this._data[key] || null; },
-    setItem(key, value) { this._data[key] = value; },
-    removeItem(key) { delete this._data[key]; },
-  };
-
-  const endpoint = "ws://localhost:8080/v1/ws";
-  const sessionID = "sess-123";
-
-  assert.equal(loadAgentSettings(mockStorage, endpoint, sessionID), null);
-
-  const settings = { model: "claude-3-7-sonnet", reasoning: "high" };
-  const saved = saveAgentSettings(mockStorage, endpoint, sessionID, settings);
-  assert.equal(saved, true);
-
-  const loaded = loadAgentSettings(mockStorage, endpoint, sessionID);
-  assert.deepEqual(loaded, settings);
-});
 
 function canonicalEvent(sequence, role = "assistant", content = "") {
   return { sequence, eventId: `evt-${sequence}`, streamId: "exec-1", executionId: "exec-1", type: "message.created", occurredAt: "2026-01-01T00:00:00Z", recordedAt: "2026-01-01T00:00:00Z", origin: { kind: "host", confidence: "native" }, payload: { role, content } };

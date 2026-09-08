@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+.device-build/
 .swiftpm/
 *.xcodeproj/xcuserdata/
 Packages/WarrenIOS/WarrenIOS.xcodeproj/
@@ -10,6 +11,7 @@ xcuserdata/
 Web/node_modules/
 Warren.app/
 Warren-*.zip
+Warren-*.zip.sha256
 Frameworks/
 # Local-only release tooling and runbooks
 .local/

@@ -191,14 +191,22 @@ struct WarrenDesktopExternalIDEMenu: View {
 }
 
 @MainActor
-struct WarrenDesktopExternalIDEService {
+final class WarrenDesktopExternalIDEService {
     typealias Launch = (URL, URL) async throws -> Void
+
+    private struct OptionsCacheKey: Hashable {
+        let workspacePath: String?
+        let isLocalEndpoint: Bool
+        let workspaceDirectoryExists: Bool
+        let customIDEs: [WarrenDesktopCustomIDE]
+    }
 
     let resolveApplicationURL: (String) -> URL?
     let directoryExists: (URL) -> Bool
     let applicationIcon: (URL) -> NSImage?
     let loadCustomIDEs: () -> [WarrenDesktopCustomIDE]
     let launch: Launch
+    private var cachedOptions: (key: OptionsCacheKey, options: [WarrenDesktopExternalIDEOption])?
 
     init(
         resolveApplicationURL: @escaping (String) -> URL?,
@@ -224,9 +232,24 @@ struct WarrenDesktopExternalIDEService {
         let workspaceURL = workspace.map {
             URL(fileURLWithPath: $0.path, isDirectory: true).standardizedFileURL
         }
-        let availableWorkspaceURL = workspaceURL.flatMap { url in
-            isLocalEndpoint && directoryExists(url) ? url : nil
+        let workspaceDirectoryExists: Bool
+        if isLocalEndpoint, let workspaceURL {
+            workspaceDirectoryExists = directoryExists(workspaceURL)
+        } else {
+            workspaceDirectoryExists = false
         }
+        let customIDEs = loadCustomIDEs()
+        let cacheKey = OptionsCacheKey(
+            workspacePath: workspaceURL?.path,
+            isLocalEndpoint: isLocalEndpoint,
+            workspaceDirectoryExists: workspaceDirectoryExists,
+            customIDEs: customIDEs
+        )
+        if let cachedOptions, cachedOptions.key == cacheKey {
+            return cachedOptions.options
+        }
+
+        let availableWorkspaceURL = workspaceDirectoryExists ? workspaceURL : nil
 
         var options: [WarrenDesktopExternalIDEOption] = []
         for ide in WarrenDesktopExternalIDE.supported {
@@ -246,7 +269,7 @@ struct WarrenDesktopExternalIDEService {
                 }
             ))
         }
-        for custom in loadCustomIDEs() {
+        for custom in customIDEs {
             let applicationURL = URL(fileURLWithPath: custom.path).standardizedFileURL
             options.append(WarrenDesktopExternalIDEOption(
                 id: "custom:\(custom.id.uuidString)",
@@ -258,6 +281,7 @@ struct WarrenDesktopExternalIDEService {
                 }
             ))
         }
+        cachedOptions = (key: cacheKey, options: options)
         return options
     }
 }
@@ -286,7 +310,7 @@ extension WarrenDesktopExternalIDEService {
             )
     }
 
-    static let live = Self(
+    static let live = WarrenDesktopExternalIDEService(
         resolveApplicationURL: { bundleIdentifier in
             NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
         },

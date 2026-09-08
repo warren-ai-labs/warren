@@ -7101,19 +7101,10 @@ func (s *Service) claimControlPeer(peer *wsPeer, sessionID string) bool {
 	return true
 }
 
-// claimAgentControlPeer grants an explicit mutation lease to a canonical Agent
-// subscriber without requiring terminal output registration. Unlike terminal
-// focus, an Agent-only claim never steals a lease held by another peer; the
-// caller can surface the negative receipt and let the user retry after the
-// other client releases control.
+// claimAgentControlPeer acknowledges an Agent-only focus request.
+// Agent View operations operate through structured, idempotent RPCs and do not
+// contend with or require the single-tenant Terminal PTY control lease.
 func (s *Service) claimAgentControlPeer(peer *wsPeer, sessionID string) bool {
-	s.lazyInit()
-	s.outputMu.Lock()
-	defer s.outputMu.Unlock()
-	if owner := s.controlPeers[sessionID]; owner != nil && owner != peer {
-		return false
-	}
-	s.controlPeers[sessionID] = peer
 	return true
 }
 

@@ -72,11 +72,17 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
 
     func testManagedProfileMovesFileTreeRightAndPreservesUnownedSettings() {
         let settings = WarrenEmbeddedEditorProfile.mergingManagedSettings(into: [
-            "editor.fontFamily": "Berkeley Mono",
+            "editor.wordWrap": "off",
             "workbench.sideBar.location": "left",
         ])
 
-        XCTAssertEqual(settings["editor.fontFamily"] as? String, "Berkeley Mono")
+        XCTAssertEqual(settings["editor.wordWrap"] as? String, "off")
+        XCTAssertEqual(
+            settings["editor.fontFamily"] as? String,
+            "SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+        )
+        XCTAssertEqual(settings["editor.fontSize"] as? Int, 13)
+        XCTAssertEqual(settings["editor.lineHeight"] as? Int, 20)
         XCTAssertEqual(settings["workbench.sideBar.location"] as? String, "right")
         XCTAssertEqual(settings["workbench.activityBar.location"] as? String, "top")
         XCTAssertEqual(settings["workbench.colorTheme"] as? String, "Default Dark Modern")

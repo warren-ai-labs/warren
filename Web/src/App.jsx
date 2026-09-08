@@ -1608,8 +1608,7 @@ export default function App() {
     const sessionID = appStateRef.current.activeSession;
     if (!sessionID) return false;
     if (focusedSessionRef.current !== sessionID) {
-      const claimed = await claimSessionFocus(sessionID, true);
-      if (!claimed) throw new Error("Another client currently controls this Session.");
+      await claimSessionFocus(sessionID, true);
     }
     // Every composer submission gets a stable local ID first. The queue then
     // submits exactly one canonical turn.start command, preserving idempotency
@@ -1691,14 +1690,7 @@ export default function App() {
       return;
     }
     if (focusedSessionRef.current !== sessionID) {
-      const claimed = await claimSessionFocus(sessionID, true);
-      if (!claimed) {
-        agentInterruptInFlightRef.current.delete(sessionID);
-        if (appStateRef.current.activeSession === sessionID) {
-          setAgentActionError("Another client currently controls this Session.");
-        }
-        return;
-      }
+      await claimSessionFocus(sessionID, true);
     }
     const params = {
       executionId: executionID,
@@ -1746,8 +1738,7 @@ export default function App() {
       return Promise.reject(new Error("The active Agent turn is unavailable"));
     }
     if (focusedSessionRef.current !== sessionID) {
-      const claimed = await claimSessionFocus(sessionID, true);
-      if (!claimed) throw new Error("Another client currently controls this Session.");
+      await claimSessionFocus(sessionID, true);
     }
     const item = queueAgentMessage(sessionID, value, attachments);
     const queueKey = agentQueueKey(webSocketURL(), sessionID);
@@ -1988,12 +1979,7 @@ export default function App() {
       throw error;
     }
     if (focusedSessionRef.current !== sessionID) {
-      const claimed = await claimSessionFocus(sessionID, true);
-      if (!claimed) {
-        const error = new Error("Another client currently controls this Session.");
-        if (appStateRef.current.activeSession === sessionID) setAgentActionError(error.message);
-        throw error;
-      }
+      await claimSessionFocus(sessionID, true);
     }
     return new Promise((resolve, reject) => {
       const failed = detail => {

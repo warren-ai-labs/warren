@@ -554,28 +554,6 @@ export function defaultAgentLaunchCommand(provider) {
   }
 }
 
-export function agentModelSwitchCommand(modelId) {
-  const model = normalizeAgentModelID(modelId);
-  if (!model) return "";
-  return `/model ${model}`;
-}
-
-export function agentReasoningSwitchCommand(effort, provider) {
-  const normalized = String(effort || "default").trim().toLowerCase();
-  if (!AGENT_REASONING_IDS.has(normalized) || normalized === "default") return "";
-  const prov = normalizeAgentProvider(provider);
-  if (prov === "pi") {
-    return `/thinking ${normalized}`;
-  }
-  return `/effort ${normalized}`;
-}
-
-export function agentReasoningResetCommand(provider) {
-  return normalizeAgentProvider(provider) === "pi"
-    ? "/thinking default"
-    : "/effort default";
-}
-
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
@@ -1010,28 +988,6 @@ export function saveAgentDraft(storage, endpointIdentity, sessionID, text, maxBy
 
 export function removeAgentDraft(storage, endpointIdentity, sessionID) {
   try { storage?.removeItem(agentDraftKey(endpointIdentity, sessionID)); } catch { /* best effort */ }
-}
-
-export function agentSettingsKey(endpointIdentity, sessionID) {
-  return `warren.agent-settings.${encodeAgentDraftKeyPart(endpointIdentity)}.${encodeAgentDraftKeyPart(sessionID)}`;
-}
-
-export function loadAgentSettings(storage, endpointIdentity, sessionID) {
-  try {
-    const raw = storage?.getItem(agentSettingsKey(endpointIdentity, sessionID));
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveAgentSettings(storage, endpointIdentity, sessionID, settings) {
-  try {
-    storage?.setItem(agentSettingsKey(endpointIdentity, sessionID), JSON.stringify(settings));
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
