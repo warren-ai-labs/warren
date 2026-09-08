@@ -1438,10 +1438,20 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 			}
 			if delta, isDelta := openCodeDelta(old.Text, part.Text, existed); delta != "" {
 				eventType := "assistant"
+				role := "assistant"
 				if envelope.Role == "user" {
-					eventType = "user"
+					if isCompactionContext(delta) {
+						eventType = "compaction"
+						role = "system"
+					} else if isSystemInjectedUserContext(delta) {
+						eventType = "system_instructions"
+						role = "system"
+					} else {
+						eventType = "user"
+						role = "user"
+					}
 				}
-				events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: part.ID, Type: eventType, Content: p.clip(delta), ContentDelta: isDelta, Model: model, Timestamp: timestamp})
+				events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: part.ID, Type: eventType, Role: role, Content: p.clip(delta), ContentDelta: isDelta, Model: model, Timestamp: timestamp})
 			}
 		case "reasoning":
 			previousText := old.Text
@@ -1579,7 +1589,16 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 		}
 	}
 	if envelope.Role == "user" && !emittedUserText && current.Summary != "" && previous.Summary != current.Summary {
-		events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: "user", Content: current.Summary, Timestamp: timestamp})
+		userType := "user"
+		userRole := "user"
+		if isCompactionContext(current.Summary) {
+			userType = "compaction"
+			userRole = "system"
+		} else if isSystemInjectedUserContext(current.Summary) {
+			userType = "system_instructions"
+			userRole = "system"
+		}
+		events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: userType, Role: userRole, Content: current.Summary, Timestamp: timestamp})
 	}
 	if current.Error != "" && (!existedOpenCodeError(previous) || previous.Error != current.Error) {
 		events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: "error", Content: current.Error, Error: current.Error, Model: model, Timestamp: timestamp})

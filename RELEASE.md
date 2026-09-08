@@ -101,9 +101,13 @@ go test -race ./Headless/...
    terminal core; the app has no v0 bridge, migration binary, or separate
    Ghostty checkout to package.
 
-   This release is a clean protocol and persistence break. Pre-4.0 clients,
-   old Ghostline sockets, and old Warren state or Agent databases are rejected
-   or require recreation; no in-place migration is shipped.
+   This release is a coordinated protocol boundary with selective persistence
+   migration. Pre-4.0 clients are rejected during authentication. Host state
+   schemas 1 and 2 migrate in place to schema 3; unknown or future schemas
+   still fail closed. Compatible Ghostline v1 sessions use the rolling handoff
+   path, but old Ghostline v0 sockets, legacy PTY aliases, and pre-canonical
+   Agent projections are not migrated and require recreation or a fresh cache.
+   Back up `~/.warren` before upgrading an existing Host.
 
    Public Access is provided by the independently deployed Relay. Confirm that
    the release contains the headless Relay connector and that no external

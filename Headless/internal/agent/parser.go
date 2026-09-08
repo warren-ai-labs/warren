@@ -61,6 +61,7 @@ func (b *baseParser) clip(value string) string {
 func (b *baseParser) observe(events []api.AgentEvent) []api.AgentEvent {
 	events = compactRenderable(events)
 	for index := range events {
+		canonicalizeAgentEvent(&events[index])
 		enrichToolSemantics(&events[index])
 		b.tracker.Observe(events[index])
 		if !events[index].Sidechain {

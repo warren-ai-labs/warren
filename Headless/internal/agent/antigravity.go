@@ -333,6 +333,12 @@ func cleanAntigravityUserContent(content string) string {
 			return strings.TrimSpace(contentAfter[:endIndex])
 		}
 	}
+	if metaIdx := strings.Index(content, "<ADDITIONAL_METADATA>"); metaIdx != -1 {
+		content = content[:metaIdx]
+	}
+	if summaryIdx := strings.Index(content, "</CONTEXT_SUMMARY>"); summaryIdx != -1 {
+		content = content[summaryIdx+len("</CONTEXT_SUMMARY>"):]
+	}
 	return strings.TrimSpace(content)
 }
 
@@ -468,10 +474,65 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 			Timestamp: timestamp,
 		}}
 
+	case "CHECKPOINT":
+		compactionID := fmt.Sprintf("checkpoint_%d", record.StepIndex)
+		summary := "History compacted"
+		return []api.AgentEvent{{
+			Provider:  antigravityProvider,
+			ID:        compactionID,
+			Type:      "compaction",
+			Role:      "system",
+			Content:   summary,
+			Payload: map[string]any{
+				"compactionId": compactionID,
+				"summary":      summary,
+			},
+			Timestamp: timestamp,
+		}}
+
+	case "SYSTEM_MESSAGE":
+		content := strings.TrimSpace(record.Content)
+		if content == "" {
+			return nil
+		}
+		return []api.AgentEvent{{
+			Provider:  antigravityProvider,
+			ID:        fmt.Sprintf("step_%d", record.StepIndex),
+			Type:      "system_instructions",
+			Role:      "system",
+			Content:   p.clip(content),
+			Timestamp: timestamp,
+		}}
+
 	case "USER_INPUT":
 		cleaned := cleanAntigravityUserContent(record.Content)
 		if cleaned == "" {
 			return nil
+		}
+		if isCompactionContext(cleaned) || isCompactionContext(record.Content) {
+			compactionID := fmt.Sprintf("checkpoint_%d", record.StepIndex)
+			return []api.AgentEvent{{
+				Provider:  antigravityProvider,
+				ID:        compactionID,
+				Type:      "compaction",
+				Role:      "system",
+				Content:   "History compacted",
+				Payload: map[string]any{
+					"compactionId": compactionID,
+					"summary":      "History compacted",
+				},
+				Timestamp: timestamp,
+			}}
+		}
+		if record.Source == "SYSTEM" || isSystemInjectedUserContext(cleaned) {
+			return []api.AgentEvent{{
+				Provider:  antigravityProvider,
+				Type:      "system_instructions",
+				Role:      "system",
+				Content:   p.clip(cleaned),
+				Timestamp: timestamp,
+				ID:        fmt.Sprintf("step_%d", record.StepIndex),
+			}}
 		}
 		return []api.AgentEvent{{
 			Provider:  antigravityProvider,

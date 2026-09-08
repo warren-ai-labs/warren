@@ -4,6 +4,40 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-08
+
+> Minor release: introduces Warren protocol 4.0, canonical Agent execution, an independently deployed Relay control plane, and a coordinated terminal/runtime boundary. Pre-4.0 clients are rejected. Host state schemas 1 and 2 migrate in place to schema 3; compatible Ghostline v1 sessions use rolling handoff, while v0 sockets and legacy Agent projections require recreation. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.
+
+### Added
+
+- Add the canonical Agent event protocol with a durable Host journal, idempotent command admission, history pagination, gap recovery, reconnect-safe client replicas, and structured status, tool, diff, diagnostics, queue, goal, attachment, approval, and question events.
+- Add normalized Agent providers for Codex, Claude, OpenCode, Pi, Qoder, and Antigravity, with model and reasoning controls, queued turns, explicit interruption and cancellation, provider binding hooks, and Agent-first CLI commands. Trae remains an interactive shell preset rather than an Agent provider.
+- Add the independently deployed Relay control plane with expiring enrollment keys, server-owned Host identities, opaque share links, signed scoped capabilities, refresh tokens, device association and revocation, IP/path routes, and LAN-to-Relay endpoint fallback.
+- Add embedded SSH endpoints and a bundled forwarding helper, plus terminal-link opening in the workspace-scoped embedded editor.
+- Add safer Task, Workspace, and Session workflows: Task rename and ordering, active-only workspace filtering, setup scripts, worktree import controls, MRU navigation, compare-and-swap session moves, preflight checks, and guarded undo operations.
+
+### Changed
+
+- Move terminal recovery to atomic DENB state snapshots while retaining wire version 1, durable Ghostline cursors, bounded output rings, and rolling handoff across compatible Ghostline v1 runtimes.
+- Bound CLI list and transcript output by default. Use `--all`, `--ended`, `--full`, `--tool-output`, filtering, quiet mode, or explicit truncation controls when automation needs more data.
+- Keep Web, Desktop, and CLI Agent surfaces on the canonical event projection; unknown Agent event types are retained for forward-compatible replicas.
+
+### Breaking
+
+- Advance the JSON control protocol to 4.0. Legacy Agent aliases, JSON terminal-input fallback, the old session lifecycle, compatibility attach/roster paths, the Ghostline v0 bridge, and the legacy PTY alias are removed.
+- Require the coordinated 0.12.0 Host and client surface. A pre-4.0 client is rejected during authentication, and old Ghostline v0 sockets cannot be recovered by this release.
+
+### RFCs
+
+- [RFC 0012: Antigravity CLI Agent support](docs/rfc/0012-antigravity-cli-agent-support.md) — proposed, with provider implementation included.
+- [RFC 0013: Agent interaction architecture and PTY guarding](docs/rfc/0013-agent-interaction-architecture-and-pty-guarding.md) — proposed.
+- [RFC 0014: Autonomous engineering pipeline](docs/rfc/0014-autonomous-engineering-pipeline.md) — proposed.
+- [RFC 0015: Cloud Agent daemon and scheduled bots](docs/rfc/0015-cloud-agent-daemon-and-scheduled-bots.md) — baseline draft.
+- [RFC 0016: Canonical Agent execution protocol](docs/rfc/0016-canonical-agent-execution-protocol.md) — accepted and implemented.
+- [RFC 0017: Agent task handoff](docs/rfc/0017-agent-task-handoff.md) — accepted and implemented.
+- [RFC 0018: Multi-Host sidebar and projects](docs/rfc/0018-multi-host-sidebar-projects.md) — draft.
+- [RFC 0019: LAN Host discovery and pairing](docs/rfc/0019-lan-host-discovery-and-pairing.md) — draft.
+
 ## [0.11.3] - 2026-08-30
 
 > Patch release: makes Codex Working state visibly blink in the agent view and preserves configured terminal colors after snapshot restore. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes. A local Apple Development build may fail Gatekeeper until replaced by a notarized Developer ID build.
