@@ -1453,7 +1453,7 @@ func (p *wsPeer) close() {
 
 func (p *wsPeer) closeWithReason(reason string) {
 	p.enqueueMu.Lock()
-	sessionIDs, agentSessionID := p.closeLocked(reason)
+	sessionIDs, agentSessionID, controlSessionID := p.closeLocked(reason)
 	p.enqueueMu.Unlock()
 	p.cancelAllPendingSubscriptions()
 	for _, sessionID := range sessionIDs {
@@ -1461,6 +1461,13 @@ func (p *wsPeer) closeWithReason(reason string) {
 	}
 	if agentSessionID != "" {
 		p.server.Service.detachAgentPeer(p, agentSessionID)
+	}
+	// Agent-only focus does not create a terminal output subscription, so the
+	// control lease may have no session ID in either cleanup list above. Always
+	// release the lease captured while holding enqueueMu; the service-side
+	// comparison keeps this idempotent when detachPeer already removed it.
+	if controlSessionID != "" {
+		p.server.Service.releaseControlPeer(p, controlSessionID)
 	}
 }
 
@@ -1587,7 +1594,7 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		// Queue overflow is a per-client failure: close only this peer. The
 		// client reconnects with its Recovery Anchor and Host re-serves the
 		// retained tail from the ring.
-		sessionIDs, agentSessionID := p.closeLocked("queue_overflow")
+		sessionIDs, agentSessionID, controlSessionID := p.closeLocked("queue_overflow")
 		p.enqueueMu.Unlock()
 		p.cancelAllPendingSubscriptions()
 		for _, sessionID := range sessionIDs {
@@ -1595,6 +1602,9 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 		}
 		if agentSessionID != "" {
 			p.server.Service.detachAgentPeer(p, agentSessionID)
+		}
+		if controlSessionID != "" {
+			p.server.Service.releaseControlPeer(p, controlSessionID)
 		}
 		return false
 	}
@@ -1606,9 +1616,10 @@ func (p *wsPeer) enqueue(item outboundMessage) bool {
 // agent-only subscription ID so the caller can unregister after releasing
 // the lock, keeping registry lock ordering acyclic.
 
-func (p *wsPeer) closeLocked(reason string) ([]string, string) {
+func (p *wsPeer) closeLocked(reason string) ([]string, string, string) {
 	if p.closeFlag {
 		agentSessionID := p.agentSession
+		controlSessionID := p.controlSession
 		sessionIDs := make([]string, 0, len(p.outputs)+1)
 		for sessionID := range p.outputs {
 			sessionIDs = append(sessionIDs, sessionID)
@@ -1625,7 +1636,7 @@ func (p *wsPeer) closeLocked(reason string) ([]string, string) {
 				sessionIDs = append(sessionIDs, p.attached.ID)
 			}
 		}
-		return sessionIDs, agentSessionID
+		return sessionIDs, agentSessionID, controlSessionID
 	}
 	p.closeFlag = true
 	p.closeReason = reason
@@ -1667,7 +1678,7 @@ func (p *wsPeer) closeLocked(reason string) ([]string, string) {
 		"outputs", len(p.outputs),
 		"attached", attachedID,
 	)
-	return sessionIDs, p.agentSession
+	return sessionIDs, p.agentSession, p.controlSession
 }
 
 func (p *wsPeer) outboundLengthLocked() int {
@@ -2608,6 +2619,42 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"unsubscribed": true})
 	case "session.focus":
+		agentOnly, _, agentErr := optionalBoolParam(params, "agent")
+		if agentErr != nil {
+			return agentErr
+		}
+		if agentOnly {
+			requestedSessionID := stringParam(params, "id")
+			if requestedSessionID == "" {
+				return errors.New("session parameter required")
+			}
+			session, found := p.server.Service.Session(requestedSessionID)
+			if !found {
+				return fmt.Errorf("session not found: %s", requestedSessionID)
+			}
+			if session.Lifecycle != "running" {
+				return fmt.Errorf("session is not running: %s", requestedSessionID)
+			}
+			focused, specified, focusErr := optionalBoolParam(params, "focused")
+			if focusErr != nil {
+				return focusErr
+			}
+			if !specified {
+				focused = true
+			}
+			if focused {
+				// Agent-only clients subscribe to the canonical stream, not to
+				// terminal output. Promote only when the mutation lease is free;
+				// never steal an active terminal owner's lease silently.
+				if !p.server.Service.claimAgentControlPeer(p, requestedSessionID) {
+					return p.writeResult(command.ID, map[string]bool{"focused": false, "resized": false})
+				}
+				p.claimAgentControl(requestedSessionID)
+			} else {
+				p.releaseControl(requestedSessionID)
+			}
+			return p.writeResult(command.ID, map[string]bool{"focused": focused, "resized": false})
+		}
 		attached, ok := p.attachedSession()
 		requestedSessionID := stringParam(params, "id")
 		if requestedSessionID != "" {
@@ -2834,7 +2881,7 @@ func (p *wsPeer) handleCanonicalTurnSteer(ctx context.Context, command api.Envel
 		ctx, request.ExecutionID, request.CommandID, request,
 		func() (any, error) {
 			_, err := p.server.Service.interruptAgentTurn(ctx, api.AgentTurnInterruptRequest{
-				Session: session.ID, Turn: turnID, Reason: "send_now",
+				CommandID: request.CommandID, Session: session.ID, Turn: turnID, Reason: "send_now",
 				Replacement: &api.AgentMessageSendRequest{
 					Session: session.ID, ClientMessageID: request.CommandID,
 					Text: request.Text, Attachments: request.Attachments,
@@ -3167,10 +3214,7 @@ func (p *wsPeer) attach(session api.Session) {
 // pointer.
 func (p *wsPeer) claimControl(session api.Session) {
 	p.enqueueMu.Lock()
-	previousSessionID := ""
-	if p.attached != nil {
-		previousSessionID = p.attached.ID
-	}
+	previousSessionID := p.controlSession
 	p.attached = &session
 	p.controlSession = session.ID
 	p.enqueueMu.Unlock()
@@ -3182,6 +3226,20 @@ func (p *wsPeer) claimControl(session api.Session) {
 	}
 }
 
+// claimAgentControl records a control lease for an Agent-only peer without
+// manufacturing a terminal attachment. Agent timelines are passive by
+// default; this explicit marker is required before an interaction, goal, or
+// interrupt mutation can reach the provider.
+func (p *wsPeer) claimAgentControl(sessionID string) {
+	p.enqueueMu.Lock()
+	previousSessionID := p.controlSession
+	p.controlSession = sessionID
+	p.enqueueMu.Unlock()
+	if previousSessionID != "" && previousSessionID != sessionID && p.server != nil && p.server.Service != nil {
+		p.server.Service.releaseControlPeer(p, previousSessionID)
+	}
+}
+
 func (p *wsPeer) subscribeCanonicalAgent(sessionID, streamID string) error {
 	p.enqueueMu.Lock()
 	if p.closeFlag {
@@ -3190,10 +3248,11 @@ func (p *wsPeer) subscribeCanonicalAgent(sessionID, streamID string) error {
 	}
 	previous := p.agentSession
 	p.agentSession = sessionID
-	if p.canonicalAgentStreams == nil {
-		p.canonicalAgentStreams = make(map[string]struct{})
-	}
-	p.canonicalAgentStreams[streamID] = struct{}{}
+	// A canonical Agent peer has one active execution stream. Replacing the
+	// stream in-place prevents events from a retired execution from passing the
+	// peer filter after `/new`, `/clear`, or a provider restart rebinds the same
+	// Session to a new execution ID.
+	p.canonicalAgentStreams = map[string]struct{}{streamID: {}}
 	p.enqueueMu.Unlock()
 	if previous != "" && previous != sessionID {
 		p.server.Service.detachAgentPeer(p, previous)
@@ -3219,11 +3278,18 @@ func (p *wsPeer) hasCanonicalAgentStream(streamID string) bool {
 func (p *wsPeer) detach() {
 	p.enqueueMu.Lock()
 	attached := p.attached
+	controlSessionID := p.controlSession
 	p.attached = nil
 	p.controlSession = ""
 	p.enqueueMu.Unlock()
 	if attached != nil {
 		p.server.Service.detachPeer(p, attached.ID)
+	}
+	if controlSessionID != "" && p.server != nil && p.server.Service != nil {
+		// Agent-only focus has no attached terminal session, so detachPeer cannot
+		// release its mutation lease. The service-side identity check makes this
+		// safe when the attached path already removed the same lease.
+		p.server.Service.releaseControlPeer(p, controlSessionID)
 	}
 }
 
@@ -3233,14 +3299,27 @@ func (p *wsPeer) detach() {
 // a newer session's lease.
 func (p *wsPeer) detachIfAttached(sessionID string) {
 	p.enqueueMu.Lock()
-	if p.attached == nil || p.attached.ID != sessionID {
+	attachedID := ""
+	if p.attached != nil {
+		attachedID = p.attached.ID
+	}
+	if attachedID != sessionID && p.controlSession != sessionID {
 		p.enqueueMu.Unlock()
 		return
 	}
-	p.attached = nil
-	p.controlSession = ""
+	if attachedID == sessionID {
+		p.attached = nil
+	}
+	if p.controlSession == sessionID {
+		p.controlSession = ""
+	}
 	p.enqueueMu.Unlock()
-	p.server.Service.detachPeer(p, sessionID)
+	if attachedID == sessionID {
+		p.server.Service.detachPeer(p, sessionID)
+	}
+	if p.server != nil && p.server.Service != nil {
+		p.server.Service.releaseControlPeer(p, sessionID)
+	}
 }
 
 func (p *wsPeer) attachedSession() (api.Session, bool) {
@@ -3289,20 +3368,18 @@ func (p *wsPeer) requireAgentControl(sessionID string) error {
 		// requests; no provider call can be made without a session identity.
 		return nil
 	}
-	attached, err := p.controlledSession()
-	if err != nil {
-		return err
-	}
-	if attached.ID != sessionID {
+	p.enqueueMu.Lock()
+	localSession := p.controlSession
+	p.enqueueMu.Unlock()
+	if localSession != sessionID {
 		return fmt.Errorf("control lease required for session: %s", sessionID)
 	}
 	// A focus/control handoff can replace the service-level owner while the
-	// previous peer still has its local attached pointer. Consult the
-	// authoritative owner map so a stale socket cannot mutate Agent state after
-	// the lease moved to another client. Agent-only claims do not need a
-	// terminal output subscription and therefore are not represented by the
-	// focused-peer map.
-	if p.server != nil && p.server.Service != nil && !p.server.Service.hasControlPeer(p, attached.ID) {
+	// previous peer still has its local pointer. Consult the authoritative owner
+	// map so a stale socket cannot mutate Agent state after the lease moved to
+	// another client. Agent-only claims do not need a terminal output
+	// subscription and therefore are not represented by the focused-peer map.
+	if p.server != nil && p.server.Service != nil && !p.server.Service.hasControlPeer(p, sessionID) {
 		return fmt.Errorf("control lease required for session: %s", sessionID)
 	}
 	return nil
@@ -3361,7 +3438,7 @@ func (p *wsPeer) releaseControl(sessionID string) {
 		p.server.Service.releaseControlPeer(p, sessionID)
 	}
 	p.enqueueMu.Lock()
-	if p.attached != nil && p.attached.ID == sessionID {
+	if p.controlSession == sessionID {
 		p.controlSession = ""
 	}
 	p.enqueueMu.Unlock()

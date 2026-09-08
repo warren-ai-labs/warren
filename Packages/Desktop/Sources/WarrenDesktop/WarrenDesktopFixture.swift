@@ -1013,6 +1013,7 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case requestProjectWorktreeImport(ProjectID)
     case requestProjectSetupScript(ProjectID)
     case setProjectAutoImportGitWorktrees(ProjectID, Bool)
+    case renameTask(TaskID, String)
     case renameProject(ProjectID, String)
     case renameWorkspace(WorkspaceID, String)
     case attachWorkspaceToTask(TaskID, WorkspaceID)

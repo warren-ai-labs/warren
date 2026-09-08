@@ -297,15 +297,21 @@ type AgentEvent struct {
 }
 
 // AgentTurnStatus describes one explicit turn boundary in an agent transcript.
-// Idle is only used by snapshots before the first observed turn.
+// Idle is only used by snapshots before the first observed turn. Interrupted
+// is a provider-observed stop (for example a TUI Ctrl-C); cancelled is the
+// observed completion of a Host cancellation/steer request. Aborted is
+// retained for replaying older canonical events that did not preserve that
+// distinction.
 type AgentTurnStatus string
 
 const (
-	AgentTurnIdle      AgentTurnStatus = "idle"
-	AgentTurnStarted   AgentTurnStatus = "started"
-	AgentTurnCompleted AgentTurnStatus = "completed"
-	AgentTurnFailed    AgentTurnStatus = "failed"
-	AgentTurnAborted   AgentTurnStatus = "aborted"
+	AgentTurnIdle        AgentTurnStatus = "idle"
+	AgentTurnStarted     AgentTurnStatus = "started"
+	AgentTurnCompleted   AgentTurnStatus = "completed"
+	AgentTurnFailed      AgentTurnStatus = "failed"
+	AgentTurnInterrupted AgentTurnStatus = "interrupted"
+	AgentTurnCancelled   AgentTurnStatus = "cancelled"
+	AgentTurnAborted     AgentTurnStatus = "aborted"
 )
 
 // AgentTurn is a monotonically numbered lifecycle transition within one

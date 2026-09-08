@@ -220,6 +220,17 @@ type canonicalCommandResult struct {
 	err         error
 }
 
+// pendingAgentTurnRequest records a Host-originated request whose transport
+// has been accepted but whose Provider terminal observation has not arrived.
+// It is deliberately ephemeral: the provider transcript remains the source
+// of truth for ending the turn, while this record only lets the Host preserve
+// the distinction between a direct TUI interruption and a Host cancel.
+type pendingAgentTurnRequest struct {
+	turn      uint64
+	commandID string
+	reason    string
+}
+
 type outputSession struct {
 	mu                sync.Mutex
 	sessionID         string
@@ -259,11 +270,12 @@ type agentSession struct {
 	// canonicalEvents is an in-memory read-through projection used when an
 	// embedder does not configure AgentStore; production Headless persists the
 	// same rows in AgentStore before broadcasting them.
-	executionID     string
-	canonicalEvents []api.CanonicalAgentEvent
-	events          []api.AgentEvent
-	status          api.AgentStatus
-	turn            api.AgentTurn
+	executionID        string
+	canonicalEvents    []api.CanonicalAgentEvent
+	events             []api.AgentEvent
+	status             api.AgentStatus
+	turn               api.AgentTurn
+	pendingTurnRequest *pendingAgentTurnRequest
 	// titleUser and titleAssistant retain only the first real text messages
 	// needed for one automatic title suggestion. They are intentionally kept
 	// separate from the public transcript projection.
@@ -4618,7 +4630,7 @@ func canonicalProjectionFromEvent(status api.AgentStatus, turn api.AgentTurn, ev
 		if err == nil && json.Unmarshal(encoded, &value) == nil && value.Activity != "" {
 			status = value
 		}
-	case "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.aborted":
+	case "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted":
 		turnID := strings.TrimSpace(event.TurnID)
 		if value, ok := event.Payload["turnId"].(string); ok && value != "" {
 			turnID = value
@@ -4636,7 +4648,11 @@ func canonicalProjectionFromEvent(status api.AgentStatus, turn api.AgentTurn, ev
 				turn.Status = api.AgentTurnCompleted
 			case "turn.failed":
 				turn.Status = api.AgentTurnFailed
-			case "turn.cancelled", "turn.aborted":
+			case "turn.cancelled":
+				turn.Status = api.AgentTurnCancelled
+			case "turn.interrupted":
+				turn.Status = api.AgentTurnInterrupted
+			case "turn.aborted":
 				turn.Status = api.AgentTurnAborted
 			}
 		}
@@ -4677,10 +4693,38 @@ func (s *Service) restoreCanonicalProjection(executionID string) (api.AgentStatu
 	return status, turn, status.Activity != "" || turn.ID > 0
 }
 
-func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string) api.CanonicalAgentEvent {
+func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string, requests ...*pendingAgentTurnRequest) api.CanonicalAgentEvent {
+	var request *pendingAgentTurnRequest
+	if len(requests) > 0 {
+		request = requests[0]
+	}
 	eventType := "turn." + string(turn.Status)
 	if turn.Status == api.AgentTurnAborted {
+		eventType = "turn.aborted"
+	}
+	if turn.Status == api.AgentTurnInterrupted {
+		eventType = "turn.interrupted"
+	}
+	if turn.Status == api.AgentTurnCancelled {
 		eventType = "turn.cancelled"
+	}
+	payload := map[string]any{
+		"turnId": strconv.FormatUint(turn.ID, 10),
+		"status": string(turn.Status),
+	}
+	var causedBy string
+	if turn.Status == api.AgentTurnInterrupted {
+		payload["cause"] = "interrupt"
+	}
+	if turn.Status == api.AgentTurnCancelled {
+		cause := "cancel"
+		if request != nil && request.reason != "" {
+			cause = request.reason
+		}
+		payload["cause"] = cause
+		if request != nil {
+			causedBy = strings.TrimSpace(request.commandID)
+		}
 	}
 	return api.CanonicalAgentEvent{
 		EventID:     fmt.Sprintf("turn:%d:%s", turn.ID, turn.Status),
@@ -4689,14 +4733,12 @@ func canonicalTurnEvent(turn api.AgentTurn, streamID, executionID string) api.Ca
 		TurnID:      strconv.FormatUint(turn.ID, 10),
 		Type:        eventType,
 		OccurredAt:  time.Now().UTC(),
+		CausedBy:    causedBy,
 		Origin: api.AgentEventOrigin{
 			Kind:       "host",
 			Confidence: "derived",
 		},
-		Payload: map[string]any{
-			"turnId": strconv.FormatUint(turn.ID, 10),
-			"status": string(turn.Status),
-		},
+		Payload: payload,
 	}
 }
 
@@ -4893,23 +4935,6 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		s.agentsMu.Unlock()
 		return
 	}
-	// A native interaction response is recorded locally before a provider may
-	// echo interaction.resolved through its transcript watcher. Suppress that
-	// semantic duplicate while retaining all unrelated provider observations.
-	filteredEvents := make([]api.AgentEvent, 0, len(events))
-	for _, source := range events {
-		if strings.EqualFold(strings.TrimSpace(source.Type), "interaction.resolved") {
-			interactionID, _ := source.Payload["interactionId"].(string)
-			if interactionID == "" {
-				interactionID, _ = source.Payload["requestId"].(string)
-			}
-			if canonicalEntryHasResolvedInteraction(entry, interactionID) {
-				continue
-			}
-		}
-		filteredEvents = append(filteredEvents, source)
-	}
-	events = filteredEvents
 	streamID := strings.TrimSpace(entry.executionID)
 	if streamID == "" {
 		// recordAgentEventsForHandle already owns agentsMu and entry.mu. Calling
@@ -4923,6 +4948,21 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		}
 		entry.executionID = streamID
 	}
+	// A native interaction response is recorded locally before a provider may
+	// echo its terminal observation through the transcript watcher. Suppress
+	// that semantic duplicate while retaining all unrelated observations.
+	filteredEvents := make([]api.AgentEvent, 0, len(events))
+	for _, source := range events {
+		canonicalType := canonicalProviderEvent(source, streamID, streamID).Type
+		if strings.HasPrefix(canonicalType, "interaction.") && canonicalType != "interaction.requested" {
+			interactionID := canonicalInteractionEventID(source)
+			if canonicalEntryHasTerminalInteraction(entry, interactionID) {
+				continue
+			}
+		}
+		filteredEvents = append(filteredEvents, source)
+	}
+	events = filteredEvents
 	effectiveStatus = entry.status
 	if entry.status.Activity == api.AgentActivityExited && status.Activity != api.AgentActivityExited {
 		status = entry.status
@@ -4936,7 +4976,18 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 		if source.ID == "" {
 			source.ID = api.StableAgentEventID(source)
 		}
-		canonical = append(canonical, canonicalProviderEvent(source, streamID, streamID))
+		canonicalEvent := canonicalProviderEvent(source, streamID, streamID)
+		if strings.HasPrefix(canonicalEvent.Type, "interaction.") {
+			// Provider terminal observations often contain only requestId/state.
+			// Carry the immutable request schema forward so a resolved card can
+			// still be expanded and audited after a reconnect.
+			mergeCanonicalInteractionContext(entry.canonicalEvents, &canonicalEvent)
+			if canonicalEvent.Type != "interaction.requested" &&
+				canonicalEntryHasTerminalInteraction(entry, canonicalInteractionCanonicalID(canonicalEvent)) {
+				continue
+			}
+		}
+		canonical = append(canonical, canonicalEvent)
 	}
 	statusChanged := status.Activity != "" && !entry.status.Equal(status)
 	if statusChanged {
@@ -5040,6 +5091,45 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 			s.agentsMu.Unlock()
 			continue
 		}
+		// Turn callbacks can be replayed or arrive out of order around a
+		// provider callback. Once this turn has a terminal boundary, never let a
+		// duplicate or stale observation regress its semantic status.
+		if entry.turn.ID > turn.ID ||
+			(entry.turn.ID == turn.ID && terminalAgentTurnStatus(entry.turn.Status)) {
+			entry.mu.Unlock()
+			s.agentsMu.Unlock()
+			continue
+		}
+		observedTurn := turn
+		var terminationRequest *pendingAgentTurnRequest
+		consumePendingRequest := false
+		if turn.Status == api.AgentTurnInterrupted || turn.Status == api.AgentTurnAborted {
+			if pending := entry.pendingTurnRequest; pending != nil && pending.turn == turn.ID {
+				copy := *pending
+				terminationRequest = &copy
+				observedTurn.Status = api.AgentTurnCancelled
+				consumePendingRequest = true
+			} else {
+				// Provider adapters report the fact of an interruption. A Host
+				// cancellation is only inferred when it matches an outstanding
+				// request for this exact turn.
+				observedTurn.Status = api.AgentTurnInterrupted
+				if pending := entry.pendingTurnRequest; pending != nil && pending.turn < turn.ID {
+					entry.pendingTurnRequest = nil
+				}
+			}
+		} else if pending := entry.pendingTurnRequest; pending != nil && turn.ID > pending.turn {
+			// A newer turn supersedes a request whose target never produced a
+			// terminal observation. Do not attribute the new turn to that request.
+			entry.pendingTurnRequest = nil
+		}
+		if pending := entry.pendingTurnRequest; pending != nil && pending.turn == turn.ID &&
+			(turn.Status == api.AgentTurnCompleted || turn.Status == api.AgentTurnFailed) {
+			// A normal Provider terminal boundary wins over an outstanding Host
+			// request. The request was accepted, but it did not cause this
+			// completion, so it must not leak into a later interruption.
+			entry.pendingTurnRequest = nil
+		}
 		streamID := strings.TrimSpace(entry.executionID)
 		if streamID == "" {
 			if s.Store != nil {
@@ -5049,13 +5139,13 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 			}
 			entry.executionID = streamID
 		}
-		changed := entry.turn.ID != turn.ID || entry.turn.Status != turn.Status
+		changed := entry.turn.ID != observedTurn.ID || entry.turn.Status != observedTurn.Status
 		var canonical []api.CanonicalAgentEvent
 		if changed {
 			var appendErr error
 			canonical, appendErr = s.appendCanonicalEventsLockedWithCheckpoint(sessionID, entry, []api.CanonicalAgentEvent{
-				canonicalTurnEvent(turn, streamID, streamID),
-			}, canonicalProjectionState(entry.status, turn))
+				canonicalTurnEvent(observedTurn, streamID, streamID, terminationRequest),
+			}, canonicalProjectionState(entry.status, observedTurn))
 			if appendErr != nil {
 				entry.mu.Unlock()
 				s.agentsMu.Unlock()
@@ -5063,8 +5153,11 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 				return
 			}
 		}
-		entry.turn = turn
-		if turn.Status == api.AgentTurnCompleted && strings.TrimSpace(entry.titleAssistant) != "" {
+		if consumePendingRequest {
+			entry.pendingTurnRequest = nil
+		}
+		entry.turn = observedTurn
+		if observedTurn.Status == api.AgentTurnCompleted && strings.TrimSpace(entry.titleAssistant) != "" {
 			entry.titleAssistantComplete = true
 		}
 		entry.mu.Unlock()
@@ -5080,7 +5173,7 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 				}
 			}
 		}
-		if turn.Status == api.AgentTurnCompleted {
+		if observedTurn.Status == api.AgentTurnCompleted {
 			s.tryStartSessionTitle(sessionID)
 		}
 	}
@@ -5541,19 +5634,77 @@ type canonicalInteractionProjection struct {
 }
 
 func canonicalEntryHasResolvedInteraction(entry *agentSession, interactionID string) bool {
+	return canonicalEntryHasTerminalInteraction(entry, interactionID)
+}
+
+func canonicalEntryHasTerminalInteraction(entry *agentSession, interactionID string) bool {
 	if entry == nil || strings.TrimSpace(interactionID) == "" {
 		return false
 	}
 	for _, event := range entry.canonicalEvents {
-		if event.Type != "interaction.resolved" {
+		if event.Type != "interaction.resolved" && event.Type != "interaction.expired" {
 			continue
 		}
-		candidateID, _ := event.Payload["interactionId"].(string)
+		candidateID := canonicalInteractionCanonicalID(event)
 		if strings.TrimSpace(candidateID) == strings.TrimSpace(interactionID) {
 			return true
 		}
 	}
 	return false
+}
+
+func canonicalInteractionEventID(event api.AgentEvent) string {
+	if event.Payload != nil {
+		for _, key := range []string{"interactionId", "requestId"} {
+			if value, ok := event.Payload[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return strings.TrimSpace(event.ID)
+}
+
+func canonicalInteractionCanonicalID(event api.CanonicalAgentEvent) string {
+	if event.Payload != nil {
+		for _, key := range []string{"interactionId", "requestId"} {
+			if value, ok := event.Payload[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return strings.TrimSpace(event.EventID)
+}
+
+// mergeCanonicalInteractionContext keeps the request schema attached to a
+// terminal lifecycle row. Providers commonly emit only requestId/state in the
+// tool result; dropping the original questions/options makes an Answered card
+// impossible to inspect after replay.
+func mergeCanonicalInteractionContext(history []api.CanonicalAgentEvent, event *api.CanonicalAgentEvent) {
+	if event == nil || event.Payload == nil || event.Type == "interaction.requested" {
+		return
+	}
+	interactionID := canonicalInteractionCanonicalID(*event)
+	if interactionID == "" {
+		return
+	}
+	for index := len(history) - 1; index >= 0; index-- {
+		candidate := history[index]
+		if candidate.Type != "interaction.requested" || canonicalInteractionCanonicalID(candidate) != interactionID {
+			continue
+		}
+		if candidate.Payload == nil {
+			return
+		}
+		for _, key := range []string{"interactionId", "requestId", "kind", "title", "description", "schema", "options", "questions", "version", "turnId"} {
+			if _, exists := event.Payload[key]; exists {
+				continue
+			}
+			if value, exists := candidate.Payload[key]; exists {
+				event.Payload[key] = value
+			}
+		}
+		return
+	}
 }
 
 // canonicalInteraction resolves the provider-neutral interaction projection
@@ -5578,10 +5729,7 @@ func (s *Service) canonicalInteraction(sessionID, interactionID string) (canonic
 		if event.Type != "interaction.requested" && event.Type != "interaction.resolved" && event.Type != "interaction.expired" {
 			continue
 		}
-		candidateID, _ := event.Payload["interactionId"].(string)
-		if candidateID == "" {
-			candidateID, _ = event.Payload["requestId"].(string)
-		}
+		candidateID := canonicalInteractionCanonicalID(event)
 		if strings.TrimSpace(candidateID) != interactionID {
 			continue
 		}
@@ -5605,16 +5753,16 @@ func (s *Service) canonicalInteraction(sessionID, interactionID string) (canonic
 			projection.version = 1
 		}
 		state, _ := event.Payload["state"].(string)
-		state = strings.ToLower(strings.TrimSpace(state))
+		state = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(state, "-", "_")))
 		switch event.Type {
 		case "interaction.requested":
 			if state == "" {
 				state = "pending"
 			}
 		case "interaction.resolved":
-			if state == "" {
-				state = "resolved"
-			}
+			// The lifecycle type is authoritative even when a provider uses
+			// answered/accepted/completed in its payload.
+			state = "resolved"
 		case "interaction.expired":
 			state = "expired"
 		}
@@ -5873,6 +6021,73 @@ func (s *Service) agentTurn(sessionID string) api.AgentTurn {
 		turn.Status = api.AgentTurnIdle
 	}
 	return turn
+}
+
+func terminalAgentTurnStatus(status api.AgentTurnStatus) bool {
+	switch status {
+	case api.AgentTurnCompleted, api.AgentTurnFailed, api.AgentTurnInterrupted, api.AgentTurnCancelled, api.AgentTurnAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+// markPendingAgentTurnRequest records a cancellation/steer request only after
+// all request validation has passed and immediately before the transport is
+// invoked. It must not mutate AgentStatus: acceptance is an intent, not a
+// Provider terminal observation.
+func (s *Service) markPendingAgentTurnRequest(sessionID string, request api.AgentTurnInterruptRequest) error {
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry == nil {
+		return fmt.Errorf("turn %d is not active", request.Turn)
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.turn.ID != request.Turn || entry.turn.Status != api.AgentTurnStarted {
+		return fmt.Errorf("turn %d is not active", request.Turn)
+	}
+	// A watcher may publish a ready status immediately before its turn
+	// boundary callback. Do not attach a later Host request to that already
+	// observed stop; an empty status remains allowed for legacy/native bridges
+	// that only publish turn cursors.
+	switch entry.status.Activity {
+	case "":
+	case api.AgentActivityWorking, api.AgentActivityBlocked, api.AgentActivityStalled:
+	default:
+		return fmt.Errorf("turn %d is not active", request.Turn)
+	}
+	entry.pendingTurnRequest = &pendingAgentTurnRequest{
+		turn:      request.Turn,
+		commandID: strings.TrimSpace(request.CommandID),
+		reason:    strings.TrimSpace(request.Reason),
+	}
+	return nil
+}
+
+// clearPendingAgentTurnRequest removes an admission record when its transport
+// failed. A Provider observation may have consumed it already, so matching is
+// intentionally conditional and idempotent.
+func (s *Service) clearPendingAgentTurnRequest(sessionID string, turn uint64, commandID string) {
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry == nil {
+		return
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	pending := entry.pendingTurnRequest
+	if pending == nil || pending.turn != turn {
+		return
+	}
+	if commandID != "" && pending.commandID != strings.TrimSpace(commandID) {
+		return
+	}
+	entry.pendingTurnRequest = nil
 }
 
 func (s *Service) waitAgentReady(ctx context.Context, sessionID string) error {
@@ -6690,13 +6905,22 @@ func (s *Service) registerAgentPeer(sessionID string, peer *wsPeer) {
 func (s *Service) detachAgentPeer(peer *wsPeer, sessionID string) {
 	s.lazyInit()
 	s.outputMu.Lock()
-	defer s.outputMu.Unlock()
 	if peers := s.agentPeers[sessionID]; peers != nil {
 		delete(peers, peer)
 		if len(peers) == 0 {
 			delete(s.agentPeers, sessionID)
 		}
 	}
+	// Agent subscriptions are passive, but an Agent-only action may have
+	// promoted this peer to the per-session mutation lease. A disconnect (or a
+	// rapid stream switch) must release that lease or every later client will
+	// observe a permanently occupied owner. Preserve the lease when this same
+	// peer still owns terminal focus; in that case the terminal subscription is
+	// the live owner and should continue to gate input/resize.
+	if s.controlPeers[sessionID] == peer && s.focusedPeers[sessionID] != peer {
+		delete(s.controlPeers, sessionID)
+	}
+	s.outputMu.Unlock()
 }
 
 func (s *Service) hasAgentPeers(sessionID string) bool {
@@ -6874,6 +7098,22 @@ func (s *Service) claimControlPeer(peer *wsPeer, sessionID string) bool {
 	s.outputMu.Lock()
 	s.controlPeers[sessionID] = peer
 	s.outputMu.Unlock()
+	return true
+}
+
+// claimAgentControlPeer grants an explicit mutation lease to a canonical Agent
+// subscriber without requiring terminal output registration. Unlike terminal
+// focus, an Agent-only claim never steals a lease held by another peer; the
+// caller can surface the negative receipt and let the user retry after the
+// other client releases control.
+func (s *Service) claimAgentControlPeer(peer *wsPeer, sessionID string) bool {
+	s.lazyInit()
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	if owner := s.controlPeers[sessionID]; owner != nil && owner != peer {
+		return false
+	}
+	s.controlPeers[sessionID] = peer
 	return true
 }
 

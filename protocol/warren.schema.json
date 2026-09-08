@@ -405,7 +405,7 @@
             "type": "string",
             "enum": [
               "execution.started", "execution.resumed", "execution.replaced", "execution.failed",
-              "turn.started", "turn.completed", "turn.failed", "turn.cancelled",
+              "turn.started", "turn.completed", "turn.failed", "turn.interrupted", "turn.cancelled", "turn.aborted",
               "message.created", "message.delta", "message.completed", "reasoning.delta",
               "tool.started", "tool.updated", "tool.completed", "tool.failed",
               "interaction.requested", "interaction.resolved", "interaction.expired",

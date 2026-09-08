@@ -1053,14 +1053,11 @@ func (s *Service) existingAgentMessageIdentity(sessionID, clientMessageID, finge
 }
 
 func sendAgentMessageInput(ctx context.Context, runtime Runtime, sessionID, text string) error {
-	var buf bytes.Buffer
-	buf.WriteString("\x1b[200~")
-	buf.WriteString(strings.ReplaceAll(text, "\n", "\r"))
-	buf.WriteString("\x1b[201~")
-	if err := runtime.Input(ctx, sessionID, buf.Bytes()); err != nil {
-		return err
-	}
-	return runtime.Input(ctx, sessionID, []byte{0x1b, 0x5b, 0x31, 0x33, 0x75})
+	// Herdr-compatible submission: write the text, allow the TUI to consume
+	// and redraw it, then submit with a separate carriage return. The previous
+	// ESC[13u shortcut depends on Kitty keyboard negotiation and was silently
+	// ignored by Codex sessions that had not enabled that protocol.
+	return sendTerminalSubmission(ctx, runtime, sessionID, text)
 }
 
 // interruptAgentTurnInput sends the terminal interrupt byte (Ctrl+C) and, for
@@ -1078,6 +1075,9 @@ func interruptAgentTurnInputText(ctx context.Context, runtime Runtime, sessionID
 		return err
 	}
 	if replacementText != "" {
+		if err := waitAgentTerminalInput(ctx); err != nil {
+			return err
+		}
 		return sendAgentMessageInput(ctx, runtime, sessionID, replacementText)
 	}
 	return nil
@@ -1592,7 +1592,7 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		if existing.Type != "interaction.resolved" {
 			continue
 		}
-		candidateID, _ := existing.Payload["interactionId"].(string)
+		candidateID := canonicalInteractionCanonicalID(existing)
 		if strings.TrimSpace(candidateID) == request.RequestID {
 			entry.mu.Unlock()
 			s.agentsMu.Unlock()
@@ -1744,6 +1744,16 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			}
 		}
 	}
+	if err := s.markPendingAgentTurnRequest(request.Session, request); err != nil {
+		s.finishAgentAction(actionKey, call, nil, err)
+		return api.AgentTurnInterruptResult{}, err
+	}
+	pendingRequest := true
+	defer func() {
+		if pendingRequest {
+			s.clearPendingAgentTurnRequest(request.Session, request.Turn, request.CommandID)
+		}
+	}()
 	if handle := s.currentAgentHandle(request.Session); handle != nil {
 		if request.Replacement != nil {
 			// AgentHandle owns the atomic send-now operation. Attachments stay
@@ -1802,6 +1812,7 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			return api.AgentTurnInterruptResult{}, err
 		}
 	}
+	pendingRequest = false
 	result := api.AgentTurnInterruptResult{Accepted: true, Session: request.Session, Turn: request.Turn, Status: "accepted"}
 	if request.Replacement != nil {
 		result.ClientMessageID = request.Replacement.ClientMessageID

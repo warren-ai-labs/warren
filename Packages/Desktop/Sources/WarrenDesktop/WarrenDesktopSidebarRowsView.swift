@@ -384,17 +384,16 @@ struct WarrenDesktopSidebarRows: View {
     }
 
     private var visibleTaskGroups: [WarrenDesktopTaskGroup] {
-        if tree.showsActiveOnly {
-            return taskGroups.compactMap { group in
-                let activeWorkspaces = group.workspaces.filter { activeWorkspaceIDs.contains($0.id) }
-                guard !activeWorkspaces.isEmpty else { return nil }
-                return WarrenDesktopTaskGroup(
-                    task: group.task,
-                    workspaces: activeWorkspaces
-                )
-            }
+        guard tree.showsActiveOnly else { return taskGroups }
+        // The active-only switch filters workspace children, not the task
+        // heading itself. A task with no active workspace still needs to stay
+        // visible so users can inspect or attach workspaces to it.
+        return taskGroups.map { group in
+            WarrenDesktopTaskGroup(
+                task: group.task,
+                workspaces: group.workspaces.filter { activeWorkspaceIDs.contains($0.id) }
+            )
         }
-        return taskGroups
     }
 
     private var tasksSection: some View {
@@ -425,7 +424,7 @@ struct WarrenDesktopSidebarRows: View {
                             taskRow(group)
                             if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
                                 if group.workspaces.isEmpty {
-                                    if !isCollapsed {
+                                    if !isCollapsed && !tree.showsActiveOnly {
                                         Text("No linked workspaces")
                                             .font(WarrenTypography.supporting)
                                             .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
@@ -454,114 +453,28 @@ struct WarrenDesktopSidebarRows: View {
     }
 
     private func taskRow(_ group: WarrenDesktopTaskGroup) -> some View {
-        let isExpanded = tree.expandedTaskIDs.contains(group.task.id)
-        return HStack(spacing: WarrenSpacing.xxs) {
-            Button {
-                toggleTask(group.task.id)
-            } label: {
-                HStack(spacing: WarrenSpacing.compact) {
-                    Image(systemName: "checklist")
-                        .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize)
-                    if !isCollapsed {
-                        Text(group.task.name)
-                            .font(WarrenTypography.navigationItem)
-                            .lineLimit(1)
-                        Text("\(group.workspaces.count)")
-                            .font(WarrenTypography.navigationMeta)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
-                .contentShape(.rect)
-            }
-            .buttonStyle(WarrenInteractiveRowStyle(isSelected: false, isFocused: false))
-            .disabled(isInteractionDisabled)
-            .accessibilityLabel("Task \(group.task.name), \(group.workspaces.count) workspaces")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .warrenSemanticElement(
-                id: "task.\(group.task.id.description)",
-                role: .button,
-                label: "Task \(group.task.name)",
-                value: "\(group.workspaces.count) workspaces · \(isExpanded ? "Expanded" : "Collapsed")",
-                isEnabled: !isInteractionDisabled,
-                action: { toggleTask(group.task.id) }
-            )
-
-            if !isCollapsed {
-                taskAddMenu(group)
-            }
-        }
-        .padding(.horizontal, WarrenSpacing.compact)
-        .id("task.\(group.task.id.description)")
-        .contextMenu {
-            if !isInteractionDisabled {
-                WarrenDesktopContextMenu([
-                    .button(
-                        title: "Delete Task…",
-                        destructive: true,
-                        action: { onRequestDeletion(.task(group.task)) }
-                    ),
-                ])
-            }
-        }
-    }
-
-    private func taskAddMenu(_ group: WarrenDesktopTaskGroup) -> some View {
-        Menu {
-            Menu("Add Existing Workspace") {
-                let availableGroups = WarrenDesktopTaskWorkspaceOptions.availableGroups(
-                    from: groups
-                )
-                if availableGroups.isEmpty {
-                    Text("No unassigned workspaces")
-                } else {
-                    ForEach(availableGroups) { projectGroup in
-                        Menu(projectGroup.project.name) {
-                            ForEach(projectGroup.workspaces) { workspace in
-                                Button(workspace.name) {
-                                    onAction(.attachWorkspaceToTask(group.task.id, workspace.id))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Menu("Create Workspace") {
-                if groups.isEmpty {
-                    Text("No projects available")
-                } else {
-                    ForEach(groups) { projectGroup in
-                        Button(projectGroup.project.name) {
-                            onAction(.requestNewWorkspace(
-                                projectGroup.project.id,
-                                taskID: group.task.id
-                            ))
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button("Delete Task…", role: .destructive) {
+        WarrenDesktopTaskRow(
+            task: group.task,
+            workspaceCount: group.workspaces.count,
+            availableProjectGroups: groups,
+            isCollapsed: isCollapsed,
+            isExpanded: tree.expandedTaskIDs.contains(group.task.id),
+            isInteractionDisabled: isInteractionDisabled,
+            onToggleExpansion: { toggleTask(group.task.id) },
+            onAttachWorkspace: { workspaceID in
+                onAction(.attachWorkspaceToTask(group.task.id, workspaceID))
+            },
+            onCreateWorkspace: { projectID in
+                onAction(.requestNewWorkspace(projectID, taskID: group.task.id))
+            },
+            onRename: {
+                onRequestRename(.task(group.task.id, name: group.task.name))
+            },
+            onDelete: {
                 onRequestDeletion(.task(group.task))
             }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 12, weight: .medium))
-                .frame(
-                    width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                    height: WarrenLayoutMetrics.sidebarActionButtonSize
-                )
-                .contentShape(.rect)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(isInteractionDisabled)
-        .accessibilityLabel("Add workspace to task \(group.task.name)")
+        )
+        .id("task.\(group.task.id.description)")
     }
 
     private var visibleTerminalGroups: [WarrenDesktopTerminalGroup] {

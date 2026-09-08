@@ -23,9 +23,11 @@ import {
   formatAgentReasoning,
   getAvailableAgentModels,
   groupAgentEvents,
+  agentInteractionIdentity,
   isCommandTool,
   isHiddenAgentEvent,
   latestAgentAction,
+  latestPendingAgentInteraction,
   loadAgentDraft,
   loadAgentSettings,
   mergeAgentEvents,
@@ -245,14 +247,90 @@ test("groupAgentEvents does not attach a late tool output to an earlier message"
 test("projectAgentEvents keeps structured cards as activity boundaries", () => {
   const blocks = projectAgentEvents([
     { sequence: 1, type: "tool_call", callId: "call-1", toolName: "shell" },
-    { sequence: 2, id: "question-1", type: "question", payload: { state: "pending" } },
+    {
+      sequence: 2,
+      id: "question-1",
+      type: "question",
+      payload: {
+        requestId: "question-1",
+        state: "pending",
+        questions: [{ id: "q1", prompt: "Continue?", options: [{ id: "yes", label: "Yes" }] }],
+      },
+    },
     { sequence: 3, type: "reasoning", content: "after the question" },
-    { sequence: 4, id: "question-1", type: "question", payload: { state: "resolved" } },
+    { sequence: 4, id: "question-1", type: "question", payload: { requestId: "question-1", state: "resolved" } },
     { sequence: 5, type: "reasoning", content: "after resolution" },
   ]);
   assert.deepEqual(blocks.map(block => block.kind), ["activity_group", "structured", "activity_group"]);
   assert.equal(blocks[1].event.payload.state, "resolved");
   assert.deepEqual(blocks[2].reasoning.map(event => event.content), ["after resolution"]);
+});
+
+test("Web interaction projection rejects malformed questions and stale pending rows", () => {
+  const malformed = projectAgentEvents([
+    { sequence: 1, type: "assistant", content: "Which file?" },
+    { sequence: 2, type: "question", payload: { requestId: "bad-question", state: "pending" } },
+    {
+      sequence: 3,
+      type: "interaction.requested",
+      payload: { requestId: "bad-canonical", state: "pending", questions: [{ prompt: "?", options: ["yes"] }] },
+    },
+  ]);
+  assert.deepEqual(malformed.map(block => block.kind), ["assistant"]);
+
+  const request = {
+    sequence: 4,
+    type: "interaction.requested",
+    payload: {
+      kind: "question",
+      requestId: "question-lifecycle",
+      questions: [{ id: "q1", prompt: "Continue?", options: ["yes", "no"] }],
+    },
+  };
+  const resolved = {
+    sequence: 5,
+    type: "interaction.resolved",
+    payload: {
+      kind: "question",
+      requestId: "question-lifecycle",
+      response: { answers: { q1: ["yes"] } },
+      state: "answered",
+    },
+  };
+  const events = [request, resolved].map((event, index) => ({
+    ...canonicalEvent(event.sequence),
+    ...event,
+    eventId: `interaction-${index}`,
+  }));
+  const projected = projectAgentEvents(events);
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0].kind, "structured");
+  assert.equal(projected[0].event.type, "question");
+  assert.equal(projected[0].event.payload.state, "answered");
+  assert.equal(latestPendingAgentInteraction(events), null);
+  assert.equal(agentInteractionIdentity(projected[0].event), "question-lifecycle");
+});
+
+test("canonical requested interactions default to pending without inventing a kind", () => {
+  const requested = normalizeCanonicalAgentEvent({
+    ...canonicalEvent(1),
+    type: "interaction.requested",
+    payload: {
+      kind: "question",
+      requestId: "request-1",
+      questions: [{ prompt: "Pick one", options: [{ id: "a", label: "A" }] }],
+    },
+  });
+  assert.equal(requested.type, "question");
+  assert.equal(requested.payload.state, "pending");
+  assert.equal(latestPendingAgentInteraction([requested]).payload.requestId, "request-1");
+
+  const missingKind = normalizeCanonicalAgentEvent({
+    ...canonicalEvent(2),
+    type: "interaction.resolved",
+    payload: { requestId: "request-2", state: "resolved" },
+  });
+  assert.equal(projectAgentEvents([missingKind]).length, 0);
 });
 
 test("canonical normalization projects tool semantics and queue identity", () => {
@@ -283,6 +361,38 @@ test("canonical normalization projects tool semantics and queue identity", () =>
   ]);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].event.payload.content, "edited");
+});
+
+test("canonical goal updates project as one compact structured event", () => {
+  const blocks = projectAgentEvents([
+    {
+      ...canonicalEvent(1),
+      type: "goal.updated",
+      payload: {
+        goalId: "goal-1",
+        objective: "Ship the mobile capsule",
+        state: "active",
+        tokenBudget: 1000,
+        tokensUsed: 125,
+      },
+    },
+    {
+      ...canonicalEvent(2),
+      type: "goal.updated",
+      payload: {
+        goalId: "goal-1",
+        objective: "Ship the mobile capsule",
+        state: "budgetLimited",
+        tokenBudget: 1000,
+        tokensUsed: 1000,
+      },
+    },
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].kind, "structured");
+  assert.equal(blocks[0].event.type, "goal");
+  assert.equal(blocks[0].event.payload.state, "budgetLimited");
+  assert.equal(blocks[0].event.payload.tokensUsed, 1000);
 });
 
 test("groupAgentEvents treats role-only messages as visible message boundaries", () => {
@@ -561,6 +671,40 @@ test("control projection waits for missing events and applies unknown types in o
   const recovered = projectAgentControlState([first, missing, future], gapped);
   assert.equal(recovered.projectionThrough, 3);
   assert.equal(recovered.status.activity, "ready");
+});
+
+test("control projection preserves interrupted and cancelled turn semantics", () => {
+  const started = {
+    ...canonicalEvent(1),
+    type: "turn.started",
+    turnId: "4",
+    payload: { turnId: "4", status: "started" },
+  };
+  const interrupted = {
+    ...canonicalEvent(2),
+    type: "turn.interrupted",
+    turnId: "4",
+    payload: { turnId: "4", status: "interrupted", cause: "interrupt" },
+  };
+  const providerProjection = projectAgentControlState([started, interrupted]);
+  assert.deepEqual(providerProjection.turn, { id: 4, status: "interrupted" });
+
+  const cancelled = {
+    ...canonicalEvent(2),
+    type: "turn.cancelled",
+    turnId: "4",
+    payload: { turnId: "4", status: "cancelled", cause: "cancel" },
+  };
+  const hostProjection = projectAgentControlState([started, cancelled]);
+  assert.deepEqual(hostProjection.turn, { id: 4, status: "cancelled" });
+
+  const legacy = {
+    ...canonicalEvent(2),
+    type: "turn.aborted",
+    turnId: "4",
+    payload: { turnId: "4", status: "aborted" },
+  };
+  assert.deepEqual(projectAgentControlState([started, legacy]).turn, { id: 4, status: "aborted" });
 });
 
 test("isHiddenAgentEvent hides status, turn, and execution control-plane events from timeline", () => {

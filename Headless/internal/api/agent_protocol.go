@@ -327,8 +327,11 @@ func CanonicalAgentEventFromObservation(event AgentEvent, streamID, executionID 
 	// Legacy provider parsers identify interactions with their projected type
 	// (`question`, `permission`, or `confirmation`) but predate the canonical
 	// discriminator. Preserve that semantic at the wire boundary so clients do
-	// not have to infer a Question from an arbitrary payload.
-	if canonicalType := canonicalAgentEventType(event.Type, event.ContentDelta, role); canonicalType == "interaction.requested" {
+	// not have to infer a Question from an arbitrary payload. The lifecycle state
+	// is part of this decision: a provider result must never be advertised as a
+	// second `interaction.requested` row.
+	canonicalType := canonicalAgentEventTypeForPayload(event.Type, event.ContentDelta, payload, role)
+	if strings.HasPrefix(canonicalType, "interaction.") {
 		if _, exists := payload["kind"]; !exists {
 			switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(event.Type, "-", "_"))) {
 			case "question":
@@ -355,7 +358,7 @@ func CanonicalAgentEventFromObservation(event AgentEvent, streamID, executionID 
 		ExecutionID: executionID,
 		Sequence:    sequence,
 		TurnID:      turnID,
-		Type:        canonicalAgentEventType(event.Type, event.ContentDelta, role),
+		Type:        canonicalType,
 		OccurredAt:  occurredAt.UTC(),
 		RecordedAt:  recordedAt.UTC(),
 		Origin: AgentEventOrigin{
@@ -428,7 +431,17 @@ func putAgentPayload(payload map[string]any, key string, value any) {
 }
 
 func canonicalAgentEventType(value string, delta bool, roles ...string) string {
-	value = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "-", "_")))
+	return canonicalAgentEventTypeForPayload(value, delta, nil, roles...)
+}
+
+// canonicalAgentEventTypeForPayload is the only place where legacy provider
+// event names become canonical event discriminators. In particular, question
+// and permission rows carry their terminal state in payload; ignoring it
+// creates a requested row for both the request and its answer, which is what
+// caused the iOS/Web "Question + Answered" duplication after reconnect.
+func canonicalAgentEventTypeForPayload(value string, delta bool, payload map[string]any, roles ...string) string {
+	rawValue := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "-", "_")))
+	value = strings.ReplaceAll(rawValue, ".", "_")
 	switch value {
 	case "user", "assistant", "system":
 		if delta {
@@ -466,8 +479,23 @@ func canonicalAgentEventType(value string, delta bool, roles ...string) string {
 		return "tool.completed"
 	case "tool_failed":
 		return "tool.failed"
-	case "question", "permission", "confirmation":
+	case "interaction_requested", "interaction_resolved", "interaction_expired":
+		if value == "interaction_resolved" {
+			return "interaction.resolved"
+		}
+		if value == "interaction_expired" {
+			return "interaction.expired"
+		}
 		return "interaction.requested"
+	case "question", "permission", "confirmation":
+		switch canonicalInteractionState(payload) {
+		case "resolved":
+			return "interaction.resolved"
+		case "expired":
+			return "interaction.expired"
+		default:
+			return "interaction.requested"
+		}
 	case "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue":
 		return value + ".updated"
 	case "queue_operation":
@@ -476,7 +504,138 @@ func canonicalAgentEventType(value string, delta bool, roles ...string) string {
 		if value == "" {
 			return "message.created"
 		}
+		// Already-canonical dotted types pass through untouched. Legacy
+		// underscore spellings are normalized by the cases above.
+		if strings.Contains(rawValue, ".") {
+			return rawValue
+		}
 		return value
+	}
+}
+
+// canonicalInteractionState normalizes provider-specific terminal spellings
+// without changing the provider payload. Unknown or missing states remain
+// pending so an incomplete observation cannot accidentally close a request.
+func canonicalInteractionState(payload map[string]any) string {
+	if payload == nil {
+		return "pending"
+	}
+	state, _ := payload["state"].(string)
+	if strings.TrimSpace(state) == "" {
+		state, _ = payload["status"].(string)
+	}
+	state = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(state, "-", "_")))
+	// An explicit lifecycle state is authoritative. In particular, a pending
+	// request may legitimately carry a provider field named `value`; looking
+	// for response-shaped keys before honoring `state` turned those requests
+	// into false Answered cards.
+	switch state {
+	case "resolved", "answered", "accepted", "approved", "submitted", "completed", "done", "success":
+		return "resolved"
+	case "expired", "cancelled", "canceled", "timeout", "timed_out", "rejected", "denied":
+		return "expired"
+	case "pending", "waiting", "running", "asked", "requested", "submitting", "in_progress", "inprogress":
+		return "pending"
+	}
+	if response, ok := payload["response"].(map[string]any); ok {
+		if cancelled, _ := response["cancelled"].(bool); cancelled {
+			return "expired"
+		}
+		// Some providers omit state from their terminal observation and only
+		// return the submitted answer. Treat a meaningful response as resolved
+		// so clients do not render a second pending Question card.
+		if canonicalInteractionResponsePresent(response) {
+			return "resolved"
+		}
+	}
+	// A few legacy adapters flatten response fields onto the event payload.
+	// Preserve the same lifecycle inference for those observations too.
+	// Only inspect flattened response fields when the payload does not also
+	// look like a request schema. A request's `options`/`questions` values are
+	// presentation data, not an answer, and some providers reuse the generic
+	// key `value` for that data.
+	if !hasCanonicalInteractionRequestSchema(payload) && canonicalInteractionResponsePresent(payload) {
+		return "resolved"
+	}
+	return "pending"
+}
+
+func hasCanonicalInteractionRequestSchema(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	for _, key := range []string{"questions", "options", "schema"} {
+		if value, exists := payload[key]; exists && value != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalInteractionResponsePresent(response map[string]any) bool {
+	if response == nil {
+		return false
+	}
+	if decision, ok := response["decision"].(string); ok && strings.TrimSpace(decision) != "" {
+		return true
+	}
+	if answer, ok := response["answer"].(string); ok && strings.TrimSpace(answer) != "" {
+		return true
+	}
+	if value, ok := response["value"].(string); ok && strings.TrimSpace(value) != "" {
+		return true
+	}
+	for _, key := range []string{"answers", "customAnswers", "answerLabels"} {
+		value, exists := response[key]
+		if !exists || value == nil {
+			continue
+		}
+		if canonicalResponseValuePresent(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalResponseValuePresent(value any) bool {
+	switch value := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(value) != ""
+	case []any:
+		for _, item := range value {
+			if canonicalResponseValuePresent(item) {
+				return true
+			}
+		}
+		return false
+	case []string:
+		for _, item := range value {
+			if strings.TrimSpace(item) != "" {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		for _, item := range value {
+			if canonicalResponseValuePresent(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]string:
+		for _, item := range value {
+			if strings.TrimSpace(item) != "" {
+				return true
+			}
+		}
+		return false
+	default:
+		// Numeric and boolean answers can be valid provider responses. They are
+		// meaningful as long as the field itself is present; empty containers
+		// were handled explicitly above to avoid false terminal states.
+		return true
 	}
 }
 

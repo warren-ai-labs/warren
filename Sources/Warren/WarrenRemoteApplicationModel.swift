@@ -28,6 +28,35 @@ extension WarrenRemoteEndpointConfiguration {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return Self(name: "Local", url: "http://127.0.0.1:8789", token: token, ssh: nil)
     }
+
+    /// The daemon records the Ghostline handoff phase before it starts the
+    /// replacement runtime. Reading this small projection lets the Desktop
+    /// explain the expected startup gap without probing a listener that is
+    /// intentionally unavailable until migration completes.
+    static func localDaemonMigrationInProgress() -> Bool {
+        let environment = ProcessInfo.processInfo.environment
+        let stateURL: URL
+        if let configured = environment["WARREN_STATE"], !configured.isEmpty {
+            stateURL = URL(fileURLWithPath: configured)
+        } else {
+            stateURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".warren/state.json")
+        }
+        guard let data = try? Data(contentsOf: stateURL),
+              let state = try? JSONDecoder().decode(WarrenLocalDaemonState.self, from: data),
+              let migration = state.ghostlineMigration else {
+            return false
+        }
+        return migration.phase != "retired"
+    }
+}
+
+private struct WarrenLocalDaemonState: Decodable {
+    let ghostlineMigration: WarrenLocalGhostlineMigration?
+}
+
+private struct WarrenLocalGhostlineMigration: Decodable {
+    let phase: String?
 }
 
 private struct WarrenEndpointConfigurationFile: Codable {
@@ -917,6 +946,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// window (for example an app install that restarts the daemon). Clients
     /// show an update state instead of treating the disconnect as a failure.
     @Published private(set) var maintenanceMessage: String?
+    /// Set while the local daemon's Ghostline handoff journal reports an
+    /// in-flight migration. The Desktop uses this only for the startup
+    /// connection spinner; it is not a transport or failure state.
+    @Published private(set) var isMigratingRuntimeSessions = false
     @Published private(set) var creatingSessionWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = []
     @Published private(set) var deletingProjectIDs: Set<ProjectID> = []
@@ -1149,6 +1182,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAIModel = ""
         openAITitleEnabled = false
         relaySettings = WarrenDesktopRelaySettings()
+        isMigratingRuntimeSessions = isLocal
+            && WarrenRemoteEndpointConfiguration.localDaemonMigrationInProgress()
         if resolvedConfiguration.url.hasPrefix("http://127.0.0.1:8789"),
            !resolvedConfiguration.token.isEmpty,
            let localBaseURL = URL(string: "http://127.0.0.1:8789/") {
@@ -1175,6 +1210,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func disconnect() {
+        isMigratingRuntimeSessions = false
         guard eventTask != nil || endpointConfiguration != nil || wire != nil
             || surfaceManager.retainedSurfaceCount > 0 else {
             return
@@ -1241,7 +1277,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// published. There is no wire/event task yet in that window, so the
     /// regular connect loop cannot provide the loading state itself.
     func markConnectionConnecting() {
+        isMigratingRuntimeSessions = WarrenRemoteEndpointConfiguration.localDaemonMigrationInProgress()
         publishProjectionIfChanged(projection.withConnectionState(.connecting))
+    }
+
+    /// Refreshes the local migration journal while the Desktop is waiting for
+    /// the daemon token. The daemon can create the journal just after the app
+    /// begins its startup wait, so a one-time read would miss that transition.
+    func refreshLocalRuntimeMigrationStatus() {
+        let inProgress = WarrenRemoteEndpointConfiguration.localDaemonMigrationInProgress()
+        if isMigratingRuntimeSessions != inProgress {
+            isMigratingRuntimeSessions = inProgress
+        }
     }
 
     /// Stops either an active transport or a pending pre-transport wait. The
@@ -1591,6 +1638,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             Task { await wire.stop() }
         }
         activeEndpointConfiguration = nil
+        isMigratingRuntimeSessions = false
         eventTask = nil
         publishProjectionIfChanged(projection.withConnectionState(.failed))
     }
@@ -2877,6 +2925,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             ]))
         case .renameProject(let id, let name):
             request("project.rename", params: ["id": id.description, "name": name])
+        case .renameTask(let id, let name):
+            request("task.rename", params: ["id": id.description, "name": name])
         case .renameWorkspace(let id, let name):
             request("workspace.rename", params: ["id": id.description, "name": name])
         case .attachWorkspaceToTask(let taskID, let workspaceID):
@@ -3713,10 +3763,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .connection(let state):
             switch state {
             case .connected:
+                isMigratingRuntimeSessions = false
                 cancelTransientConnectionIssue()
                 clearMaintenance()
                 publishProjectionIfChanged(projection.withConnectionState(.attached))
             case .reconnecting, .connecting:
+                if isLocalEndpoint {
+                    refreshLocalRuntimeMigrationStatus()
+                } else {
+                    isMigratingRuntimeSessions = false
+                }
                 publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
             case .disconnected:
                 publishProjectionIfChanged(projection.withConnectionState(.disconnected))
@@ -5267,6 +5323,7 @@ extension WarrenDesktopProjection {
         Self(
             host: host,
             groups: groups,
+            tasks: taskGroups.map(\.task),
             sessions: sessions,
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaceIDs,
@@ -5274,7 +5331,8 @@ extension WarrenDesktopProjection {
             connectionState: state,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
+            tabTerminalGroupIDs: tabTerminalGroupIDs,
+            unreadNoticeCount: unreadNoticeCount
         )
     }
 

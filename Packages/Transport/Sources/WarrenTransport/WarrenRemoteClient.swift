@@ -101,7 +101,13 @@ private actor WarrenRemoteSocket {
         self.adapter = adapter
         self.codec = codec
         self.terminalStateFormats = terminalStateFormats
-        let pair = AsyncThrowingStream<WarrenRemoteSocketEvent, Error>.makeStream()
+        // A peer can stream terminal bytes and Agent deltas faster than a
+        // suspended iOS consumer can drain them. Bound the socket queue so a
+        // stalled scene cannot retain an unbounded transcript; the model's
+        // sequence/anchor recovery repairs any dropped tail after resume.
+        let pair = AsyncThrowingStream<WarrenRemoteSocketEvent, Error>.makeStream(
+            bufferingPolicy: .bufferingNewest(2048)
+        )
         self.events = pair.stream
         self.continuation = pair.continuation
     }
@@ -145,27 +151,42 @@ private actor WarrenRemoteSocket {
             auth["token"] = token
         }
         let authPayload = Self.json(auth)
+        // URLSession's async send can remain suspended while a daemon is
+        // replacing its listener during a Ghostline handoff. Run it as an
+        // unstructured task so the welcome timeout below remains a hard
+        // deadline even when the adapter does not promptly observe task
+        // cancellation. `fail` closes the adapter on either send failure or
+        // timeout, allowing the outer connection loop to create a fresh
+        // socket and retry.
+        let authSendTask = Task { [weak self] in
+            do {
+                try await self?.adapter.send(.text(authPayload))
+            } catch {
+                guard !Task.isCancelled else { return }
+                await self?.fail(error)
+            }
+        }
+        defer { authSendTask.cancel() }
+
         do {
-            try await adapter.send(.text(authPayload))
+            return try await withTaskCancellationHandler(operation: {
+                try await withThrowingTaskGroup(of: String.self) { group in
+                    group.addTask { try await self.waitForWelcome() }
+                    group.addTask {
+                        try await Task.sleep(for: Self.connectTimeout)
+                        throw WarrenRemoteClientError.requestTimedOut("welcome")
+                    }
+                    let value = try await group.next()!
+                    group.cancelAll()
+                    return value
+                }
+            }, onCancel: {
+                Task { await self.close() }
+            })
         } catch {
             fail(error)
             throw error
         }
-
-        return try await withTaskCancellationHandler(operation: {
-            try await withThrowingTaskGroup(of: String.self) { group in
-                group.addTask { try await self.waitForWelcome() }
-                group.addTask {
-                    try await Task.sleep(for: Self.connectTimeout)
-                    throw WarrenRemoteClientError.requestTimedOut("welcome")
-                }
-                let value = try await group.next()!
-                group.cancelAll()
-                return value
-            }
-        }, onCancel: {
-            Task { await self.close() }
-        })
     }
 
     func replicaIdentity() -> (hostID: String, accessScopeID: String)? {
@@ -468,8 +489,10 @@ private actor WarrenRemoteSocket {
             guard let streamID = object["streamId"] as? String,
                   let executionID = object["executionId"] as? String,
                   let rawEvents = object["events"] as? [Any],
-                  !streamID.isEmpty,
-                  !executionID.isEmpty else { return }
+                  !streamID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !executionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw WarrenRemoteClientError.invalidResponse
+            }
             // Canonical event decoding is strict: a malformed row invalidates
             // the batch because sequence continuity is part of the contract.
             let events: [WarrenRemoteAgentEvent]
@@ -482,8 +505,10 @@ private actor WarrenRemoteSocket {
                     return try JSONDecoder().decode(WarrenRemoteAgentEvent.self, from: encoded)
                 }
             } catch {
-                _ = continuation?.yield(.disconnected(reason: "Invalid canonical Agent event batch."))
-                return
+                // A malformed batch cannot be sequence-repaired safely. Fail
+                // the socket so the connection loop closes this replica and
+                // reconnects through the normal bounded history handshake.
+                throw WarrenRemoteClientError.invalidResponse
             }
             _ = continuation?.yield(.agentEvents(
                 streamID: streamID,
@@ -525,6 +550,7 @@ public actor WarrenRemoteClient {
         let size: TerminalSize?
         let claimControl: Bool
         let attachmentID: String?
+        let generation: UInt64
     }
 
     private let configuration: WarrenRemoteEndpointConfiguration
@@ -556,6 +582,7 @@ public actor WarrenRemoteClient {
     /// separate from recovery anchors: the latter advance with every frame,
     /// while this table records the user's current visibility intent.
     private var subscriptions: [String: Subscription] = [:]
+    private var subscriptionGeneration: UInt64 = 0
 
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
@@ -584,7 +611,9 @@ public actor WarrenRemoteClient {
         self.clientID = clientID ?? configuration.clientID
         self.codec = codec
         self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
-        let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
+        let pair = AsyncStream<WarrenRemoteEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(4096)
+        )
         self.eventStream = pair.stream
         self.eventContinuation = pair.continuation
     }
@@ -612,7 +641,9 @@ public actor WarrenRemoteClient {
         self.injectedTask = task
         self.codec = codec
         self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
-        let pair = AsyncStream<WarrenRemoteEvent>.makeStream()
+        let pair = AsyncStream<WarrenRemoteEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(4096)
+        )
         self.eventStream = pair.stream
         self.eventContinuation = pair.continuation
     }
@@ -921,17 +952,31 @@ public actor WarrenRemoteClient {
             // Record intent before the request starts. A Session can be
             // selected while the socket is reconnecting; retaining that
             // intent lets the next socket restore it automatically.
-            subscriptions[sessionID] = Subscription(size: size, claimControl: claimControl, attachmentID: nil)
+            subscriptionGeneration &+= 1
+            subscriptions[sessionID] = Subscription(
+                size: size,
+                claimControl: claimControl,
+                attachmentID: nil,
+                generation: subscriptionGeneration
+            )
         }
+        let intentGeneration = subscriptions[sessionID]?.generation
         let data: Data
         if let socket { data = try await request(on: socket, method: "session.subscribe", params: params) }
         else { data = try await request("session.subscribe", params: params) }
         let result = try decode(data, as: WarrenRemoteSubscriptionResult.self)
-        subscriptions[sessionID] = Subscription(
-            size: size,
-            claimControl: claimControl,
-            attachmentID: result.attachmentID
-        )
+        // A restore request may complete after the UI unsubscribed the
+        // Session. Do not resurrect that intent (or its attachment) on a
+        // late response; only update an intent that still has the same token.
+        if let intentGeneration,
+           subscriptions[sessionID]?.generation == intentGeneration {
+            subscriptions[sessionID] = Subscription(
+                size: size,
+                claimControl: claimControl,
+                attachmentID: result.attachmentID,
+                generation: intentGeneration
+            )
+        }
         return result
     }
 
@@ -940,6 +985,7 @@ public actor WarrenRemoteClient {
         // Remove the local visibility intent before waiting for the Host. If
         // the socket is already down there is no request to send, but a later
         // reconnect must still not resurrect a Session the user left.
+        subscriptionGeneration &+= 1
         subscriptions.removeValue(forKey: sessionID)
         let result = try await request(
             "session.unsubscribe",
@@ -953,9 +999,11 @@ public actor WarrenRemoteClient {
     public func focus(
         sessionID: String,
         focused: Bool = true,
-        size: TerminalSize? = nil
+        size: TerminalSize? = nil,
+        agentOnly: Bool = false
     ) async throws -> WarrenRemoteFocusResult {
         var params = ["id": sessionID, "focused": focused ? "true" : "false"]
+        if agentOnly { params["agent"] = "true" }
         if focused, let size {
             params["cols"] = String(size.columns)
             params["rows"] = String(size.rows)
@@ -968,7 +1016,7 @@ public actor WarrenRemoteClient {
     /// the protocol has no control-only attach alias.
     @discardableResult
     public func claimControl(sessionID: String) async throws -> Bool {
-        let result = try await focus(sessionID: sessionID, focused: true)
+        let result = try await focus(sessionID: sessionID, focused: true, agentOnly: true)
         return result.focused
     }
 
@@ -1573,7 +1621,8 @@ public actor WarrenRemoteClient {
             guard running, self.socket === socket else { return }
             guard let current = subscriptions[sessionID],
                   current.size == subscription.size,
-                  current.claimControl == subscription.claimControl else { continue }
+                  current.claimControl == subscription.claimControl,
+                  current.generation == subscription.generation else { continue }
             let anchor = anchors[sessionID]
             do {
                 _ = try await subscribe(
@@ -1594,7 +1643,8 @@ public actor WarrenRemoteClient {
                 if anchor != nil,
                    Self.isRecoveryAnchorFailure(error),
                    running,
-                   self.socket === socket {
+                   self.socket === socket,
+                   subscriptions[sessionID]?.generation == subscription.generation {
                     _ = try? await subscribe(
                         sessionID: sessionID,
                         size: subscription.size,

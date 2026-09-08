@@ -28,7 +28,8 @@ The protocol has five rules:
    local event replicas for instant rendering and reconnect clarity. A local
    replica is a disposable cache/read model; it never changes Host truth.
 4. **Terminal bytes and Agent semantics are separate.** TUI sessions retain
-   the DENB PTY stream. Agent events travel on the JSON control channel.
+   the DENB PTY stream. Agent events travel on the JSON control channel. A raw
+   TUI interrupt is not itself an Agent event.
 5. **Provider details stop at the adapter.** Clients consume typed,
    provider-neutral events and send typed commands. They do not parse
    transcript formats or infer status from text.
@@ -93,10 +94,15 @@ closed and a new execution starts a new stream at sequence 1.
 
     Turn {
       id: string
-      status: "started" | "completed" | "failed" | "cancelled"
+      status: "started" | "completed" | "failed" | "interrupted" | "cancelled"
       startedAt: timestamp
       completedAt?: timestamp
     }
+
+`interrupted` is a Provider-observed terminal stop without a matching Host
+cancel/steer request. `cancelled` is a Provider-observed terminal stop that is
+correlated with an accepted Host cancel/steer request. Older `turn.aborted`
+events remain readable as a legacy status but are not emitted for new turns.
 
     Interaction {
       id: string
@@ -166,10 +172,15 @@ The driver contract is intentionally small:
     }
 
 The TUI driver keeps PTY display and raw keyboard input authoritative. Its
-structured message path may use bracketed paste, and cancellation may use an
-explicit interrupt signal. It may resolve an interaction only through a
-Provider-native or blocking hook channel. It must never answer approval by
-guessing terminal keystrokes.
+structured message path may use bracketed paste, and stopping a turn may use an
+explicit interrupt signal. A TUI Ctrl-C or Escape is forwarded as terminal
+input and is not treated as a semantic turn transition until a Provider
+transcript, hook, or native lifecycle observation confirms the boundary. That
+observation is `turn.interrupted` unless it matches an accepted Host
+cancel/steer request, in which case it is `turn.cancelled`. The Host must not
+publish `ready` merely because a command was accepted. It may resolve an
+interaction only through a Provider-native or blocking hook channel. It must
+never answer approval by guessing terminal keystrokes.
 
 The ACP driver uses the Provider's bidirectional JSON-RPC channel without a
 PTY. The Cloud driver uses the Run/Runner control plane without a PTY. Both
@@ -218,11 +229,17 @@ Every mutation contains:
 
 Repeating a command with the same payload returns its original admission
 result. Reusing commandId with a different payload is an error. A response
-means accepted by Host; completion is always an event.
+means accepted by Host; completion is always an event. For cancellation,
+`accepted` means only that the driver accepted a cancellation attempt. It does
+not mean that the Provider has stopped the turn.
 
 agent.turn.start creates a new Turn from text and opaque attachment references.
 agent.turn.steer atomically cancels one active Turn and starts a replacement.
-agent.turn.cancel only cancels.
+agent.turn.cancel only requests cancellation. The command does not mutate the
+execution status directly. A later `turn.cancelled` event is emitted only when
+the matching Provider terminal observation confirms that request; otherwise a
+direct TUI or Provider-side stop is `turn.interrupted`. `agent.turn.steer` uses
+the same correlation for the cancellation half of its atomic replacement.
 
 agent.interaction.resolve targets an interaction ID and version:
 
@@ -395,7 +412,9 @@ Host diagnostic channel.
     turn.started
     turn.completed
     turn.failed
+    turn.interrupted
     turn.cancelled
+    turn.aborted              (legacy replay only)
 
     message.created
     message.delta
@@ -415,6 +434,14 @@ Host diagnostic channel.
     tasks.updated
     context.updated
     status.changed
+
+`turn.interrupted` and `turn.cancelled` are emitted only after the Host observes
+a Provider or process boundary that ends the turn. `turn.interrupted` means
+that no matching Host cancel/steer request was pending. `turn.cancelled` means
+that the observation matched one; its `causedBy` field contains that accepted
+command ID. A client must not interpret raw PTY input, a command receipt, or a
+missing observation as either event. `turn.aborted` is retained solely so old
+journal rows and clients can be replayed without data loss.
 
 Message events use a stable messageId. Deltas additionally use an append-only
 deltaIndex. Tool events use callId. Interaction events use interactionId and a
@@ -596,6 +623,12 @@ Examples:
 
 An unsupported operation is absent or explicitly none. The Host must never
 advertise a capability because a Provider type is known.
+
+`turn.cancel` describes the transport's ability to send a cancellation request;
+it is not a guarantee that the Provider will emit a terminal observation. TUI
+drivers must document the observation they rely on (`turn_aborted`, `Stop`,
+`session.idle`, or equivalent) and must leave the capability absent when no
+safe cancellation transport exists.
 
 ## 10. Client and UI contract
 

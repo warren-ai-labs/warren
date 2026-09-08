@@ -9,10 +9,12 @@ export const agentStructuredEventTypes = new Set([
   "confirmation",
   "plan",
   "todo",
+  "goal",
   "activity",
   "plugin",
   "subagent",
   "attachment",
+  "context",
   "diff",
   "diagnostics",
   "config",
@@ -30,10 +32,12 @@ const canonicalStructuredEventTypes = new Set([
   "plan.updated",
   "tasks.updated",
   "todo.updated",
+  "goal.updated",
   "activity.updated",
   "plugin.updated",
   "subagent.updated",
   "attachment.updated",
+  "context.updated",
   "diff.updated",
   "diagnostics.updated",
   "config.updated",
@@ -61,8 +65,10 @@ export function projectAgentControlState(events, current = {}, checkpoint = null
     if (event.sequence !== projectionThrough + 1) break;
     projectionThrough = event.sequence;
     if (event.type === "status.changed") status = event.payload;
-    if (["turn.started", "turn.completed", "turn.failed", "turn.cancelled"].includes(event.type)) {
-      turn = { id: Number(event.turnId), status: event.type === "turn.cancelled" ? "aborted" : event.type.slice(5) };
+    if (["turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted"].includes(event.type)) {
+      const status = event.payload?.status
+        || (event.type === "turn.cancelled" ? "cancelled" : event.type === "turn.interrupted" ? "interrupted" : event.type === "turn.aborted" ? "aborted" : event.type.slice(5));
+      turn = { id: Number(event.turnId), status };
     }
   }
   return { projectionThrough, status, turn };
@@ -76,7 +82,7 @@ export function projectAgentControlState(events, current = {}, checkpoint = null
 export function normalizeCanonicalAgentEvent(event) {
   validateCanonicalAgentEvent(event);
   const sequence = agentEventSequence(event);
-  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const payload = event.payload && typeof event.payload === "object" ? { ...event.payload } : {};
   const originProvider = event.origin?.provider || "";
   const type = String(event.type || "").trim().toLowerCase();
   let projectedType = type;
@@ -84,6 +90,11 @@ export function normalizeCanonicalAgentEvent(event) {
   let content = payload.content ?? payload.contentDelta ?? null;
   let contentDelta = type === "message.delta";
   const projected = { ...event, sequence, eventId: event.eventId };
+  // Keep the wire discriminator alongside the short presentation type. The
+  // reducer needs to know that a `question` row came from
+  // `interaction.resolved` so it can merge it with the original request
+  // instead of rendering the terminal observation as an unknown block.
+  projected.canonicalType = type;
   if (!projected.provider && originProvider) projected.provider = originProvider;
   switch (type) {
     case "message.created":
@@ -112,10 +123,13 @@ export function normalizeCanonicalAgentEvent(event) {
       projectedType = "tool_output";
       break;
     case "interaction.requested":
-      projectedType = payload.kind || "question";
+      projectedType = interactionKind(type, payload) || "";
       break;
     case "interaction.resolved":
-      projectedType = "response";
+      projectedType = interactionKind(type, payload) || "";
+      break;
+    case "interaction.expired":
+      projectedType = interactionKind(type, payload) || "";
       break;
     case "plan.updated":
       projectedType = "plan";
@@ -123,6 +137,9 @@ export function normalizeCanonicalAgentEvent(event) {
     case "tasks.updated":
     case "todo.updated":
       projectedType = "todo";
+      break;
+    case "goal.updated":
+      projectedType = "goal";
       break;
     case "subagent.updated":
       projectedType = "subagent";
@@ -148,6 +165,20 @@ export function normalizeCanonicalAgentEvent(event) {
       break;
   }
   if (projectedType === "message" && !role) role = "assistant";
+  if (type === "interaction.requested" && !payload.state) payload.state = "pending";
+  if (type === "interaction.resolved" && !payload.state) payload.state = "resolved";
+  if (type === "interaction.expired" && !payload.state) payload.state = "expired";
+  // Terminal interaction observations often contain only the response and
+  // request identity. Preserve the payload object on the projected row so
+  // the UI can inspect the answer and the request schema after a reconnect.
+  projected.payload = { ...payload };
+  if (type.startsWith("interaction.") && !interactionKind(type, payload)) {
+    // Keep malformed canonical rows in the lossless replica, but mark them so
+    // the presentation reducer can discard them. A missing discriminator is
+    // not evidence of a Question; rendering it would turn ordinary provider
+    // text or a failed tool result into a blocking interaction card.
+    projected.nonRenderableInteraction = true;
+  }
   projected.type = projectedType;
   if (role) projected.role = role;
   if (content !== null && content !== undefined) projected.content = String(content);
@@ -183,6 +214,7 @@ function structuredAgentEventIdentity(event, type, payload) {
       confirmation: "interaction.requested",
       plan: "plan.updated",
       todo: "todo.updated",
+      goal: "goal.updated",
       activity: "activity.updated",
       plugin: "plugin.updated",
       subagent: "subagent.updated",
@@ -208,6 +240,7 @@ function structuredAgentEventIdentity(event, type, payload) {
     "plan.updated": ["planId"],
     "tasks.updated": ["taskListId", "todoId"],
     "todo.updated": ["todoId", "taskListId"],
+    "goal.updated": ["goalId", "threadId", "sessionId"],
     "activity.updated": ["activityId"],
     "plugin.updated": ["pluginId"],
     "subagent.updated": ["subagentId"],
@@ -234,6 +267,131 @@ export function normalizeAgentEventType(type) {
 export function isStructuredAgentEvent(event) {
   const type = normalizeAgentEventType(event?.type);
   return agentStructuredEventTypes.has(type) || canonicalStructuredEventTypes.has(type);
+}
+
+function interactionKind(type, payload = {}) {
+  const explicit = String(payload?.kind || "").trim().toLowerCase().replaceAll("-", "_");
+  if (["question", "permission", "confirmation"].includes(explicit)) return explicit;
+  switch (normalizeAgentEventType(type)) {
+    case "permission":
+    case "approval":
+      return "permission";
+    case "confirmation":
+    case "confirm":
+      return "confirmation";
+    case "question":
+      return "question";
+    default:
+      return "";
+  }
+}
+
+function canonicalInteractionEvent(event) {
+  const type = normalizeAgentEventType(event?.canonicalType || event?.type).replaceAll(".", "_");
+  return ["interaction_requested", "interaction_resolved", "interaction_expired"].includes(type);
+}
+
+/** Returns the stable interaction identity, or an empty string if malformed. */
+export function agentInteractionIdentity(event) {
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+  const value = payload.interactionId || payload.requestId || event?.interactionId || event?.requestId;
+  if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  // Canonical lifecycle rows must carry their identity in the payload. Their
+  // eventId/sequence is the immutable row identity and cannot safely answer a
+  // different interaction after replay. Legacy projected rows may fall back to
+  // their provider/event ID for backwards compatibility.
+  if (canonicalInteractionEvent(event)) return "";
+  return String(event?.interactionId || event?.requestId || event?.id || event?.eventId || event?.sequence || "").trim();
+}
+
+function questionPayloadIsValid(payload = {}) {
+  if (!Array.isArray(payload.questions) || payload.questions.length === 0) return false;
+  return payload.questions.every(question => {
+    if (!question || typeof question !== "object" || Array.isArray(question)) return false;
+    const prompt = [question.prompt, question.question, question.title, question.header]
+      .map(value => String(value ?? "").trim())
+      .find(Boolean);
+    if (!prompt) return false;
+    const allowCustom = question.allowCustom === true;
+    if (!Array.isArray(question.options)) return allowCustom;
+    const hasOption = question.options.some(option => {
+      if (typeof option === "string" || typeof option === "number") return String(option).trim() !== "";
+      if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+      return [option.id, option.value, option.label, option.title]
+        .some(value => String(value ?? "").trim() !== "");
+    });
+    return hasOption || allowCustom;
+  });
+}
+
+function normalizedInteractionState(event) {
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+  const value = payload.state ?? payload.status ?? event?.state;
+  const normalized = String(value ?? "")
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+  if (normalized) return normalized;
+  return canonicalInteractionEvent(event)
+    ? (normalizeAgentEventType(event?.canonicalType || event?.type).replaceAll(".", "_") === "interaction_requested" ? "pending" : "resolved")
+    : "";
+}
+
+function interactionEventIsRenderable(event, validQuestionIdentities = new Set()) {
+  if (!event || event.nonRenderableInteraction) return false;
+  const type = normalizeAgentEventType(event?.type);
+  const kind = interactionKind(event?.canonicalType || type, event?.payload);
+  if (!kind) return false;
+  const identity = agentInteractionIdentity(event);
+  if (!identity) return false;
+  if (kind !== "question") return true;
+  if (questionPayloadIsValid(event?.payload || {})) return true;
+  const state = normalizedInteractionState(event);
+  const terminal = ["resolved", "complete", "completed", "expired", "cancelled", "canceled", "failed"].includes(state)
+    || ["interaction.resolved", "interaction.expired"].includes(String(event?.canonicalType || event?.type || "").toLowerCase());
+  return terminal && validQuestionIdentities.has(identity);
+}
+
+/**
+ * Returns the newest unresolved interaction after collapsing request/terminal
+ * lifecycle rows. This is shared by the docked composer and timeline code so
+ * a stale pending request cannot survive a later resolved event.
+ */
+export function latestPendingAgentInteraction(events = []) {
+  const validQuestionIdentities = new Set();
+  const normalized = (events || []).map(event => normalizeProjectAgentEvent(event));
+  for (const event of normalized) {
+    const kind = interactionKind(event?.canonicalType || event?.type, event?.payload);
+    const identity = agentInteractionIdentity(event);
+    if (kind === "question" && identity && questionPayloadIsValid(event?.payload || {})) {
+      validQuestionIdentities.add(identity);
+    }
+  }
+  const latest = new Map();
+  for (const event of normalized) {
+    if (!interactionEventIsRenderable(event, validQuestionIdentities)) continue;
+    const kind = interactionKind(event?.canonicalType || event?.type, event?.payload);
+    const identity = agentInteractionIdentity(event);
+    const key = `${kind}:${identity}`;
+    const previous = latest.get(key);
+    if (!previous || agentEventSequence(event) >= agentEventSequence(previous)) latest.set(key, event);
+  }
+  return [...latest.values()]
+    .filter(event => ["pending", "submitting"].includes(normalizedInteractionState(event)))
+    .sort((left, right) => agentEventSequence(right) - agentEventSequence(left))[0] || null;
+}
+
+function structuredEventFamily(event) {
+  const type = normalizeAgentEventType(event?.type).replaceAll(".", "_");
+  if (["question", "permission", "confirmation", "interaction_requested", "interaction_resolved", "interaction_expired"].includes(type)
+      || type.startsWith("interaction_")) {
+    return "interaction";
+  }
+  if (type === "tasks_updated") return "todo";
+  if (type.endsWith("_updated")) return type.slice(0, -"_updated".length);
+  return type;
 }
 
 /** Returns true for events that should not be displayed in the conversation message stream. */
@@ -618,12 +776,53 @@ export function groupAgentEvents(events = []) {
 export function projectAgentEvents(events = []) {
   const latestStructured = new Map();
   const projected = [];
-  for (const event of events || []) {
+  const normalizedEvents = (events || []).map(rawEvent => normalizeProjectAgentEvent(rawEvent));
+  const validQuestionIdentities = new Set();
+  for (const event of normalizedEvents) {
+    const kind = interactionKind(event?.canonicalType || event?.type, event?.payload);
+    const identity = agentInteractionIdentity(event);
+    if (kind === "question" && identity && questionPayloadIsValid(event?.payload || {})) {
+      validQuestionIdentities.add(identity);
+    }
+  }
+  for (const event of normalizedEvents) {
+    // Callers normally receive rows from mergeAgentEvents, which already
+    // normalizes the canonical envelope. Keep this projection boundary
+    // defensive as well: history/cache consumers may hand us a raw dotted
+    // event directly (for example `goal.updated`).
+    if (event?.nonRenderableInteraction) continue;
     if (isStructuredAgentEvent(event)) {
       const type = normalizeAgentEventType(event.type);
       const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
-      const stableID = structuredAgentEventIdentity(event, type, payload);
-      latestStructured.set(`${type}:${stableID}`, event);
+      const family = structuredEventFamily(event);
+      const stableID = family === "interaction"
+        ? agentInteractionIdentity(event)
+        : structuredAgentEventIdentity(event, type, payload);
+      if (family === "interaction" && !interactionEventIsRenderable(event, validQuestionIdentities)) continue;
+      const key = `${family}:${stableID || "event"}`;
+      let projectedEvent = event;
+      const previous = latestStructured.get(key);
+      if (family === "interaction" && previous) {
+        // A terminal interaction event is a lifecycle update, not a second
+        // card. Merge it with the request so resolved rows retain questions,
+        // options, and descriptions even when the provider only echoes an ID
+        // and a response.
+        const previousPayload = previous.payload && typeof previous.payload === "object" ? previous.payload : {};
+        const nextPayload = payload;
+        projectedEvent = {
+          ...previous,
+          ...event,
+          type: interactionKind(type, nextPayload) || interactionKind(previous.type, previousPayload) || event.type,
+          payload: { ...previousPayload, ...nextPayload },
+        };
+      } else if (family === "interaction") {
+        projectedEvent = {
+          ...event,
+          type: interactionKind(type, payload) || event.type,
+          payload: { ...payload },
+        };
+      }
+      latestStructured.set(key, projectedEvent);
     } else {
       projected.push(event);
     }
@@ -634,6 +833,28 @@ export function projectAgentEvents(events = []) {
   projected.push(...latestStructured.values());
   projected.sort((left, right) => (left?.sequence ?? 0) - (right?.sequence ?? 0));
   return groupAgentEvents(projected);
+}
+
+function normalizeProjectAgentEvent(event) {
+  if (!event || typeof event !== "object") return event;
+  const type = normalizeAgentEventType(event.type);
+  if (!type.includes(".")
+      || typeof event.eventId !== "string"
+      || !event.eventId
+      || typeof event.streamId !== "string"
+      || !event.streamId
+      || typeof event.executionId !== "string"
+      || !event.executionId) {
+    return event;
+  }
+  try {
+    return normalizeCanonicalAgentEvent(event);
+  } catch {
+    // Legacy/provider rows can use dotted labels without carrying the full
+    // canonical envelope. Leave those rows untouched so one malformed row
+    // cannot erase the rest of the conversation.
+    return event;
+  }
 }
 
 export class AgentMessageQueue {

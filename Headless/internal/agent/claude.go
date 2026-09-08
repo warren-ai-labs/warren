@@ -193,7 +193,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 			return nil
 		}
 		if strings.HasPrefix(strings.TrimSpace(content), "[Request interrupted") {
-			p.tracker.TurnAborted()
+			p.tracker.TurnInterrupted()
 			return []api.AgentEvent{{
 				Provider:   "claude",
 				ID:         record.UUID,

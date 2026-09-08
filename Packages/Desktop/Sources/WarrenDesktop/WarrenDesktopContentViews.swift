@@ -11,6 +11,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let tab: ClientTab?
     let hasProjects: Bool
     let connectionState: WarrenDesktopConnectionState
+    let isMigratingRuntimeSessions: Bool
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let showsPaneHeader: Bool
     let session: WarrenDesktopSession?
@@ -156,7 +157,10 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     }
 
     private func connectionLoadingState(tokens: WarrenColorTokens) -> some View {
-        let presentation = WarrenDesktopConnectionPresentation(connectionState)
+        let presentation = WarrenDesktopConnectionPresentation(
+            connectionState,
+            migratingRuntimeSessions: isMigratingRuntimeSessions
+        )
         return VStack(spacing: WarrenSpacing.standard) {
             WarrenBrailleSpinner(
                 size: 22,

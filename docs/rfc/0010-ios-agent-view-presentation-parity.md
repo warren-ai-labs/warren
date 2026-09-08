@@ -7,6 +7,11 @@
 - 参考实现：Paseo、Lody
 - 协议基线：Warren protocol 2.0
 
+> Historical note: RFC 0016 is authoritative for the protocol 4.0 surface.
+> References in this document to `agent.turn.interrupt` describe the pre-4.0
+> design and must not be implemented; the canonical method is
+> `agent.turn.cancel`.
+
 ## 摘要
 
 Warren 已经能够通过 `agent` 批量事件、`agent.history`、`agent.status` 和
@@ -18,7 +23,7 @@ Warren 已经能够通过 `agent` 批量事件、`agent.history`、`agent.status
 本 RFC 为 iOS 与 Web 定义同一套 Agent View 语义和最小支撑协议，覆盖以下七项：
 
 1. Question / Permission / Plan；
-2. Cancel / Interrupt；
+2. Host cancel/steer and Provider interruption；
 3. 附件上传；
 4. 新的结构化协议事件；
 5. 排队消息管理；
@@ -37,7 +42,7 @@ Warren 已经能够通过 `agent` 批量事件、`agent.history`、`agent.status
 | 能力 | Warren iOS | Warren Web | Paseo / Lody 参考 |
 | --- | --- | --- | --- |
 | Question / Permission / Plan | 无结构化卡片和响应 | 无结构化卡片和响应 | 两者均有交互卡片；Paseo 还支持多问题表单和 Plan/Todo 展示 |
-| Cancel / Interrupt | composer 通过 PTY 发送文本，没有语义化 stop | 同样没有 Agent stop 控件 | Paseo 支持 cancel 和 `Send now`；Lody 有 session cancel |
+| Host cancel/steer and Provider interruption | composer 通过 PTY 发送文本，没有语义化 stop | 同样没有 Agent stop 控件 | Paseo 支持 cancel 和 `Send now`；Lody 有 session cancel |
 | 附件上传 | 无 Agent attachment 上传链路 | 只有文本 composer | Paseo/Lody 支持选择、拖放、校验、上传和失败重试 |
 | 新协议事件 | 主要消费 `user`、`assistant`、`reasoning`、tool、usage 等已有事件 | 可显示少量已有事件 | Paseo/Lody 有 permission、question、plan、todo、activity、plugin 等结构化视图 |
 | 排队消息管理 | 只有按 Session 的文本队列和 `Queued N` | 无 Agent 消息队列 | Lody 支持查看、编辑、删除、排序和 Steer；Paseo 支持 queue 与 Send now |
@@ -111,7 +116,7 @@ Host 负责 Agent 的事实和生命周期；客户端负责把事实投影成 V
 | Agent 事件、`agent.status`、`agent.turn`、history | Host/Transport | Host 是事实来源；客户端只合并和展示 |
 | Question/Permission 的 pending/resolved | Host | 使用稳定 `requestId`；客户端不根据本地点击直接宣告完成 |
 | Plan/Todo/Activity/Plugin/Subagent 详情 | Host 事件投影 | 只展示 Host 提供的字段；未知类型安全忽略 |
-| 当前 turn 的 cancel/interrupt | Host | 由 Host 返回接受/失败，并以最终 turn 状态为准 |
+| 当前 turn 的 Host cancel/steer 与 Provider/TUI interruption | Host | receipt 只表示命令被接受；`turn.interrupted`/`turn.cancelled` 及 `agent.status` 才是终态事实 |
 | 附件上传会话 | Host/Transport | 返回 opaque ID；客户端不构造远端路径或 URL 作为身份 |
 | 排队消息 | iOS/Web 各自的 View model | 本期不跨设备同步，不写入远端 transcript |
 | composer draft | iOS `IOSLocalStore` / Web 本地存储 | 按 endpoint identity + Session 隔离 |
@@ -142,7 +147,7 @@ Host 负责 Agent 的事实和生命周期；客户端负责把事实投影成 V
 | --- | --- |
 | `agent-timeline-v1` | 新的结构化 Agent 事件可出现在 `agent` 和 `agent.history` |
 | `agent-interactions-v1` | `question`/`permission` 卡片及 `agent.interaction.respond` |
-| `agent-interrupt-v1` | `agent.turn.interrupt`，包括可选的原子 interrupt + send |
+| `agent-interrupt-v1` | `agent.turn.cancel` / `agent.turn.steer`，包括可选的原子 steer + replacement |
 | `agent-attachments-v1` | attachment prepare/chunk/complete/abort 及带附件发送 |
 
 capability 通过现有认证/hello 协商字段声明，客户端只使用 Host 和客户端共同
@@ -282,15 +287,17 @@ Permission 的 `response` 使用 payload 声明的 decision/action ID；Question
 拒绝重复 `requestId`。过期请求返回失败并要求客户端刷新 history，客户端不能
 乐观地把旧卡片标为已解决。
 
-### 2. Cancel / Interrupt
+### 2. Host cancel/steer and Provider interruption
 
-新增语义化请求：
+Host cancellation and steering use canonical commands. A raw TUI Ctrl-C or
+Escape is not one of these commands and is classified only after a Provider
+terminal observation.
 
 ```json
 {
   "t": "request",
-  "id": "interrupt-1",
-  "method": "agent.turn.interrupt",
+  "id": "cancel-1",
+  "method": "agent.turn.cancel",
   "params": {
     "session": "session-1",
     "turn": 7,
@@ -299,8 +306,14 @@ Permission 的 `response` 使用 payload 声明的 decision/action ID；Question
 }
 ```
 
-`reason` 至少支持 `cancel` 和 `send_now`。请求可以带可选的
-`replacement`：
+For an atomic replacement, use `agent.turn.steer`; its cancellation half is
+correlated with the same command ID. The legacy `agent.turn.interrupt` method
+is not emitted by protocol 4.0 Hosts.
+
+The Host service model uses `reason=cancel` for cancellation and
+`reason=send_now` for its internal atomic path. On the canonical wire,
+`agent.turn.cancel` carries no replacement; `agent.turn.steer` carries the
+replacement for `Send now`:
 
 ```json
 {
@@ -315,18 +328,25 @@ Permission 的 `response` 使用 payload 声明的 decision/action ID；Question
 
 规则如下：
 
-- `cancel` 停止当前 turn，保留已产生的事件和客户端本地队列。
-- Agent 工作中普通发送仍进入队列，不隐式 interrupt。
-- `send_now` 必须由 Host 原子完成“停止当前 turn + 接受 replacement”。成功或
-  失败都必须明确返回；客户端不能用两个独立请求模拟该动作。
+- `agent.turn.cancel` requests that the current turn stop, while retaining
+  existing events and the client-local queue. An `accepted` receipt does not
+  change `working`.
+- A normal message sent while the Agent is working remains queued; it does not
+  implicitly interrupt the turn.
+- `agent.turn.steer` atomically performs “stop the current turn + accept the
+  replacement”. Success or failure must be explicit; clients must not emulate
+  it with two independent requests.
 - replacement 被 Host 接受前，队列项保持可恢复；超时不能当作已发送。
-- 最终 UI 以 `agent.turn`、`agent.status` 和事件回放为准，不以本地按钮点击
-  直接把 Agent 改成 ready。
+- The final UI uses `agent.turn`, `agent.status`, and event replay as the
+  authority; a local button click must not set the Agent to `ready`.
+- A Provider terminal observation without a matching accepted Host command
+  emits `turn.interrupted`; a matching cancel/steer observation emits
+  `turn.cancelled` with `causedBy=<commandId>`.
 - 没有 `agent-interrupt-v1` 时隐藏 Cancel/Send now；队列控制只能提供排序和
   “下一个发送”，不能把它命名为 `Send now`。
 
 iOS 可将 Cancel 放在 composer 的工作态按钮；Web 可放在 composer 内或 turn
-footer。两端都必须防止重复点击造成多个 interrupt request。
+footer。两端都必须防止重复点击造成多个 cancel/steer request。
 
 ### 3. 附件上传
 
@@ -428,7 +448,8 @@ Host/账号，但不能使用 token 本身作为 UI key。
 - 发送失败保留 item 和失败原因，支持重试；重试复用 `clientMessageId` 或
   明确生成不会重复投递的幂等 ID。
 - 当 Agent working 且存在 `agent-interrupt-v1` 时，可以对某一项显示 `Send
-  now`，它必须走原子 interrupt + replacement。没有该 capability 时只能
+  now`，它必须走 `agent.turn.steer` 的原子 cancellation + replacement。没有该
+  capability 时只能
   “Move to front”，下次 ready 后发送。
 - 切换 Session 时不能把队列消息带到另一 Session；断线重连不丢本地队列，也
   不应在 Host 是否已接受不确定时自动重复发送。
@@ -518,7 +539,10 @@ Queue:       queued → sending → delivered
 
 Turn:        ready → working → blocked → ready
                     │          └──────→ interrupted → ready
-                    └────────────────→ completed / failed / aborted
+                    └────────────────→ completed / failed / cancelled
+
+`aborted` is a legacy replay status only; new Hosts emit `interrupted` or
+`cancelled` according to the observed cause.
 ```
 
 状态机中的最终 Agent 状态由 Host 事件确认。网络失败、请求超时或客户端重启
@@ -549,8 +573,9 @@ Turn:        ready → working → blocked → ready
   打印 token、签名上传 URL 或完整文件内容。
 - draft、队列和上传临时状态不保存认证 token。浏览器存储遵循现有同源和清理策略。
 - Copy 不读取用户已有剪贴板；Permission 的默认操作不能是自动允许。
-- 取消、interrupt、上传 abort 和 interaction cancel 都必须检查 Session/turn/
-  requestId 所属关系，防止旧 View 操作影响新 turn。
+- Cancel/steer, Provider interruption observations, upload abort, and
+  interaction cancel must check their Session/turn/requestId ownership so an
+  old View action cannot affect a new turn.
 
 ## 分阶段实施
 
@@ -558,7 +583,8 @@ Turn:        ready → working → blocked → ready
 
 - 在 Headless/Transport 中补齐 capability、`payload` 解码和结构化事件模型。
 - 为 `agent.history`、live batch 和重连回放增加相同的事件覆盖。
-- 加入 `agent.interaction.respond`、`agent.turn.interrupt` 的请求/响应模型。
+- 加入 `agent.interaction.respond`、`agent.turn.cancel`、`agent.turn.steer` 的
+  请求/响应模型。
 - 先用 contract tests 固定序列号、稳定 ID、未知事件和幂等错误语义。
 
 ### Phase 2：iOS/Web 共同 View 语义
@@ -569,7 +595,7 @@ Turn:        ready → working → blocked → ready
   基础呈现，以及 status 与 pending card 的关联。
 - 为 copy、edit & resend、retry 建立统一 action 规则。
 
-### Phase 3：interrupt、附件和 composer
+### Phase 3：cancel/steer、附件和 composer
 
 - 实现 cancel、原子 `Send now` 和失败恢复。
 - 实现 prepare/chunk/complete/abort 及 iOS/Web 上传入口。
@@ -586,7 +612,7 @@ Turn:        ready → working → blocked → ready
 1. iOS 和 Web 都能展示 Question、Permission、Plan；Question/Permission 能提交
    或取消，最终状态来自 Host 事件，Plan 更新不重复。
 2. Agent working 时可 Cancel；有 `agent-interrupt-v1` 时 `Send now` 使用一次
-   原子 interrupt + send；无 capability 时不显示该操作。
+   原子 steer + replacement；无 capability 时不显示该操作。
 3. iOS 和 Web 都能选择/拖放附件，看到进度和失败重试，完成后以 opaque reference
    发送；不会把临时路径或文件内容写入消息/draft。
 4. 新结构化事件能通过 live batch 和 history 回放，旧客户端遇到未知事件不崩溃，
@@ -605,7 +631,7 @@ Turn:        ready → working → blocked → ready
 ## 验证计划
 
 - Headless contract tests：capability 交集、事件 payload、history/live 一致性、
-  requestId/clientMessageId 幂等、interrupt 原子性、上传 chunk 校验。
+  requestId/clientMessageId 幂等、cancel/steer correlation、上传 chunk 校验。
 - Transport tests：新旧事件解码、未知字段/类型、epoch/sequence 恢复和错误映射。
 - iOS unit/UI tests：interaction reducer、Plan 更新、队列 edit/delete/reorder、
   draft 隔离与 flush、pasteboard、Dynamic Type、VoiceOver labels、附件失败恢复。

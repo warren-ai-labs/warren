@@ -1055,6 +1055,17 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(failed.isActive)
     }
 
+    func testConnectionPresentationNamesRuntimeMigration() {
+        let migrating = WarrenDesktopConnectionPresentation(
+            .connecting,
+            migratingRuntimeSessions: true
+        )
+
+        XCTAssertEqual(migrating.label, "Migrating runtime sessions…")
+        XCTAssertEqual(migrating.tone, .info)
+        XCTAssertTrue(migrating.isActive)
+    }
+
     func testWindowDragRegionPerformsDragOnSingleClick() {
         let view = WarrenDesktopWindowDragView()
         let window = WarrenDragProbeWindow(
@@ -1264,6 +1275,16 @@ final class WarrenDesktopTests: XCTestCase {
         }
 
         XCTAssertEqual(receivedTask, task)
+    }
+
+    func testTaskRenameRequestCarriesTaskMetadata() {
+        let taskID = TaskID()
+        let request = WarrenDesktopRenameRequest.task(taskID, name: "Delivery")
+
+        XCTAssertEqual(request.initialValue, "Delivery")
+        XCTAssertEqual(request.title, "Rename Task")
+        XCTAssertEqual(request.fieldLabel, "Task name")
+        XCTAssertTrue(request.message.contains("linked workspaces"))
     }
 
     @MainActor
@@ -3392,6 +3413,107 @@ final class WarrenDesktopTests: XCTestCase {
         let snapshot = recorder.snapshot()
         XCTAssertNotNil(snapshot.node(id: "workspace.project-list.\(activeWorkspace.id.description)"))
         XCTAssertNil(snapshot.node(id: "workspace.project-list.\(idleWorkspace.id.description)"))
+    }
+
+    func testSidebarRowsKeepsTaskGroupsWhenShowsActiveOnlyIsTrue() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let project = Project(hostID: host.id, name: "Repo", rootPath: "/repo")
+        let idleWorkspace = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "idle",
+            path: "/repo/idle"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [project],
+            workspaces: [idleWorkspace]
+        )
+        let recorder = WarrenSemanticRecorder()
+
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: projection.taskGroups,
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeWorkspaceIDs: [],
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedTaskIDs: [task.id],
+                showsActiveOnly: true
+            )),
+            isCollapsed: false,
+            selection: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        let taskNode = snapshot.node(id: "task.\(task.id.description)")
+        XCTAssertEqual(taskNode?.label, "Task Delivery")
+        XCTAssertEqual(taskNode?.value, "0 workspaces · Expanded")
+        XCTAssertNil(snapshot.node(id: "workspace.task-list.\(idleWorkspace.id.description)"))
+    }
+
+    func testTaskRowExposesProjectStyleSecondaryActions() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let recorder = WarrenSemanticRecorder()
+        let row = WarrenDesktopTaskRow(
+            task: task,
+            workspaceCount: 2,
+            availableProjectGroups: [],
+            isCollapsed: false,
+            isExpanded: false,
+            isInteractionDisabled: false,
+            onToggleExpansion: {},
+            onAttachWorkspace: { _ in },
+            onCreateWorkspace: { _ in },
+            onRename: {},
+            onDelete: {}
+        )
+        .frame(width: 420, height: WarrenLayoutMetrics.sidebarProjectRowHeight)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: row)
+        hostingView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 420,
+            height: WarrenLayoutMetrics.sidebarProjectRowHeight
+        )
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        XCTAssertEqual(
+            snapshot.node(id: "task.\(task.id.description).toggle")?.label,
+            "Expand task Delivery"
+        )
+        XCTAssertEqual(
+            snapshot.node(id: "task.\(task.id.description).new-workspace")?.label,
+            "Add workspace to task Delivery"
+        )
     }
 
     func testNavigationReducerIgnoresSidebarMoves() {

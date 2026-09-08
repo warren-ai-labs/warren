@@ -223,6 +223,174 @@ func TestAgentViewActionsAreIdempotentAndRejectConflictingIdentities(t *testing.
 	}
 }
 
+func TestAgentTurnInterruptionAndCancellationRemainDistinct(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	// A provider/TUI interruption has no Host command to correlate. The
+	// provider status and turn observation arrive independently, just as they
+	// do from the transcript watcher.
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, false)
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityReady})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnInterrupted}}, false)
+	if got := service.agentTurn(sessionID); got.Status != api.AgentTurnInterrupted {
+		t.Fatalf("provider interruption turn = %#v, want interrupted", got)
+	}
+	if got := service.agentStatus(sessionID).Activity; got != api.AgentActivityReady {
+		t.Fatalf("provider interruption activity = %q, want ready", got)
+	}
+
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	events := append([]api.CanonicalAgentEvent(nil), entry.canonicalEvents...)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	var interruption *api.CanonicalAgentEvent
+	for index := range events {
+		if events[index].Type == "turn.interrupted" {
+			interruption = &events[index]
+		}
+	}
+	if interruption == nil {
+		t.Fatalf("canonical events = %#v, want turn.interrupted", events)
+	}
+	if interruption.CausedBy != "" || interruption.Payload["cause"] != "interrupt" {
+		t.Fatalf("uncorrelated interruption = %#v, want no causedBy and interrupt cause", interruption)
+	}
+
+	// A Host cancel receipt is not a terminal observation. The activity must
+	// remain working until the Provider reports the interruption.
+	service = newAgentViewTestService(t, controller)
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, false)
+	result, err := service.interruptAgentTurn(context.Background(), api.AgentTurnInterruptRequest{
+		CommandID: "cancel-1", Session: sessionID, Turn: 1, Reason: "cancel",
+	})
+	if err != nil || !result.Accepted {
+		t.Fatalf("cancel result = %#v, err=%v", result, err)
+	}
+	if got := service.agentStatus(sessionID).Activity; got != api.AgentActivityWorking {
+		t.Fatalf("accepted cancel activity = %q, want working", got)
+	}
+	service.agentsMu.Lock()
+	entry = service.agents[sessionID]
+	entry.mu.Lock()
+	pending := entry.pendingTurnRequest
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	if pending == nil || pending.commandID != "cancel-1" {
+		t.Fatalf("pending cancel = %#v, want command cancel-1", pending)
+	}
+
+	// The matching Provider observation converts the turn boundary to
+	// cancelled and carries the Host command correlation.
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityReady})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnInterrupted}}, false)
+	if got := service.agentTurn(sessionID); got.Status != api.AgentTurnCancelled {
+		t.Fatalf("correlated interruption turn = %#v, want cancelled", got)
+	}
+	// A duplicate provider callback must not regress the already correlated
+	// boundary back to an uncorrelated interruption.
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnInterrupted}}, false)
+	service.agentsMu.Lock()
+	entry = service.agents[sessionID]
+	entry.mu.Lock()
+	events = append([]api.CanonicalAgentEvent(nil), entry.canonicalEvents...)
+	pending = entry.pendingTurnRequest
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	var cancellation *api.CanonicalAgentEvent
+	for index := range events {
+		if events[index].Type == "turn.cancelled" {
+			cancellation = &events[index]
+		}
+	}
+	if cancellation == nil || cancellation.CausedBy != "cancel-1" || cancellation.Payload["cause"] != "cancel" {
+		t.Fatalf("correlated cancellation = %#v, want causedBy cancel-1", cancellation)
+	}
+	if pending != nil {
+		t.Fatalf("pending request after cancellation = %#v, want nil", pending)
+	}
+	var cancellationCount int
+	var interruptionCount int
+	for index := range events {
+		switch events[index].Type {
+		case "turn.cancelled":
+			cancellationCount++
+		case "turn.interrupted":
+			interruptionCount++
+		}
+	}
+	if cancellationCount != 1 || interruptionCount != 0 {
+		t.Fatalf("terminal event counts = cancelled %d, interrupted %d; want 1, 0", cancellationCount, interruptionCount)
+	}
+}
+
+func TestAgentTurnCancelCannotAttachAfterReadyObservation(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, false)
+	// The watcher publishes the terminal status before it publishes the turn
+	// cursor. A Host request in this gap is too late to cause the stop.
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityReady})
+	if _, err := service.interruptAgentTurn(context.Background(), api.AgentTurnInterruptRequest{
+		CommandID: "late-cancel", Session: sessionID, Turn: 1, Reason: "cancel",
+	}); err == nil {
+		t.Fatal("cancel after ready observation was accepted")
+	}
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnInterrupted}}, false)
+	if got := service.agentTurn(sessionID); got.Status != api.AgentTurnInterrupted {
+		t.Fatalf("late cancel observation = %#v, want interrupted", got)
+	}
+}
+
+func TestAgentTurnCancelPendingClearsOnNormalTerminalBoundary(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, false)
+	if _, err := service.interruptAgentTurn(context.Background(), api.AgentTurnInterruptRequest{
+		CommandID: "cancel-normal", Session: sessionID, Turn: 1, Reason: "cancel",
+	}); err != nil {
+		t.Fatalf("cancel request failed: %v", err)
+	}
+
+	// The Provider completed normally after the request was accepted. It must
+	// consume the pending correlation instead of poisoning a future turn.
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnCompleted}}, false)
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 2, Status: api.AgentTurnStarted}}, false)
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 2, Status: api.AgentTurnInterrupted}}, false)
+	if got := service.agentTurn(sessionID); got.Status != api.AgentTurnInterrupted {
+		t.Fatalf("next turn after normal completion = %#v, want interrupted", got)
+	}
+}
+
+func TestAgentTurnLegacyAbortedObservationRemainsCompatible(t *testing.T) {
+	service := newAgentViewTestService(t, &recordingAgentViewController{})
+	sessionID := "agent-view-session"
+	service.recordAgentStatus(sessionID, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, false)
+	service.recordAgentTurns(sessionID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnAborted}}, false)
+	if got := service.agentTurn(sessionID); got.Status != api.AgentTurnInterrupted {
+		t.Fatalf("legacy aborted turn = %#v, want interrupted projection", got)
+	}
+
+	status, turn := canonicalProjectionFromEvent(api.AgentStatus{}, api.AgentTurn{}, api.CanonicalAgentEvent{
+		Type:    "turn.aborted",
+		TurnID:  "7",
+		Payload: map[string]any{"turnId": "7", "status": "aborted"},
+	})
+	if status.Activity != "" || turn.ID != 7 || turn.Status != api.AgentTurnAborted {
+		t.Fatalf("legacy canonical projection = status %#v turn %#v", status, turn)
+	}
+}
+
 func TestAgentViewAttachmentLifecycleValidatesChunksAndPrepareHash(t *testing.T) {
 	service := newAgentViewTestService(t, &recordingAgentViewController{})
 	sessionID := "agent-view-session"
@@ -448,7 +616,113 @@ func TestAgentViewControlOnlyClaimIsAuthoritative(t *testing.T) {
 	}
 }
 
-func TestSendAgentMessageInputBracketedPasteFraming(t *testing.T) {
+func TestDetachAgentPeerReleasesStaleControlLease(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	server := &HTTPServer{Service: service}
+	owner := &wsPeer{server: server}
+	replacement := &wsPeer{server: server}
+	const sessionID = "session-agent-lease"
+
+	service.registerAgentPeer(sessionID, owner)
+	if !service.claimAgentControlPeer(owner, sessionID) {
+		t.Fatal("initial Agent control claim was rejected")
+	}
+	service.detachAgentPeer(owner, sessionID)
+	if service.hasControlPeer(owner, sessionID) {
+		t.Fatal("detaching Agent peer retained a stale control lease")
+	}
+	if !service.claimAgentControlPeer(replacement, sessionID) {
+		t.Fatal("replacement Agent peer could not claim released control lease")
+	}
+}
+
+func TestDetachAgentPeerPreservesTerminalFocusLease(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	server := &HTTPServer{Service: service}
+	peer := &wsPeer{server: server}
+	const sessionID = "session-terminal-focus"
+
+	service.registerAgentPeer(sessionID, peer)
+	service.outputMu.Lock()
+	service.focusedPeers[sessionID] = peer
+	service.controlPeers[sessionID] = peer
+	service.outputMu.Unlock()
+	service.detachAgentPeer(peer, sessionID)
+	if !service.hasControlPeer(peer, sessionID) {
+		t.Fatal("detaching Agent stream stole a live terminal focus lease")
+	}
+}
+
+func TestPeerCloseReleasesAgentOnlyControlLeaseBeforeSubscription(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	server := &HTTPServer{Service: service}
+	peer := &wsPeer{
+		server: server,
+		closed: make(chan struct{}),
+	}
+	const sessionID = "session-agent-only-before-subscribe"
+
+	service.outputMu.Lock()
+	service.controlPeers[sessionID] = peer
+	service.outputMu.Unlock()
+	peer.enqueueMu.Lock()
+	peer.controlSession = sessionID
+	peer.enqueueMu.Unlock()
+
+	// The focus request may race the canonical subscribe response. Closing the
+	// socket must release the lease even though agentSession is still empty.
+	peer.closeWithReason("test")
+	if service.hasControlPeer(peer, sessionID) {
+		t.Fatal("closing an Agent-only peer retained its control lease")
+	}
+}
+
+func TestPeerDetachReleasesAgentOnlyControlLease(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	server := &HTTPServer{Service: service}
+	peer := &wsPeer{server: server}
+	const sessionID = "session-agent-only-detach"
+
+	if !service.claimAgentControlPeer(peer, sessionID) {
+		t.Fatal("Agent-only control claim was rejected")
+	}
+	peer.enqueueMu.Lock()
+	peer.controlSession = sessionID
+	peer.enqueueMu.Unlock()
+	peer.detach()
+	if service.hasControlPeer(peer, sessionID) {
+		t.Fatal("detaching an Agent-only peer retained its control lease")
+	}
+}
+
+func TestPeerClaimControlReleasesPreviousAgentOnlyLease(t *testing.T) {
+	service := &Service{}
+	service.lazyInit()
+	server := &HTTPServer{Service: service}
+	peer := &wsPeer{server: server}
+	const agentSessionID = "session-agent-only-switch"
+	const terminalSessionID = "session-terminal-switch"
+
+	if !service.claimAgentControlPeer(peer, agentSessionID) {
+		t.Fatal("Agent-only control claim was rejected")
+	}
+	peer.enqueueMu.Lock()
+	peer.controlSession = agentSessionID
+	peer.enqueueMu.Unlock()
+	peer.claimControl(api.Session{ID: terminalSessionID})
+	if service.hasControlPeer(peer, agentSessionID) {
+		t.Fatal("switching to terminal focus retained the previous Agent-only lease")
+	}
+	if !service.hasControlPeer(peer, terminalSessionID) {
+		t.Fatal("terminal focus did not claim the new control lease")
+	}
+}
+
+func TestSendAgentMessageInputHerdrSubmissionFraming(t *testing.T) {
 	runtime := newMemoryRuntime(t)
 	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
 		t.Fatal(err)
@@ -461,7 +735,7 @@ func TestSendAgentMessageInputBracketedPasteFraming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\x1b[200~line1\rline2\twith tab\rline3\x1b[201~\x1b[13u"
+	want := "\x1b[200~line1\rline2\twith tab\rline3\x1b[201~\r"
 	if !bytes.Contains(data, []byte(want)) {
 		t.Fatalf("captured = %q, want containing %q", data, want)
 	}
@@ -918,9 +1192,11 @@ func TestProviderInteractionResolvedDoesNotDuplicateHostResolution(t *testing.T)
 		Type: "interaction.resolved",
 		ID:   "provider-resolution",
 		Payload: map[string]any{
-			"interactionId": "request-duplicate",
-			"kind":          "question",
-			"state":         "resolved",
+			// Providers commonly echo only requestId/state. The Host's local
+			// resolution already owns this lifecycle row, so this observation
+			// must not create a second canonical resolved event.
+			"requestId": "request-duplicate",
+			"state":     "resolved",
 		},
 	}}, api.AgentStatus{Activity: api.AgentActivityReady})
 	after, err := service.canonicalHistoryPage(context.Background(), service.canonicalExecutionID(sessionID), 0, 0, 100)

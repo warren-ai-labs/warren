@@ -20,6 +20,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let updateStatus: WarrenDesktopUpdateStatus
     public let onUpdateAction: () -> Void
     public let webStatus: WarrenDesktopWebStatus
+    public let isMigratingRuntimeSessions: Bool
     public let creatingSessionWorkspaceIDs: Set<WorkspaceID>
     public let creatingSessionTerminalGroupIDs: Set<TerminalGroupID>
     public let deletingProjectIDs: Set<ProjectID>
@@ -128,6 +129,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             throw URLError(.unsupportedURL)
         },
         webStatus: WarrenDesktopWebStatus = .init(),
+        isMigratingRuntimeSessions: Bool = false,
         creatingSessionWorkspaceIDs: Set<WorkspaceID> = [],
         creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = [],
         deletingProjectIDs: Set<ProjectID> = [],
@@ -184,6 +186,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.updateStatus = updateStatus
         self.onUpdateAction = onUpdateAction
         self.webStatus = webStatus
+        self.isMigratingRuntimeSessions = isMigratingRuntimeSessions
         self.creatingSessionWorkspaceIDs = creatingSessionWorkspaceIDs
         self.creatingSessionTerminalGroupIDs = creatingSessionTerminalGroupIDs
         self.deletingProjectIDs = deletingProjectIDs
@@ -761,6 +764,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         tab: presentation.tab,
                         hasProjects: !projection.groups.isEmpty,
                         connectionState: projection.connectionState,
+                        isMigratingRuntimeSessions: isMigratingRuntimeSessions,
                         endpointCapabilities: endpointCapabilities,
                         // Superset keeps the 28pt pane toolbar in workspace
                         // mode too. It is pane chrome, not a duplicate top bar.
@@ -1346,6 +1350,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func confirmRename() {
         guard let pendingRename else { return }
         switch pendingRename {
+        case .task(let id, _):
+            dispatch(.renameTask(id, renameValue))
         case .project(let id, _):
             dispatch(.renameProject(id, renameValue))
         case .workspace(let id, _):

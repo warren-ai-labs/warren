@@ -12,7 +12,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
-func TestRealPTYGuardrailsAndBracketedPaste(t *testing.T) {
+func TestRealPTYGuardrailsAndHerdrSubmission(t *testing.T) {
 	runtime, _ := startGhostlineRuntime(t)
 	ctx := context.Background()
 
@@ -84,7 +84,7 @@ func TestRealPTYGuardrailsAndBracketedPaste(t *testing.T) {
 		t.Fatalf("real PTY leaked working payload: %q", captured)
 	}
 
-	// 3. Verify Ready State writes with Bracketed Paste Mode framing to real PTY
+	// 3. Verify Ready State writes Herdr-compatible text/submit framing to real PTY
 	service.agents[sessionID].status = api.AgentStatus{
 		Activity: api.AgentActivityReady,
 	}
@@ -99,10 +99,17 @@ func TestRealPTYGuardrailsAndBracketedPaste(t *testing.T) {
 		t.Fatalf("res = %#v, want accepted", res)
 	}
 
-	// Wait for cat to echo the bracketed paste input from real PTY
+	// Wait for cat to echo the bracketed text input from real PTY. Enter is a
+	// separate carriage-return write; Kitty's ESC[13u shortcut must not appear.
 	waitGhostlineOutput(t, runtime, runtimeName, "first line")
 	waitGhostlineOutput(t, runtime, runtimeName, "second line")
 	waitGhostlineOutput(t, runtime, runtimeName, "200~")
 	waitGhostlineOutput(t, runtime, runtimeName, "201~")
-	waitGhostlineOutput(t, runtime, runtimeName, "13u")
+	captured, err = runtime.Capture(ctx, runtimeName)
+	if err != nil {
+		t.Fatalf("Capture final PTY output: %v", err)
+	}
+	if bytes.Contains(captured, []byte("13u")) {
+		t.Fatalf("unexpected Kitty keyboard submission marker: %q", captured)
+	}
 }

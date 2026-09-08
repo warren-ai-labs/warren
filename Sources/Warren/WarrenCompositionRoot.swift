@@ -139,6 +139,7 @@ struct WarrenCompositionRoot: View {
                 try await remoteModel.createTask(creation)
             },
             webStatus: remoteModel.webStatus,
+            isMigratingRuntimeSessions: remoteModel.isMigratingRuntimeSessions,
             creatingSessionWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs,
             creatingSessionTerminalGroupIDs: remoteModel.creatingSessionTerminalGroupIDs,
             deletingProjectIDs: remoteModel.deletingProjectIDs,
@@ -775,6 +776,7 @@ struct WarrenCompositionRoot: View {
             for _ in 0..<30 {
                 guard self.localEndpointWaitGeneration == waitGeneration,
                       self.selectedEndpointID == "local" else { return }
+                remoteModel.refreshLocalRuntimeMigrationStatus()
                 let endpoint = WarrenRemoteEndpointConfiguration.localDaemon()
                 // The remote model already owns the WebSocket retry loop. Once
                 // the daemon has published its token, connect immediately

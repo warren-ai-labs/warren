@@ -21,6 +21,8 @@ import {
   loadAgentDraft,
   loadAgentSettings,
   isHiddenAgentEvent,
+  agentInteractionIdentity,
+  latestPendingAgentInteraction,
   normalizeAgentEventType,
   projectAgentEvents,
   removeAgentDraft,
@@ -133,21 +135,11 @@ export function AgentView({
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isReasoningPickerOpen, setIsReasoningPickerOpen] = useState(false);
   const [customModelInput, setCustomModelInput] = useState("");
-  const activePendingInteraction = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i];
-      const type = String(e?.type || "").trim().toLowerCase().replaceAll("-", "_");
-      if (type === "question" || type === "permission" || type === "confirmation" || type === "interaction_requested") {
-        const payload = e?.payload && typeof e.payload === "object" ? e.payload : {};
-        const state = String(payload.state || e?.state || "pending").toLowerCase();
-        if (state === "pending" || state === "submitting") {
-          return e;
-        }
-      }
-    }
-    return null;
-  }, [events]);
-  const activePendingInteractionID = String(activePendingInteraction?.id || activePendingInteraction?.payload?.requestId || "");
+  const activePendingInteraction = useMemo(
+    () => latestPendingAgentInteraction(events),
+    [events],
+  );
+  const activePendingInteractionID = agentInteractionIdentity(activePendingInteraction);
 
   const modelPickerRef = useRef(null);
   const reasoningPickerRef = useRef(null);
@@ -655,7 +647,7 @@ export function AgentView({
             {blocks.map((block, index) => {
               if (block.kind === "usage") return null;
               if (activePendingInteractionID && block.event) {
-                const eventID = String(block.event.id || block.event.payload?.requestId || "");
+                const eventID = agentInteractionIdentity(block.event);
                 if (eventID === activePendingInteractionID) return null;
               }
               return (
@@ -1248,31 +1240,139 @@ function AgentBlock({ block, onInteraction = () => {}, onEditResend = () => {}, 
 function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false, isDocked = false }) {
   const type = String(event?.type || "").trim().toLowerCase().replaceAll("-", "_");
   const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
-  const state = String(payload.state || "").toLowerCase();
+  const state = String(payload.state || "")
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replaceAll("-", "_");
   const title = payload.title || payload.label || payload.name || type.replaceAll("_", " ");
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState({});
   const [customAnswers, setCustomAnswers] = useState({});
   const [expanded, setExpanded] = useState(false);
-  const requestID = String(payload.requestId || "").trim();
-  const pending = canInteract && (state === "pending" || state === "submitting") && requestID;
+  const requestID = String(payload.requestId || payload.interactionId || event?.requestId || event?.interactionId || "").trim();
+  const pendingState = state === "pending" || state === "submitting";
+  const pending = pendingState && Boolean(requestID);
   const isInteraction = type === "question" || type === "permission" || type === "confirmation";
+  const optionID = option => String(
+    option && typeof option === "object" ? (option.id ?? option.value ?? "") : option ?? "",
+  ).trim();
+  const optionLabel = option => String(
+    option && typeof option === "object"
+      ? (option.label ?? option.title ?? option.id ?? option.value ?? "")
+      : option ?? "",
+  ).trim();
+  const normalizeOption = (option, index) => {
+    const source = option && typeof option === "object" && !Array.isArray(option) ? option : {};
+    const rawID = optionID(option);
+    const rawLabel = optionLabel(option);
+    if (!rawID && !rawLabel) return null;
+    const id = rawID || `option-${index}`;
+    const label = rawLabel || id;
+    return {
+      ...source,
+      id,
+      label,
+      ...(source.description !== undefined ? { description: String(source.description) } : {}),
+    };
+  };
   const questions = type === "question"
-    ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => ({
-      ...question,
-      id: String(question?.id || `question-${index}`),
-      prompt: String(question?.prompt || question?.title || "Question"),
-      selection: String(question?.selection || "single").toLowerCase() === "multiple" ? "multiple" : "single",
-      required: question?.required !== false,
-      allowCustom: Boolean(question?.allowCustom),
-      options: Array.isArray(question?.options) ? question.options : [],
-    }))
+    ? (Array.isArray(payload.questions) ? payload.questions : []).map((question, index) => {
+      const source = question && typeof question === "object" ? question : { prompt: question };
+      return {
+        ...source,
+        id: String(source.id || `question-${index}`),
+        prompt: String(source.prompt || source.question || source.title || source.header || "Question"),
+        selection: String(source.selection || (source.multiSelect || source.is_multi_select ? "multiple" : "single")).toLowerCase() === "multiple" ? "multiple" : "single",
+        required: source.required !== false,
+        allowCustom: source.allowCustom === true,
+        options: Array.isArray(source.options) ? source.options.map(normalizeOption).filter(Boolean) : [],
+      };
+    })
     : [];
-  const permissionOptions = (type === "permission" || type === "confirmation") && Array.isArray(payload.options) ? payload.options : [];
-  const optionID = option => String(option?.id || option?.value || "");
+  const permissionOptions = (type === "permission" || type === "confirmation") && Array.isArray(payload.options)
+    ? payload.options.map(normalizeOption).filter(Boolean)
+    : [];
+  const isProgressMetadata = type === "plan" || type === "todo" || type === "goal";
+  const progressItems = isProgressMetadata
+    ? (Array.isArray(payload.items) ? payload.items : Array.isArray(payload.steps) ? payload.steps : [])
+      .map((item, index) => {
+        const source = item && typeof item === "object" ? item : { label: item };
+        const itemState = String(source.state || source.status || "pending").trim().toLowerCase().replaceAll("-", "_");
+        return {
+          ...source,
+          id: String(source.id || `item-${index}`),
+          label: String(source.label || source.title || source.step || source.prompt || ""),
+          state: itemState || "pending",
+        };
+      })
+      .filter(item => item.label)
+    : [];
+  const progressObjective = isProgressMetadata
+    ? [payload.objective, payload.summary, payload.description, payload.content]
+      .map(value => String(value || "").trim())
+      .find(value => value && value !== title)
+    : "";
+  const progressTotal = progressItems.length > 0
+    ? progressItems.length
+    : Number(payload.total ?? payload.totalCount ?? 0);
+  const progressCompleted = progressItems.length > 0
+    ? progressItems.filter(item => ["completed", "complete", "done"].includes(item.state)).length
+    : Number(payload.completed ?? payload.completedCount ?? 0);
+  const tokenBudget = Number(payload.tokenBudget ?? payload.token_budget ?? 0);
+  const tokensUsed = Number(payload.tokensUsed ?? payload.tokens_used ?? 0);
+  const progressCount = progressTotal > 0
+    ? `${Math.min(Math.max(progressCompleted, 0), progressTotal)}/${progressTotal}`
+    : type === "goal" && tokenBudget > 0 && Number.isFinite(tokensUsed)
+      ? `${Math.min(Math.max(tokensUsed, 0), tokenBudget)}/${tokenBudget}`
+      : "";
+  const progressPreview = progressObjective
+    ? progressObjective.split(/\r?\n/, 1)[0]
+    : progressItems[0]?.label || "";
+  // Progress metadata stays compact in the transcript and expands on demand.
+  // This mirrors the native client while keeping the full objective and item
+  // list available to keyboard and screen-reader users.
+  if (isProgressMetadata) {
+    const progressState = state || (type === "goal" ? "active" : "pending");
+    return (
+      <section className={`agent-progress-capsule agent-progress-${type}${expanded ? " open" : ""}`} aria-label={title}>
+        <button
+          type="button"
+          className="agent-progress-capsule-trigger"
+          onClick={() => setExpanded(previous => !previous)}
+          aria-expanded={expanded}
+        >
+          <span className="agent-progress-icon" aria-hidden="true">{structuredIcon(type)}</span>
+          <strong>{title}</strong>
+          {!expanded && progressPreview && <span className="agent-progress-preview">{progressPreview}</span>}
+          <span className="agent-progress-spacer" />
+          {progressCount && <span className="agent-progress-count">{progressCount}</span>}
+          <span className={`agent-structured-state ${progressState}`}>{structuredStateLabel(progressState)}</span>
+          <span className="agent-progress-caret" aria-hidden="true">{expanded ? "▴" : "▾"}</span>
+        </button>
+        {expanded && (
+          <div className="agent-progress-details">
+            {progressObjective && <p className="agent-structured-description">{progressObjective}</p>}
+            {progressItems.length > 0 && (
+              <ul className="agent-structured-items">
+                {progressItems.map(item => (
+                  <li key={item.id} className={item.state}>
+                    <span aria-hidden="true">{["completed", "complete", "done"].includes(item.state) ? "✓" : "○"}</span>
+                    {item.label}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!progressObjective && progressItems.length === 0 && (
+              <p className="agent-structured-summary">No details reported by the Host.</p>
+            )}
+          </div>
+        )}
+      </section>
+    );
+  }
 
   // Render resolved interaction as a simple collapsible card in the message flow
-  if (isInteraction && !pending && !isDocked) {
+  if (isInteraction && !pendingState && !isDocked) {
     const categoryLabel = type === "permission" ? "Permission" : type === "confirmation" ? "Confirmation" : "Ask";
     const promptPreview = questions[0]?.prompt || payload.description || payload.title || title;
 
@@ -1331,7 +1431,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
                         return (
                           <div key={optId} className={`agent-interaction-card-opt${isChosen ? " chosen" : ""}`}>
                             <span className="agent-interaction-opt-marker">{isChosen ? "✓" : "○"}</span>
-                            <span>{opt.label || opt.id || optId}</span>
+                            <span>{optionLabel(opt) || optId}</span>
                           </div>
                         );
                       })}
@@ -1357,10 +1457,11 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   }
 
   const submitResponse = response => {
-    if (!pending || submitting || state !== "pending") return;
+    if (!pending || !canInteract || submitting || state !== "pending") return;
     setSubmitting(true);
     try {
-      const result = onInteraction({ requestId: requestID, kind: type, response });
+      const version = Number(payload.version || event?.version) || 1;
+      const result = onInteraction({ requestId: requestID, kind: type, version, response });
       // App-level request adapters return a Promise when the Host rejects the
       // response. Restore the card so a transient failure is retryable.
       Promise.resolve(result).catch(() => setSubmitting(false));
@@ -1369,7 +1470,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     }
   };
   const toggleQuestionOption = (question, optionID) => {
-    if (!pending || submitting || state !== "pending") return;
+    if (!pending || !canInteract || submitting || state !== "pending") return;
     setAnswers(previous => {
       const selected = new Set(previous[question.id] || []);
       if (question.selection === "multiple") {
@@ -1393,13 +1494,15 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     }
     submitResponse({ answers: normalized, ...(Object.keys(custom).length ? { customAnswers: custom } : {}) });
   };
-  const questionsValid = questions.every(question => {
+  const questionsValid = questions.length > 0 && questions.every(question => {
     if (!question.required) return true;
     return (answers[question.id] || []).length > 0 || String(customAnswers[question.id] || "").trim().length > 0;
-  });
+  }) && questions.some(question => (
+    (answers[question.id] || []).length > 0
+    || String(customAnswers[question.id] || "").trim().length > 0
+  ));
   const cancelInteraction = () => submitResponse({ cancelled: true });
-  const selectPermission = option => submitResponse({ decision: option.id || option.value });
-  const confirmInteraction = () => submitResponse({ decision: "confirm" });
+  const selectPermission = option => submitResponse({ decision: optionID(option) });
 
   useEffect(() => {
     if (state !== "pending") setSubmitting(false);
@@ -1410,7 +1513,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     return <div className="agent-metadata-marker" role="note">--- {markerLabel} ---</div>;
   }
 
-  const interactionPending = pending && state === "pending";
+  const interactionPending = pending && canInteract && state === "pending";
   const isSelected = (questionID, id) => (answers[questionID] || []).includes(id);
 
   const questionContent = questions.map(question => (
@@ -1429,7 +1532,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
               disabled={!interactionPending}
               aria-pressed={selected}
             >
-              <span>{option.label || option.id || option.value || id}</span>
+              <span>{optionLabel(option) || id}</span>
               {option.description && <small>{option.description}</small>}
             </button>
           );
@@ -1452,7 +1555,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     const id = optionID(option) || `option-${index}`;
     return (
       <button key={id} type="button" onClick={() => selectPermission(option)} disabled={!interactionPending}>
-        <span>{option.label || option.id || option.value || id}</span>
+        <span>{optionLabel(option) || id}</span>
         {option.description && <small>{option.description}</small>}
       </button>
     );
@@ -1461,8 +1564,12 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   const responseControls = interactionPending && canInteract && (
     <div className="agent-structured-actions">
       {type === "question" && <button type="button" onClick={submitQuestionAnswers} disabled={submitting || !questionsValid}>Submit</button>}
-      {type === "confirmation" && permissionOptions.length === 0 && <button type="button" onClick={confirmInteraction} disabled={submitting}>Confirm</button>}
-      {(type === "question" || type === "permission" || type === "confirmation") && <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>}
+      {type === "question" && questions.length > 0 && (
+        <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>
+      )}
+      {(type === "permission" || type === "confirmation") && permissionOptions.length > 0 && (
+        <button type="button" onClick={cancelInteraction} disabled={submitting}>Cancel</button>
+      )}
     </div>
   );
 
@@ -1479,8 +1586,14 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
         <div className="agent-structured-options" role="group" aria-label={`${title} options`}>{permissionContent}</div>
       )}
       {responseControls}
-      {!canInteract && (type === "question" || type === "permission" || type === "confirmation") && (state === "pending" || state === "submitting") && (
-        <p className="agent-structured-readonly" role="status">This Host does not support responding here.</p>
+      {(type === "question" || type === "permission" || type === "confirmation") && pendingState && (
+        (!canInteract || ((type === "permission" || type === "confirmation") && permissionOptions.length === 0)) && (
+          <p className="agent-structured-readonly" role="status">
+            {!canInteract
+              ? "This Host does not support responding here."
+              : "This request has no options from the Host and is read-only."}
+          </p>
+        )
       )}
       {(type === "plan" || type === "todo") && Array.isArray(payload.items) && (
         <ul className="agent-structured-items">
@@ -1506,6 +1619,7 @@ function structuredIcon(type) {
     confirmation: "!",
     plan: "☷",
     todo: "☑",
+    goal: "◎",
     activity: "•",
     plugin: "◆",
     subagent: "◇",
