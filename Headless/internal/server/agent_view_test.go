@@ -616,6 +616,48 @@ func TestAgentViewControlOnlyClaimIsAuthoritative(t *testing.T) {
 	}
 }
 
+func TestCanonicalCommandSessionDoesNotRequireTerminalControlLease(t *testing.T) {
+	const sessionID = "session-decoupled-agent"
+	const execID = "exec-decoupled-agent"
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(func(s *api.State) error {
+		s.Sessions = append(s.Sessions, api.Session{
+			ID:               sessionID,
+			AgentExecutionID: execID,
+			Lifecycle:        "running",
+			Kind:             "codex",
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state}
+	service.lazyInit()
+
+	// Another peer (e.g. Warren Desktop) owns the terminal control lease.
+	terminalPeer := &wsPeer{}
+	service.outputMu.Lock()
+	service.controlPeers[sessionID] = terminalPeer
+	service.outputMu.Unlock()
+
+	// A mobile agent peer without terminal control lease submits an agent command.
+	agentPeer := &wsPeer{server: &HTTPServer{Service: service}}
+	cmd := api.AgentCommand{
+		CommandID:   "cmd-1",
+		ExecutionID: execID,
+	}
+	session, execution, err := agentPeer.canonicalCommandSession(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("canonical agent command rejected when terminal lease is held by another client: %v", err)
+	}
+	if session.ID != sessionID || execution.ID != execID {
+		t.Fatalf("unexpected session or execution: %v, %v", session, execution)
+	}
+}
+
 func TestDetachAgentPeerReleasesStaleControlLease(t *testing.T) {
 	service := &Service{}
 	service.lazyInit()
@@ -991,6 +1033,42 @@ func TestSendAgentInteractionInputCombinesCustomAndSelectedAnswers(t *testing.T)
 	}
 	if got := string(runtime.writes[2]); got != "Visible choice" {
 		t.Fatalf("selected label = %q, want Visible choice", got)
+	}
+}
+
+func TestSendAgentInteractionInputUsesArrowKeyNavigation(t *testing.T) {
+	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	if err := runtime.Create(context.Background(), "sess-arrow", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	err := sendAgentInteractionInput(context.Background(), runtime, "sess-arrow", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"answerOrder": []any{"q1", "q2"},
+			"answerIndices": map[string]any{
+				"q1": []any{2}, // Option index 2 -> 2 down arrows + enter
+				"q2": []any{0}, // Option index 0 -> 0 down arrows + enter
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	// Writes should be: \x1b[B, \x1b[B, \r for q1, then \r for q2
+	if len(runtime.writes) != 4 {
+		t.Fatalf("writes = %#v (len %d), want 4 writes", runtime.writes, len(runtime.writes))
+	}
+	if got := string(runtime.writes[0]); got != "\x1b[B" {
+		t.Fatalf("write[0] = %q, want down arrow", got)
+	}
+	if got := string(runtime.writes[1]); got != "\x1b[B" {
+		t.Fatalf("write[1] = %q, want down arrow", got)
+	}
+	if got := string(runtime.writes[2]); got != "\r" {
+		t.Fatalf("write[2] = %q, want Enter", got)
+	}
+	if got := string(runtime.writes[3]); got != "\r" {
+		t.Fatalf("write[3] = %q, want Enter", got)
 	}
 }
 

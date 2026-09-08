@@ -2644,11 +2644,8 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			}
 			if focused {
 				// Agent-only clients subscribe to the canonical stream, not to
-				// terminal output. Promote only when the mutation lease is free;
-				// never steal an active terminal owner's lease silently.
-				if !p.server.Service.claimAgentControlPeer(p, requestedSessionID) {
-					return p.writeResult(command.ID, map[string]bool{"focused": false, "resized": false})
-				}
+				// terminal output. Record agent focus without contending with
+				// or requiring the single-tenant Terminal PTY control lease.
 				p.claimAgentControl(requestedSessionID)
 			} else {
 				p.releaseControl(requestedSessionID)
@@ -2795,9 +2792,9 @@ func (p *wsPeer) canonicalCommandSession(ctx context.Context, command api.AgentC
 	if !ok || execution.ID != command.ExecutionID {
 		return api.Session{}, api.AgentExecution{}, fmt.Errorf("agent execution not found: %s", command.ExecutionID)
 	}
-	if err := p.requireAgentControl(session.ID); err != nil {
-		return api.Session{}, api.AgentExecution{}, err
-	}
+	// Canonical Agent View operations (turns, interactions, goals, attachments)
+	// operate through structured idempotent RPCs and do not require the
+	// single-tenant Terminal PTY control lease.
 	admitted, err := p.server.Service.canonicalCommandAdmitted(ctx, command.ExecutionID, command.CommandID)
 	if err != nil {
 		return api.Session{}, api.AgentExecution{}, fmt.Errorf("load canonical command admission: %w", err)

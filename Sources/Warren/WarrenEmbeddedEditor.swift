@@ -234,6 +234,11 @@ enum WarrenEmbeddedEditorProfile {
         [
             "breadcrumbs.enabled": true,
             "chat.disableAIFeatures": true,
+            // Keep the embedded Monaco surface aligned with the native Warren
+            // editor and Superset's compact code-view rhythm.
+            "editor.fontFamily": "SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            "editor.fontSize": 13,
+            "editor.lineHeight": 20,
             "editor.minimap.enabled": false,
             "editor.scrollbar.horizontalScrollbarSize": 8,
             "editor.scrollbar.verticalScrollbarSize": 8,

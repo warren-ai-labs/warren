@@ -4,8 +4,8 @@ import WarrenDomain
 import WarrenObservation
 
 /// A workspace row uses a compact 26pt desktop rhythm. Its marker lives in a
-/// stable slot. The complete row is one navigation/session target; there is no
-/// tiny nested add button competing with branch selection.
+/// stable slot. Project-list copies attached to a Task are context-only; the
+/// Task-list copy remains the workspace navigation target.
 struct WarrenDesktopWorkspaceRow: View {
     let workspace: Workspace
     let semanticScope: String
@@ -16,6 +16,9 @@ struct WarrenDesktopWorkspaceRow: View {
     let isPinned: Bool
     let isDeleting: Bool
     let isInteractionDisabled: Bool
+    /// Project-list copies of Task workspaces remain visible for context but
+    /// are not navigation targets; the Task-list copy owns selection.
+    let isSelectionDisabled: Bool
     /// The task label is supplied only when this workspace is rendered in the
     /// project list. Task-list rows already sit beneath their task heading.
     let taskName: String?
@@ -43,7 +46,10 @@ struct WarrenDesktopWorkspaceRow: View {
 
     private var collapsedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        return Button(action: onSelect) {
+        return Button(action: {
+            guard !isSelectionDisabled else { return }
+            onSelect()
+        }) {
             ZStack(alignment: .topTrailing) {
                 workspaceGlyph(tokens: tokens)
                 if let activity {
@@ -61,11 +67,18 @@ struct WarrenDesktopWorkspaceRow: View {
                 }
             }
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
-        .disabled(isInteractionDisabled)
+        .buttonStyle(WarrenInteractiveRowStyle(
+            isSelected: isSelected && !isSelectionDisabled,
+            isFocused: isFocused
+        ))
+        .disabled(isInteractionDisabled || isSelectionDisabled)
         .frame(width: 32, height: 32)
         .contentShape(.rect)
         .foregroundStyle(tokens.mutedForeground)
+        .background(
+            isSelectionDisabled ? tokens.tertiaryWash : .clear,
+            in: RoundedRectangle(cornerRadius: WarrenRadius.row)
+        )
         .opacity(isInteractionDisabled ? 0.62 : 1)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .help(taskName.map { "Task: \($0)" } ?? "")
@@ -75,19 +88,21 @@ struct WarrenDesktopWorkspaceRow: View {
         }
         .accessibilityLabel("Workspace \(workspace.name)")
         .accessibilityValue(workspaceAccessibilityValue)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
         .warrenSemanticElement(
             id: "workspace.\(semanticScope).\(workspace.id.description)",
             role: .button,
             label: "Workspace \(workspace.name)",
             value: workspaceAccessibilityValue,
-            isEnabled: !isInteractionDisabled,
-            isSelected: isSelected,
-            action: { if !isInteractionDisabled { onSelect() } }
+            isEnabled: !isInteractionDisabled && !isSelectionDisabled,
+            isSelected: isSelected && !isSelectionDisabled,
+            action: {
+                if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
+            }
         )
         .focused($isFocused)
         .simultaneousGesture(TapGesture(count: 2).onEnded {
-            if !isInteractionDisabled { onDoubleClick() }
+            if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
         })
         .contextMenu {
             if !isInteractionDisabled {
@@ -100,7 +115,10 @@ struct WarrenDesktopWorkspaceRow: View {
 
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        return Button(action: onSelect) {
+        return Button(action: {
+            guard !isSelectionDisabled else { return }
+            onSelect()
+        }) {
             HStack(spacing: WarrenSpacing.compact) {
                 workspaceGlyph(tokens: tokens)
                     .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
@@ -109,7 +127,9 @@ struct WarrenDesktopWorkspaceRow: View {
                 Text(workspace.name.isEmpty ? "Workspace" : workspace.name)
                     .font(WarrenTypography.navigationItem)
                     .foregroundStyle(
-                        isSelected
+                        isSelectionDisabled
+                            ? tokens.mutedForeground.opacity(0.62)
+                            : isSelected
                             ? tokens.workspaceSelectedText
                             : tokens.workspaceText
                     )
@@ -141,23 +161,28 @@ struct WarrenDesktopWorkspaceRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
-        .disabled(isInteractionDisabled)
+        .buttonStyle(WarrenInteractiveRowStyle(
+            isSelected: isSelected && !isSelectionDisabled,
+            isFocused: isFocused
+        ))
+        .disabled(isInteractionDisabled || isSelectionDisabled)
         .focused($isFocused)
         .simultaneousGesture(TapGesture(count: 2).onEnded {
-            if !isInteractionDisabled { onDoubleClick() }
+            if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
         })
         .accessibilityLabel("Workspace \(workspace.name)")
         .accessibilityValue(workspaceAccessibilityValue)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
         .warrenSemanticElement(
             id: "workspace.\(semanticScope).\(workspace.id.description)",
             role: .button,
             label: "Workspace \(workspace.name)",
             value: workspaceAccessibilityValue,
-            isEnabled: !isInteractionDisabled,
-            isSelected: isSelected,
-            action: { if !isInteractionDisabled { onSelect() } }
+            isEnabled: !isInteractionDisabled && !isSelectionDisabled,
+            isSelected: isSelected && !isSelectionDisabled,
+            action: {
+                if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
+            }
         )
         .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
         .padding(.leading, WarrenSpacing.compact + WarrenSpacing.xs)
@@ -174,6 +199,10 @@ struct WarrenDesktopWorkspaceRow: View {
             }
         }
         .padding(.horizontal, WarrenSpacing.compact)
+        .background(
+            isSelectionDisabled ? tokens.tertiaryWash : .clear,
+            in: RoundedRectangle(cornerRadius: WarrenRadius.row)
+        )
         .help(taskName.map { "Task: \($0)" } ?? "")
         .accessibilityElement(children: .contain)
     }
@@ -207,10 +236,10 @@ struct WarrenDesktopWorkspaceRow: View {
                 guard !isInteractionDisabled else { return }
                 onSelectTask(taskID)
             } label: {
-                Text("T")
-                    .font(.system(size: 11, weight: .light))
-                    .foregroundStyle(tokens.success)
-                    .frame(width: 18, height: 18)
+                Text("Task")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tokens.highlight)
+                    .frame(width: 32, height: 18)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -236,6 +265,9 @@ struct WarrenDesktopWorkspaceRow: View {
         var values: [String] = []
         if let taskName {
             values.append("Belongs to task \(taskName)")
+        }
+        if isSelectionDisabled {
+            values.append("Open from Task")
         }
         if workspace.branch != nil, let mergeState = workspace.mergeState {
             values.append(mergeState.accessibilityLabel)

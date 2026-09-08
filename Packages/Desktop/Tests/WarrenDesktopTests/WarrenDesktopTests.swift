@@ -448,6 +448,91 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(requestedPaths, ["/Applications/GoLand.app"])
     }
 
+    func testExternalIDEOptionsCacheApplicationResolutionAndIcons() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var resolvedBundleIdentifiers: [String] = []
+        var requestedIconPaths: [String] = []
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { bundleIdentifier in
+                resolvedBundleIdentifiers.append(bundleIdentifier)
+                return bundleIdentifier == "com.jetbrains.goland" ? applicationURL : nil
+            },
+            directoryExists: { _ in true },
+            applicationIcon: { url in
+                requestedIconPaths.append(url.path)
+                return nil
+            },
+            launch: { _, _ in }
+        )
+
+        let firstOptions = service.options(for: workspace, isLocalEndpoint: true)
+        let secondOptions = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(firstOptions.map(\.id), secondOptions.map(\.id))
+        XCTAssertEqual(
+            resolvedBundleIdentifiers.count,
+            WarrenDesktopExternalIDE.supported.count
+        )
+        XCTAssertEqual(requestedIconPaths, [applicationURL.path])
+    }
+
+    func testExternalIDEOptionsCacheInvalidatesWhenWorkspaceDirectoryChanges() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        let applicationURL = URL(fileURLWithPath: "/Applications/GoLand.app")
+        var directoryExists = true
+        var resolveCount = 0
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in
+                resolveCount += 1
+                return applicationURL
+            },
+            directoryExists: { _ in directoryExists },
+            launch: { _, _ in }
+        )
+
+        let availableOptions = service.options(for: workspace, isLocalEndpoint: true)
+        directoryExists = false
+        let unavailableOptions = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertTrue(availableOptions.allSatisfy(\.isEnabled))
+        XCTAssertTrue(unavailableOptions.allSatisfy { !$0.isEnabled })
+        XCTAssertEqual(resolveCount, WarrenDesktopExternalIDE.supported.count * 2)
+    }
+
+    func testExternalIDEOptionsCacheInvalidatesWhenCustomIDEsChange() {
+        let workspace = Workspace(
+            projectID: ProjectID(),
+            name: "Feature",
+            path: "/Users/me/Workspace/warren-feature"
+        )
+        var customIDEs: [WarrenDesktopCustomIDE] = []
+        let custom = WarrenDesktopCustomIDE(
+            name: "Custom IDE",
+            path: "/Applications/Custom IDE.app"
+        )
+        let service = WarrenDesktopExternalIDEService(
+            resolveApplicationURL: { _ in nil },
+            directoryExists: { _ in true },
+            loadCustomIDEs: { customIDEs },
+            launch: { _, _ in }
+        )
+
+        XCTAssertTrue(service.options(for: workspace, isLocalEndpoint: true).isEmpty)
+        customIDEs = [custom]
+        let options = service.options(for: workspace, isLocalEndpoint: true)
+
+        XCTAssertEqual(options.map(\.id), ["custom:\(custom.id.uuidString)"])
+    }
+
     func testExternalIDEIconNormalizesAppKitIntrinsicSize() {
         let source = NSImage(size: NSSize(width: 32, height: 32))
         let normalized = WarrenDesktopExternalIDEIcon.normalized(source)
@@ -1360,19 +1445,22 @@ final class WarrenDesktopTests: XCTestCase {
             "Workspace assigned"
         )
         XCTAssertTrue(assignedProjectNode?.value?.contains("Belongs to task Delivery") == true)
+        XCTAssertFalse(assignedProjectNode?.isEnabled ?? true)
+        XCTAssertFalse(assignedProjectNode?.isSelected ?? true)
 
         let taskLinkNode = snapshot.node(
             id: "workspace-task.project-list.\(assigned.id.description)"
         )
         XCTAssertEqual(taskLinkNode?.label, "Task Delivery")
         XCTAssertEqual(taskLinkNode?.value, "Open task")
+        XCTAssertTrue(taskLinkNode?.isEnabled ?? false)
         try recorder.perform(.press, on: "workspace-task.project-list.\(assigned.id.description)")
         XCTAssertEqual(selectedTaskID, task.id)
         XCTAssertFalse(taskTree.tasksCollapsed)
         XCTAssertTrue(taskTree.expandedTaskIDs.contains(task.id))
 
         try recorder.perform(.press, on: "workspace.project-list.\(assigned.id.description)")
-        XCTAssertEqual(selectedWorkspaceID, assigned.id)
+        XCTAssertNil(selectedWorkspaceID)
 
         let availableProjectNode = snapshot.node(
             id: "workspace.project-list.\(available.id.description)"
@@ -1388,6 +1476,32 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(assignedTaskNode?.label.contains("Delivery") == true)
         XCTAssertFalse(assignedTaskNode?.value?.contains("Belongs to task") == true)
         XCTAssertNil(snapshot.node(id: "workspace-task.task-list.\(assigned.id.description)"))
+    }
+
+    func testSidebarWorkspaceScrollTargetPrefersTaskListForAttachedWorkspace() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let assigned = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "assigned",
+            path: "/tmp/api-assigned"
+        )
+        let available = Workspace(
+            projectID: project.id,
+            name: "available",
+            path: "/tmp/api-available"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopSidebar.workspaceScrollTarget(for: assigned),
+            "workspace.task-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSidebar.workspaceScrollTarget(for: available),
+            "workspace.project-list.\(available.id.description)"
+        )
     }
 
     func testTaskWorkspaceOptionsKeepOnlyUnassignedWorkspacesGroupedByProject() {

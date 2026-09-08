@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1119,45 +1120,98 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 		}
 
 	case "question":
-		var answers []string
 		answerOrder := request.Response["answerOrder"]
 		customAnswers, _ := request.Response["customAnswers"].(map[string]any)
 		answerLabels, _ := request.Response["answerLabels"].(map[string]any)
 		selectedAnswers, _ := request.Response["answers"].(map[string]any)
-		// Codex and a few other interactive TUIs display choices by label rather
-		// than by the provider-neutral option ID. iOS keeps IDs in `answers` for
-		// canonical validation and supplies labels as an explicit PTY fallback.
-		// Resolve one question at a time so a custom answer for q1 cannot hide a
-		// selected option for q2. A custom value wins for its own question because
-		// it represents the user's explicit free-form replacement for a choice.
-		for _, key := range responseKeysInOrder(answerOrder, customAnswers, answerLabels, selectedAnswers) {
-			before := len(answers)
-			if value, ok := customAnswers[key]; ok {
-				appendAgentInteractionAnswers(&answers, value)
-			}
-			if len(answers) == before {
-				if value, ok := answerLabels[key]; ok {
-					appendAgentInteractionAnswers(&answers, value)
+		answerIndices, _ := request.Response["answerIndices"].(map[string]any)
+
+		orderedKeys := responseKeysInOrder(answerOrder, customAnswers, answerLabels, selectedAnswers, answerIndices)
+		hasHandledAny := false
+
+		for _, key := range orderedKeys {
+			if custom, ok := customAnswers[key]; ok {
+				if customText := strings.TrimSpace(agentStringValue(custom)); customText != "" {
+					if err := sendTerminalSubmission(ctx, runtime, sessionID, customText); err != nil {
+						return err
+					}
+					hasHandledAny = true
+					continue
 				}
 			}
-			if len(answers) == before {
+
+			indices := parseInteractionIndices(answerIndices[key])
+			if len(indices) > 0 {
+				hasHandledAny = true
+				if len(indices) == 1 {
+					// Single choice: navigate down `target` times, then press Enter
+					target := indices[0]
+					for i := 0; i < target; i++ {
+						if err := runtime.Input(ctx, sessionID, []byte("\x1b[B")); err != nil {
+							return err
+						}
+						_ = waitAgentTerminalKey(ctx)
+					}
+					if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
+						return err
+					}
+					_ = waitAgentTerminalInput(ctx)
+				} else {
+					// Multiple choices: navigate and toggle with Space, then press Enter
+					sort.Ints(indices)
+					selectedSet := make(map[int]bool, len(indices))
+					maxIdx := 0
+					for _, idx := range indices {
+						selectedSet[idx] = true
+						if idx > maxIdx {
+							maxIdx = idx
+						}
+					}
+					for curr := 0; curr <= maxIdx; curr++ {
+						if selectedSet[curr] {
+							if err := runtime.Input(ctx, sessionID, []byte{' '}); err != nil {
+								return err
+							}
+							_ = waitAgentTerminalKey(ctx)
+						}
+						if curr < maxIdx {
+							if err := runtime.Input(ctx, sessionID, []byte("\x1b[B")); err != nil {
+								return err
+							}
+							_ = waitAgentTerminalKey(ctx)
+						}
+					}
+					if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
+						return err
+					}
+					_ = waitAgentTerminalInput(ctx)
+				}
+				continue
+			}
+
+			// Fallback to text submission when indices are absent
+			var labels []string
+			if value, ok := answerLabels[key]; ok {
+				appendAgentInteractionAnswers(&labels, value)
+			}
+			if len(labels) == 0 {
 				if value, ok := selectedAnswers[key]; ok {
-					appendAgentInteractionAnswers(&answers, value)
+					appendAgentInteractionAnswers(&labels, value)
 				}
 			}
-		}
-		if len(answers) == 0 {
-			if text := strings.TrimSpace(agentStringValue(request.Response["text"])); text != "" {
-				answers = append(answers, text)
-			}
-		}
-		if len(answers) > 0 {
-			for _, ans := range answers {
-				if err := sendTerminalSubmission(ctx, runtime, sessionID, ans); err != nil {
+			for _, label := range labels {
+				if err := sendTerminalSubmission(ctx, runtime, sessionID, label); err != nil {
 					return err
 				}
+				hasHandledAny = true
 			}
+		}
+
+		if hasHandledAny {
 			return nil
+		}
+		if text := strings.TrimSpace(agentStringValue(request.Response["text"])); text != "" {
+			return sendTerminalSubmission(ctx, runtime, sessionID, text)
 		}
 		return runtime.Input(ctx, sessionID, []byte{'\r'})
 
@@ -1246,6 +1300,60 @@ func appendAgentInteractionAnswers(destination *[]string, value any) {
 }
 
 const agentInteractionSubmitDelay = 300 * time.Millisecond
+const agentInteractionKeyDelay = 35 * time.Millisecond
+
+func waitAgentTerminalKey(ctx context.Context) error {
+	timer := time.NewTimer(agentInteractionKeyDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func parseInteractionIndices(value any) []int {
+	if value == nil {
+		return nil
+	}
+	var result []int
+	switch v := value.(type) {
+	case []any:
+		for _, item := range v {
+			if num, ok := toInteractionInt(item); ok {
+				result = append(result, num)
+			}
+		}
+	case []int:
+		return v
+	case []float64:
+		for _, item := range v {
+			result = append(result, int(item))
+		}
+	case int:
+		return []int{v}
+	case float64:
+		return []int{int(v)}
+	}
+	return result
+}
+
+func toInteractionInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
 
 // sendTerminalSubmission mirrors Herdr's PTY contract: write the text first,
 // let the TUI consume and redraw it, then send Enter as a separate write.

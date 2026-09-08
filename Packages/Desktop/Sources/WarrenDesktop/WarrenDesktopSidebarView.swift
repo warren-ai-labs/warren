@@ -121,8 +121,7 @@ struct WarrenDesktopSidebar: View {
                                     reduceMotion: reduceMotion
                                 )) {
                                     proxy.scrollTo(
-                                        "task.\(taskID.description)",
-                                        anchor: .center
+                                        "task.\(taskID.description)"
                                     )
                                 }
                             }
@@ -137,11 +136,22 @@ struct WarrenDesktopSidebar: View {
                 }
                 .onChange(of: selection) { newSelection in
                     guard case let .workspace(workspaceID)? = newSelection else { return }
-                    withAnimation(WarrenMotion.animation(
-                        .stateChange,
-                        reduceMotion: reduceMotion
-                    )) {
-                        proxy.scrollTo(workspaceID, anchor: .center)
+                    let workspace = projection.groups
+                        .flatMap(\.workspaces)
+                        .first(where: { $0.id == workspaceID })
+                    let targetID = workspace.map(Self.workspaceScrollTarget)
+                        ?? "workspace.project-list.\(workspaceID.description)"
+                    // A nil anchor asks ScrollViewReader to make an off-screen
+                    // row visible with the smallest required movement. It
+                    // leaves an already visible row where it is instead of
+                    // recentering the sidebar for every selection change.
+                    DispatchQueue.main.async {
+                        withAnimation(WarrenMotion.animation(
+                            .stateChange,
+                            reduceMotion: reduceMotion
+                        )) {
+                            proxy.scrollTo(targetID)
+                        }
                     }
                 }
             }
@@ -163,6 +173,11 @@ struct WarrenDesktopSidebar: View {
     ) {
         tree.tasksCollapsed = false
         tree.expandedTaskIDs.insert(taskID)
+    }
+
+    static func workspaceScrollTarget(for workspace: Workspace) -> String {
+        let scope = workspace.taskID == nil ? "project-list" : "task-list"
+        return "workspace.\(scope).\(workspace.id.description)"
     }
 
     private func toggleSidebar() {

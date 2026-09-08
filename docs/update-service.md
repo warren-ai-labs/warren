@@ -18,17 +18,17 @@ the desktop updater:
 {
   "tag": "v0.5.1",
   "tag_name": "v0.5.1",
-  "html_url": "https://github.com/abcdlsj/warren/releases/tag/v0.5.1",
+  "html_url": "https://github.com/warren-ai-labs/warren/releases/tag/v0.5.1",
   "assets": [
     {
       "name": "Warren-0.5.1.zip",
-      "browser_download_url": "https://github.com/abcdlsj/warren/releases/download/v0.5.1/Warren-0.5.1.zip",
+      "browser_download_url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip",
       "size": 20847018
     }
   ],
   "name": "Warren-0.5.1.zip",
   "size": 20847018,
-  "url": "https://github.com/abcdlsj/warren/releases/download/v0.5.1/Warren-0.5.1.zip"
+  "url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip"
 }
 ```
 

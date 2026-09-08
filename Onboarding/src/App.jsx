@@ -70,7 +70,7 @@ function Nav({ current = "home" }) {
       <div className="nav-right">
         <a
           className="github-link"
-          href="https://github.com/abcdlsj/warren"
+          href="https://github.com/warren-ai-labs/warren"
           target="_blank"
           rel="noreferrer"
         >
@@ -101,7 +101,7 @@ function Hero() {
       window.setTimeout(() => setDownloadState("idle"), 4000);
     } catch {
       setDownloadState("error");
-      window.location.assign("https://github.com/abcdlsj/warren/releases/latest");
+      window.location.assign("https://github.com/warren-ai-labs/warren/releases/latest");
       window.setTimeout(() => setDownloadState("idle"), 4000);
     }
   }
@@ -141,7 +141,7 @@ function Hero() {
         </a>
         <a
           className="btn ghost"
-          href="https://github.com/abcdlsj/warren"
+          href="https://github.com/warren-ai-labs/warren"
           target="_blank"
           rel="noreferrer"
         >
@@ -308,13 +308,13 @@ function Footer() {
         <span className="footer-sep" aria-hidden="true">
           ·
         </span>
-        <a href="https://github.com/abcdlsj/warren" target="_blank" rel="noreferrer">
+        <a href="https://github.com/warren-ai-labs/warren" target="_blank" rel="noreferrer">
           {t("footer.source")}
         </a>
         <span className="footer-sep" aria-hidden="true">
           ·
         </span>
-        <a href="https://github.com/abcdlsj/warren/blob/main/LICENSE" target="_blank" rel="noreferrer">
+        <a href="https://github.com/warren-ai-labs/warren/blob/main/LICENSE" target="_blank" rel="noreferrer">
           {t("footer.license")}
         </a>
         <span className="footer-sep" aria-hidden="true">
@@ -389,7 +389,7 @@ function ChangelogPage() {
                 </time>
                 <a
                   className="release-link"
-                  href={`https://github.com/abcdlsj/warren/releases/tag/v${entry.version}`}
+                  href={`https://github.com/warren-ai-labs/warren/releases/tag/v${entry.version}`}
                   target="_blank"
                   rel="noreferrer"
                 >

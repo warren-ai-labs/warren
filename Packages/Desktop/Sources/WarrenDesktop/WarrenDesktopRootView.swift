@@ -285,6 +285,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
         let contentMode = workspaceContentMode(for: presentation.workspace)
+        let externalIDEOptions = makeExternalIDEOptions(for: presentation)
+        let embeddedEditorChromeAvailable = embeddedEditorAvailable
+            && externalIDEOptions != nil
+        let availableTrailingControls = WarrenDesktopWorkspaceTabTrailingControl.available(
+            externalIDEOptions: externalIDEOptions,
+            embeddedEditorAvailable: embeddedEditorChromeAvailable
+        )
+        let trailingControlLayout = WarrenDesktopWorkspaceTabTrailingControl.layout(
+            externallyVisibleControls: externallyVisibleControls,
+            availableControls: availableTrailingControls
+        )
         let tabBarView = makeTabBarView(
             presentation: presentation,
             contentMode: contentMode,
@@ -293,7 +304,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             pinnedSessionIDs: pinnedSessionIDs,
             isAddingSession: isAddingSession,
             sessionMoveTargets: sessionMoveTargets,
-            sessionMoveDestinations: sessionMoveDestinations
+            sessionMoveDestinations: sessionMoveDestinations,
+            externalIDEOptions: externalIDEOptions,
+            embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
         )
         let sidebarView = WarrenDesktopSidebar(
             projection: projection,
@@ -470,7 +483,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             activeSessionsOverlay
         }
         .overlay {
-            chromePopoverLayer
+            chromePopoverLayer(
+                presentation: presentation,
+                externalIDEOptions: externalIDEOptions,
+                embeddedEditorChromeAvailable: embeddedEditorChromeAvailable,
+                overflowControls: trailingControlLayout.overflow
+            )
         }
         .onChange(of: chromePopover) { popover in
             guard case .web? = popover else { return }
@@ -487,27 +505,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         chromePopover == .web
     }
 
-    private var availableTrailingControls: [WarrenDesktopWorkspaceTabTrailingControl] {
-        WarrenDesktopWorkspaceTabTrailingControl.available(
-            externalIDEOptions: externalIDEOptions,
-            embeddedEditorAvailable: embeddedEditorChromeAvailable
-        )
-    }
-
-    private var embeddedEditorChromeAvailable: Bool {
-        embeddedEditorAvailable && externalIDEOptions != nil
-    }
-
-    private var trailingControlLayout: (direct: [WarrenDesktopWorkspaceTabTrailingControl], overflow: [WarrenDesktopWorkspaceTabTrailingControl]) {
-        WarrenDesktopWorkspaceTabTrailingControl.layout(
-            externallyVisibleControls: externallyVisibleControls,
-            availableControls: availableTrailingControls
-        )
-    }
-
-    private var externalIDEOptions: [WarrenDesktopExternalIDEOption]? {
+    private func makeExternalIDEOptions(
+        for presentation: Presentation
+    ) -> [WarrenDesktopExternalIDEOption]? {
         guard endpointCapabilities.canOpenExternalIDE else { return nil }
-        return makePresentation().workspace.map { workspace in
+        return presentation.workspace.map { workspace in
             externalIDEService.options(
                 for: workspace,
                 isLocalEndpoint: selectedEndpointIsLocal
@@ -516,7 +518,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     @ViewBuilder
-    private var chromePopoverLayer: some View {
+    private func chromePopoverLayer(
+        presentation: Presentation,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool,
+        overflowControls: [WarrenDesktopWorkspaceTabTrailingControl]
+    ) -> some View {
         if let chromePopover, !settingsPresented {
             ZStack(alignment: .topTrailing) {
                 Color.clear
@@ -572,7 +579,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             onOpenEmbeddedEditor: {
                                 setWorkspaceContentMode(
                                     .editor,
-                                    for: makePresentation().workspace
+                                    for: presentation.workspace
                                 )
                             },
                             onSetEmbeddedEditorDefault: {
@@ -584,12 +591,39 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     }
                 case .overflow:
                     WarrenDesktopOverflowPopover(
-                        controls: trailingControlLayout.overflow,
-                        detail: overflowControlDetail,
-                        supportsSecondary: overflowControlSupportsSecondary,
-                        secondaryContent: overflowSecondaryContent,
+                        controls: overflowControls,
+                        detail: { control in
+                            overflowControlDetail(
+                                control,
+                                externalIDEOptions: externalIDEOptions,
+                                embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
+                            )
+                        },
+                        supportsSecondary: { control in
+                            overflowControlSupportsSecondary(
+                                control,
+                                externalIDEOptions: externalIDEOptions,
+                                embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
+                            )
+                        },
+                        secondaryContent: { control, onBack in
+                            overflowSecondaryContent(
+                                control,
+                                onBack: onBack,
+                                presentation: presentation,
+                                externalIDEOptions: externalIDEOptions,
+                                embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
+                            )
+                        },
                         secondaryTitleAccessory: overflowSecondaryTitleAccessory,
-                        onSelect: selectOverflowControl,
+                        onSelect: { control in
+                            selectOverflowControl(
+                                control,
+                                presentation: presentation,
+                                externalIDEOptions: externalIDEOptions,
+                                embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
+                            )
+                        },
                         onDismiss: { setChromePopover(nil) }
                     )
                 }
@@ -668,7 +702,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         pinnedSessionIDs: Set<TerminalSessionID>,
         isAddingSession: Bool,
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
-        sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination]
+        sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination],
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool
     ) -> AnyView {
         AnyView(WarrenDesktopTabBar(
             tabs: presentation.tabs,
@@ -683,7 +719,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             selectedEndpointID: selectedEndpointID,
             webStatus: webStatus,
             externalIDEOptions: externalIDEOptions,
-            embeddedEditorAvailable: embeddedEditorAvailable && presentation.workspace != nil,
+            embeddedEditorAvailable: embeddedEditorChromeAvailable
+                && presentation.workspace != nil,
             embeddedEditorTabVisible: hasEmbeddedEditorTab(for: presentation.workspace),
             embeddedEditorSelected: contentMode == .editor,
             embeddedEditorDefault: embeddedEditorDefaultIDE,
@@ -1038,7 +1075,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func overflowControlDetail(
-        _ control: WarrenDesktopWorkspaceTabTrailingControl
+        _ control: WarrenDesktopWorkspaceTabTrailingControl,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool
     ) -> String? {
         switch control {
         case .externalIDE:
@@ -1062,7 +1101,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func overflowControlSupportsSecondary(
-        _ control: WarrenDesktopWorkspaceTabTrailingControl
+        _ control: WarrenDesktopWorkspaceTabTrailingControl,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool
     ) -> Bool {
         switch control {
         case .externalIDE:
@@ -1080,7 +1121,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func overflowSecondaryContent(
         _ control: WarrenDesktopWorkspaceTabTrailingControl,
-        onBack: @escaping () -> Void
+        onBack: @escaping () -> Void,
+        presentation: Presentation,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool
     ) -> AnyView? {
         switch control {
         case .externalIDE:
@@ -1093,7 +1137,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onOpenEmbeddedEditor: {
                         setWorkspaceContentMode(
                             .editor,
-                            for: makePresentation().workspace
+                            for: presentation.workspace
                         )
                     },
                     onSetEmbeddedEditorDefault: {
@@ -1167,12 +1211,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func selectOverflowControl(
-        _ control: WarrenDesktopWorkspaceTabTrailingControl
+        _ control: WarrenDesktopWorkspaceTabTrailingControl,
+        presentation: Presentation,
+        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
+        embeddedEditorChromeAvailable: Bool
     ) {
         switch control {
         case .externalIDE:
             if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
-                setWorkspaceContentMode(.editor, for: makePresentation().workspace)
+                setWorkspaceContentMode(.editor, for: presentation.workspace)
                 setChromePopover(nil)
                 return
             }

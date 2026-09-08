@@ -788,8 +788,10 @@ struct WarrenDesktopSidebarRows: View {
             value.name = name
             return value
         } ?? workspace
+        let rowID = "workspace.\(semanticScope).\(workspace.id.description)"
         let isProjectDeleting = deletingProjectIDs.contains(group.project.id)
         let isDeleting = deletingWorkspaceIDs.contains(workspace.id)
+        let isSelectionDisabled = semanticScope == "project-list" && workspace.taskID != nil
         ZStack {
             let activitySummary = workspaceActivitySummary(workspace.id)
             WarrenDesktopWorkspaceRow(
@@ -798,10 +800,11 @@ struct WarrenDesktopSidebarRows: View {
                 activity: activitySummary?.activity,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
                 isCollapsed: isCollapsed,
-                isSelected: selection == .workspace(workspace.id),
+                isSelected: selection == .workspace(workspace.id) && !isSelectionDisabled,
                 isPinned: workspace.pinned,
                 isDeleting: isDeleting,
                 isInteractionDisabled: isInteractionDisabled || isProjectDeleting || isDeleting,
+                isSelectionDisabled: isSelectionDisabled,
                 taskName: taskName,
                 taskID: workspace.taskID,
                 tasks: taskGroups.map(\.task),
@@ -831,7 +834,7 @@ struct WarrenDesktopSidebarRows: View {
                 }
             )
         }
-        .id(workspace.id)
+        .id(rowID)
         .transition(.opacity)
         .background {
             if isDragMeasurementEnabled {

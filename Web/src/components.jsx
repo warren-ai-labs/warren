@@ -506,10 +506,11 @@ export function Sidebar({
                   const task = workspace.task
                     ? catalog.tasks.find(value => value.id === workspace.task)
                     : null;
+                  const taskWorkspace = Boolean(task);
                   const creating = creatingWorkspaceIDs.has(workspace.id);
                   return (
                     <div
-                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
+                      className={`workspace-row${workspace.id === activeWorkspace && !taskWorkspace ? " active" : ""}${taskWorkspace ? " task-linked" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
                       key={workspace.id}
                       aria-busy={creating || undefined}
                       onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
@@ -522,8 +523,9 @@ export function Sidebar({
                       <button
                         type="button"
                         className="workspace-row-main"
-                        disabled={creating}
+                        disabled={creating || taskWorkspace}
                         aria-busy={creating || undefined}
+                        aria-label={taskWorkspace ? `${workspace.branch || workspace.name || "Workspace"} (open from Task)` : undefined}
                         onClick={() => onChooseWorkspace(workspace.id)}
                         onDoubleClick={() => onOpenWorkspace(workspace.id)}
                       >
@@ -546,7 +548,7 @@ export function Sidebar({
                             onFocusTask(task.id);
                           }}
                         >
-                          T
+                          Task
                         </button>
                       )}
                     </div>
