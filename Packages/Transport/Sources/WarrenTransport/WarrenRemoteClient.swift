@@ -11,6 +11,7 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
     case requestFailed(String)
     case requestFailedWithCode(code: String, message: String, details: [String: WarrenRemoteJSONValue]?)
     case incompatibleProtocol(expected: String, received: String)
+    case upgradeRequired(String)
     case unsupportedTerminalStateFormat(String)
     case invalidResponse
     case requestTimedOut(String)
@@ -33,6 +34,8 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
             return "Warren Host request failed [\(code)]: \(message)"
         case .incompatibleProtocol(let expected, let received):
             return "Warren Host protocol mismatch (expected \(expected), received \(received))."
+        case .upgradeRequired(let message):
+            return "Warren Host upgrade required: \(message)"
         case .unsupportedTerminalStateFormat(let format):
             return "Warren Host sent an unsupported terminal state format: \(format)."
         case .invalidResponse:
@@ -72,7 +75,9 @@ private enum WarrenRemoteSocketEvent: Sendable {
 /// prevents a response from an old socket from completing a request on a new
 /// socket.
 private actor WarrenRemoteSocket {
-    private static let connectTimeout: Duration = .seconds(10)
+    // Mobile networks may spend several seconds on DNS, TLS, and proxy
+    // negotiation before the authenticated welcome arrives.
+    private static let connectTimeout: Duration = .seconds(30)
     private static let requestTimeout: Duration = .seconds(15)
     private static let heartbeatInterval: Duration = .seconds(20)
     private static let maximumWebSocketMessageBytes = 128 * 1024 * 1024
@@ -465,7 +470,12 @@ private actor WarrenRemoteSocket {
             let message = object["error"] as? String
                 ?? object["message"] as? String
                 ?? "Remote authentication failed"
-            let error = WarrenRemoteClientError.authenticationFailed(message)
+            let error: WarrenRemoteClientError
+            if message.hasPrefix("incompatible protocol version:") || message.hasPrefix("upgrade required:") {
+                error = .upgradeRequired(message)
+            } else {
+                error = .authenticationFailed(message)
+            }
             if let welcomeContinuation {
                 self.welcomeContinuation = nil
                 welcomeContinuation.resume(throwing: error)
@@ -1423,6 +1433,15 @@ public actor WarrenRemoteClient {
                 }
             } catch {
                 guard running, !Task.isCancelled else { return }
+                if let error = error as? WarrenRemoteClientError,
+                   error.requiresClientUpgrade {
+                    if self.socket === socket { self.socket = nil }
+                    await socket.close()
+                    running = false
+                    setConnectionState(.disconnected)
+                    emit(.disconnected(reason: error.localizedDescription))
+                    return
+                }
                 // Relay access capabilities are intentionally short-lived. A
                 // failed auth after a foreground resume is recoverable when
                 // the shared URLSession still owns the HttpOnly refresh cookie;

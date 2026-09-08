@@ -424,7 +424,7 @@ func (server *Server) hostHandshake(connection *websocket.Conn, hostID, credenti
 	if err := connection.WriteJSON(challenge); err != nil {
 		return err
 	}
-	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = connection.SetReadDeadline(time.Now().Add(30 * time.Second))
 	messageType, payload, err := connection.ReadMessage()
 	if err != nil || messageType != websocket.TextMessage {
 		return errors.New("invalid host hello")
@@ -1132,7 +1132,7 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 	}
 	defer client.Close()
 	client.SetReadLimit(maxRelayMessageBytes)
-	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = client.SetReadDeadline(time.Now().Add(30 * time.Second))
 	messageType, authPayload, err := client.ReadMessage()
 	var auth struct {
 		Type        string `json:"t"`

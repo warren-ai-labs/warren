@@ -470,6 +470,11 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					"title":     title,
 					"state":     "resolved",
 				}
+				if kind == "question" {
+					if response := codexQuestionResponse(output, p.contentLimit); response != nil {
+						event.Payload["response"] = response
+					}
+				}
 				return []api.AgentEvent{event}
 			}
 			if codexGoalToolName(p.codexCallTool[payload.CallID]) || p.codexGoalCalls[payload.CallID] != "" {
@@ -1223,11 +1228,14 @@ func codexQuestionPayload(requestID string, rawArgs string, limit int) map[strin
 				qID = fmt.Sprintf("q%d", index)
 			}
 			questions = append(questions, map[string]any{
-				"id":          qID,
-				"prompt":      prompt,
-				"selection":   selection,
-				"required":    true,
-				"allowCustom": false,
+				"id":        qID,
+				"prompt":    prompt,
+				"selection": selection,
+				"required":  true,
+				// Codex's request_user_input overlay accepts an optional note in
+				// addition to the selected option. Expose that field to clients so
+				// mobile answers can carry the same free-form context.
+				"allowCustom": true,
 				"options":     options,
 			})
 		}
@@ -1239,11 +1247,14 @@ func codexQuestionPayload(requestID string, rawArgs string, limit int) map[strin
 		}
 		options := parseQuestionOptions(parsed.Options)
 		questions = append(questions, map[string]any{
-			"id":          "q0",
-			"prompt":      prompt,
-			"selection":   selection,
-			"required":    true,
-			"allowCustom": false,
+			"id":        "q0",
+			"prompt":    prompt,
+			"selection": selection,
+			"required":  true,
+			// Codex's request_user_input overlay accepts an optional note in
+			// addition to the selected option. Expose that field to clients so
+			// mobile answers can carry the same free-form context.
+			"allowCustom": true,
 			"options":     options,
 		})
 	}
@@ -1254,4 +1265,66 @@ func codexQuestionPayload(requestID string, rawArgs string, limit int) map[strin
 		"questions": questions,
 		"state":     "pending",
 	}
+}
+
+// codexQuestionResponse decodes the JSON returned by request_user_input. The
+// Codex TUI stores an optional note as a synthetic "user_note: ..." answer;
+// split it into the provider-neutral customAnswers field while retaining the
+// visible option labels for clients that need to render a completed card.
+func codexQuestionResponse(raw string, limit int) map[string]any {
+	var envelope struct {
+		Answers map[string]json.RawMessage `json:"answers"`
+	}
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &envelope) != nil || len(envelope.Answers) == 0 {
+		return nil
+	}
+	answers := make(map[string]any)
+	answerLabels := make(map[string]any)
+	customAnswers := make(map[string]any)
+	for questionID, encoded := range envelope.Answers {
+		var wrapper struct {
+			Answers []string `json:"answers"`
+		}
+		values := []string(nil)
+		if json.Unmarshal(encoded, &wrapper) == nil && wrapper.Answers != nil {
+			values = wrapper.Answers
+		} else if json.Unmarshal(encoded, &values) != nil {
+			var value string
+			if json.Unmarshal(encoded, &value) == nil {
+				values = []string{value}
+			}
+		}
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if strings.HasPrefix(value, "user_note: ") {
+				note := strings.TrimSpace(strings.TrimPrefix(value, "user_note: "))
+				if note != "" {
+					customAnswers[questionID] = truncate(note, limit)
+				}
+				continue
+			}
+			value = truncate(value, limit)
+			answersForQuestion, _ := answers[questionID].([]any)
+			answersForQuestion = append(answersForQuestion, value)
+			answers[questionID] = answersForQuestion
+			labelsForQuestion, _ := answerLabels[questionID].([]any)
+			labelsForQuestion = append(labelsForQuestion, value)
+			answerLabels[questionID] = labelsForQuestion
+		}
+	}
+	response := make(map[string]any)
+	if len(answers) > 0 {
+		response["answers"] = answers
+		response["answerLabels"] = answerLabels
+	}
+	if len(customAnswers) > 0 {
+		response["customAnswers"] = customAnswers
+	}
+	if len(response) == 0 {
+		return nil
+	}
+	return response
 }

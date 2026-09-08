@@ -157,6 +157,10 @@ public final class TerminalSurfaceManager {
         /// `displayVisible == true` would make `schedulePresent` skip the
         /// output-boundary wait and draw the old grid once more.
         var waitsForRecoveryBoundary = false
+        /// Whether the manager has already reported AppKit focus for this
+        /// mounted surface. Geometry-only reconciliations must not re-claim
+        /// the daemon control lease on every SwiftUI update.
+        var focusReported = false
         /// The presentation token that last completed successfully. Native
         /// surface identity matters because a coordinator can rebuild the
         /// underlying Ghostty surface without replacing this entry.
@@ -190,6 +194,11 @@ public final class TerminalSurfaceManager {
     private var pendingDisposals: [TerminalSessionID: Entry] = [:]
     private var hiddenRenderAttemptCount: UInt64 = 0
     private var windowObservers: [NSObjectProtocol] = []
+    /// Observer registration is tied to both the window and active session.
+    /// Reinstalling the same observers for every layout reconciliation creates
+    /// notification churn and can race a pending blur.
+    private weak var observedWindow: NSWindow?
+    private var observedSessionID: TerminalSessionID?
     /// Invalidates callbacks queued by an observer that was removed while the
     /// host moved between windows or while SwiftUI replaced the terminal pane.
     private var windowObserverGeneration: UInt64 = 0
@@ -431,7 +440,10 @@ public final class TerminalSurfaceManager {
 
     public func requestFocusForActiveSurface() {
         guard let sessionID = policy.activeSessionID else { return }
-        focus(sessionID, generation: transitionGeneration)
+        // A key-window transition can leave the same AppKit first responder in
+        // place while the daemon control lease was released during the blur.
+        // Explicit focus requests therefore force one lease re-claim.
+        focus(sessionID, generation: transitionGeneration, forceReport: true)
     }
 
     public func requestPresent(_ sessionID: TerminalSessionID) {
@@ -482,6 +494,7 @@ public final class TerminalSurfaceManager {
             && entry.displayVisible
             && !entry.view.isHidden
             && entry.view.alphaValue > 0
+        entry.focusReported = false
         cancelPresentation(for: entry)
         if entry.preserveDisplayDuringRecovery {
             // Keep the last completed frame on screen. The native renderer is
@@ -696,13 +709,22 @@ public final class TerminalSurfaceManager {
         to host: TerminalHostContainerView,
         generation: UInt64
     ) {
-        // SwiftUI can submit the terminal host before its pane constraints have
-        // propagated through AppKit. Flush that pending layout before deriving
-        // the frame used to create Ghostty's first grid; otherwise the initial
-        // attach can capture an intermediate viewport and only a later manual
-        // resize will correct the PTY/cell geometry.
-        host.window?.contentView?.layoutSubtreeIfNeeded()
-        host.layoutSubtreeIfNeeded()
+        // SwiftUI can submit a newly mounted terminal host before its pane
+        // constraints have propagated through AppKit. Flush that pending
+        // layout before deriving the frame used to create Ghostty's first
+        // grid; otherwise the initial attach can capture an intermediate
+        // viewport and only a later manual resize will correct the PTY/cell
+        // geometry. A geometry-only reconciliation already arrives after
+        // `hostDidLayout`; flushing the entire window tree in that hot path
+        // needlessly re-enters SwiftUI layout and can steal first responder.
+        let needsInitialLayout = entry.view.superview !== host
+            || !entry.surface.terminalSurfaceIsReady
+            || host.bounds.width <= 0
+            || host.bounds.height <= 0
+        if needsInitialLayout {
+            host.window?.contentView?.layoutSubtreeIfNeeded()
+            host.layoutSubtreeIfNeeded()
+        }
         // The host's measured bounds are authoritative after the layout flush.
         // The intent can still contain the size from the preceding
         // NSViewRepresentable update while SwiftUI is committing a new pane
@@ -798,6 +820,7 @@ public final class TerminalSurfaceManager {
         let skipPostRevealRedraw = entry.skipNextWarmPromotionRedraw
         entry.skipNextWarmPromotionRedraw = false
         entry.warmPromotionPending = wasDisplayedWarmSurface && !skipPostRevealRedraw
+        entry.focusReported = false
         // Do not capture viewport text synchronously on MainActor: `captureReattachAnchor`
         // previously called `ghostty_surface_read_text` under `terminalCallLock`,
         // which blocks if the background drain is inside `ghostty_surface_write_buffer`.
@@ -852,17 +875,25 @@ public final class TerminalSurfaceManager {
         pendingDisposals.removeValue(forKey: sessionID)
     }
 
-    private func focus(_ sessionID: TerminalSessionID, generation: UInt64) {
+    private func focus(
+        _ sessionID: TerminalSessionID,
+        generation: UInt64,
+        forceReport: Bool = false
+    ) {
         guard let host,
               let window = host.window,
               let entry = entries[sessionID],
               isCurrent(sessionID, entry: entry, host: host, generation: generation),
               window.isKeyWindow else { return }
-        guard window.firstResponder === entry.view || window.makeFirstResponder(entry.view) else {
+        let wasFirstResponder = window.firstResponder === entry.view
+        guard wasFirstResponder || window.makeFirstResponder(entry.view) else {
             return
         }
         entry.view.setFocusLossReportingSuppressed(false)
-        onFocused(sessionID, entry.surface.terminalSize)
+        if forceReport || !wasFirstResponder || !entry.focusReported {
+            entry.focusReported = true
+            onFocused(sessionID, entry.surface.terminalSize)
+        }
     }
 
     private func schedulePresent(_ entry: Entry, generation: UInt64) {
@@ -1096,11 +1127,20 @@ public final class TerminalSurfaceManager {
     }
 
     private func installWindowObservers(for window: NSWindow?) {
+        let activeSessionID = policy.activeSessionID
+        if let window,
+           !windowObservers.isEmpty,
+           observedWindow === window,
+           observedSessionID == activeSessionID
+        {
+            return
+        }
         removeWindowObservers()
         guard let window else { return }
         windowObserverGeneration &+= 1
         let observerGeneration = windowObserverGeneration
-        let observedSessionID = policy.activeSessionID
+        observedWindow = window
+        observedSessionID = activeSessionID
         let center = NotificationCenter.default
         windowObservers.append(center.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -1162,6 +1202,8 @@ public final class TerminalSurfaceManager {
         let center = NotificationCenter.default
         windowObservers.forEach(center.removeObserver)
         windowObservers.removeAll()
+        observedWindow = nil
+        observedSessionID = nil
     }
 
     private func scheduleWindowBlur(
@@ -1198,6 +1240,7 @@ public final class TerminalSurfaceManager {
             TerminalDiagnostics.logVerbose("window_blur_commit", [
                 "session": sessionID.description,
             ])
+            self.entries[sessionID]?.focusReported = false
             self.onBlurred(sessionID)
         }
     }

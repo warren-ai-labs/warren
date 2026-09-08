@@ -309,6 +309,17 @@ Access disables only the Relay route; local Sessions and PTYs remain Host-owned.
 
 Daemon events (start/stop with build version, tunnel start, restore, and errors) are appended to `~/.warren/headless.log` with `0600` permissions and rotate at 5 MiB; point `--log-file` or `WARREN_LOG_FILE` elsewhere or set it empty to disable file logging.
 
+The desktop Execution Server menu probes direct Hosts through `GET /healthz`
+when opened; **Check hosts** refreshes the results. Each entry shows reachability,
+the Headless build, and the wire protocol. For an existing SSH port forward, the
+probe uses the configured local address and port. Embedded SSH Hosts can be
+probed once their tunnel is connected; Relay routes do not expose this direct
+Host health probe. Health is advisory and does not verify the token: the selected
+Host also shows the actual WebSocket connection error. Protocol versions must
+match exactly; different build versions alone do not imply incompatibility.
+An explicit protocol or terminal-format incompatibility stops automatic retries.
+Update the incompatible client or Host, then choose **Retry connection**.
+
 The Web UI and `/v1/ws` share port 8789; the local browser uses `http://127.0.0.1:8789/#t=<token>` and LAN devices use `https://<host-LAN-IP>:8788/#t=<token>` after trusting the local CA (see "LAN HTTPS"). Public Access is managed by the daemon through the same Relay route API used by owner access: `GET /v1/public-access` reports the Relay URL, Host ID, route state, and credential-free Public Endpoint; `POST /v1/public-access/test` validates route metadata without changing the enabled intent; `POST /v1/public-access/enable` and `/disable` configure the Relay route. `POST /v1/public-access/reset` disables the route and clears local route metadata while retaining Host enrollment. Empty-workspace entry defaults are host settings: `autoOpenShell` and `autoStartAI` both default to `false`. Git worktree import is project-scoped: `Project.autoImportGitWorktrees` is opt-in, and `project.worktrees` plus `project.worktrees.import` expose the one-time selector path; `project.autoImportGitWorktrees` enables immediate, non-interactive import of all currently existing external worktrees for that project.
 
 Operators can announce a planned restart with `POST /v1/maintenance` (Bearer

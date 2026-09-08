@@ -315,7 +315,7 @@ Appearance is per-surface, not global. The three clients do not share one palett
 
 - **macOS Desktop**: dark only. It uses the shared `WarrenColorTokens`, whose `resolved(for:)` returns the Ember dark values for every color scheme.
 - **Web/PWA**: dark only. `color-scheme: dark` is declared at `:root`, and there is no light branch.
-- **iOS**: follows the system appearance, with a first-class light palette (Ember Paper) beside the Ember dark one. A phone has a system-level appearance preference and is read in daylight; a developer workbench should not override it. iOS therefore owns its design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens.
+- **iOS**: follows the system appearance by default, with a first-class light palette (Ember Paper) beside the Ember dark one. Settings also offers explicit Light and Dark overrides for users who want the client independent of the device setting. iOS therefore owns its design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens.
 
 Two invariants follow:
 

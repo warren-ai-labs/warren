@@ -4,6 +4,36 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-09
+
+> Patch release: improves remote Host diagnostics and compatibility handling,
+> strengthens Agent interaction fidelity, and stabilizes terminal attachment.
+> This release covers macOS, Web, and Headless clients; iOS changes remain
+> outside the release scope.
+
+### Added
+
+- Add advisory Host health probes for direct endpoints and show reachability,
+  Headless build, protocol status, and connection errors in the Desktop
+  Execution Server menu, with a manual **Check hosts** action.
+
+### Changed
+
+- Extend Relay and remote WebSocket handshake windows for slower DNS, TLS,
+  proxy, and mobile-network negotiation.
+- Preserve Codex question schemas while exposing optional notes and completed
+  answer labels through the provider-neutral interaction response.
+- Keep terminal attach and focus reconciliation generation-safe, coalesce
+  duplicate attaches, and avoid redundant layout work during presentation.
+- Keep external IDE discovery cached across repeated Desktop menu opens.
+
+### Fixed
+
+- Stop reconnect loops when the Host reports an incompatible protocol or
+  terminal-state format, while retaining retry behavior for transient failures.
+- Match resolved Agent interactions by request or interaction identity so
+  replayed responses retain their original questions and options.
+
 ## [0.12.1] - 2026-09-08
 
 > Patch release: improves Agent interaction reliability, cross-client control
