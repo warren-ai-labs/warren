@@ -118,6 +118,38 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.12.2",
+        dateISO: "2026-09-09",
+        date: "September 9, 2026",
+        title: "Warren makes remote Hosts easier to understand and recover.",
+        summary:
+          "A patch release that improves Host diagnostics and compatibility handling, strengthens Agent interaction fidelity, and stabilizes terminal attachment. Covers macOS, Web, and Headless clients; iOS changes remain outside this release.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add advisory Host health probes for direct endpoints and show reachability, Headless build, protocol status, and connection errors in the Desktop Execution Server menu, with a manual Check hosts action.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Extend Relay and remote WebSocket handshake windows for slower DNS, TLS, proxy, and mobile-network negotiation.",
+              "Preserve Codex question schemas while exposing optional notes and completed answer labels through the provider-neutral interaction response.",
+              "Keep terminal attach and focus reconciliation generation-safe, coalesce duplicate attaches, and avoid redundant layout work during presentation.",
+              "Keep external IDE discovery cached across repeated Desktop menu opens.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Stop reconnect loops when the Host reports an incompatible protocol or terminal-state format, while retaining retry behavior for transient failures.",
+              "Match resolved Agent interactions by request or interaction identity so replayed responses retain their original questions and options.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.12.1",
         dateISO: "2026-09-08",
         date: "September 8, 2026",
@@ -957,6 +989,38 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.12.2",
+        dateISO: "2026-09-09",
+        date: "2026 年 9 月 9 日",
+        title: "Warren 让远程 Host 更容易理解，也更容易恢复。",
+        summary:
+          "修复版本：改进远程 Host 诊断与兼容性处理，增强 Agent 交互上下文保留，并稳定终端 attach。覆盖 macOS、Web 与 Headless，iOS 变化不在本次发布范围内。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "为直连 endpoint 增加提示性的 Host health probe，并在 Desktop Execution Server 菜单显示可达性、Headless build、协议状态和连接错误，同时提供手动“检查 Host”。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "延长 Relay 与远程 WebSocket handshake 等待时间，适应较慢的 DNS、TLS、代理和移动网络协商。",
+              "保留 Codex question schema，并通过 provider-neutral interaction response 暴露可选备注和已完成答案标签。",
+              "让 terminal attach 与 focus reconciliation 按 generation 安全处理，合并重复 attach，并减少呈现过程中的重复 layout。",
+              "缓存 Desktop 菜单重复打开时的外部 IDE 发现结果。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Host 报告协议或 terminal-state format 不兼容时停止无效重连，同时保留瞬时故障的重试行为。",
+              "按 request 或 interaction identity 匹配已完成 Agent interaction，让 replay response 保留原始问题和选项。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.12.1",
         dateISO: "2026-09-08",

@@ -1130,16 +1130,7 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 		hasHandledAny := false
 
 		for _, key := range orderedKeys {
-			if custom, ok := customAnswers[key]; ok {
-				if customText := strings.TrimSpace(agentStringValue(custom)); customText != "" {
-					if err := sendTerminalSubmission(ctx, runtime, sessionID, customText); err != nil {
-						return err
-					}
-					hasHandledAny = true
-					continue
-				}
-			}
-
+			customText := strings.TrimSpace(agentStringValue(customAnswers[key]))
 			indices := parseInteractionIndices(answerIndices[key])
 			if len(indices) > 0 {
 				hasHandledAny = true
@@ -1152,10 +1143,25 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 						}
 						_ = waitAgentTerminalKey(ctx)
 					}
-					if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
-						return err
+					if customText == "" {
+						if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
+							return err
+						}
+						_ = waitAgentTerminalInput(ctx)
+					} else {
+						// Codex keeps the selected option and stores notes as an
+						// additional answer. Tab focuses the notes field without
+						// submitting the selected option prematurely.
+						if err := runtime.Input(ctx, sessionID, []byte{'\t'}); err != nil {
+							return err
+						}
+						if err := waitAgentTerminalKey(ctx); err != nil {
+							return err
+						}
+						if err := sendTerminalSubmission(ctx, runtime, sessionID, customText); err != nil {
+							return err
+						}
 					}
-					_ = waitAgentTerminalInput(ctx)
 				} else {
 					// Multiple choices: navigate and toggle with Space, then press Enter
 					sort.Ints(indices)
@@ -1181,11 +1187,31 @@ func sendAgentInteractionInput(ctx context.Context, runtime Runtime, sessionID s
 							_ = waitAgentTerminalKey(ctx)
 						}
 					}
-					if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
-						return err
+					if customText == "" {
+						if err := runtime.Input(ctx, sessionID, []byte{'\r'}); err != nil {
+							return err
+						}
+						_ = waitAgentTerminalInput(ctx)
+					} else {
+						if err := runtime.Input(ctx, sessionID, []byte{'\t'}); err != nil {
+							return err
+						}
+						if err := waitAgentTerminalKey(ctx); err != nil {
+							return err
+						}
+						if err := sendTerminalSubmission(ctx, runtime, sessionID, customText); err != nil {
+							return err
+						}
 					}
-					_ = waitAgentTerminalInput(ctx)
 				}
+				continue
+			}
+
+			if customText != "" {
+				if err := sendTerminalSubmission(ctx, runtime, sessionID, customText); err != nil {
+					return err
+				}
+				hasHandledAny = true
 				continue
 			}
 
@@ -1700,8 +1726,7 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		if existing.Type != "interaction.resolved" {
 			continue
 		}
-		candidateID := canonicalInteractionCanonicalID(existing)
-		if strings.TrimSpace(candidateID) == request.RequestID {
+		if canonicalInteractionEventMatchesID(existing, request.RequestID) {
 			entry.mu.Unlock()
 			s.agentsMu.Unlock()
 			return
@@ -1724,16 +1749,6 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		"response":      request.Response,
 	}
 	now := time.Now().UTC()
-	resolvedEvent := api.AgentEvent{
-		ID:        request.RequestID,
-		Type:      request.Kind,
-		Payload:   payload,
-		Timestamp: now,
-	}
-	entry.events = append(entry.events, resolvedEvent)
-	if len(entry.events) > 2000 {
-		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
-	}
 	canonicalEvent := api.CanonicalAgentEvent{
 		EventID:    store.NewID(),
 		Type:       "interaction.resolved",
@@ -1741,6 +1756,21 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		RecordedAt: now,
 		StreamID:   streamID,
 		Payload:    payload,
+	}
+	// Native controllers resolve an interaction locally and therefore bypass
+	// the provider-observation path that normally inherits the request schema.
+	// Attach the original questions/options before publishing the legacy row and
+	// canonical event so replayed clients can still render the completed answer.
+	mergeCanonicalInteractionContext(entry.canonicalEvents, &canonicalEvent)
+	resolvedEvent := api.AgentEvent{
+		ID:        request.RequestID,
+		Type:      request.Kind,
+		Payload:   canonicalEvent.Payload,
+		Timestamp: now,
+	}
+	entry.events = append(entry.events, resolvedEvent)
+	if len(entry.events) > 2000 {
+		entry.events = append([]api.AgentEvent(nil), entry.events[len(entry.events)-2000:]...)
 	}
 	canonical, appendErr := s.appendCanonicalEventsLockedWithCheckpoint(request.Session, entry, []api.CanonicalAgentEvent{canonicalEvent}, nil)
 	entry.mu.Unlock()

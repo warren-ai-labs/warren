@@ -5645,8 +5645,7 @@ func canonicalEntryHasTerminalInteraction(entry *agentSession, interactionID str
 		if event.Type != "interaction.resolved" && event.Type != "interaction.expired" {
 			continue
 		}
-		candidateID := canonicalInteractionCanonicalID(event)
-		if strings.TrimSpace(candidateID) == strings.TrimSpace(interactionID) {
+		if canonicalInteractionEventMatchesID(event, interactionID) {
 			return true
 		}
 	}
@@ -5675,6 +5674,61 @@ func canonicalInteractionCanonicalID(event api.CanonicalAgentEvent) string {
 	return strings.TrimSpace(event.EventID)
 }
 
+func canonicalInteractionIdentityValues(event api.CanonicalAgentEvent) []string {
+	values := make([]string, 0, 2)
+	if event.Payload != nil {
+		for _, key := range []string{"interactionId", "requestId"} {
+			value, ok := event.Payload[key].(string)
+			value = strings.TrimSpace(value)
+			if !ok || value == "" {
+				continue
+			}
+			seen := false
+			for _, prior := range values {
+				if prior == value {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				values = append(values, value)
+			}
+		}
+	}
+	if len(values) == 0 {
+		if eventID := strings.TrimSpace(event.EventID); eventID != "" {
+			values = append(values, eventID)
+		}
+	}
+	return values
+}
+
+func canonicalInteractionEventMatchesID(event api.CanonicalAgentEvent, interactionID string) bool {
+	interactionID = strings.TrimSpace(interactionID)
+	if interactionID == "" {
+		return false
+	}
+	for _, value := range canonicalInteractionIdentityValues(event) {
+		if value == interactionID {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalInteractionEventsMatch(left, right api.CanonicalAgentEvent) bool {
+	leftValues := canonicalInteractionIdentityValues(left)
+	rightValues := canonicalInteractionIdentityValues(right)
+	for _, leftValue := range leftValues {
+		for _, rightValue := range rightValues {
+			if leftValue == rightValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // mergeCanonicalInteractionContext keeps the request schema attached to a
 // terminal lifecycle row. Providers commonly emit only requestId/state in the
 // tool result; dropping the original questions/options makes an Answered card
@@ -5683,13 +5737,12 @@ func mergeCanonicalInteractionContext(history []api.CanonicalAgentEvent, event *
 	if event == nil || event.Payload == nil || event.Type == "interaction.requested" {
 		return
 	}
-	interactionID := canonicalInteractionCanonicalID(*event)
-	if interactionID == "" {
+	if canonicalInteractionCanonicalID(*event) == "" {
 		return
 	}
 	for index := len(history) - 1; index >= 0; index-- {
 		candidate := history[index]
-		if candidate.Type != "interaction.requested" || canonicalInteractionCanonicalID(candidate) != interactionID {
+		if candidate.Type != "interaction.requested" || !canonicalInteractionEventsMatch(candidate, *event) {
 			continue
 		}
 		if candidate.Payload == nil {
@@ -5729,8 +5782,7 @@ func (s *Service) canonicalInteraction(sessionID, interactionID string) (canonic
 		if event.Type != "interaction.requested" && event.Type != "interaction.resolved" && event.Type != "interaction.expired" {
 			continue
 		}
-		candidateID := canonicalInteractionCanonicalID(event)
-		if strings.TrimSpace(candidateID) != interactionID {
+		if !canonicalInteractionEventMatchesID(event, interactionID) {
 			continue
 		}
 		if kind, _ := event.Payload["kind"].(string); kind != "" {

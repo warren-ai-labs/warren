@@ -308,6 +308,9 @@ struct WarrenCompositionRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copySecureURL)) { _ in
             remoteModel.copySecureWebURL()
         }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopEndpointOption.probeRequested)) { _ in
+            remoteModel.probeHosts([.localDaemon()] + endpointCatalog.filter { $0.id != "local" })
+        }
         .onReceive(NotificationCenter.default.publisher(for: WarrenUpdateNotification.available)) { note in
             guard let release = note.userInfo?[WarrenUpdateNotification.keyRelease] as? WarrenRelease else {
                 return
@@ -563,11 +566,16 @@ struct WarrenCompositionRoot: View {
     }
 
     private var endpointOptions: [WarrenDesktopEndpointOption] {
+        let localEndpoint = WarrenRemoteEndpointConfiguration.localDaemon()
+        let localProbe = remoteModel.hostProbes[localEndpoint]
         let local = WarrenDesktopEndpointOption(
             id: "local",
             label: "Local",
             isLocal: true,
-            detail: Self.endpointDetail(WarrenRemoteEndpointConfiguration.localDaemon().url)
+            detail: Self.endpointDetail(localEndpoint.url),
+            probeStatus: localProbe?.message ?? "Checking Host…",
+            probeFailed: localProbe?.isFailure ?? false,
+            connectionError: selectedEndpointID == "local" ? remoteModel.connectionError : nil
         )
         let configured = endpointCatalog
             .filter { $0.id != local.id }
@@ -575,7 +583,10 @@ struct WarrenCompositionRoot: View {
                 WarrenDesktopEndpointOption(
                     id: endpoint.id,
                     label: endpoint.name,
-                    detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url)
+                    detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url),
+                    probeStatus: remoteModel.hostProbes[endpoint]?.message ?? "Checking Host…",
+                    probeFailed: remoteModel.hostProbes[endpoint]?.isFailure ?? false,
+                    connectionError: selectedEndpointID == endpoint.id ? remoteModel.connectionError : nil
                 )
             }
         return [local] + configured

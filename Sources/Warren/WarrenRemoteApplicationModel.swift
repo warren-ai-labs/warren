@@ -913,6 +913,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// budget after the user fixes credentials or host-key configuration.
     private static let maxReconnectAttempts = 8
 
+    @Published private(set) var connectionError: String?
+    @Published private(set) var hostProbes: [WarrenRemoteEndpointConfiguration: WarrenHostProbe] = [:]
+    private var hostProbeTask: Task<Void, Never>?
+
+    func probeHosts(_ endpoints: [WarrenRemoteEndpointConfiguration]) {
+        hostProbeTask?.cancel()
+        hostProbes = [:]
+        let active = activeEndpointConfiguration
+        let selected = endpointConfiguration
+        hostProbeTask = Task { [weak self] in
+            await withTaskGroup(of: (WarrenRemoteEndpointConfiguration, WarrenHostProbe).self) { group in
+                for endpoint in endpoints {
+                    group.addTask {
+                        if endpoint.ssh != nil, endpoint != selected || active == nil {
+                            return (endpoint, WarrenHostProbe(message: "Select Host to check its SSH connection"))
+                        }
+                        let target = endpoint.ssh != nil ? (active ?? endpoint) : endpoint
+                        return (endpoint, await WarrenHostProbe.check(target))
+                    }
+                }
+                for await (endpoint, probe) in group {
+                    guard !Task.isCancelled else { return }
+                    self?.hostProbes[endpoint] = probe
+                }
+            }
+        }
+    }
+
     @Published private(set) var projection = WarrenDesktopProjection
         .empty(host: WarrenDomain.Host(name: "Server"))
         .withConnectionState(.connecting)
@@ -1079,6 +1107,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             WarrenDesktopNavigationPersistence.save(pending)
         }
         navigationPersistenceTask?.cancel()
+        hostProbeTask?.cancel()
     }
 
     private func scheduleNavigationPersistence() {
@@ -1167,6 +1196,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // never put the URL (or a bearer token embedded in it) in logs.
         TerminalDiagnostics.log("remote_connect_begin", ["endpoint": resolvedConfiguration.name])
         disconnect()
+        connectionError = nil
         connectionGeneration &+= 1
         let generation = connectionGeneration
         cancelTransientConnectionIssue()
@@ -1387,6 +1417,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 }
                 if case .disconnected(let reason) = event {
                     disconnectReason = reason
+                    if Self.isUpgradeFailure(reason) {
+                        await wire.stop()
+                        failConnection(NSError(
+                            domain: "WarrenRemote", code: 31,
+                            userInfo: [NSLocalizedDescriptionKey: reason]
+                        ))
+                        return
+                    }
                 }
                 await consume(event)
             }
@@ -1626,7 +1664,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return permanentMarkers.contains(where: message.contains)
     }
 
+    nonisolated static func isUpgradeFailure(_ reason: String) -> Bool {
+        let message = reason.lowercased()
+        return message.contains("protocol mismatch")
+            || message.contains("incompatible protocol version:")
+            || message.contains("upgrade required:")
+            || message.contains("unsupported terminal state format")
+    }
+
     private func failConnection(_ error: Error) {
+        connectionError = error.localizedDescription
         presentDiagnostic(error)
         cancelTransientConnectionIssue()
         // A permanent/authentication failure is no longer a reconnect window;
@@ -3763,6 +3810,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .connection(let state):
             switch state {
             case .connected:
+                connectionError = nil
                 isMigratingRuntimeSessions = false
                 cancelTransientConnectionIssue()
                 clearMaintenance()
@@ -3851,6 +3899,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .maintenance(let message):
             consumeMaintenance(message)
         case .disconnected(let reason):
+            connectionError = reason
             scheduleTransientConnectionIssue(NSError(
                 domain: "WarrenRemote",
                 code: 1,
@@ -4741,6 +4790,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID,
               let session = projection.sessions.first(where: { $0.id == sessionID }),
               let wire else { return }
+
+        // A tab can send the same selection more than once while SwiftUI is
+        // reconciling the tab rail (and a roster update can schedule another
+        // presentation at the same time). Do not start a second daemon attach
+        // for the same session: the second request cancels the first attach
+        // preparation, then its failure tears down the only mounted surface.
+        guard attachingSessionID != sessionID else {
+            TerminalDiagnostics.logVerbose("attach_deduplicated", [
+                "session": sessionID.description,
+            ])
+            return
+        }
 
         // Mount before awaiting the attach response. The daemon may legally
         // produce the first recovery snapshot immediately after it accepts the

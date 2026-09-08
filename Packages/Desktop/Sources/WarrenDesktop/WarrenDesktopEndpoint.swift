@@ -57,10 +57,14 @@ public enum WarrenDesktopEndpointCapabilitiesNotification {
 }
 
 public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
+    public static let probeRequested = Notification.Name("WarrenDesktopEndpoint.probeRequested")
     public let id: String
     public let label: String
     public let isLocal: Bool
     public let detail: String?
+    public let probeStatus: String?
+    public let probeFailed: Bool
+    public let connectionError: String?
     public let capabilities: WarrenDesktopEndpointCapabilities
 
     public init(
@@ -68,12 +72,18 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
         label: String,
         isLocal: Bool = false,
         detail: String? = nil,
+        probeStatus: String? = nil,
+        probeFailed: Bool = false,
+        connectionError: String? = nil,
         capabilities: WarrenDesktopEndpointCapabilities? = nil
     ) {
         self.id = id
         self.label = label
         self.isLocal = isLocal
         self.detail = detail
+        self.probeStatus = probeStatus
+        self.probeFailed = probeFailed
+        self.connectionError = connectionError
         self.capabilities = capabilities ?? (isLocal ? .local : .remote)
     }
 }

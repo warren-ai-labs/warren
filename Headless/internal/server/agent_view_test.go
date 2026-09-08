@@ -1072,6 +1072,43 @@ func TestSendAgentInteractionInputUsesArrowKeyNavigation(t *testing.T) {
 	}
 }
 
+func TestSendAgentInteractionInputAddsCodexNotesAfterSelection(t *testing.T) {
+	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
+	if err := runtime.Create(context.Background(), "sess-notes", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	err := sendAgentInteractionInput(context.Background(), runtime, "sess-notes", api.AgentInteractionResponse{
+		Kind: "question",
+		Response: map[string]any{
+			"answerOrder": []any{"q1"},
+			"answerIndices": map[string]any{
+				"q1": []any{1},
+			},
+			"customAnswers": map[string]any{
+				"q1": "additional context",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sendAgentInteractionInput failed: %v", err)
+	}
+	if len(runtime.writes) != 4 {
+		t.Fatalf("writes = %#v, want down, tab, note, enter", runtime.writes)
+	}
+	if got := string(runtime.writes[0]); got != "\x1b[B" {
+		t.Fatalf("write[0] = %q, want down arrow", got)
+	}
+	if got := string(runtime.writes[1]); got != "\t" {
+		t.Fatalf("write[1] = %q, want Tab", got)
+	}
+	if got := string(runtime.writes[2]); got != "additional context" {
+		t.Fatalf("write[2] = %q, want note text", got)
+	}
+	if got := string(runtime.writes[3]); got != "\r" {
+		t.Fatalf("write[3] = %q, want Enter", got)
+	}
+}
+
 func TestSendAgentGoalInputReplaceUsesCodexEditPrompt(t *testing.T) {
 	runtime := &inputRecordingRuntime{memoryRuntime: newMemoryRuntime(t)}
 	if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
@@ -1290,4 +1327,54 @@ func TestProviderInteractionResolvedDoesNotDuplicateHostResolution(t *testing.T)
 	if resolvedBefore != 1 || resolvedAfter != resolvedBefore {
 		t.Fatalf("resolved event count before=%d after=%d, want one stable row", resolvedBefore, resolvedAfter)
 	}
+}
+
+func TestNativeInteractionResolutionPreservesQuestionSchema(t *testing.T) {
+	service := newAgentViewTestService(t, &recordingAgentViewController{})
+	sessionID := "agent-view-session"
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Type: "question",
+		ID:   "question-schema",
+		Payload: map[string]any{
+			"requestId": "request-schema",
+			"kind":      "question",
+			"state":     "pending",
+			"title":     "Question",
+			"questions": []any{
+				map[string]any{
+					"id":       "q1",
+					"prompt":   "Continue?",
+					"required": true,
+					"options": []any{
+						map[string]any{"id": "yes", "label": "Yes"},
+					},
+				},
+			},
+		},
+	}}, api.AgentStatus{Activity: api.AgentActivityBlocked})
+	if _, err := service.respondAgentInteraction(context.Background(), api.AgentInteractionResponse{
+		Session:   sessionID,
+		RequestID: "request-schema",
+		Kind:      "question",
+		Response: map[string]any{
+			"answers": map[string]any{"q1": []any{"yes"}},
+		},
+	}); err != nil {
+		t.Fatalf("host interaction response failed: %v", err)
+	}
+	history, err := service.canonicalHistoryPage(context.Background(), service.canonicalExecutionID(sessionID), 0, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range history.Events {
+		if event.Type != "interaction.resolved" {
+			continue
+		}
+		questions, ok := event.Payload["questions"].([]any)
+		if !ok || len(questions) != 1 {
+			t.Fatalf("resolved payload dropped questions: %#v", event.Payload)
+		}
+		return
+	}
+	t.Fatal("resolved interaction event not found")
 }

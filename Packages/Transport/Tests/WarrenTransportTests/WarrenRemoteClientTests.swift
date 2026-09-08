@@ -163,6 +163,57 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testRejectedProtocolAndTerminalFormatStopReconnecting() async throws {
+        for rejection in [
+            "incompatible protocol version: client=4.0 server=3.0",
+            "upgrade required: client does not support a compatible atomic terminal state format",
+        ] {
+            let task = ScriptedWebSocketTask()
+            let data = try JSONSerialization.data(withJSONObject: ["t": "error", "error": rejection])
+            await task.enqueue(.text(String(decoding: data, as: UTF8.self)))
+            let client = WarrenRemoteClient(
+                configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://127.0.0.1:9"),
+                task: task
+            )
+            let recorder = EventRecorder()
+            let consuming = recordEvents(from: client.events(), into: recorder)
+            await client.start()
+            try await waitUntil { await client.state() == .disconnected }
+            // The old path retries after 500 ms; a fatal rejection must stay stopped.
+            try await Task.sleep(for: .milliseconds(650))
+            let state = await client.state()
+            XCTAssertEqual(state, .disconnected)
+            let sawReason = await recorder.contains {
+                if case .disconnected(let reason) = $0 {
+                    return reason.contains(rejection) && !reason.contains("authentication failed")
+                }
+                return false
+            }
+            XCTAssertTrue(sawReason)
+            await client.stop()
+            consuming.cancel()
+        }
+    }
+
+    func testAuthenticationRejectionKeepsItsReasonAndRetryPolicy() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text(#"{"t":"error","error":"unauthorized"}"#))
+        let client = WarrenRemoteClient(
+            configuration: .init(name: "Host", url: "http://127.0.0.1:9"), task: task
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+        try await waitUntil { await client.state() == .reconnecting }
+        let sawReason = await recorder.contains {
+            if case .disconnected(let reason) = $0 { return reason.contains("authentication failed: unauthorized") }
+            return false
+        }
+        XCTAssertTrue(sawReason)
+        await client.stop()
+        consuming.cancel()
+    }
+
     func testRequestResponseUsesRequestIDAndDecodesResult() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let request = Task {

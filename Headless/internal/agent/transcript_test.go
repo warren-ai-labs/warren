@@ -1261,6 +1261,13 @@ func TestCodexQuestionAttentionAndResolution(t *testing.T) {
 	if events[0].Payload["state"] != "pending" {
 		t.Fatalf("expected state pending, got %v", events[0].Payload["state"])
 	}
+	questions, ok := events[0].Payload["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("expected one question schema, got %v", events[0].Payload["questions"])
+	}
+	if question, ok := questions[0].(map[string]any); !ok || question["allowCustom"] != true {
+		t.Fatalf("expected Codex question to expose optional notes, got %v", questions[0])
+	}
 	status := p.Status()
 	if status.Activity != api.AgentActivityBlocked || status.Attention == nil || status.Attention.Reason != "question" || status.Attention.RequestID != "call_q1" {
 		t.Fatalf("expected blocked attention on question, got %#v", status)
@@ -1273,6 +1280,14 @@ func TestCodexQuestionAttentionAndResolution(t *testing.T) {
 	}
 	if events[0].Payload["state"] != "resolved" {
 		t.Fatalf("expected state resolved, got %v", events[0].Payload["state"])
+	}
+	response, ok := events[0].Payload["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected resolved response payload, got %v", events[0].Payload["response"])
+	}
+	answers, ok := response["answers"].(map[string]any)
+	if !ok || answers["q1"] == nil {
+		t.Fatalf("expected decoded answer for q1, got %v", response["answers"])
 	}
 	status = p.Status()
 	if status.Activity == api.AgentActivityBlocked || status.Attention != nil {

@@ -209,6 +209,18 @@ struct WarrenDesktopEndpointPopoverContent: View {
                                     .font(WarrenTypography.popoverMeta)
                                     .foregroundStyle(tokens.mutedForeground)
                             }
+                            if let status = endpoint.probeStatus {
+                                Text(status)
+                                    .font(WarrenTypography.popoverMeta)
+                                    .foregroundStyle(endpoint.probeFailed ? tokens.destructive : tokens.mutedForeground)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let error = endpoint.connectionError {
+                                Text(error)
+                                    .font(WarrenTypography.popoverMeta)
+                                    .foregroundStyle(tokens.destructive)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
@@ -218,11 +230,32 @@ struct WarrenDesktopEndpointPopoverContent: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(endpoint.label)
-                .accessibilityValue(endpoint.id == selectedID ? "Selected" : "")
+                .accessibilityValue([endpoint.id == selectedID ? "Selected" : nil, endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: ". "))
+                .warrenSemanticElement(
+                    id: "endpoint.\(endpoint.id)",
+                    role: .button,
+                    label: endpoint.label,
+                    value: [endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: "\n"),
+                    isSelected: endpoint.id == selectedID,
+                    action: {
+                        onSelect(endpoint.id)
+                        onDismiss()
+                    }
+                )
             }
 
             Divider()
                 .padding(.vertical, WarrenSpacing.xs)
+
+            Button {
+                NotificationCenter.default.post(name: WarrenDesktopEndpointOption.probeRequested, object: nil)
+            } label: {
+                Label("Check hosts", systemImage: "arrow.clockwise")
+                    .font(WarrenTypography.popoverItem)
+                    .padding(.horizontal, WarrenSpacing.standard)
+                    .padding(.vertical, WarrenSpacing.compact)
+            }
+            .buttonStyle(.plain)
 
             Button {
                 onAddSSHHost()
@@ -236,6 +269,9 @@ struct WarrenDesktopEndpointPopoverContent: View {
                     .padding(.vertical, WarrenSpacing.compact)
             }
             .buttonStyle(.plain)
+        }
+        .onAppear {
+            NotificationCenter.default.post(name: WarrenDesktopEndpointOption.probeRequested, object: nil)
         }
     }
 

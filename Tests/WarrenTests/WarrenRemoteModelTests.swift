@@ -827,6 +827,20 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertFalse(WarrenRemoteApplicationModel.isPermanentConnectionError(transient))
     }
 
+    func testOnlyUpgradeFailuresStopDesktopReconnect() {
+        for message in [
+            "Warren Host protocol mismatch (expected 4.0, received 3.0).",
+            "Warren Host upgrade required: incompatible protocol version: client=4.0 server=3.0",
+            "upgrade required: client does not support a compatible atomic terminal state format",
+            "Warren Host sent an unsupported terminal state format: future-format.",
+        ] {
+            XCTAssertTrue(WarrenRemoteApplicationModel.isUpgradeFailure(message))
+        }
+        for message in ["The connection timed out.", "Host offline", "Warren Host authentication failed: unauthorized"] {
+            XCTAssertFalse(WarrenRemoteApplicationModel.isUpgradeFailure(message))
+        }
+    }
+
     func testSSHAuthenticationFailuresAreClassifiedAsPermanent() {
         for message in [
             "authenticate SSH host 203.0.113.10: ssh: unable to authenticate",
