@@ -4,6 +4,34 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-08
+
+> Patch release: improves Agent interaction reliability, cross-client control
+> flow, task and workspace navigation, external IDE discovery, and the
+> embedded editor surface. This release covers macOS, Web, and Headless
+> clients; iOS changes remain outside the release scope.
+
+### Changed
+
+- Keep canonical Agent View operations independent from the single-tenant
+  terminal PTY control lease so Web and Headless Agent actions do not contend
+  with terminal focus.
+- Simplify the Web Agent surface by keeping model and reasoning choices in
+  launch-time/provider configuration instead of issuing in-session switch
+  commands.
+- Cache external IDE options for repeated workspace menu opens and align the
+  embedded editor typography with the native Warren editor.
+- Keep task-linked workspaces anchored to their Task navigation, avoid
+  unnecessary sidebar recentering, and make workspace selection state clearer
+  across Desktop and Web; keep disabled workspace rows visually quiet.
+
+### Fixed
+
+- Resolve structured question responses by option index, including multi-choice
+  keyboard navigation, custom answers, and multi-step interactions.
+- Prevent Agent interaction submissions from getting stuck behind terminal
+  control ownership or a stale loading state.
+
 ## [0.12.0] - 2026-09-08
 
 > Minor release: introduces Warren protocol 4.0, canonical Agent execution, an independently deployed Relay control plane, and a coordinated terminal/runtime boundary. Pre-4.0 clients are rejected. Host state schemas 1 and 2 migrate in place to schema 3; compatible Ghostline v1 sessions use rolling handoff, while v0 sockets and legacy Agent projections require recreation. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.

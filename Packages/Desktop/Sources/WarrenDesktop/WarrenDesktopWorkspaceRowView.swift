@@ -75,10 +75,6 @@ struct WarrenDesktopWorkspaceRow: View {
         .frame(width: 32, height: 32)
         .contentShape(.rect)
         .foregroundStyle(tokens.mutedForeground)
-        .background(
-            isSelectionDisabled ? tokens.tertiaryWash : .clear,
-            in: RoundedRectangle(cornerRadius: WarrenRadius.row)
-        )
         .opacity(isInteractionDisabled ? 0.62 : 1)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .help(taskName.map { "Task: \($0)" } ?? "")
@@ -199,10 +195,6 @@ struct WarrenDesktopWorkspaceRow: View {
             }
         }
         .padding(.horizontal, WarrenSpacing.compact)
-        .background(
-            isSelectionDisabled ? tokens.tertiaryWash : .clear,
-            in: RoundedRectangle(cornerRadius: WarrenRadius.row)
-        )
         .help(taskName.map { "Task: \($0)" } ?? "")
         .accessibilityElement(children: .contain)
     }
@@ -307,19 +299,25 @@ struct WarrenDesktopWorkspaceRow: View {
     /// other branch rows retain the plain dot.
     @ViewBuilder
     private func workspaceGlyph(tokens: WarrenColorTokens) -> some View {
+        let disabledColor = tokens.mutedForeground.opacity(0.62)
         if workspace.branch == nil {
             Image(systemName: "laptopcomputer")
                 .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(tokens.mutedForeground)
+                .foregroundStyle(isSelectionDisabled ? disabledColor : tokens.mutedForeground)
                 .accessibilityHidden(true)
         } else if isMergedWorktree {
             Image(systemName: "arrow.triangle.merge")
                 .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(tokens.success.opacity(0.8))
+                .foregroundStyle(
+                    isSelectionDisabled ? disabledColor : tokens.success.opacity(0.8)
+                )
                 .accessibilityHidden(true)
         } else {
             Circle()
-                .strokeBorder(tokens.mutedForeground.opacity(0.9), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(
+                    isSelectionDisabled ? disabledColor : tokens.mutedForeground.opacity(0.9),
+                    lineWidth: WarrenSpacing.hairline
+                )
                 .frame(width: 5, height: 5)
                 .accessibilityHidden(true)
         }
