@@ -238,6 +238,87 @@ func eventIsRenderable(e api.AgentEvent) bool {
 	return false
 }
 
+// isCompactionContext reports whether content represents an agent history compaction or checkpoint.
+func isCompactionContext(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "# Resuming from a compaction") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "{{ CHECKPOINT") || strings.Contains(trimmed, "The earlier parts of this conversation have been truncated") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<summary>") || strings.HasPrefix(trimmed, "<compact>") || strings.HasPrefix(trimmed, "<compaction>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<CONTEXT_SUMMARY>") || strings.HasPrefix(trimmed, "<context_summary>") {
+		return true
+	}
+	return false
+}
+
+// isSystemInjectedUserContext reports whether a message marked with user role
+// was actually injected by the CLI, environment, or system rather than authored by the user.
+func isSystemInjectedUserContext(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if isCompactionContext(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<environment_context>") || strings.HasPrefix(trimmed, "<environment_context") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "# AGENTS.md") || strings.HasPrefix(trimmed, "<RULE[") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<collaboration_mode>") || strings.HasPrefix(trimmed, "<collaboration_mode") {
+		return true
+	}
+	if strings.Contains(trimmed, "<permissions instructions>") || strings.Contains(trimmed, "<permissions_instructions>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<skill>") || strings.HasPrefix(trimmed, "<skill ") || strings.HasPrefix(trimmed, "<skills>") || strings.HasPrefix(trimmed, "<skills_instructions>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<turn_aborted>") || strings.Contains(trimmed, "<turn_aborted>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<user_instructions>") || strings.HasPrefix(trimmed, "<system_instructions>") || strings.HasPrefix(trimmed, "<system_message>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<identity>") || strings.HasPrefix(trimmed, "<user_information>") || strings.HasPrefix(trimmed, "<user_rules>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "The following is a <SYSTEM_MESSAGE>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "[Request interrupted") {
+		return true
+	}
+	return false
+}
+
+// canonicalizeAgentEvent normalizes events to preserve proper role and semantic boundaries.
+func canonicalizeAgentEvent(e *api.AgentEvent) {
+	if e == nil {
+		return
+	}
+	if e.Type == "user" {
+		if isCompactionContext(e.Content) {
+			e.Type = "compaction"
+			e.Role = "system"
+			e.Content = "History compacted"
+			if e.Payload == nil {
+				e.Payload = map[string]any{
+					"compactionId": firstNonEmpty(e.ID, "compaction"),
+					"summary":      "History compacted",
+				}
+			}
+		} else if isSystemInjectedUserContext(e.Content) {
+			e.Type = "system_instructions"
+			e.Role = "system"
+		}
+	}
+}
+
 // compactRenderable returns the events that qualify as renderable,
 // preserving order. The non-renderable events are dropped before the
 // activity tracker observes them so they cannot influence lifecycle.
@@ -250,3 +331,4 @@ func compactRenderable(events []api.AgentEvent) []api.AgentEvent {
 	}
 	return out
 }
+

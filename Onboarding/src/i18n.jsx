@@ -118,6 +118,46 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.12.0",
+        dateISO: "2026-09-08",
+        date: "September 8, 2026",
+        title: "Warren adopts canonical Agent execution and Relay control.",
+        summary:
+          "A minor release that advances the JSON control protocol to 4.0, adds durable canonical Agent execution across Codex, Claude, OpenCode, Pi, Qoder, and Antigravity, and makes Relay an independently deployed control plane. Host state schemas 1 and 2 migrate to schema 3; pre-4.0 clients and Ghostline v0 sockets are not compatible. Targets arm64 Apple Silicon on macOS 13+; Public Access uses Relay routes.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add canonical Agent events, durable command admission, history recovery, structured interactions, queues, attachments, goals, and model/reasoning controls.",
+              "Add normalized Agent providers for Codex, Claude, OpenCode, Pi, Qoder, and Antigravity; Trae remains an interactive shell preset.",
+              "Add Relay enrollment keys, opaque share links, signed capabilities, refresh tokens, device revocation, and IP/path routes.",
+              "Add embedded SSH endpoints, a bundled forwarding helper, and terminal-link opening in the embedded editor.",
+              "Add safer Task, Workspace, and Session workflows with ordering, worktree import, MRU navigation, preflight checks, and guarded undo.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Move terminal recovery to atomic DENB state snapshots with durable Ghostline cursors and rolling handoff across compatible v1 runtimes.",
+              "Bound CLI list and transcript output by default; use --all, --full, --tool-output, filtering, quiet mode, or explicit truncation for automation.",
+            ],
+          },
+          {
+            title: "Breaking",
+            items: [
+              "Advance the JSON control protocol to 4.0 and remove legacy Agent aliases, JSON input fallback, old session lifecycle paths, the Ghostline v0 bridge, and the legacy PTY alias.",
+              "Ship the 0.12.0 Host and client surface together; pre-4.0 clients are rejected during authentication and Ghostline v0 sockets require recreation.",
+            ],
+          },
+          {
+            title: "RFCs",
+            items: [
+              "Include RFC 0012, 0013, 0014, 0015, 0016, 0017, 0018, and 0019 with their current proposed, draft, or implemented status.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.11.3",
         dateISO: "2026-08-30",
         date: "August 30, 2026",
@@ -891,6 +931,46 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.12.0",
+        dateISO: "2026-09-08",
+        date: "2026 年 9 月 8 日",
+        title: "Warren 引入统一 Agent 执行协议与 Relay 控制面。",
+        summary:
+          "次版本：JSON 控制协议升级到 4.0，为 Codex、Claude、OpenCode、Pi、Qoder 与 Antigravity 提供持久化的统一 Agent 执行模型，并将 Relay 独立为控制面。Host state schema 1/2 原地升级到 schema 3；4.0 之前的客户端与 Ghostline v0 socket 不兼容。面向 arm64 macOS 13+，Public Access 使用 Relay 路由。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增统一 Agent 事件、幂等 command journal、历史恢复、结构化交互、队列、附件、目标与模型/推理控制。",
+              "新增 Codex、Claude、OpenCode、Pi、Qoder、Antigravity 的统一 Agent provider；Trae 仍是交互式 shell preset。",
+              "新增 Relay enrollment key、opaque 分享链接、签名 capability、refresh token、设备撤销与 IP/path 路由。",
+              "新增 embedded SSH endpoint、内置转发 helper，以及默认在 embedded editor 中打开终端链接。",
+              "新增更安全的 Task、Workspace、Session 操作，包括排序、worktree 导入、MRU 导航、preflight 与受保护 undo。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "终端恢复改用原子 DENB 状态快照、持久化 Ghostline cursor，并支持兼容 Ghostline v1 runtime 的 rolling handoff。",
+              "CLI list 与 transcript 默认限制输出；自动化场景请显式使用 --all、--full、--tool-output、过滤、quiet 或截断参数。",
+            ],
+          },
+          {
+            title: "不兼容变更",
+            items: [
+              "JSON 控制协议升级到 4.0，移除旧 Agent alias、JSON input fallback、旧 session lifecycle、Ghostline v0 bridge 与 legacy PTY alias。",
+              "Host 与客户端必须一起升级到 0.12.0；4.0 之前的客户端会在认证阶段被拒绝，Ghostline v0 socket 需要重建。",
+            ],
+          },
+          {
+            title: "RFC",
+            items: [
+              "随版本收录 RFC 0012、0013、0014、0015、0016、0017、0018、0019，并保留各自 proposed、draft 或 implemented 状态。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.11.3",
         dateISO: "2026-08-30",

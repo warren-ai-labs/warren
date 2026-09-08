@@ -70,6 +70,14 @@ func TestAntigravityParser_CleanUserContent(t *testing.T) {
 			input:    "<USER_REQUEST>One line</USER_REQUEST>",
 			expected: "One line",
 		},
+		{
+			input:    "<CONTEXT_SUMMARY>\nHistory summary\n</CONTEXT_SUMMARY>\n\n<USER_REQUEST>\nUser prompt after compaction\n</USER_REQUEST>",
+			expected: "User prompt after compaction",
+		},
+		{
+			input:    "<CONTEXT_SUMMARY>\nOld summary\n</CONTEXT_SUMMARY>\nPrompt without request tags\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+			expected: "Prompt without request tags",
+		},
 	}
 	for _, tc := range tests {
 		got := cleanAntigravityUserContent(tc.input)
@@ -313,3 +321,103 @@ func TestCanonicalToolStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestAntigravityParser_CheckpointAndCompaction(t *testing.T) {
+	parser := newAntigravityParser(1024)
+	checkpointLine := `{"step_index":4304,"source":"SYSTEM","type":"CHECKPOINT","status":"DONE","created_at":"2026-09-08T04:05:12Z","content":"# Resuming from a compaction\n\nYou are continuing work on the task..."}`
+	events := parser.Parse([]byte(checkpointLine))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "compaction" {
+		t.Errorf("got type %q, want compaction", events[0].Type)
+	}
+	if events[0].Role != "system" {
+		t.Errorf("got role %q, want system", events[0].Role)
+	}
+	if events[0].Content != "History compacted" {
+		t.Errorf("got content %q, want 'History compacted'", events[0].Content)
+	}
+	if events[0].Payload["summary"] != "History compacted" {
+		t.Errorf("unexpected payload: %+v", events[0].Payload)
+	}
+}
+
+func TestAntigravityParser_SystemMessage(t *testing.T) {
+	parser := newAntigravityParser(1024)
+	sysLine := `{"step_index":10,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-09-08T04:00:00Z","content":"The following is a <SYSTEM_MESSAGE> not actually sent by the user."}`
+	events := parser.Parse([]byte(sysLine))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "system_instructions" {
+		t.Errorf("got type %q, want system_instructions", events[0].Type)
+	}
+	if events[0].Role != "system" {
+		t.Errorf("got role %q, want system", events[0].Role)
+	}
+}
+
+func TestAntigravityParser_SystemInjectedUserInput(t *testing.T) {
+	parser := newAntigravityParser(1024)
+	// Even if type is USER_INPUT, if content is system injected, it must not be tagged as user.
+	line := `{"step_index":11,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-09-08T04:00:00Z","content":"<USER_REQUEST>\n<turn_aborted>\n</USER_REQUEST>"}`
+	events := parser.Parse([]byte(line))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != "system_instructions" {
+		t.Errorf("got type %q, want system_instructions", events[0].Type)
+	}
+	if events[0].Role != "system" {
+		t.Errorf("got role %q, want system", events[0].Role)
+	}
+}
+
+func TestSystemInjectedContextAcrossProviders(t *testing.T) {
+	injectedSamples := []string{
+		"<environment_context>cwd=/work</environment_context>",
+		"# AGENTS.md rules\n- do not edit",
+		"<collaboration_mode>team</collaboration_mode>",
+		"<permissions instructions>allow shell",
+		"<skill>git-expert</skill>",
+		"<skills_instructions>run git",
+		"<turn_aborted>",
+		"<user_instructions>read only</user_instructions>",
+		"<system_message>notice</system_message>",
+		"The following is a <SYSTEM_MESSAGE> important",
+		"[Request interrupted by user]",
+	}
+	for _, sample := range injectedSamples {
+		if !isSystemInjectedUserContext(sample) {
+			t.Errorf("isSystemInjectedUserContext(%q) = false, want true", sample)
+		}
+	}
+
+	compactionSamples := []string{
+		"# Resuming from a compaction\n\nsummary",
+		"{{ CHECKPOINT 0 }}\n The earlier parts of this conversation have been truncated",
+		"<summary>conversation summary</summary>",
+		"<CONTEXT_SUMMARY>compacted</CONTEXT_SUMMARY>",
+	}
+	for _, sample := range compactionSamples {
+		if !isCompactionContext(sample) {
+			t.Errorf("isCompactionContext(%q) = false, want true", sample)
+		}
+	}
+
+	userSamples := []string{
+		"Please fix the bug in main.go",
+		"How do I use this library?",
+		"Run tests and let me know",
+	}
+	for _, sample := range userSamples {
+		if isSystemInjectedUserContext(sample) {
+			t.Errorf("isSystemInjectedUserContext(%q) = true, want false", sample)
+		}
+		if isCompactionContext(sample) {
+			t.Errorf("isCompactionContext(%q) = true, want false", sample)
+		}
+	}
+}
+

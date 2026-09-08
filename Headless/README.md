@@ -347,6 +347,13 @@ Known limits:
   current Ghostline v1 server; an old socket, protocol, or build fails closed
   and its sessions must be recreated at the reset boundary.
 
+At the 0.12.0 release boundary, Host state schemas 1 and 2 are upgraded in
+place to schema 3, while unknown or future schemas fail closed. This migration
+does not make pre-4.0 clients compatible. A compatible Ghostline v1 runtime can
+use the rolling handoff journal; Ghostline v0 sockets and legacy Agent
+projections have no in-place migration path and must be recreated or rebuilt as
+fresh client caches.
+
 ## Canonical Agent Protocol
 
 The Host is the sole authority for Agent execution state. Provider adapters

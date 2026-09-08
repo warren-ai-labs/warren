@@ -204,20 +204,26 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				Timestamp:  timestamp,
 			}}
 		}
-		if record.IsCompactSummary {
+		if record.IsCompactSummary || isCompactionContext(content) {
 			return []api.AgentEvent{{
 				Provider:  "claude",
 				ID:        record.UUID,
-				Type:      "system",
+				Type:      "compaction",
+				Role:      "system",
 				Content:   p.clip(content),
+				Payload: map[string]any{
+					"compactionId": record.UUID,
+					"summary":      "History compacted",
+				},
 				Timestamp: timestamp,
 			}}
 		}
-		if record.IsMeta || strings.HasPrefix(strings.TrimSpace(content), "<") {
+		if record.IsMeta || strings.HasPrefix(strings.TrimSpace(content), "<") || isSystemInjectedUserContext(content) {
 			return []api.AgentEvent{{
 				Provider:  "claude",
 				ID:        record.UUID,
 				Type:      "system",
+				Role:      "system",
 				Content:   p.clip(content),
 				Timestamp: timestamp,
 			}}
@@ -226,6 +232,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 			Provider:  "claude",
 			ID:        record.UUID,
 			Type:      "user",
+			Role:      "user",
 			Content:   p.clip(content),
 			Sidechain: record.IsSidechain,
 			Timestamp: timestamp,

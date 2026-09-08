@@ -566,10 +566,36 @@ func (p *qoderParser) parseQoderUser(record qoderRecord, message qoderMessage, t
 	if content == "" {
 		return nil
 	}
+	if isCompactionContext(content) {
+		return []api.AgentEvent{{
+			Provider:  qoderProvider,
+			ID:        record.UUID,
+			Type:      "compaction",
+			Role:      "system",
+			Content:   "History compacted",
+			Payload: map[string]any{
+				"compactionId": record.UUID,
+				"summary":      "History compacted",
+			},
+			Timestamp: timestamp,
+		}}
+	}
+	if isSystemInjectedUserContext(content) {
+		return []api.AgentEvent{{
+			Provider:  qoderProvider,
+			ID:        record.UUID,
+			Type:      "system_instructions",
+			Role:      "system",
+			Content:   p.clip(content),
+			Sidechain: record.IsSidechain,
+			Timestamp: timestamp,
+		}}
+	}
 	return []api.AgentEvent{{
 		Provider:  qoderProvider,
 		ID:        record.UUID,
 		Type:      "user",
+		Role:      "user",
 		Content:   p.clip(content),
 		Sidechain: record.IsSidechain,
 		Timestamp: timestamp,

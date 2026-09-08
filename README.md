@@ -94,10 +94,13 @@ daemon and CLI can still be built for non-macOS hosts. Ghostline v1 statically
 links its terminal core, so the app has one runtime and no bundled v0 bridge,
 legacy daemon, or separate Ghostty checkout to maintain.
 
-The current release is a clean protocol and persistence break. Existing
-pre-4.0 clients, old Ghostline sockets, and old Warren state or Agent
-databases must be recreated at the release boundary; Warren does not migrate
-or reinterpret them.
+The 0.12.0 release is a coordinated protocol boundary with selective
+persistence migration. Pre-4.0 clients are rejected during authentication.
+Host state schemas 1 and 2 migrate in place to schema 3, while unknown or
+future schemas fail closed. Compatible Ghostline v1 sessions use the rolling
+handoff journal; Ghostline v0 sockets, legacy PTY aliases, and pre-canonical
+Agent projections require recreation or a fresh client cache. Back up
+`~/.warren` before upgrading an existing Host.
 
 The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when

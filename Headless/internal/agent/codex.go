@@ -250,6 +250,14 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		return nil
 	case "compacted":
 		event.Type = "compaction"
+		event.Role = "system"
+		event.Content = "History compacted"
+		if event.Payload == nil {
+			event.Payload = map[string]any{
+				"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
+				"summary":      "History compacted",
+			}
+		}
 		return []api.AgentEvent{event}
 	case "response_item":
 		var payload codexPayload
@@ -284,8 +292,19 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				p.lastAssistantContent = event.Content
 			}
 			if event.Type == "user" {
-				if isSystemInjectedUserContext(event.Content) {
+				if isCompactionContext(event.Content) {
+					event.Type = "compaction"
+					event.Role = "system"
+					event.Content = "History compacted"
+					if event.Payload == nil {
+						event.Payload = map[string]any{
+							"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
+							"summary":      "History compacted",
+						}
+					}
+				} else if isSystemInjectedUserContext(event.Content) {
 					event.Type = "system_instructions"
+					event.Role = "system"
 				} else {
 					p.lastUserContent = event.Content
 				}
@@ -699,6 +718,24 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				if content == "" || content == p.lastUserContent {
 					return nil
 				}
+				if isCompactionContext(content) {
+					event.Type = "compaction"
+					event.Role = "system"
+					event.Content = "History compacted"
+					event.Payload = map[string]any{
+						"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
+						"summary":      "History compacted",
+					}
+					p.lastEventType = "compaction"
+					return []api.AgentEvent{event}
+				}
+				if isSystemInjectedUserContext(content) {
+					event.Type = "system_instructions"
+					event.Role = "system"
+					event.Content = content
+					p.lastEventType = "system_instructions"
+					return []api.AgentEvent{event}
+				}
 				p.lastUserContent = content
 				event.Type = "user"
 				event.Content = content
@@ -1008,13 +1045,6 @@ func codexFallbackContent(payload codexPayload, raw json.RawMessage, limit int) 
 
 func normalizeToolStatus(status string) string {
 	return canonicalToolStatus(status)
-}
-
-func isSystemInjectedUserContext(content string) bool {
-	return strings.HasPrefix(content, "<environment_context>") ||
-		strings.HasPrefix(content, "# AGENTS.md") ||
-		strings.HasPrefix(content, "<collaboration_mode>") ||
-		strings.Contains(content, "<permissions instructions>")
 }
 
 func codexReasoningContent(payload codexPayload, limit int) string {
